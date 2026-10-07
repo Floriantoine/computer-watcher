@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'vitest';
 import { DEFAULT_CONFIG, configDir, loadConfig, saveConfig, validateConfig } from './config';
+import { DEFAULT_RECORDER } from './defaults';
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'procwatch-cfg-'));
 
@@ -85,4 +86,36 @@ test('validateConfig rejette seuils négatifs et entrées non textuelles', () =>
   expect(validateConfig({ ...DEFAULT_CONFIG, othersThreshold: { memMB: -1, cpuPercent: 1 } })).toBeNull();
   expect(validateConfig({ ...DEFAULT_CONFIG, protected: [1] })).toBeNull();
   expect(validateConfig(DEFAULT_CONFIG)).toEqual(DEFAULT_CONFIG);
+});
+
+test('config v1 sans section recorder : valide, défauts ajoutés', () => {
+  const { recorder: _r, ...v1 } = DEFAULT_CONFIG;
+  expect(validateConfig(v1)).toEqual({ ...v1, recorder: DEFAULT_RECORDER });
+});
+
+test('config v1 existante sur disque sans recorder : relue sans .bak ni avertissement', () => {
+  const dir = tmp();
+  const { recorder: _r, ...v1 } = DEFAULT_CONFIG;
+  writeFileSync(join(dir, 'config.json'), JSON.stringify({ ...v1, protected: ['zsh'] }));
+  const r = loadConfig(dir);
+  expect(r.warning).toBeNull();
+  expect(r.config.protected).toEqual(['zsh']);
+  expect(r.config.recorder).toEqual(DEFAULT_RECORDER);
+  expect(existsSync(join(dir, 'config.json.bak'))).toBe(false);
+});
+
+test.each([
+  ['intervalSec', 0], ['intervalSec', 61], ['intervalSec', 2.5],
+  ['detailHours', 0], ['detailHours', 169],
+  ['summaryDays', 0], ['summaryDays', 366],
+  ['procMinMemMB', -1], ['procMinCpuPercent', -1],
+  ['leakMinMinutes', 4], ['leakMinGrowthMB', -1],
+  ['enabled', 'oui'],
+])('recorder.%s = %s → config invalide', (key, value) => {
+  expect(validateConfig({ ...DEFAULT_CONFIG, recorder: { ...DEFAULT_RECORDER, [key]: value } })).toBeNull();
+});
+
+test('recorder valide modifié : conservé', () => {
+  const recorder = { ...DEFAULT_RECORDER, intervalSec: 10, enabled: false };
+  expect(validateConfig({ ...DEFAULT_CONFIG, recorder })?.recorder).toEqual(recorder);
 });

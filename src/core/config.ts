@@ -1,8 +1,8 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_CONFIG } from './defaults';
-import type { Config } from './types';
+import { DEFAULT_CONFIG, DEFAULT_RECORDER } from './defaults';
+import type { Config, RecorderConfig } from './types';
 
 export { DEFAULT_CONFIG };
 
@@ -10,6 +10,32 @@ const FILE = 'config.json';
 
 export function configDir(env: NodeJS.ProcessEnv = process.env, home: string = homedir()): string {
   return join(env.XDG_CONFIG_HOME || join(home, '.config'), 'proc-watch');
+}
+
+const intIn = (v: unknown, min: number, max: number) => Number.isInteger(v) && (v as number) >= min && (v as number) <= max;
+const numMin = (v: unknown, min: number) => typeof v === 'number' && Number.isFinite(v) && v >= min;
+
+function validateRecorder(raw: unknown): RecorderConfig | null {
+  if (raw === undefined) return { ...DEFAULT_RECORDER };
+  if (typeof raw !== 'object' || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.enabled !== 'boolean') return null;
+  if (!intIn(r.intervalSec, 1, 60)) return null;
+  if (!intIn(r.detailHours, 1, 168)) return null;
+  if (!intIn(r.summaryDays, 1, 365)) return null;
+  if (!numMin(r.procMinMemMB, 0) || !numMin(r.procMinCpuPercent, 0)) return null;
+  if (!intIn(r.leakMinMinutes, 5, 24 * 60)) return null;
+  if (!numMin(r.leakMinGrowthMB, 0)) return null;
+  return {
+    enabled: r.enabled,
+    intervalSec: r.intervalSec as number,
+    detailHours: r.detailHours as number,
+    summaryDays: r.summaryDays as number,
+    procMinMemMB: r.procMinMemMB as number,
+    procMinCpuPercent: r.procMinCpuPercent as number,
+    leakMinMinutes: r.leakMinMinutes as number,
+    leakMinGrowthMB: r.leakMinGrowthMB as number,
+  };
 }
 
 export function validateConfig(raw: unknown): Config | null {
@@ -20,7 +46,9 @@ export function validateConfig(raw: unknown): Config | null {
   const t = r.othersThreshold as Record<string, unknown> | undefined;
   if (!t || typeof t.memMB !== 'number' || typeof t.cpuPercent !== 'number') return null;
   if (!(t.memMB >= 0) || !(t.cpuPercent >= 0)) return null;
-  return { version: 1, protected: [...r.protected], othersThreshold: { memMB: t.memMB, cpuPercent: t.cpuPercent } };
+  const recorder = validateRecorder(r.recorder);
+  if (!recorder) return null;
+  return { version: 1, protected: [...r.protected], othersThreshold: { memMB: t.memMB, cpuPercent: t.cpuPercent }, recorder };
 }
 
 export function saveConfig(dir: string, config: Config): void {

@@ -1,4 +1,15 @@
-import type { Config } from './types';
+import type { Config, RecorderConfig } from './types';
+
+export const DEFAULT_RECORDER: RecorderConfig = {
+  enabled: true,
+  intervalSec: 5,
+  detailHours: 24,
+  summaryDays: 30,
+  procMinMemMB: 50,
+  procMinCpuPercent: 1,
+  leakMinMinutes: 60,
+  leakMinGrowthMB: 300,
+};
 
 export const DEFAULT_CONFIG: Config = {
   version: 1,
@@ -10,4 +21,5 @@ export const DEFAULT_CONFIG: Config = {
     '/^systemd/',
   ],
   othersThreshold: { memMB: 100, cpuPercent: 1 },
+  recorder: DEFAULT_RECORDER,
 };

@@ -69,10 +69,22 @@ export interface Snapshot {
   groups: Group[];
 }
 
+export interface RecorderConfig {
+  enabled: boolean;
+  intervalSec: number;
+  detailHours: number;
+  summaryDays: number;
+  procMinMemMB: number;
+  procMinCpuPercent: number;
+  leakMinMinutes: number;
+  leakMinGrowthMB: number;
+}
+
 export interface Config {
   version: 1;
   protected: string[];
   othersThreshold: { memMB: number; cpuPercent: number };
+  recorder: RecorderConfig;
 }
 
 export interface ConfigState {
