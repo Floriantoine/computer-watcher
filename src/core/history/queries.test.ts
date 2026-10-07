@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { expect, test } from 'vitest';
 import { openHistoryDb } from './db';
 import { aggregateMinute } from './maintenance';
-import { bucketMs, pickSource, queryCulprits, queryEvents, queryGroup, queryGroups, queryProcs, querySystem, queryTop, rangeFromPreset } from './queries';
+import { bucketMs, pickSource, queryCulprits, queryEvents, queryGroup, queryGroups, queryProcs, queryProcsAt, querySystem, queryTop, rangeFromPreset } from './queries';
 
 const H = 3600_000;
 const M = 60_000;
@@ -150,4 +150,31 @@ test('queryProcs : une série par processus du groupe (pas de collision avec gro
     expect(p.series.map((s) => `${s.pid}:${s.startTicks}`).sort()).toEqual(['10:100', '11:200']);
     expect(p.series.find((s) => s.pid === 11)!.memKB.every((v) => v === 300 * 1024)).toBe(true);
   }
+});
+
+test('queryProcsAt : état à l\'instant demandé, mort/naissance, tri, repli minute', () => {
+  const { db } = openHistoryDb(join(mkdtempSync(join(tmpdir(), 'pw-at-')), 'm.db'));
+  db.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'g','g','app');
+           INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id,ppid) VALUES
+             (1,10,1,'root','root',1,1), (2,11,1,'dead','dead',1,10), (3,12,1,'late','late',1,10);`);
+  const ins = db.prepare('INSERT INTO proc_samples VALUES (?,?,?,?,?)');
+  for (let ts = 0; ts <= 100_000; ts += 5000) {
+    ins.run(ts, 1, 1000, 0, 1);
+    if (ts <= 40_000) ins.run(ts, 2, 5000, 100, 2); // meurt après 40 s
+    if (ts >= 70_000) ins.run(ts, 3, 300, 0, 0); // naît à 70 s
+  }
+  const o = { now: 101_000, detailHours: 24, intervalSec: 5 };
+  const at = (ts: number) => queryProcsAt(db, 'g', ts, o);
+  expect(at(30_000).map((p) => p.pid)).toEqual([11, 10]); // trié par rss+swap décroissant
+  expect(at(30_000)[0]).toEqual({ pid: 11, startTicks: 1, ppid: 10, name: 'dead', cmdline: 'dead', rssKB: 5000, swapKB: 100, cpu: 2 });
+  expect(at(48_000).map((p) => p.pid)).toEqual([11, 10]); // mort depuis < 2 x 5 s : encore là
+  expect(at(60_000).map((p) => p.pid)).toEqual([10]); // mort depuis > 2 x 5 s
+  expect(at(60_000).map((p) => p.pid)).not.toContain(12); // pas encore né
+  expect(at(100_000).map((p) => p.pid)).toEqual([10, 12]);
+  expect(queryProcsAt(db, 'absent', 30_000, o)).toEqual([]);
+  // hors rétention détaillée : proc_minute
+  aggregateMinute(db, 0);
+  const old = { now: 100 * H, detailHours: 24, intervalSec: 5 };
+  const m = queryProcsAt(db, 'g', 30_000, old);
+  expect(m.map((p) => [p.pid, p.ppid, p.swapKB])).toEqual([[11, 10, null], [10, 1, null]]);
 });

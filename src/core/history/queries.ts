@@ -3,6 +3,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type {
   Culprit, GroupHistory, GroupKind, GroupsHistory, HistoryEvent, ProcsHistory, RangePreset, SystemSeries, TimeRange, TopConsumer, TopOptions,
 } from '../types';
+import { hasColumn } from './db';
 import { alignSeries } from './series';
 
 const M = 60_000;
@@ -204,4 +205,46 @@ export function queryEvents(db: DatabaseSync, range: TimeRange): HistoryEvent[] 
     )
     .all(range.from, range.to) as { ts: number; type: string; gk: string | null; gl: string | null; detail: string }[];
   return rows.map((r) => ({ ts: r.ts, type: r.type, groupKey: r.gk, groupLabel: r.gl, detail: JSON.parse(r.detail) as Record<string, unknown> }));
+}
+
+export interface ProcAt {
+  pid: number;
+  startTicks: number;
+  ppid: number | null;
+  name: string;
+  cmdline: string;
+  rssKB: number;
+  swapKB: number | null;
+  cpu: number;
+}
+
+/**
+ * État des processus enregistrés d'un groupe à l'instant ts : pour chacun, l'échantillon le plus récent dans
+ * [ts - 2 x intervalle, ts] (détail), ou la ligne de la minute de ts (agrégats, rss = moyenne mémoire, swap inconnu).
+ * Tolère une base v1 en lecture seule (ppid = NULL).
+ */
+export function queryProcsAt(db: DatabaseSync, groupKey: string, ts: number, o: QueryOpts): ProcAt[] {
+  const ppid = hasColumn(db, 'procs', 'ppid') ? 'p.ppid' : 'NULL';
+  const detail = ts >= o.now - o.detailHours * H;
+  const rows = (
+    detail
+      ? db
+          .prepare(
+            `SELECT p.pid, p.start_ticks AS st, ${ppid} AS ppid, p.name, p.cmdline, s.rss_kb AS rss, s.swap_kb AS swap, s.cpu_percent AS cpu
+             FROM procs p JOIN proc_samples s ON s.proc_id = p.id
+              AND s.ts = (SELECT MAX(ts) FROM proc_samples WHERE proc_id = p.id AND ts >= ? AND ts <= ?)
+             WHERE p.group_id = (SELECT id FROM groups WHERE key = ?)`,
+          )
+          .all(ts - 2 * o.intervalSec * 1000, ts, groupKey)
+      : db
+          .prepare(
+            `SELECT p.pid, p.start_ticks AS st, ${ppid} AS ppid, p.name, p.cmdline, s.mem_kb_avg AS rss, NULL AS swap, s.cpu_avg AS cpu
+             FROM procs p JOIN proc_minute s ON s.proc_id = p.id AND s.ts = ?
+             WHERE p.group_id = (SELECT id FROM groups WHERE key = ?)`,
+          )
+          .all(Math.floor(ts / M) * M, groupKey)
+  ) as { pid: number; st: number; ppid: number | null; name: string; cmdline: string; rss: number; swap: number | null; cpu: number }[];
+  return rows
+    .map((r) => ({ pid: r.pid, startTicks: r.st, ppid: r.ppid, name: r.name, cmdline: r.cmdline, rssKB: r.rss, swapKB: r.swap, cpu: r.cpu }))
+    .sort((a, b) => b.rssKB + (b.swapKB ?? 0) - (a.rssKB + (a.swapKB ?? 0)));
 }

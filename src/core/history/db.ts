@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 const SCHEMA = `
 CREATE TABLE system_samples (
@@ -20,7 +20,7 @@ CREATE TABLE group_samples (
 CREATE INDEX group_samples_ts ON group_samples(ts);
 CREATE TABLE procs (
   id INTEGER PRIMARY KEY, pid INTEGER NOT NULL, start_ticks INTEGER NOT NULL,
-  name TEXT NOT NULL, cmdline TEXT NOT NULL, group_id INTEGER NOT NULL,
+  name TEXT NOT NULL, cmdline TEXT NOT NULL, group_id INTEGER NOT NULL, ppid INTEGER,
   UNIQUE (pid, start_ticks)
 );
 CREATE INDEX procs_group ON procs(group_id);
@@ -77,6 +77,23 @@ function create(path: string): DatabaseSync {
   return db;
 }
 
+/** v1 -> v2 : ajoute procs.ppid (NULL pour l'historique existant). Idempotent, atomique. */
+function migrateV1(db: DatabaseSync): void {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    if (!hasColumn(db, 'procs', 'ppid')) db.exec('ALTER TABLE procs ADD COLUMN ppid INTEGER');
+    db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
+
+export function hasColumn(db: DatabaseSync, table: string, column: string): boolean {
+  return (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((c) => c.name === column);
+}
+
 const SQLITE_CORRUPT = 11;
 const SQLITE_NOTADB = 26;
 
@@ -101,7 +118,13 @@ export function openHistoryDb(
     db = new DatabaseSync(path);
     db.exec('PRAGMA busy_timeout = 2000;');
     const v = (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
-    if (v === SCHEMA_VERSION) {
+    // v1 reconnue (table procs présente) : migration en place ; sinon traitée comme inconnue (.bak)
+    const migratable = v === 1 && hasColumn(db, 'procs', 'id');
+    if (migratable) {
+      db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;');
+      migrateV1(db);
+    }
+    if (migratable || v === SCHEMA_VERSION) {
       db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;');
       secure(path);
       return { db, recreated: null };

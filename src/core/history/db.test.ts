@@ -125,3 +125,35 @@ test('permissions : dossier 0700, fichiers 0600', () => {
   db.close();
   rmSync(join(p, '..'), { recursive: true });
 });
+
+test('migration v1 → v2 en place : lignes conservées, colonne ppid ajoutée (NULL)', () => {
+  const p = tmp();
+  const { db: v2 } = openHistoryDb(p);
+  v2.exec("INSERT INTO groups(id,key,label,kind) VALUES (1,'g','g','app')");
+  v2.exec('ALTER TABLE procs DROP COLUMN ppid'); // reconstitue le schéma v1
+  v2.exec("INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id) VALUES (1,10,100,'a','a',1),(2,11,100,'b','b',1)");
+  v2.exec('INSERT INTO proc_samples VALUES (5,1,10,0,1)');
+  v2.exec('PRAGMA user_version = 1');
+  v2.close();
+  const { db, recreated } = openHistoryDb(p);
+  expect(recreated).toBeNull();
+  expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(2);
+  expect(db.prepare('SELECT id, pid, ppid FROM procs ORDER BY id').all()).toEqual([
+    { id: 1, pid: 10, ppid: null }, { id: 2, pid: 11, ppid: null },
+  ]);
+  expect((db.prepare('SELECT COUNT(*) n FROM proc_samples').get() as { n: number }).n).toBe(1);
+  expect(readdirSync(join(p, '..')).filter((f) => f.includes('.bak'))).toEqual([]);
+  db.close();
+  openHistoryDb(p).db.close(); // réouverture : idempotent
+});
+
+test('lecture seule sur une base v1 : ne migre pas, lit normalement', () => {
+  const p = tmp();
+  const { db: v2 } = openHistoryDb(p);
+  v2.exec('ALTER TABLE procs DROP COLUMN ppid; PRAGMA user_version = 1');
+  v2.close();
+  const { db } = openHistoryDb(p, { readOnly: true });
+  expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(1);
+  expect(db.prepare('SELECT * FROM procs').all()).toEqual([]);
+  db.close();
+});

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { expect, test } from 'vitest';
 import { openHistoryDb } from './db';
 import { aggregateMinute } from './maintenance';
-import { queryGroups, querySystem, queryTop, rangeFromPreset } from './queries';
+import { queryGroups, queryProcsAt, querySystem, queryTop, rangeFromPreset } from './queries';
 
 const H = 3600_000;
 const M = 60_000;
@@ -23,6 +23,12 @@ test('performance : 24 h x 100 groupes à 5 s', () => {
     for (let i = 1; i <= 100; i++) gs.run(ts, i, 1000 * i + ((ts / 5000) % 50), 0, 1, 1);
   }
   db.exec('COMMIT');
+  db.exec('BEGIN');
+  const ps = db.prepare('INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id,ppid) VALUES (?,?,?,?,?,?,?)');
+  const pss = db.prepare('INSERT INTO proc_samples VALUES (?,?,?,?,?)');
+  for (let i = 1; i <= 100; i++) ps.run(i, 1000 + i, 1, `p${i}`, `p${i}`, 1, 1);
+  for (let ts = start; ts < now; ts += 5000) for (let i = 1; i <= 100; i++) pss.run(ts, i, 1000 + i, 0, 1);
+  db.exec('COMMIT');
   for (let ts = start; ts < now; ts += M) aggregateMinute(db, ts);
 
   const o = { now, detailHours: 24, intervalSec: 5 };
@@ -31,12 +37,17 @@ test('performance : 24 h x 100 groupes à 5 s', () => {
     fn();
     const ms = performance.now() - t0;
     console.info(`${name}: ${ms.toFixed(1)} ms`);
-    expect(ms).toBeLessThan(150);
+    expect(ms).toBeLessThan(name.startsWith("queryProcsAt") ? 50 : 150);
   };
   time('queryGroups 24h', () => expect(queryGroups(db, rangeFromPreset('24h', now), o).series).toHaveLength(100));
   time('queryGroups 1h', () => expect(queryGroups(db, rangeFromPreset('1h', now), o).series).toHaveLength(100));
   time('queryGroups 6h', () => expect(queryGroups(db, rangeFromPreset('6h', now), o).series).toHaveLength(100));
   time('queryTop 6h', () => expect(queryTop(db, rangeFromPreset('6h', now), o)).toHaveLength(10));
   time('queryTop 24h', () => expect(queryTop(db, rangeFromPreset('24h', now), o)).toHaveLength(10));
+  time('queryProcsAt détail (100 procs)', () => {
+    expect(queryProcsAt(db, 'app:g1', now - 12 * H, o)).toHaveLength(100);
+    expect(queryProcsAt(db, 'app:g1', now - 1, o)).toHaveLength(100);
+  });
+  time('queryProcsAt minute (100 procs)', () => expect(queryProcsAt(db, 'app:g1', now - 12 * H, { ...o, detailHours: 6 })).toHaveLength(100));
   time('querySystem 24h', () => expect(querySystem(db, rangeFromPreset('24h', now), o).ts.length).toBeGreaterThan(0));
 }, 60_000);

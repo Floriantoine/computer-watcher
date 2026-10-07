@@ -11,8 +11,8 @@ export interface TickInput {
 }
 
 export class HistoryWriter {
-  private procIds = new Map<string, number>();
-  private s: Record<'system' | 'group' | 'groupSample' | 'proc' | 'procSample', StatementSync>;
+  private procIds = new Map<string, { id: number; ppid: number }>();
+  private s: Record<'system' | 'group' | 'groupSample' | 'proc' | 'procPpid' | 'procSample', StatementSync>;
 
   constructor(private db: DatabaseSync) {
     this.s = {
@@ -22,8 +22,9 @@ export class HistoryWriter {
       ),
       groupSample: db.prepare('INSERT OR REPLACE INTO group_samples VALUES (?,?,?,?,?,?)'),
       proc: db.prepare(
-        'INSERT INTO procs(pid,start_ticks,name,cmdline,group_id) VALUES (?,?,?,?,?) ON CONFLICT(pid,start_ticks) DO UPDATE SET group_id=excluded.group_id RETURNING id',
+        'INSERT INTO procs(pid,start_ticks,name,cmdline,group_id,ppid) VALUES (?,?,?,?,?,?) ON CONFLICT(pid,start_ticks) DO UPDATE SET group_id=excluded.group_id, ppid=excluded.ppid RETURNING id',
       ),
+      procPpid: db.prepare('UPDATE procs SET ppid = ? WHERE id = ?'),
       procSample: db.prepare('INSERT OR REPLACE INTO proc_samples VALUES (?,?,?,?,?)'),
     };
   }
@@ -56,12 +57,17 @@ export class HistoryWriter {
         const gid = groupOfPid.get(p.pid);
         if (gid === undefined) continue;
         const key = `${p.pid}:${p.startTicks}`;
-        let id = this.procIds.get(key);
-        if (id === undefined) {
-          id = (this.s.proc.get(p.pid, p.startTicks, p.name, p.cmdline, gid) as { id: number }).id;
-          this.procIds.set(key, id);
+        let known = this.procIds.get(key);
+        if (known === undefined) {
+          const id = (this.s.proc.get(p.pid, p.startTicks, p.name, p.cmdline, gid, p.ppid) as { id: number }).id;
+          known = { id, ppid: p.ppid };
+          this.procIds.set(key, known);
+        } else if (known.ppid !== p.ppid) {
+          // reparentage (le parent est mort) : une seule UPDATE, pas de coût par tick
+          this.s.procPpid.run(p.ppid, known.id);
+          known.ppid = p.ppid;
         }
-        this.s.procSample.run(t.ts, id, p.rssKB, p.swapKB, p.cpuPercent);
+        this.s.procSample.run(t.ts, known.id, p.rssKB, p.swapKB, p.cpuPercent);
         procCount++;
       }
       this.db.exec('COMMIT');

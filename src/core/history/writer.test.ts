@@ -63,3 +63,24 @@ test('PSI absent → NULL', () => {
   new HistoryWriter(db).writeTick({ ts: 1, system: { ...sys, psiSome10: null }, cpuPercent: 0, groups: [], procs: [] }, T);
   expect((db.prepare('SELECT psi_some10 FROM system_samples').get() as { psi_some10: null }).psi_some10).toBeNull();
 });
+
+test('ppid écrit à la création, mis à jour une seule fois au reparentage', () => {
+  const db = open();
+  const w = new HistoryWriter(db);
+  const tick = (ts: number, ppid: number) => {
+    const p = proc(10, { rssKB: 60 * 1024, ppid });
+    w.writeTick({ ts, system: sys, cpuPercent: 0, groups: [group('g', [p])], procs: [p] }, T);
+  };
+  const ppid = () => (db.prepare('SELECT ppid FROM procs').get() as { ppid: number }).ppid;
+  tick(1000, 5);
+  expect(ppid()).toBe(5);
+  db.exec('CREATE TEMP TABLE upd(n)');
+  db.exec('CREATE TEMP TRIGGER t AFTER UPDATE ON main.procs BEGIN INSERT INTO upd VALUES(1); END');
+  tick(6000, 5);
+  tick(11000, 5);
+  expect((db.prepare('SELECT COUNT(*) n FROM upd').get() as { n: number }).n).toBe(0);
+  tick(16000, 1);
+  tick(21000, 1);
+  expect(ppid()).toBe(1);
+  expect((db.prepare('SELECT COUNT(*) n FROM upd').get() as { n: number }).n).toBe(1);
+});
