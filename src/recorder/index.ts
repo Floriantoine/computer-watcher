@@ -1,5 +1,5 @@
 // src/recorder/index.ts
-import { watch } from 'node:fs';
+import { mkdirSync, watch } from 'node:fs';
 import { configDir } from '../core/config';
 import { dataDir } from '../core/paths';
 import { followEarlyoom } from './journal';
@@ -21,16 +21,22 @@ const stopJournal = followEarlyoom((l) => rec.onEarlyoomLine(l), (s) => rec.setE
 
 let debounce: NodeJS.Timeout | undefined;
 try {
-  watch(configDir(), () => {
+  mkdirSync(configDir(), { recursive: true });
+  const watcher = watch(configDir(), () => {
     clearTimeout(debounce);
     debounce = setTimeout(() => {
-      const before = rec.config().intervalSec;
-      rec.reloadConfig();
-      if (rec.config().intervalSec !== before) schedule();
+      try {
+        const before = rec.config().intervalSec;
+        rec.reloadConfig();
+        if (rec.config().intervalSec !== before) schedule();
+      } catch (e) {
+        console.error(`config: ${(e as Error).message}`);
+      }
     }, 500);
   });
+  watcher.on('error', (e) => console.error(`config watch: ${e.message}`));
 } catch {
-  // dossier de config absent : la config par défaut reste active
+  // dossier de config inaccessible : la config par défaut reste active
 }
 
 const shutdown = () => {

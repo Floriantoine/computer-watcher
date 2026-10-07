@@ -103,3 +103,30 @@ test('après une purge qui supprime un processus en cache, le tick suivant recr�
   expect(db().prepare('SELECT COUNT(*) n FROM proc_samples').get()).toEqual({ n: 2 });
   rec.stop();
 });
+
+test('redémarrage : la minute en cours à l\'arrêt est agrégée', () => {
+  const { rec, db, base, procRoot } = setup();
+  rec.start();
+  rec.tick(); // t = 1_000_000 (minute 960_000)
+  rec.stop();
+  const rec2 = createRecorder({ dataDir: join(base, 'data'), configDir: join(base, 'cfg'), procRoot, now: () => 1_000_000 + 5 * 60_000, cpuCount: 4, log: () => {} });
+  rec2.start();
+  rec2.minuteJob();
+  expect(db().prepare('SELECT COUNT(*) n FROM group_minute WHERE ts = 960000').get()).toEqual({ n: 3 });
+  rec2.stop();
+});
+
+test('une étape de minuteJob en échec ne bloque pas la purge ; erreurs par travail', () => {
+  const { rec, advance, db, base } = setup();
+  rec.start();
+  rec.tick();
+  // échec simulé : un dossier à la place du fichier d'événements de l'app
+  mkdirSync(join(base, 'data', 'app-events.jsonl'));
+  advance(31 * 86400_000);
+  rec.minuteJob();
+  const s = rec.status();
+  expect(s.jobErrors?.minute).toMatch(/^minute: événements app/);
+  expect(s.lastError).toMatch(/^minute: /);
+  expect(db().prepare('SELECT COUNT(*) n FROM system_samples').get()).toEqual({ n: 0 }); // purge exécutée malgré tout
+  rec.stop();
+});

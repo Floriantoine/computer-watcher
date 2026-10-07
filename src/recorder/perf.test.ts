@@ -6,7 +6,8 @@ import { buildGroups } from '../core/grouping/buildGroups';
 import { createProjectRootCache } from '../core/grouping/projectRootCache';
 import { DEV_TOOL } from '../core/grouping/rules';
 
-test('un tick de collecte sur le vrai /proc reste rapide', () => {
+// Mesure la vraie machine, sensible au timing : lancé par `npm run test:recorder` (PROC_WATCH_PERF=1)
+test.skipIf(process.env.PROC_WATCH_PERF !== '1')('un tick de collecte sur le vrai /proc reste rapide', () => {
   const tracker = new CpuTracker();
   const cmdlineCache = new Map<string, string>();
   const projectRootOf = createProjectRootCache();

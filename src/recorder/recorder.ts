@@ -56,9 +56,17 @@ export function createRecorder(deps: RecorderDeps): Recorder {
   let lastMinute = 0;
   const st: RecorderStatus = { pid: process.pid, startedAt: now(), lastSampleAt: null, lastError: null, earlyoomSource: 'unavailable', dbSizeBytes: 0 };
 
+  type Job = 'tick' | 'minute' | 'earlyoom';
+  const jobErrors: Record<Job, string | null> = { tick: null, minute: null, earlyoom: null };
+  const errorAt: Record<Job, number> = { tick: 0, minute: 0, earlyoom: 0 };
+  let errSeq = 0;
+  st.jobErrors = jobErrors;
+  let lastPressureTs: number | null = null;
+
   const writeStatus = () => {
     try {
-      st.dbSizeBytes = existsSync(dbPath(deps.dataDir)) ? statSync(dbPath(deps.dataDir)).size : 0;
+      const size = (p: string) => (existsSync(p) ? statSync(p).size : 0);
+      st.dbSizeBytes = size(dbPath(deps.dataDir)) + size(`${dbPath(deps.dataDir)}-wal`);
       const tmp = `${statusPath(deps.dataDir)}.${process.pid}.tmp`;
       writeFileSync(tmp, JSON.stringify(st));
       renameSync(tmp, statusPath(deps.dataDir));
@@ -67,9 +75,21 @@ export function createRecorder(deps: RecorderDeps): Recorder {
     }
   };
 
-  const fail = (where: string, e: unknown) => {
-    st.lastError = `${where}: ${(e as Error).message ?? String(e)}`;
-    log(st.lastError);
+  /** lastError = erreur non nulle la plus récente ; chaque travail n'efface que la sienne. */
+  const refreshLastError = () => {
+    let best: Job | null = null;
+    for (const j of ['tick', 'minute', 'earlyoom'] as Job[]) if (jobErrors[j] && (!best || errorAt[j] > errorAt[best])) best = j;
+    st.lastError = best ? jobErrors[best] : null;
+  };
+  const ok = (job: Job) => {
+    jobErrors[job] = null;
+    refreshLastError();
+  };
+  const fail = (job: Job, where: string, e: unknown) => {
+    jobErrors[job] = `${where}: ${(e as Error).message ?? String(e)}`;
+    errorAt[job] = ++errSeq;
+    refreshLastError();
+    log(jobErrors[job]!);
     writeStatus();
   };
 
@@ -87,7 +107,11 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       }
       const gap = detectGap(lastSampleTs(db), now(), cfg.intervalSec);
       if (gap) insertEvent(db, now(), 'gap', null, gap);
-      lastMinute = Math.floor(now() / M) * M;
+      const last = lastSampleTs(db);
+      const current = Math.floor(now() / M) * M;
+      // reprend à la minute du dernier échantillon (l'agrégation est idempotente) ; les échantillons plus vieux que detailHours sont déjà purgés
+      lastMinute = last === null ? current : Math.max(Math.floor(last / M) * M, current - cfg.detailHours * 3600_000);
+      lastPressureTs = lastEventTs(db, 'pressure');
       writeStatus();
     },
 
@@ -106,40 +130,73 @@ export function createRecorder(deps: RecorderDeps): Recorder {
         });
         const cpuPercent = procs.reduce((s, p) => s + p.cpuPercent, 0) / ncpu;
         writer.writeTick({ ts, system, cpuPercent, groups, procs }, cfg);
-        if (shouldRecordPressure(system.psiSome10, lastEventTs(db, 'pressure'), ts)) {
+        if (shouldRecordPressure(system.psiSome10, lastPressureTs, ts)) {
           insertEvent(db, ts, 'pressure', null, { psi: system.psiSome10 });
+          lastPressureTs = ts;
         }
         st.lastSampleAt = ts;
-        st.lastError = null;
+        ok('tick');
         writeStatus();
       } catch (e) {
-        fail('tick', e);
+        fail('tick', 'tick', e);
       }
     },
 
     minuteJob() {
-      if (!db || !writer) return;
-      try {
-        const t = now();
+      const d = db;
+      const w = writer;
+      if (!d || !w) return;
+      const t = now();
+      let firstError: string | null = null;
+      // chaque étape est isolée : une étape en échec ne bloque pas les suivantes (notamment la purge)
+      const step = (name: string, fn: () => void) => {
+        try {
+          fn();
+        } catch (e) {
+          log(`minute(${name}): ${(e as Error).message}`);
+          firstError ??= `${name}: ${(e as Error).message ?? String(e)}`;
+        }
+      };
+      step('clear-request', () => {
         if (existsSync(clearRequestPath(deps.dataDir))) {
-          clearAll(db);
-          writer.forget();
+          clearAll(d);
+          w.forget();
+          lastMinute = Math.floor(t / M) * M;
           rmSync(clearRequestPath(deps.dataDir), { force: true });
         }
+      });
+      step('agrégation', () => {
         const current = Math.floor(t / M) * M;
-        for (let m = lastMinute; m < current; m += M) aggregateMinute(db, m);
-        lastMinute = current;
-        const taken = takeAppEvents(appEventsPath(deps.dataDir));
-        for (const e of taken.events) insertEvent(db, e.ts, 'app_kill', e.groupKey, e.detail);
-        taken.ack();
-        for (const l of leakCandidates(db, t, cfg.leakMinMinutes, cfg.leakMinGrowthMB)) {
-          insertEvent(db, t, 'leak', l.key, { growthKB: l.growthKB, minutes: cfg.leakMinMinutes });
+        while (lastMinute < current) {
+          aggregateMinute(d, lastMinute);
+          lastMinute += M;
         }
-        purge(db, t, cfg.detailHours, cfg.summaryDays);
-        writer.forget();
+      });
+      step('événements app', () => {
+        const taken = takeAppEvents(appEventsPath(deps.dataDir));
+        d.exec('BEGIN');
+        try {
+          for (const e of taken.events) insertEvent(d, e.ts, 'app_kill', e.groupKey, e.detail);
+          d.exec('COMMIT');
+        } catch (e) {
+          d.exec('ROLLBACK');
+          throw e;
+        }
+        taken.ack();
+      });
+      step('fuites', () => {
+        for (const l of leakCandidates(d, t, cfg.leakMinMinutes, cfg.leakMinGrowthMB)) {
+          insertEvent(d, t, 'leak', l.key, { growthKB: l.growthKB, minutes: cfg.leakMinMinutes });
+        }
+      });
+      step('purge', () => {
+        purge(d, t, cfg.detailHours, cfg.summaryDays);
+        w.forget();
+      });
+      if (firstError) fail('minute', 'minute', new Error(firstError));
+      else {
+        ok('minute');
         writeStatus();
-      } catch (e) {
-        fail('minute', e);
       }
     },
 
@@ -160,8 +217,10 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       try {
         insertEvent(db, j.ts, 'earlyoom_kill', null, k);
       } catch (e) {
-        fail('earlyoom', e);
+        fail('earlyoom', 'earlyoom', e);
+        return;
       }
+      ok('earlyoom');
     },
 
     stop() {

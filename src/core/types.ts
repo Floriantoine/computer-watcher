@@ -120,4 +120,4 @@ export interface ProcsHistory { ts: number[]; series: ProcSeries[] }
 export interface Culprit { key: string; label: string; kind: GroupKind; deltaKB: number; memKB: number }
 export interface TopConsumer { key: string; label: string; kind: GroupKind; avgKB: number; maxKB: number; spark: number[] }
 export interface HistoryEvent { ts: number; type: string; groupKey: string | null; groupLabel: string | null; detail: Record<string, unknown> }
-export interface RecorderStatus { pid: number; startedAt: number; lastSampleAt: number | null; lastError: string | null; earlyoomSource: 'ok' | 'unavailable'; dbSizeBytes: number }
+export interface RecorderStatus { pid: number; startedAt: number; lastSampleAt: number | null; lastError: string | null; earlyoomSource: 'ok' | 'unavailable'; dbSizeBytes: number; jobErrors?: Record<'tick' | 'minute' | 'earlyoom', string | null> }
