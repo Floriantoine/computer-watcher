@@ -1,0 +1,177 @@
+// Performance et volume à la cardinalité réelle (mesurée sur la base de l'utilisateur le 2026-10-07) :
+// ~400 groupes par tick dont ~38 au-dessus de 20 Mo (repliés par le service : ~40 groupes enregistrés + « Petits groupes »),
+// ~130 processus enregistrés par tick, ~1 300 processus distincts par heure (cmdline ~600 octets).
+// Lourd (≈ 1 Go de base) : lancé par `npm run test:recorder` (PROC_WATCH_PERF=1), base sur disque dans ~/.cache.
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import { afterAll, expect, test } from 'vitest';
+import type { Group, ProcInfo, RangePreset, SystemInfo } from '../types';
+import { openHistoryDb } from './db';
+import { aggregateHour, aggregateMinute, rollupHours } from './maintenance';
+import { queryCulprits, queryEvents, queryGroups, querySystem, queryTop, rangeFromPreset } from './queries';
+import { HistoryWriter, SMALL_GROUPS_KEY } from './writer';
+
+const M = 60_000;
+const H = 3600_000;
+const D = 24 * H;
+const TICK = 5000;
+const GROUPS = 400;
+const BIG = 38; // groupes au-dessus de 20 Mo
+const STABLE_PROCS = 110; // processus longs au-dessus de 50 Mo
+const CHURN_PER_MIN = 20; // processus courts (builds, tests, onglets) : ~1 300 distincts par heure avec les stables
+const CMDLINE = 600;
+const DAYS = 30;
+const THRESHOLDS = { procMinMemMB: 50, procMinCpuPercent: 1, groupMinMemMB: 20 };
+
+const dirs: string[] = [];
+afterAll(() => {
+  for (const d of dirs) rmSync(d, { recursive: true, force: true });
+});
+
+const groupBaseKB = (i: number) => (i < BIG ? (25 + ((i * i * 37) % 3000)) * 1024 : (100 + ((i * 7919) % 15_000)));
+/** Un « petit » groupe sur deux ticks passe au-dessus du seuil CPU : enregistré à part ce tick-là. */
+const busySmall = (tick: number) => (tick % 2 === 0 ? BIG + ((tick * 7) % (GROUPS - BIG)) : -1);
+const cmdline = (n: number) => `/usr/lib/app/bin --type=renderer --instance=${n} `.padEnd(CMDLINE, 'x');
+
+test.skipIf(process.env.PROC_WATCH_PERF !== '1')('requêtes Métriques et taille de la base à la cardinalité réelle', () => {
+  const root = join(homedir(), '.cache');
+  mkdirSync(root, { recursive: true });
+  const dir = mkdtempSync(join(root, 'proc-watch-perf-'));
+  dirs.push(dir);
+  const path = join(dir, 'metrics.db');
+  const { db } = openHistoryDb(path);
+  db.exec('PRAGMA synchronous = OFF'); // amorçage seulement : n'influence ni la taille ni les requêtes
+  const now = Date.UTC(2026, 9, 7, 12);
+  const detailFrom = now - D;
+  const start = now - DAYS * D;
+  const t0 = performance.now();
+
+  // --- 29 jours de résumés (ce que le service laisse après purge du détail) ---
+  db.exec('BEGIN');
+  const ins = {
+    group: db.prepare('INSERT INTO groups(id,key,label,kind) VALUES (?,?,?,?)'),
+    proc: db.prepare('INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id,ppid) VALUES (?,?,?,?,?,?,?)'),
+    sm: db.prepare('INSERT INTO system_minute VALUES (?,?,?,?,?,?,?,?,?,?,?)'),
+    gm: db.prepare('INSERT INTO group_minute VALUES (?,?,?,?,?,?)'),
+    pm: db.prepare('INSERT INTO proc_minute VALUES (?,?,?,?,?)'),
+    ev: db.prepare('INSERT INTO events(ts,type,group_id,detail) VALUES (?,?,?,?)'),
+  };
+  for (let i = 0; i < GROUPS; i++) ins.group.run(i + 1, `command:g${i}`, `g${i}`, 'command');
+  ins.group.run(GROUPS + 1, SMALL_GROUPS_KEY, 'Petits groupes', 'others');
+  for (let p = 1; p <= STABLE_PROCS; p++) ins.proc.run(p, 1000 + p, p, `p${p}`, cmdline(p), (p % BIG) + 1, 1);
+  let nextProc = STABLE_PROCS + 1;
+  let prevChurn: number[] = [];
+  for (let ts = start, m = 0; ts < detailFrom; ts += M, m++) {
+    ins.sm.run(ts, 20e6 + (m % 100) * 1e4, 21e6, 32e6, 4e6, 4.1e6, 20e6, 2, 8, 1.5, 12);
+    for (let i = 0; i < BIG; i++) {
+      const v = groupBaseKB(i) + (m % 60) * 100;
+      ins.gm.run(ts, i + 1, v, 1024, v + 2048, 3);
+    }
+    ins.gm.run(ts, GROUPS + 1, 1_200_000, 50_000, 1_300_000, 4);
+    for (let k = 0; k < 6; k++) ins.gm.run(ts, BIG + 1 + ((m * 6 + k) % (GROUPS - BIG)), 5000, 0, 5000, 2);
+    for (let p = 1; p <= STABLE_PROCS; p++) ins.pm.run(ts, p, 80_000 + p, 90_000 + p, 1);
+    const churn: number[] = [];
+    for (let k = 0; k < CHURN_PER_MIN; k++) {
+      const id = nextProc++;
+      ins.proc.run(id, 100_000 + (id % 4_000_000), id, 'chrome', cmdline(id), (id % BIG) + 1, 1);
+      churn.push(id);
+    }
+    for (const id of [...prevChurn, ...churn]) ins.pm.run(ts, id, 60_000, 70_000, 2);
+    prevChurn = churn;
+    if (m % 30 === 0) ins.ev.run(ts, 'pressure', null, '{"psi":30}');
+  }
+  rollupHours(db, { from: start, to: detailFrom });
+  db.exec('COMMIT');
+  const tSummary = performance.now();
+
+  // --- 24 h de détail écrites par le vrai writer (règle de repli du service), puis agrégées comme le service ---
+  const sys: SystemInfo = { memTotalKB: 32e6, memAvailableKB: 12e6, swapTotalKB: 20e6, swapFreeKB: 16e6, load1: 1.5, psiSome10: 2 };
+  const writer = new HistoryWriter(db);
+  const churnAlive: { id: number; pid: number; until: number }[] = [];
+  let maxGroupsPerTick = 0;
+  for (let ts = detailFrom, tick = 0; ts < now; ts += TICK, tick++) {
+    if (tick % 12 === 0) {
+      for (let k = 0; k < CHURN_PER_MIN; k++) {
+        const id = nextProc++;
+        churnAlive.push({ id, pid: 100_000 + (id % 4_000_000), until: ts + M });
+      }
+    }
+    while (churnAlive.length && churnAlive[0].until <= ts) churnAlive.shift();
+    const busy = busySmall(tick);
+    const procs: ProcInfo[] = [];
+    const pidsOf = new Map<number, number[]>();
+    const add = (pid: number, startTicks: number, gi: number, rssKB: number, cpu: number) => {
+      procs.push({
+        pid, ppid: 1, name: `p${pid}`, cmdline: cmdline(pid), uid: 1000, startTicks, ageSec: 1, cpuTicks: 0, cpuPercent: cpu,
+        rssKB, swapKB: 0, cwd: null, cwdDeleted: false,
+      });
+      pidsOf.set(gi, [...(pidsOf.get(gi) ?? []), pid]);
+    };
+    for (let p = 1; p <= STABLE_PROCS; p++) add(1000 + p, p, p % BIG, 80_000 + p, 0.5);
+    for (const c of churnAlive) add(c.pid, c.id, c.id % BIG, 60_000, 2);
+    const groups = Array.from({ length: GROUPS }, (_, i): Group => {
+      const rssKB = groupBaseKB(i) + (i < BIG ? (tick % 720) * 10 : 0);
+      return {
+        id: `command:g${i}`, kind: 'command', label: `g${i}`, tags: [], rootName: `g${i}`, roots: [], pids: pidsOf.get(i) ?? [],
+        procCount: 1, cpuPercent: i === busy ? 2 : 0.1, rssKB, swapKB: 1024, oldestAgeSec: 1, protected: false, killable: true, subgroups: [],
+      };
+    });
+    const r = writer.writeTick({ ts, system: sys, cpuPercent: 12, groups, procs }, THRESHOLDS);
+    maxGroupsPerTick = Math.max(maxGroupsPerTick, r.groups);
+  }
+  for (let ts = detailFrom; ts < now; ts += M) aggregateMinute(db, ts);
+  for (let ts = detailFrom; ts < now; ts += H) aggregateHour(db, ts);
+  db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+  const tDetail = performance.now();
+  console.info(`amorçage : résumés ${((tSummary - t0) / 1000).toFixed(1)} s, détail ${((tDetail - tSummary) / 1000).toFixed(1)} s`);
+  expect(maxGroupsPerTick).toBeLessThanOrEqual(BIG + 2); // ~40 groupes enregistrés au lieu de 400
+
+  // --- taille : octets par table (dbstat), ramenés à un jour ---
+  const bytes = new Map<string, number>();
+  const owner = (name: string) =>
+    name.replace(/_ts$/, '').replace(/^sqlite_autoindex_(\w+)_\d+$/, '$1').replace(/^procs_group$/, 'procs');
+  for (const r of db.prepare('SELECT name, SUM(pgsize) AS s FROM dbstat GROUP BY name').all() as { name: string; s: number }[]) {
+    bytes.set(owner(r.name), (bytes.get(owner(r.name)) ?? 0) + r.s);
+  }
+  const sum = (ts: string[]) => ts.reduce((s, t) => s + (bytes.get(t) ?? 0), 0);
+  const detail = sum(['system_samples', 'group_samples', 'proc_samples']);
+  const summaryDays = DAYS; // minutes/heures/procs/événements couvrent les 30 jours
+  const summary = sum(['system_minute', 'group_minute', 'proc_minute', 'system_hour', 'group_hour', 'procs', 'groups', 'events']);
+  const perDay = summary / summaryDays;
+  const MB = 1024 * 1024;
+  const file = (db.prepare('PRAGMA page_count').get() as { page_count: number }).page_count * 4096;
+  console.info(`taille par table (Mo) : ${JSON.stringify(Object.fromEntries([...bytes].map(([k, v]) => [k, +(v / MB).toFixed(1)])))}`);
+  console.info(`détail 24 h : ${(detail / MB).toFixed(0)} Mo ; résumés : ${(perDay / MB).toFixed(1)} Mo/jour ; fichier à 30 j : ${(file / MB).toFixed(0)} Mo`);
+  console.info(`  dont groupes (group_minute+group_hour) : ${(sum(['group_minute', 'group_hour']) / summaryDays / MB).toFixed(2)} Mo/jour ; processus (procs+proc_minute) : ${(sum(['procs', 'proc_minute']) / summaryDays / MB).toFixed(1)} Mo/jour`);
+  // projection en régime établi = détail (24 h) + 30 jours de résumés ; budget large pour ne pas casser sur le bruit
+  expect(sum(['group_minute', 'group_hour', 'system_minute', 'system_hour']) / summaryDays).toBeLessThan(6 * MB);
+  expect(detail + 30 * perDay).toBeLessThan(1600 * MB);
+  db.close();
+
+  // --- requêtes de l'onglet Métriques, sur une connexion en lecture seule neuve comme l'app ---
+  const ro = new DatabaseSync(path, { readOnly: true });
+  const o = { now, detailHours: 24, intervalSec: 5 };
+  for (const preset of ['1h', '6h', '24h', '7d', '30d'] as RangePreset[]) {
+    const r = rangeFromPreset(preset, now);
+    const times: Record<string, number> = {};
+    const time = <T,>(name: string, fn: () => T): T => {
+      const a = performance.now();
+      const v = fn();
+      times[name] = performance.now() - a;
+      return v;
+    };
+    const sysSeries = time('system', () => querySystem(ro, r, o));
+    const top = time('top', () => queryTop(ro, r, o, { peakLimit: 8 }));
+    time('groups', () => queryGroups(ro, r, o, top.byMax.map((t) => t.key)));
+    time('events', () => queryEvents(ro, r));
+    time('culprits', () => queryCulprits(ro, r.from + (r.to - r.from) / 2, o));
+    const total = Object.values(times).reduce((a, b) => a + b, 0);
+    console.info(`${preset} : ${Object.entries(times).map(([k, v]) => `${k} ${v.toFixed(1)} ms`).join(', ')} — total ${total.toFixed(1)} ms`);
+    expect(sysSeries.ts.length).toBeGreaterThan(0);
+    expect(top.byAvg.length).toBe(10);
+    for (const [k, v] of Object.entries(times)) expect(v, `${preset} ${k}`).toBeLessThan(150);
+  }
+  ro.close();
+}, 600_000);

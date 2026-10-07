@@ -188,8 +188,11 @@ export function queryTop(db: DatabaseSync, range: TimeRange, o: QueryOpts, { lim
   const avg = source === 'detail' ? 'AVG(rss_kb + swap_kb)' : 'AVG(rss_kb_avg + swap_kb_avg)';
   // Par minute/heure, mem_kb_max garde le pic : un pic court survit aux plages de 7 j / 30 j.
   const max = source === 'detail' ? 'MAX(rss_kb + swap_kb)' : 'MAX(mem_kb_max)';
+  // Tables horaires : la plage couvre une grande part de la table ; `+ts` écarte l'index sur ts au profit d'un parcours
+  // dans l'ordre de la clé (group_id, ts), déjà groupé : pas de lookup par ligne ni de B-tree temporaire (~4x plus rapide à 30 j).
+  const tsCol = source === 'hour' ? '+ts' : 'ts';
   const all = db
-    .prepare(`SELECT group_id AS gid, ${avg} AS avg, ${max} AS max FROM ${table} WHERE ts >= ? AND ts < ? GROUP BY group_id`)
+    .prepare(`SELECT group_id AS gid, ${avg} AS avg, ${max} AS max FROM ${table} WHERE ${tsCol} >= ? AND ${tsCol} < ? GROUP BY group_id`)
     .all(range.from, range.to) as { gid: number; avg: number; max: number }[];
   if (all.length === 0) return { byAvg: [], byMax: [] };
   const byAvgRows = [...all].sort((a, b) => b.avg - a.avg).slice(0, limit);

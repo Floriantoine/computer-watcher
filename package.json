@@ -16,7 +16,7 @@
     "start": "electron-vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "test:recorder": "electron-vite build && PROC_WATCH_PERF=1 vitest run src/recorder/perf.test.ts --disableConsoleIntercept && node scripts/recorder-e2e.mjs",
+    "test:recorder": "electron-vite build && PROC_WATCH_PERF=1 vitest run src/recorder/perf.test.ts src/core/history/queries.realistic.perf.test.ts --disableConsoleIntercept && node scripts/recorder-e2e.mjs",
     "smoke": "electron-vite build && node scripts/smoke.mjs",
     "dist": "electron-vite build && electron-builder --linux"
   },
