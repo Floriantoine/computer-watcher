@@ -13,3 +13,10 @@ test('LiveBuffer garde 30 min et les séries par groupe', () => {
   b.push(31 * 60_000, sys(30), []);
   expect(b.system().map((p) => p.memUsedKB)).toEqual([20, 30]);
 });
+
+test('procSparkMap : séries indexées par pid:startTicks', async () => {
+  const { procSparkMap } = await import('./history');
+  const m = procSparkMap({ ts: [1, 2], series: [{ pid: 4, startTicks: 99, memKB: [1, 2] }] });
+  expect(m.get('4:99')).toEqual([1, 2]);
+  expect(procSparkMap(null).size).toBe(0);
+});

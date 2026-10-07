@@ -1,8 +1,14 @@
+import { useCallback, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
-import { ArrowLeft, ChevronRight, Lock, Shield, ShieldOff, X } from 'lucide-react';
-import type { Group, ProcNode } from '../../../core/types';
+import { ArrowLeft, ChartLine, ChevronRight, Lock, Shield, ShieldOff, X } from 'lucide-react';
+import type { Group, ProcNode, RangePreset } from '../../../core/types';
 import { formatAge, formatKB } from '../format';
+import { procSparkMap, useHistory } from '../history';
+import { groupChartSeries } from './charts/chartData';
+import { TimeChart } from './charts/TimeChart';
+import { KB_FORMAT, PERCENT_FORMAT } from './charts/uplotTheme';
 import { ProcTree } from './ProcTree';
+import { RangeSelector } from './RangeSelector';
 import { AnimatedNumber, ForceButton, GroupIcon } from './ui';
 
 interface Props {
@@ -27,8 +33,47 @@ function BackButton({ onBack }: { onBack: () => void }) {
   );
 }
 
+const CHART_FORMAT = { left: KB_FORMAT, right: PERCENT_FORMAT };
+
+/** Panneau « Historique » : RAM + swap empilés et CPU du groupe sur la plage choisie. */
+function GroupHistoryPanel({ groupId }: { groupId: string }) {
+  const [range, setRange] = useState<RangePreset>('1h');
+  const h = useHistory(() => window.procWatch.history.group(groupId, range), [groupId, range]);
+  const series = useMemo(() => (h ? groupChartSeries(h) : []), [h]);
+  const enough = !!h && h.ts.length >= 2;
+  return (
+    <section className="chart-panel" data-testid="group-history">
+      <div className="chart-panel-head">
+        <h3><ChartLine size={14} strokeWidth={2} /> Historique</h3>
+        {enough && (
+          <span className="chart-legend">
+            <span><i className="lg-mem" />RAM</span>
+            <span><i className="lg-swap" />Swap</span>
+            <span><i className="lg-cpu" />CPU</span>
+          </span>
+        )}
+        <span className="spacer" />
+        <RangeSelector value={range} onChange={setRange} />
+      </div>
+      {enough ? (
+        <TimeChart ts={h.ts} series={series} height={190} format={CHART_FORMAT} />
+      ) : (
+        <div className="chart-empty">{h === undefined ? 'Chargement…' : "Pas encore d'historique pour ce groupe"}</div>
+      )}
+    </section>
+  );
+}
+
 export function DetailView(props: Props) {
   const { group, onBack } = props;
+  const groupId = group?.id;
+  const others = group?.kind === 'others';
+  const procs = useHistory(
+    () => (groupId && !others ? window.procWatch.history.procs(groupId, '1h') : Promise.resolve(null)),
+    [groupId, others],
+  );
+  const sparks = useMemo(() => procSparkMap(procs), [procs]);
+  const sparkOf = useCallback((pid: number, startTicks: number) => sparks.get(`${pid}:${startTicks}`), [sparks]);
   if (!group) {
     return (
       <div className="empty">
@@ -80,6 +125,7 @@ export function DetailView(props: Props) {
         <div className="tile"><small>Swap</small><b><AnimatedNumber value={group.swapKB} /></b></div>
         <div className="tile"><small>Plus ancien</small><b className={group.oldestAgeSec > 86400 ? 'old' : ''}>{formatAge(group.oldestAgeSec)}</b></div>
       </div>
+      {!others && <GroupHistoryPanel key={group.id} groupId={group.id} />}
       {group.subgroups.length > 0 ? (
         <div className="subgroups">
           {group.subgroups.map((sg) => (
@@ -97,6 +143,7 @@ export function DetailView(props: Props) {
           stuckPids={props.stuckPids}
           pendingPids={props.pendingPids}
           currentUid={props.currentUid}
+          sparkOf={sparkOf}
           onKill={props.onKillProc}
           onForce={(pid) => props.onForce([pid])}
         />

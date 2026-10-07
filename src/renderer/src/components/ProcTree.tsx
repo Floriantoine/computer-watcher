@@ -2,6 +2,7 @@ import { useState, type ReactElement } from 'react';
 import type { ProcNode } from '../../../core/types';
 import { ChevronRight } from 'lucide-react';
 import { formatAge, formatCpu, formatKB } from '../format';
+import { Sparkline } from './charts/Sparkline';
 import { ForceButton, KillButton } from './ui';
 
 const DAY = 86400;
@@ -16,11 +17,13 @@ interface Props {
   stuckPids: Set<number>;
   pendingPids: Set<number>;
   currentUid: number;
+  /** Mémoire de la dernière heure d'un processus enregistré, si le service l'a suivi. */
+  sparkOf?: (pid: number, startTicks: number) => (number | null)[] | undefined;
   onKill: (node: ProcNode) => void;
   onForce: (pid: number) => void;
 }
 
-export function ProcTree({ roots, stuckPids, pendingPids, currentUid, onKill, onForce }: Props) {
+export function ProcTree({ roots, stuckPids, pendingPids, currentUid, sparkOf, onKill, onForce }: Props) {
   const [expanded, setExpanded] = useState<Set<number>>(() =>
     count(roots) > COLLAPSE_ABOVE ? new Set() : new Set(collectPids(roots)),
   );
@@ -53,6 +56,7 @@ export function ProcTree({ roots, stuckPids, pendingPids, currentUid, onKill, on
           </td>
           <td className="cmd mono" title={p.cmdline}>{p.cmdline}</td>
           <td className="cwd mono" title={p.cwd ?? ''}>{p.cwdDeleted ? '(supprimé) ' : ''}{p.cwd ?? '—'}</td>
+          <td className="spark-cell">{spark(sparkOf?.(p.pid, p.startTicks))}</td>
           <td className="num mono">{formatCpu(p.cpuPercent)}</td>
           <td className="num mono">{formatKB(p.rssKB)}</td>
           <td className="num mono">{formatKB(p.swapKB)}</td>
@@ -76,13 +80,17 @@ export function ProcTree({ roots, stuckPids, pendingPids, currentUid, onKill, on
       <div className="panel-scroll">
         <table className="tree">
           <thead>
-            <tr><th>PID</th><th>Commande</th><th>Dossier</th><th className="num">CPU</th><th className="num">RAM</th><th className="num">Swap</th><th className="num">Depuis</th><th /></tr>
+            <tr><th>PID</th><th>Commande</th><th>Dossier</th><th className="spark-cell">1 h</th><th className="num">CPU</th><th className="num">RAM</th><th className="num">Swap</th><th className="num">Depuis</th><th /></tr>
           </thead>
           <tbody>{rows}</tbody>
         </table>
       </div>
     </div>
   );
+}
+
+function spark(values: (number | null)[] | undefined) {
+  return values && values.filter((v) => v !== null).length >= 2 ? <Sparkline values={values} tone="mem" height={18} /> : <span className="mono">—</span>;
 }
 
 function collectPids(nodes: ProcNode[], out: number[] = []): number[] {

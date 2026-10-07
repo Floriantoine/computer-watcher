@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { SystemInfo } from '../../core/types';
+import type { ProcsHistory, SystemInfo } from '../../core/types';
 
 export interface SystemPoint { ts: number; memUsedKB: number; swapUsedKB: number; psi: number | null; load: number }
 
@@ -50,4 +50,9 @@ export function useHistory<T>(fetch: () => Promise<T>, deps: unknown[], refreshM
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
   return data;
+}
+
+/** Séries mémoire des processus enregistrés, indexées par `${pid}:${startTicks}`. */
+export function procSparkMap(h: ProcsHistory | null | undefined): Map<string, (number | null)[]> {
+  return new Map((h?.series ?? []).map((s) => [`${s.pid}:${s.startTicks}`, s.memKB]));
 }

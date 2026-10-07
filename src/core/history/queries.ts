@@ -125,14 +125,15 @@ export function queryGroup(db: DatabaseSync, key: string, range: TimeRange, o: Q
 
 export function queryProcs(db: DatabaseSync, groupKey: string, range: TimeRange, o: QueryOpts): ProcsHistory {
   const { source, bucket } = plan(range, o);
+  // GROUP BY p.id et non par l'alias `key` : dans un GROUP BY, `key` désignerait la colonne groups.key.
   const sql =
     source === 'detail'
       ? `SELECT (CAST(? AS INTEGER) + ((s.ts - CAST(? AS INTEGER)) / CAST(? AS INTEGER)) * CAST(? AS INTEGER)) AS t, p.pid || ':' || p.start_ticks AS key, MAX(s.rss_kb + s.swap_kb) AS v
          FROM proc_samples s JOIN procs p ON p.id = s.proc_id JOIN groups g ON g.id = p.group_id
-         WHERE g.key = ? AND s.ts >= ? AND s.ts < ? GROUP BY t, key`
+         WHERE g.key = ? AND s.ts >= ? AND s.ts < ? GROUP BY t, p.id`
       : `SELECT (CAST(? AS INTEGER) + ((s.ts - CAST(? AS INTEGER)) / CAST(? AS INTEGER)) * CAST(? AS INTEGER)) AS t, p.pid || ':' || p.start_ticks AS key, MAX(s.mem_kb_max) AS v
          FROM proc_minute s JOIN procs p ON p.id = s.proc_id JOIN groups g ON g.id = p.group_id
-         WHERE g.key = ? AND s.ts >= ? AND s.ts < ? GROUP BY t, key`;
+         WHERE g.key = ? AND s.ts >= ? AND s.ts < ? GROUP BY t, p.id`;
   const rows = db.prepare(sql).all(range.from, range.from, bucket, bucket, groupKey, range.from, range.to) as { t: number; key: string; v: number }[];
   const { ts, byKey } = alignSeries(rows);
   return {

@@ -116,3 +116,15 @@ test('au plus 1000 points même quand from n\'est pas aligné sur le bucket', ()
   expect(s.ts.length).toBe(1000);
   expect(s.ts[0]).toBe(4000);
 });
+
+test('queryProcs : une série par processus du groupe (pas de collision avec groups.key)', () => {
+  const { db } = seeded();
+  db.exec(`INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id) VALUES (2,11,200,'chrome','chrome --type=renderer',1);`);
+  for (let ts = 0; ts < 10 * M; ts += 5000) db.prepare('INSERT INTO proc_samples VALUES (?,?,?,?,?)').run(ts, 2, 300 * 1024, 0, 1);
+  for (let m = 0; m < 10; m++) aggregateMinute(db, m * M);
+  for (const range of [{ from: 0, to: 10 * M }, { from: 0, to: 30 * H }]) {
+    const p = queryProcs(db, 'app:chrome', range, opts(10 * M));
+    expect(p.series.map((s) => `${s.pid}:${s.startTicks}`).sort()).toEqual(['10:100', '11:200']);
+    expect(p.series.find((s) => s.pid === 11)!.memKB.every((v) => v === 300 * 1024)).toBe(true);
+  }
+});
