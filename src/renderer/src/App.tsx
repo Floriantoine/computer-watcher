@@ -7,7 +7,7 @@ import { SettingsView } from './components/SettingsView';
 import { Toasts } from './components/Toasts';
 import { MainView } from './components/MainView';
 import { SystemBar } from './components/SystemBar';
-import { findGroup, flattenProcs, killErrorMessage, killRequestForGroup, killRequestForProc, trackKills, type KillRequest, type ViewFilter } from './viewModel';
+import { findGroup, flattenProcs, ipcErrorMessage, killErrorMessage, killRequestForGroup, killRequestForProc, trackKills, type KillRequest, type ViewFilter } from './viewModel';
 
 export type Route = { view: 'main' } | { view: 'detail'; groupId: string } | { view: 'settings' };
 
@@ -64,7 +64,7 @@ export function App() {
     try {
       setConfigState(await window.procWatch.setConfig(next));
     } catch (e) {
-      pushToast(`Réglages non enregistrés : ${(e as Error).message}`);
+      pushToast(`Réglages non enregistrés : ${ipcErrorMessage(e)}`);
     }
   }
 
@@ -115,7 +115,7 @@ export function App() {
           onInstallDesktop={() =>
             window.procWatch.installDesktopEntry().then(
               (file) => pushToast(`Raccourci créé : ${file}`),
-              (e: Error) => pushToast(e.message),
+              (e: unknown) => pushToast(ipcErrorMessage(e)),
             )
           }
         />

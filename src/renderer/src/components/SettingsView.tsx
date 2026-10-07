@@ -25,7 +25,7 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop }: Props)
   const saveThresholds = () => {
     const m = Number(memMB);
     const c = Number(cpu);
-    if (Number.isFinite(m) && m >= 0 && Number.isFinite(c) && c >= 0) onSave({ ...config, othersThreshold: { memMB: m, cpuPercent: c } });
+    if (memMB.trim() && cpu.trim() && Number.isFinite(m) && m >= 0 && Number.isFinite(c) && c >= 0) onSave({ ...config, othersThreshold: { memMB: m, cpuPercent: c } });
   };
 
   return (

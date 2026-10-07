@@ -106,3 +106,8 @@ export function killErrorMessage(r: KillResult): string | null {
   if (r.error === 'SELF') return `PID ${r.pid} : refusé, c'est proc-watch ou l'un de ses parents`;
   return `PID ${r.pid} : ${r.error}`;
 }
+
+export function ipcErrorMessage(e: unknown): string {
+  const msg = e instanceof Error ? e.message : String(e);
+  return msg.replace(/^Error invoking remote method '[^']*': (?:Error: )?/, '');
+}

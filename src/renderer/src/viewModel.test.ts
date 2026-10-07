@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import type { Group, ProcInfo, SystemInfo } from '../../core/types';
 import {
-  findGroup, killErrorMessage, killRequestForGroup, killRequestForProc, pressureLevel, trackKills, visibleGroups,
+  findGroup, ipcErrorMessage, killErrorMessage, killRequestForGroup, killRequestForProc, pressureLevel, trackKills, visibleGroups,
 } from './viewModel';
 
 const proc = (pid: number, name: string, extra: Partial<ProcInfo> = {}): ProcInfo => ({
@@ -96,4 +96,13 @@ test('killErrorMessage', () => {
   expect(killErrorMessage({ pid: 1, ok: false, error: 'ESRCH' })).toBeNull();
   expect(killErrorMessage({ pid: 1, ok: false, error: 'EPERM' })).toBe('PID 1 : permission refusée');
   expect(killErrorMessage({ pid: 1, ok: false, error: 'SELF' })).toBe('PID 1 : refusé, c\'est proc-watch ou l\'un de ses parents');
+});
+
+describe('ipcErrorMessage', () => {
+  test('retire le préfixe IPC d\'Electron', () => {
+    expect(ipcErrorMessage(new Error("Error invoking remote method 'desktop:install': Error: Disponible uniquement dans la version installée (AppImage ou .deb)")))
+      .toBe('Disponible uniquement dans la version installée (AppImage ou .deb)');
+  });
+  test('Error simple', () => expect(ipcErrorMessage(new Error('x'))).toBe('x'));
+  test('valeur non Error', () => expect(ipcErrorMessage('boom')).toBe('boom'));
 });
