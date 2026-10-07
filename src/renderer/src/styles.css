@@ -152,7 +152,7 @@ select option { background: var(--surface-solid); color: var(--text); }
 .stat.lvl-warn { border-color: rgba(255, 181, 71, 0.28); }
 .stat.lvl-bad { border-color: rgba(255, 92, 138, 0.35); box-shadow: 0 0 0 1px rgba(255, 92, 138, 0.08), 0 0 24px -8px rgba(255, 92, 138, 0.45); }
 .stat small { display: block; color: var(--label); font-size: 11px; }
-.stat .spark { margin-top: 7px; }
+.stat .spark { margin: 0 0 8px; }
 .stat-value { display: flex; align-items: baseline; gap: 5px; margin: 2px 0 7px; white-space: nowrap; }
 .stat-value .b { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
 .stat-value .sub { overflow: hidden; text-overflow: ellipsis; }
@@ -456,3 +456,56 @@ table.group-list td.name { width: 100%; max-width: 0; }
 table.group-list td.spark-cell { width: 80px; padding-top: 0; padding-bottom: 0; }
 table.group-list td.spark-cell .spark { display: block; width: 80px; }
 table.group-list td.act { width: 1%; text-align: right; }
+
+/* ---------- Graphes (uPlot) ---------- */
+.chart-panel { margin: 0 var(--gutter) 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 10px 12px 8px; }
+.chart-panel-head { display: flex; align-items: center; gap: 14px; margin-bottom: 6px; min-width: 0; }
+.chart-panel-head h3 { margin: 0; font-size: 12.5px; font-weight: 600; display: flex; align-items: center; gap: 7px; color: var(--text); }
+.chart-panel-head h3 svg { color: var(--muted); }
+.chart-panel-head .spacer { flex: 1; }
+.chart-legend { display: inline-flex; gap: 12px; color: var(--label); font-size: 11px; }
+.chart-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.chart-legend i { width: 9px; height: 9px; border-radius: 3px; }
+.chart-legend .lg-mem { background: var(--g-mem); }
+.chart-legend .lg-swap { background: var(--g-swap); }
+.chart-legend .lg-cpu { width: 12px; height: 2px; border-radius: 2px; background: #c9cdd6; }
+.chart-empty { height: 120px; display: grid; place-items: center; color: var(--muted); font-size: 12px; border: 1px dashed var(--border-2); border-radius: var(--r-md); margin: 4px 0 6px; }
+
+.time-chart { position: relative; width: 100%; min-width: 0; }
+.time-chart-host { width: 100%; }
+.time-chart .uplot { width: 100%; font-family: var(--font-sans); }
+.time-chart .u-over { cursor: crosshair; }
+.time-chart .u-select { background: rgba(124, 92, 255, 0.14); border-left: 1px solid var(--accent-soft); border-right: 1px solid var(--accent-soft); }
+.time-chart .u-cursor-x { border-right: 1px solid rgba(255, 255, 255, 0.22) !important; }
+.chart-tip {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  min-width: 132px;
+  padding: 7px 10px 8px;
+  border-radius: var(--r-md);
+  background: rgba(21, 22, 28, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(12px) saturate(1.3);
+  box-shadow: 0 12px 32px -12px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(0, 0, 0, 0.25);
+  font-size: 11.5px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.chart-tip-time { color: var(--label); font-size: 11px; margin-bottom: 4px; }
+.chart-tip-row { display: flex; align-items: center; gap: 7px; color: var(--text-2); line-height: 1.6; }
+.chart-tip-row i { width: 7px; height: 7px; border-radius: 99px; flex: none; }
+.chart-tip-row b { margin-left: auto; padding-left: 12px; font-weight: 600; color: var(--text); }
+.chart-tip-marker { margin-top: 3px; padding-top: 3px; border-top: 1px solid var(--border); color: var(--text); }
+
+/* Sélecteur de plage */
+.range-selector { display: inline-flex; gap: 1px; padding: 2px; background: var(--surface-2); border: 1px solid var(--border-2); border-radius: var(--r-md); backdrop-filter: blur(12px); }
+.range-selector button { position: relative; padding: 3px 10px; border: 0; background: transparent; color: var(--label); border-radius: var(--r-sm); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.range-selector button:hover:not(:disabled) { background: transparent; border: 0; color: var(--text); }
+.range-selector button.active { color: var(--text); }
+.range-selector button > span:not(.range-indicator) { position: relative; z-index: 1; }
+.range-indicator { position: absolute; inset: 0; background: var(--surface-3); border: 1px solid var(--border-hover); border-radius: var(--r-sm); box-shadow: 0 0 0 1px rgba(124, 92, 255, 0.12), 0 4px 14px -6px var(--glow); }
+
+/* Mini-courbe dans l'arbre des processus */
+table.tree th.spark-cell, table.tree td.spark-cell { width: 72px; padding-top: 0; padding-bottom: 0; }
+table.tree td.spark-cell .spark { width: 64px; }
