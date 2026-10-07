@@ -10,6 +10,7 @@ export const RECORDER_BOUNDS: Record<RecorderNumField, Bound> = {
   summaryDays: { int: true, min: 1, max: 365 },
   procMinMemMB: { int: false, min: 0 },
   procMinCpuPercent: { int: false, min: 0 },
+  groupMinMemMB: { int: false, min: 0, max: 1024 },
   leakMinMinutes: { int: true, min: 5, max: 24 * 60 },
   leakMinGrowthMB: { int: false, min: 0 },
 };

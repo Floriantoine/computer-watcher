@@ -21,7 +21,7 @@ const g: Group = {
 
 function makeDb(dir: string, ts: number): void {
   const { db } = openHistoryDb(dbPath(dir));
-  new HistoryWriter(db).writeTick({ ts, system: sys, cpuPercent: 1, groups: [g], procs: [p] }, { procMinMemMB: 50, procMinCpuPercent: 1 });
+  new HistoryWriter(db).writeTick({ ts, system: sys, cpuPercent: 1, groups: [g], procs: [p] }, { procMinMemMB: 50, procMinCpuPercent: 1, groupMinMemMB: 0 });
   db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
   db.close();
 }
@@ -49,7 +49,7 @@ test('createHistoryReader : null sans base, données avec base, récupère aprè
   }
   const { db: ndb } = openHistoryDb(dbPath(dir));
   const g2: Group = { ...g, rssKB: 10 };
-  new HistoryWriter(ndb).writeTick({ ts: Date.now(), system: { ...sys, memAvailableKB: 100 }, cpuPercent: 1, groups: [g2], procs: [p] }, { procMinMemMB: 50, procMinCpuPercent: 1 });
+  new HistoryWriter(ndb).writeTick({ ts: Date.now(), system: { ...sys, memAvailableKB: 100 }, cpuPercent: 1, groups: [g2], procs: [p] }, { procMinMemMB: 50, procMinCpuPercent: 1, groupMinMemMB: 0 });
   ndb.exec('PRAGMA wal_checkpoint(TRUNCATE)');
   ndb.close();
   expect(reader.system(range)?.memUsedKB).toEqual([900]);

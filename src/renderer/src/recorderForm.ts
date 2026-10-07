@@ -1,7 +1,7 @@
 import { inBounds, RECORDER_BOUNDS, type RecorderNumField } from '../../core/recorderBounds';
 import type { RecorderConfig } from '../../core/types';
 
-export const RECORDER_FIELDS: RecorderNumField[] = ['intervalSec', 'detailHours', 'summaryDays', 'procMinMemMB', 'procMinCpuPercent', 'leakMinMinutes', 'leakMinGrowthMB'];
+export const RECORDER_FIELDS: RecorderNumField[] = ['intervalSec', 'detailHours', 'summaryDays', 'procMinMemMB', 'procMinCpuPercent', 'groupMinMemMB', 'leakMinMinutes', 'leakMinGrowthMB'];
 
 export type RecorderForm = Record<RecorderNumField, string>;
 export type RecorderErrors = Partial<Record<RecorderNumField, string>>;

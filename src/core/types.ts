@@ -76,6 +76,8 @@ export interface RecorderConfig {
   summaryDays: number;
   procMinMemMB: number;
   procMinCpuPercent: number;
+  /** Groupes enregistrés individuellement si RAM+swap ≥ ce seuil (ou CPU ≥ procMinCpuPercent) ; les autres sont cumulés dans « Petits groupes ». */
+  groupMinMemMB: number;
   leakMinMinutes: number;
   leakMinGrowthMB: number;
 }

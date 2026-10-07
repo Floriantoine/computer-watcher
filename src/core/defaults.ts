@@ -7,6 +7,7 @@ export const DEFAULT_RECORDER: RecorderConfig = {
   summaryDays: 30,
   procMinMemMB: 50,
   procMinCpuPercent: 1,
+  groupMinMemMB: 20,
   leakMinMinutes: 60,
   leakMinGrowthMB: 300,
 };

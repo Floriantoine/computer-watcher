@@ -110,6 +110,7 @@ test.each([
   ['summaryDays', 0], ['summaryDays', 366],
   ['procMinMemMB', -1], ['procMinCpuPercent', -1],
   ['leakMinMinutes', 4], ['leakMinGrowthMB', -1],
+  ['groupMinMemMB', -1], ['groupMinMemMB', 1025], ['groupMinMemMB', 'x'],
   ['enabled', 'oui'],
 ])('recorder.%s = %s → config invalide', (key, value) => {
   expect(validateConfig({ ...DEFAULT_CONFIG, recorder: { ...DEFAULT_RECORDER, [key]: value } })).toBeNull();
@@ -118,4 +119,12 @@ test.each([
 test('recorder valide modifié : conservé', () => {
   const recorder = { ...DEFAULT_RECORDER, intervalSec: 10, enabled: false };
   expect(validateConfig({ ...DEFAULT_CONFIG, recorder })?.recorder).toEqual(recorder);
+});
+
+test('recorder.groupMinMemMB : 20 Mo par défaut, ajouté si absent (config d\'une version précédente)', () => {
+  expect(DEFAULT_RECORDER.groupMinMemMB).toBe(20);
+  const { groupMinMemMB: _g, ...old } = DEFAULT_RECORDER;
+  expect(validateConfig({ ...DEFAULT_CONFIG, recorder: { ...old, intervalSec: 10 } })?.recorder).toEqual({ ...DEFAULT_RECORDER, intervalSec: 10 });
+  expect(validateConfig({ ...DEFAULT_CONFIG, recorder: { ...DEFAULT_RECORDER, groupMinMemMB: 0 } })?.recorder.groupMinMemMB).toBe(0);
+  expect(validateConfig({ ...DEFAULT_CONFIG, recorder: { ...DEFAULT_RECORDER, groupMinMemMB: 1024 } })?.recorder.groupMinMemMB).toBe(1024);
 });

@@ -10,6 +10,12 @@ export interface TickInput {
   procs: ProcInfo[];
 }
 
+export interface WriteThresholds { procMinMemMB: number; procMinCpuPercent: number; groupMinMemMB: number }
+
+/** Groupe synthétique qui cumule, à chaque tick, les groupes sous les seuils (évite ~300 groupes/tick en base). */
+export const SMALL_GROUPS_KEY = 'others:small';
+const SMALL_GROUPS = { id: SMALL_GROUPS_KEY, label: 'Petits groupes', kind: 'others' as const };
+
 export class HistoryWriter {
   private procIds = new Map<string, { id: number; ppid: number }>();
   private s: Record<'system' | 'group' | 'groupSample' | 'proc' | 'procPpid' | 'procSample', StatementSync>;
@@ -35,22 +41,41 @@ export class HistoryWriter {
   }
 
   /** Upsert à chaque tick : garde le libellé à jour et renvoie l'id stable. */
-  private groupId(g: Group): number {
+  private groupId(g: { id: string; label: string; kind: string }): number {
     return (this.s.group.get(g.id, g.label, g.kind) as { id: number }).id;
   }
 
-  writeTick(t: TickInput, thresholds: { procMinMemMB: number; procMinCpuPercent: number }): { groups: number; procs: number } {
+  writeTick(t: TickInput, thresholds: WriteThresholds): { groups: number; procs: number } {
     const minKB = thresholds.procMinMemMB * 1024;
+    const groupMinKB = thresholds.groupMinMemMB * 1024;
     const groupOfPid = new Map<number, number>();
     let procCount = 0;
+    let groupCount = 0;
     this.db.exec('BEGIN');
     try {
       const s = t.system;
       this.s.system.run(t.ts, s.memTotalKB - s.memAvailableKB, s.memTotalKB, s.swapTotalKB - s.swapFreeKB, s.swapTotalKB, s.psiSome10, s.load1, t.cpuPercent);
+      const small = { groups: 0, rssKB: 0, swapKB: 0, cpuPercent: 0, procCount: 0, pids: [] as number[] };
       for (const g of t.groups) {
+        if (g.rssKB + g.swapKB < groupMinKB && g.cpuPercent < thresholds.procMinCpuPercent) {
+          small.groups++;
+          small.rssKB += g.rssKB;
+          small.swapKB += g.swapKB;
+          small.cpuPercent += g.cpuPercent;
+          small.procCount += g.procCount;
+          small.pids.push(...g.pids);
+          continue;
+        }
         const id = this.groupId(g);
         for (const pid of g.pids) groupOfPid.set(pid, id);
         this.s.groupSample.run(t.ts, id, g.rssKB, g.swapKB, g.cpuPercent, g.procCount);
+        groupCount++;
+      }
+      if (small.groups > 0) {
+        const id = this.groupId(SMALL_GROUPS);
+        for (const pid of small.pids) groupOfPid.set(pid, id);
+        this.s.groupSample.run(t.ts, id, small.rssKB, small.swapKB, small.cpuPercent, small.procCount);
+        groupCount++;
       }
       for (const p of t.procs) {
         if (p.rssKB + p.swapKB < minKB && p.cpuPercent < thresholds.procMinCpuPercent) continue;
@@ -75,6 +100,6 @@ export class HistoryWriter {
       this.db.exec('ROLLBACK');
       throw e;
     }
-    return { groups: t.groups.length, procs: procCount };
+    return { groups: groupCount, procs: procCount };
   }
 }

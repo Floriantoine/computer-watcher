@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { expect, test } from 'vitest';
 import type { Group, ProcInfo, SystemInfo } from '../types';
 import { openHistoryDb } from './db';
-import { HistoryWriter } from './writer';
+import { HistoryWriter, SMALL_GROUPS_KEY } from './writer';
 
 const sys: SystemInfo = { memTotalKB: 1000, memAvailableKB: 400, swapTotalKB: 2000, swapFreeKB: 500, load1: 1.5, psiSome10: 3 };
 const proc = (pid: number, extra: Partial<ProcInfo> = {}): ProcInfo => ({
@@ -16,7 +16,7 @@ const group = (id: string, procs: ProcInfo[]): Group => ({
   procCount: procs.length, cpuPercent: procs.reduce((s, p) => s + p.cpuPercent, 0), rssKB: procs.reduce((s, p) => s + p.rssKB, 0),
   swapKB: procs.reduce((s, p) => s + p.swapKB, 0), oldestAgeSec: 1, protected: false, killable: true, subgroups: [],
 });
-const T = { procMinMemMB: 50, procMinCpuPercent: 1 };
+const T = { procMinMemMB: 50, procMinCpuPercent: 1, groupMinMemMB: 0 };
 const open = () => openHistoryDb(join(mkdtempSync(join(tmpdir(), 'pw-w-')), 'm.db')).db;
 
 test('écrit système, tous les groupes, et seulement les processus au-dessus des seuils', () => {
@@ -83,4 +83,39 @@ test('ppid écrit à la création, mis à jour une seule fois au reparentage', (
   tick(21000, 1);
   expect(ppid()).toBe(1);
   expect((db.prepare('SELECT COUNT(*) n FROM upd').get() as { n: number }).n).toBe(1);
+});
+
+test('petits groupes (< groupMinMemMB et CPU < procMinCpuPercent) cumulés dans un seul groupe « Petits groupes »', () => {
+  const db = open();
+  const w = new HistoryWriter(db);
+  const big = proc(10, { rssKB: 30 * 1024 });
+  const busy = proc(11, { rssKB: 100, cpuPercent: 2 });
+  const a = proc(12, { rssKB: 5 * 1024, swapKB: 1024, cpuPercent: 0.2 });
+  const b = proc(13, { rssKB: 2 * 1024, cpuPercent: 1.5 }); // processus actif dans un groupe peu actif : gardé
+  const b2 = proc(14, { rssKB: 1024 });
+  const gb = { ...group('command:b', [b, b2]), cpuPercent: 0.9 };
+  const r = w.writeTick(
+    { ts: 1000, system: sys, cpuPercent: 0, groups: [group('app:big', [big]), group('command:busy', [busy]), group('command:a', [a]), gb], procs: [big, busy, a, b, b2] },
+    { ...T, groupMinMemMB: 20 },
+  );
+  expect(r).toEqual({ groups: 3, procs: 2 });
+  expect(db.prepare('SELECT key, label, kind FROM groups ORDER BY id').all()).toEqual([
+    { key: 'app:big', label: 'app:big', kind: 'command' },
+    { key: 'command:busy', label: 'command:busy', kind: 'command' },
+    { key: SMALL_GROUPS_KEY, label: 'Petits groupes', kind: 'others' },
+  ]);
+  expect(db.prepare('SELECT g.key, s.rss_kb, s.swap_kb, s.cpu_percent, s.proc_count FROM group_samples s JOIN groups g ON g.id = s.group_id WHERE g.key = ?').get(SMALL_GROUPS_KEY)).toEqual({
+    key: SMALL_GROUPS_KEY, rss_kb: 5 * 1024 + 3 * 1024, swap_kb: 1024, cpu_percent: 0.2 + 0.9, proc_count: 3,
+  });
+  // processus enregistrés : busy (CPU) dans son groupe, b (CPU) rattaché aux petits groupes
+  expect(db.prepare('SELECT p.pid, g.key FROM procs p JOIN groups g ON g.id = p.group_id ORDER BY p.pid').all()).toEqual([
+    { pid: 11, key: 'command:busy' }, { pid: 13, key: SMALL_GROUPS_KEY },
+  ]);
+});
+
+test('aucun petit groupe : pas de ligne « Petits groupes »', () => {
+  const db = open();
+  const big = proc(10, { rssKB: 30 * 1024 });
+  new HistoryWriter(db).writeTick({ ts: 1, system: sys, cpuPercent: 0, groups: [group('app:big', [big])], procs: [big] }, { ...T, groupMinMemMB: 20 });
+  expect(db.prepare('SELECT key FROM groups').all()).toEqual([{ key: 'app:big' }]);
 });

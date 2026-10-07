@@ -22,13 +22,13 @@ function setup() {
   return { rec, base, procRoot, advance: (ms: number) => (t += ms), db: () => new DatabaseSync(join(base, 'data', 'metrics.db'), { readOnly: true }) };
 }
 
-test('un tick écrit système, groupes, processus au-dessus des seuils, statut', () => {
+test('un tick écrit système, groupes (petits groupes cumulés), processus au-dessus des seuils, statut', () => {
   const { rec, base, db } = setup();
   rec.start();
   rec.tick();
   const d = db();
   expect(d.prepare('SELECT COUNT(*) n FROM system_samples').get()).toEqual({ n: 1 });
-  expect((d.prepare('SELECT key FROM groups ORDER BY key').all() as { key: string }[]).map((g) => g.key)).toEqual(['app:chrome', 'command:sleep', 'project:/home/u/acme']);
+  expect((d.prepare('SELECT key FROM groups ORDER BY key').all() as { key: string }[]).map((g) => g.key)).toEqual(['app:chrome', 'others:small', 'project:/home/u/acme']);
   expect((d.prepare('SELECT pid FROM procs ORDER BY pid').all() as { pid: number }[]).map((p) => p.pid)).toEqual([10, 11]);
   expect(d.prepare("SELECT type FROM events").all()).toEqual([{ type: 'pressure' }]);
   const status = JSON.parse(readFileSync(join(base, 'data', 'recorder-status.json'), 'utf8'));

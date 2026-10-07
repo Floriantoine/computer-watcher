@@ -90,6 +90,7 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
     { f: 'summaryDays', label: 'Rétention résumée', unit: 'j' },
     { f: 'procMinMemMB', label: 'Seuil mémoire processus', unit: 'Mo' },
     { f: 'procMinCpuPercent', label: 'Seuil CPU processus', unit: '%', step: '0.5' },
+    { f: 'groupMinMemMB', label: 'Seuil mémoire groupe', unit: 'Mo' },
     { f: 'leakMinMinutes', label: 'Fuite : durée', unit: 'min' },
     { f: 'leakMinGrowthMB', label: 'Fuite : hausse', unit: 'Mo' },
   ];

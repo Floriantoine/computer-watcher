@@ -16,7 +16,8 @@ export function configDir(env: NodeJS.ProcessEnv = process.env, home: string = h
 function validateRecorder(raw: unknown): RecorderConfig | null {
   if (raw === undefined) return { ...DEFAULT_RECORDER };
   if (typeof raw !== 'object' || raw === null) return null;
-  const r = raw as Record<string, unknown>;
+  // champ ajouté après coup : absent d'une config existante → valeur par défaut (pas de réinitialisation)
+  const r: Record<string, unknown> = { groupMinMemMB: DEFAULT_RECORDER.groupMinMemMB, ...(raw as Record<string, unknown>) };
   if (typeof r.enabled !== 'boolean') return null;
   for (const f of Object.keys(RECORDER_BOUNDS) as RecorderNumField[]) if (!inBounds(r[f], RECORDER_BOUNDS[f])) return null;
   return {
@@ -26,6 +27,7 @@ function validateRecorder(raw: unknown): RecorderConfig | null {
     summaryDays: r.summaryDays as number,
     procMinMemMB: r.procMinMemMB as number,
     procMinCpuPercent: r.procMinCpuPercent as number,
+    groupMinMemMB: r.groupMinMemMB as number,
     leakMinMinutes: r.leakMinMinutes as number,
     leakMinGrowthMB: r.leakMinGrowthMB as number,
   };

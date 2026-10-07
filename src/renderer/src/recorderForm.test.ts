@@ -18,6 +18,8 @@ test('champ vide ou hors bornes refusé avec message', () => {
   expect(validateRecorderForm({ ...base, leakMinMinutes: '4' }, true).errors.leakMinMinutes).toBeTruthy();
   expect(validateRecorderForm({ ...base, procMinCpuPercent: '-1' }, true).errors.procMinCpuPercent).toBeTruthy();
   expect(validateRecorderForm({ ...base, procMinMemMB: 'abc' }, true).errors.procMinMemMB).toBeTruthy();
+  expect(validateRecorderForm({ ...base, groupMinMemMB: '2000' }, true).errors.groupMinMemMB).toBe('Un nombre entre 0 et 1024 est attendu');
+  expect(base.groupMinMemMB).toBe('20');
 });
 
 test('accepte les décimaux pour les seuils et reste accepté par validateConfig', () => {
