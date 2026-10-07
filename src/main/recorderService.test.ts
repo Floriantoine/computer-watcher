@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { expect, test } from 'vitest';
-import { autoManageService, ensureRecorderService, recorderExecArgs, recorderUnit, systemdQuote, unitPath, type Systemctl } from './recorderService';
+import { autoManageService, recorderSyncDisabled, ensureRecorderService, recorderExecArgs, recorderUnit, systemdQuote, unitPath, type Systemctl } from './recorderService';
 
 test('systemdQuote échappe \\ " $ % et entoure de guillemets', () => {
   expect(systemdQuote('/opt/My App/p%w$x"y\\z')).toBe('"/opt/My App/p%%w$$x\\"y\\\\z"');
@@ -101,4 +101,10 @@ test('autoManageService : version installée, ou clone de dev avec PROC_WATCH_RE
   expect(autoManageService(false, {})).toBe(false);
   expect(autoManageService(false, { PROC_WATCH_RECORDER_DEV: '1' })).toBe(true);
   expect(autoManageService(false, { PROC_WATCH_RECORDER_DEV: '0' })).toBe(false);
+});
+
+test('PROC_WATCH_NO_RECORDER_SYNC=1 : l\'app ne touche jamais au service (mesures, tests)', () => {
+  expect(recorderSyncDisabled({ PROC_WATCH_NO_RECORDER_SYNC: '1' })).toBe(true);
+  expect(recorderSyncDisabled({})).toBe(false);
+  expect(recorderSyncDisabled({ PROC_WATCH_NO_RECORDER_SYNC: '0' })).toBe(false);
 });

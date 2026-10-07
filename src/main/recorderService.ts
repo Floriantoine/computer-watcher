@@ -44,6 +44,11 @@ export function unitPath(env: NodeJS.ProcessEnv = process.env, home: string = ho
  * seulement avec PROC_WATCH_RECORDER_DEV=1 (pas de service permanent installé en silence). Le réglage
  * « Enregistrer l'historique », action explicite, gère le service dans tous les cas.
  */
+/** PROC_WATCH_NO_RECORDER_SYNC=1 : l'app ne crée, ne modifie ni ne retire jamais l'unité (scripts de mesure, tests). */
+export function recorderSyncDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.PROC_WATCH_NO_RECORDER_SYNC === '1';
+}
+
 export function autoManageService(isPackaged: boolean, env: NodeJS.ProcessEnv = process.env): boolean {
   return isPackaged || env.PROC_WATCH_RECORDER_DEV === '1';
 }

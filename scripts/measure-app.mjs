@@ -161,7 +161,8 @@ async function launch(spec, kwin) {
     const config = { version: 1, protected: [], othersThreshold: { memMB: 100, cpuPercent: 1 }, ui: { reducedEffects: true } };
     writeFileSync(join(cfg, 'proc-watch', 'config.json'), JSON.stringify(config));
   }
-  const env = { ...process.env, XDG_CONFIG_HOME: cfg };
+  // PROC_WATCH_NO_RECORDER_SYNC : l'app mesurée ne touche pas au service systemd réel de l'utilisateur.
+  const env = { ...process.env, XDG_CONFIG_HOME: cfg, PROC_WATCH_NO_RECORDER_SYNC: '1' };
   if (kwin) {
     env.WAYLAND_DISPLAY = kwin.socket;
     delete env.DISPLAY;

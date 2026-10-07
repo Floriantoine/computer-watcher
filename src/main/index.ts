@@ -19,7 +19,7 @@ import { installDesktopEntry } from './desktopEntry';
 import { clearHistory, createHistoryReader } from './history';
 import { pollDelay, type WindowActivity } from './pollPolicy';
 import { isGroupKeys, isRange, isTopOptions, recorderState as computeRecorderState } from './historyIpc';
-import { autoManageService, defaultSystemctl, ensureRecorderService, recorderExecArgs, systemctlAvailable, unitPath } from './recorderService';
+import { autoManageService, defaultSystemctl, recorderSyncDisabled, ensureRecorderService, recorderExecArgs, systemctlAvailable, unitPath } from './recorderService';
 
 // Service réseau dans le processus main : l'app ne charge que des fichiers locaux, un processus de moins (~20 Mo).
 app.commandLine.appendSwitch('enable-features', 'NetworkServiceInProcess2');
@@ -43,7 +43,7 @@ const execArgs = () => recorderExecArgs({ appImage: process.env.APPIMAGE, execPa
 /** `explicit` : action de l'utilisateur (réglage) ; sinon synchronisation au démarrage (création réservée à autoManageService). */
 async function doSync(explicit: boolean): Promise<void> {
   systemdOk = await systemctlAvailable(defaultSystemctl);
-  if (!systemdOk) return;
+  if (!systemdOk || recorderSyncDisabled()) return;
   // Au démarrage en dev (non empaqueté, sans PROC_WATCH_RECORDER_DEV) : jamais de création d'unité, mais une unité
   // existante est tenue à jour (ou retirée si l'historique est désactivé), comme en mode empaqueté.
   const allowCreate = explicit || autoManageService(app.isPackaged);
