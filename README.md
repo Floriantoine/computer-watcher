@@ -8,7 +8,7 @@ Né d'un PC gelé dix minutes par 19 Go de swap : vieilles sessions de terminal,
 
 ## Ce que ça fait
 
-- **Groupes lisibles** : une carte par appli (Chrome, Spotify…), par projet de dev (tous les `node`, `vite`, `esbuild`… d'un même dépôt), par session Claude Code, et le reste par nom de commande. Les petits groupes sont rangés dans « Autres ».
+- **Groupes lisibles** : une carte par appli (Chrome, Spotify…), par projet de dev (tous les `node`, `vite`, `esbuild`… d'un même dépôt), une carte « Claude » qui rassemble toutes les sessions Claude Code (chaque session est une racine de l'arbre de détail), et le reste par nom de commande. Les petits groupes sont rangés dans « Autres ».
 - **Ancienneté** de chaque groupe et de chaque processus, en orange au-delà d'un jour.
 - **Bandeau système** : RAM, swap, pression mémoire (PSI), charge.
 - **Page de détail** : arbre parent → enfants, commande complète, dossier de travail, CPU, RAM, swap.
@@ -41,7 +41,7 @@ npm install
 npm run dev
 ```
 
-Avec npm 11.10+ (dont npm 12), les scripts d'installation des dépendances sont bloqués par défaut ; le champ `allowScripts` de `package.json` autorise uniquement ceux d'`electron` (téléchargement du binaire) et d'`esbuild`, donc un simple `npm install` suffit.
+Avec npm 11.10+ (dont npm 12), les scripts d'installation des dépendances sont bloqués par défaut ; le champ `allowScripts` de `package.json` autorise le script d'installation d'`electron`, qui télécharge le binaire Electron (indispensable) ; celui d'`esbuild` n'est qu'une optimisation de démarrage, il n'est pas requis. Un simple `npm install` suffit.
 
 ## Développement
 
