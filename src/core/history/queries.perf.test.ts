@@ -30,11 +30,13 @@ test('performance : 24 h x 100 groupes à 5 s', () => {
     const t0 = performance.now();
     fn();
     const ms = performance.now() - t0;
-    console.log(`${name}: ${ms.toFixed(1)} ms`);
+    console.info(`${name}: ${ms.toFixed(1)} ms`);
     expect(ms).toBeLessThan(150);
   };
   time('queryGroups 24h', () => expect(queryGroups(db, rangeFromPreset('24h', now), o).series).toHaveLength(100));
   time('queryGroups 1h', () => expect(queryGroups(db, rangeFromPreset('1h', now), o).series).toHaveLength(100));
+  time('queryGroups 6h', () => expect(queryGroups(db, rangeFromPreset('6h', now), o).series).toHaveLength(100));
+  time('queryTop 6h', () => expect(queryTop(db, rangeFromPreset('6h', now), o)).toHaveLength(10));
   time('queryTop 24h', () => expect(queryTop(db, rangeFromPreset('24h', now), o)).toHaveLength(10));
   time('querySystem 24h', () => expect(querySystem(db, rangeFromPreset('24h', now), o).ts.length).toBeGreaterThan(0));
 }, 60_000);

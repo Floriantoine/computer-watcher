@@ -7,6 +7,7 @@ import { alignSeries } from './series';
 
 const M = 60_000;
 const H = 3600_000;
+const DETAIL_MAX_BUCKET = 15_000;
 const I = 'CAST(? AS INTEGER)';
 // node:sqlite lie les nombres JS en REAL : la division du bucket doit être castée en entier.
 const PRESET_MS: Record<RangePreset, number> = { '1h': H, '6h': 6 * H, '24h': 24 * H, '7d': 7 * 24 * H, '30d': 30 * 24 * H };
@@ -21,8 +22,8 @@ export const rangeFromPreset = (p: RangePreset, now: number): TimeRange => ({ fr
 
 export function pickSource(range: TimeRange, now: number, detailHours: number, intervalSec = 5): 'detail' | 'minute' {
   if (range.from < now - detailHours * H || range.to - range.from > 24 * H) return 'minute';
-  // Dès que le bucket détaillé atteint la minute, les agrégats donnent le même rendu avec ~12x moins de lignes.
-  return bucketMs(range, 'detail', intervalSec) >= M ? 'minute' : 'detail';
+  // Dès que le bucket détaillé atteint 15 s, les agrégats par minute donnent un rendu quasi identique avec bien moins de lignes.
+  return bucketMs(range, 'detail', intervalSec) >= DETAIL_MAX_BUCKET ? 'minute' : 'detail';
 }
 
 export function bucketMs(range: TimeRange, source: 'detail' | 'minute', intervalSec: number, maxPoints = 1000): number {

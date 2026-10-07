@@ -35,7 +35,8 @@ test('rangeFromPreset / pickSource / bucketMs', () => {
   expect(pickSource({ from: 0, to: 48 * H }, 48 * H, 24)).toBe('minute');
   expect(pickSource({ from: 0, to: 1 * H }, 48 * H, 24)).toBe('minute'); // plus vieux que la rétention détaillée
   expect(pickSource({ from: 24 * H, to: 48 * H }, 48 * H, 48)).toBe('minute'); // bucket détaillé 90 s >= 1 min
-  expect(pickSource({ from: 42 * H, to: 48 * H }, 48 * H, 24)).toBe('detail'); // bucket 25 s
+  expect(pickSource({ from: 42 * H, to: 48 * H }, 48 * H, 24)).toBe('minute'); // 6 h : bucket détaillé 25 s >= 15 s (était 'detail' avant le seuil de 15 s)
+  expect(pickSource({ from: 46 * H, to: 48 * H }, 48 * H, 24)).toBe('detail'); // 2 h : bucket 10 s
   expect(bucketMs({ from: 0, to: H }, 'detail', 5)).toBe(5000);
   expect(bucketMs({ from: 0, to: 24 * H }, 'detail', 5)).toBe(90_000);
   expect(bucketMs({ from: 0, to: 30 * 24 * H }, 'minute', 5)).toBe(44 * M);
