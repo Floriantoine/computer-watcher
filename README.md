@@ -62,16 +62,17 @@ La logique (lecture de `/proc`, regroupement, protection, kill) vit dans `src/co
 
 Au premier lancement, proc-watch installe automatiquement un service systemd utilisateur, `proc-watch-recorder` (sans sudo). Il échantillonne le système en continu, même quand la fenêtre est fermée, pour répondre à « qu'est-ce qui a fait geler la machine à 3 h du matin ? ».
 
-- **Couper l'enregistrement** : Réglages → Enregistrement, ou `systemctl --user disable --now proc-watch-recorder`.
-- **Données** : `~/.local/share/proc-watch/metrics.db` (SQLite, schéma v2). Rétention par défaut : 24 h détaillées, 30 jours résumés (modifiable dans les Réglages). À la mise à jour du schéma, une copie `metrics.db.pre-v2-*` est faite avant migration. Une base d'une version plus récente n'est jamais écrasée : l'enregistrement se met en pause.
-- **Coût mesuré** : un tick du service dure environ 22 à 28 ms sur ~750 processus, et le service occupe environ 39 à 48 Mo de PSS.
+- **Couper l'enregistrement** : Réglages → Enregistrement (arrête et supprime le service). `systemctl --user disable --now proc-watch-recorder` seul ne tient pas : tant que le réglage reste activé, l'app réactive le service à son prochain lancement.
+- **Ce qui est enregistré** : un échantillon toutes les 5 s. Chaque groupe l'est toujours ; un processus seul ne l'est que s'il dépasse 50 Mo ou 1 % de CPU. Intervalle, seuils et rétention se règlent dans Réglages → Enregistrement.
+- **Données** : `~/.local/share/proc-watch/metrics.db` (SQLite, schéma v2). Rétention par défaut : 24 h détaillées, 30 jours résumés. À la mise à jour du schéma, une copie `metrics.db.pre-v2-*` est faite avant migration. Une base d'une version plus récente n'est jamais écrasée : l'enregistrement se met en pause.
+- **Coût mesuré** : sur ~750 processus, un tick du service dure environ 21 à 28 ms et le service occupe environ 34 à 48 Mo de PSS.
+- **Kills earlyoom** : pour les enregistrer, l'utilisateur doit pouvoir lire le journal système (groupe `systemd-journal` ou `adm` sur la plupart des distributions, `wheel` sur certaines). Sans cet accès, Réglages → Enregistrement affiche « Kills earlyoom : indisponibles » et le reste fonctionne normalement.
 
 ### Onglet Métriques
 
-- **Enquête** : courbes de mémoire, swap et pression sur la période choisie, pour retrouver ce qui se passait à un instant donné.
-- **Coupables** : les groupes et processus qui ont le plus pesé sur la période.
-- **Alertes de fuite** : un groupe dont la mémoire monte de façon continue (par défaut au moins 300 Mo sur 60 minutes) est signalé.
-- **Kills earlyoom** : les processus tués par earlyoom sont retrouvés dans l'historique, avec le contexte mémoire autour.
+- **Enquête — mémoire par groupe** : courbe de la mémoire par groupe sur la période choisie ; cliquer place un curseur sur un instant. Le panneau « À <heure> » liste alors les groupes dont la mémoire a le plus augmenté dans les 5 minutes précédentes.
+- **Top consommateurs** : les groupes les plus gourmands en mémoire (moyenne) sur la plage, avec mini-courbe, pic et moyenne.
+- **Alertes** : fuites, kills earlyoom, pics de pression et trous d'enregistrement ; un clic place le curseur de l'enquête sur l'événement. Une fuite probable est signalée quand la mémoire d'un groupe monte de façon quasi continue (≥ 80 % des minutes sur 1 h, +300 Mo par défaut, réglable), et un badge « fuite ? » apparaît alors sur sa carte.
 
 ## Va bien avec earlyoom
 
