@@ -7,6 +7,7 @@ import { DetailView } from './components/DetailView';
 import { SettingsView } from './components/SettingsView';
 import { Toasts, type Toast } from './components/Toasts';
 import { MainView } from './components/MainView';
+import { MetricsView } from './components/MetricsView';
 import { SystemBar, type SystemSparks } from './components/SystemBar';
 import { TopNav } from './components/TopNav';
 import { LiveBuffer, useHistory } from './history';
@@ -175,7 +176,13 @@ export function App() {
                 onToggleProtect={toggleProtect}
               />
             )}
-            {route.view === 'metrics' && <p className="empty">Vue Métriques : à venir.</p>}
+            {route.view === 'metrics' && (
+              <MetricsView
+                at={route.at}
+                canOpen={(key) => !!findGroup(snapshot.groups, key)}
+                onOpenGroup={(key) => findGroup(snapshot.groups, key) && setRoute({ view: 'detail', groupId: key })}
+              />
+            )}
             {route.view === 'settings' && (
               <SettingsView
                 state={configState}

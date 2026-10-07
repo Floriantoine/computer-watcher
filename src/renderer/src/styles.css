@@ -509,3 +509,72 @@ table.group-list td.act { width: 1%; text-align: right; }
 /* Mini-courbe dans l'arbre des processus */
 table.tree th.spark-cell, table.tree td.spark-cell { width: 72px; padding-top: 0; padding-bottom: 0; }
 table.tree td.spark-cell .spark { width: 64px; }
+
+/* ---------- Onglet Métriques ---------- */
+.metrics { padding-bottom: 28px; }
+.metrics-toolbar { padding-bottom: 12px; }
+.metrics-toolbar .spacer { flex: 1; }
+.metrics-toolbar .hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.metrics-toolbar button { padding: 4px 10px; font-size: 11.5px; }
+.zoom-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 99px; background: rgba(124, 92, 255, 0.12); border: 1px solid rgba(124, 92, 255, 0.3); color: var(--text-2); }
+.metrics-banner { display: flex; align-items: center; gap: 9px; margin: 0 var(--gutter) 12px; padding: 9px 12px; border-radius: var(--r-md); background: rgba(255, 181, 71, 0.08); border: 1px solid rgba(255, 181, 71, 0.25); color: #ffd9a0; }
+.metrics-banner svg { flex: none; color: var(--amber); }
+.metrics-banner b { font-weight: 600; }
+.metrics-banner .spacer { flex: 1; }
+.metrics-banner button { padding: 4px 12px; }
+
+.sys-charts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 0 var(--gutter) 10px; }
+.sys-charts .chart-panel { margin: 0; min-width: 0; }
+.sys-chart { padding: 9px 10px 4px; }
+.sys-chart-head { display: flex; align-items: baseline; gap: 7px; margin: 0 2px 2px; min-width: 0; white-space: nowrap; }
+.sys-chart-head small { display: inline-flex; align-items: center; gap: 5px; color: var(--label); font-size: 11px; }
+.sys-chart-head small svg { color: var(--muted); }
+.sys-chart-head b { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+.sys-chart-head .sub { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.chart-empty.small { height: 96px; }
+.chart-empty.tall { height: 280px; }
+
+.investigation { display: flex; gap: 10px; margin: 0 var(--gutter) 10px; align-items: stretch; }
+/* La hauteur de la rangée suit le graphe ; le panneau Coupables la remplit et fait défiler sa liste. */
+.investigation .inv-chart { flex: 1; min-width: 0; margin: 0; }
+.inv-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0 2px 6px; color: var(--label); font-size: 11px; }
+.inv-legend span { display: inline-flex; align-items: center; gap: 5px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inv-legend i { flex: none; width: 9px; height: 9px; border-radius: 3px; }
+.culprits-wrap { flex: none; width: 320px; position: relative; }
+.culprits { position: absolute; inset: 0; min-width: 0; background: linear-gradient(rgba(124, 92, 255, 0.05), transparent 40%), var(--surface); border: 1px solid var(--border-hover); border-radius: var(--r-lg); padding: 10px 6px 6px; display: flex; flex-direction: column; box-shadow: 0 10px 30px -18px var(--glow); }
+.culprits-head { display: flex; align-items: flex-start; gap: 8px; padding: 0 6px 8px; border-bottom: 1px solid var(--border); }
+.culprits-head > div { flex: 1; min-width: 0; }
+.culprits-head h3 { margin: 0; font-size: 13.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.icon-btn.sm { width: 26px; height: 26px; border-radius: 7px; }
+.culprits-empty { padding: 20px 8px; color: var(--muted); text-align: center; }
+.culprits-list { list-style: none; margin: 4px 0 0; padding: 0; overflow-y: auto; flex: 1; min-height: 0; }
+.culprits-list li, .metrics-list li { display: flex; align-items: center; gap: 8px; padding: 6px; border-radius: var(--r-sm); min-width: 0; transition: background-color 0.12s; }
+.culprits-list li.clickable, .metrics-list li.clickable { cursor: pointer; }
+.culprits-list li.clickable:hover, .metrics-list li.clickable:hover { background: rgba(255, 255, 255, 0.05); }
+.culprits-list .ico, .metrics-list .ico { width: 22px; height: 22px; border-radius: 7px; }
+.culprits-list .name, .metrics-list .name { flex: 1; min-width: 0; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.culprits-list .delta { flex: none; width: 66px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; color: var(--muted); white-space: nowrap; }
+.culprits-list .delta.up { color: #ff8a3d; }
+.culprits-list .total { flex: none; width: 58px; text-align: right; white-space: nowrap; }
+.culprits-list svg.hidden { visibility: hidden; }
+.culprits-list li > svg { flex: none; color: var(--muted); }
+
+.metrics-bottom { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; margin: 0 var(--gutter); align-items: start; }
+.metrics-bottom .chart-panel { margin: 0; }
+.metrics-list ul { list-style: none; margin: 0; padding: 0; max-height: 320px; overflow-y: auto; }
+.metrics-list .row-spark { flex: none; width: 90px; }
+.metrics-list .num { flex: none; width: 62px; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.metrics-list .num.muted { color: var(--muted); }
+.metrics-list .list-cols { display: inline-flex; color: var(--label); font-size: 11px; padding-right: 6px; }
+.metrics-list .list-cols span { width: 62px; text-align: right; }
+.metrics-list .mono { white-space: nowrap; }
+.metrics-list .count { font-size: 11px; color: var(--label); background: var(--surface-3); border: 1px solid var(--border-2); border-radius: 99px; padding: 0 7px; }
+.alert-ico { flex: none; width: 22px; height: 22px; border-radius: 7px; display: grid; place-items: center; }
+
+@media (max-width: 960px) {
+  .sys-charts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .metrics-bottom { grid-template-columns: minmax(0, 1fr); }
+  .investigation { flex-wrap: wrap; }
+  .culprits-wrap { width: 100%; height: 340px; }
+  .metrics-toolbar .hint { display: none; }
+}

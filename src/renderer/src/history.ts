@@ -31,8 +31,8 @@ export class LiveBuffer {
   }
 }
 
-/** Charge des données d'historique et les rafraîchit périodiquement ; ignore les réponses obsolètes. */
-export function useHistory<T>(fetch: () => Promise<T>, deps: unknown[], refreshMs = 30_000): T | undefined {
+/** Charge des données d'historique et les rafraîchit périodiquement (`refreshMs` nul : jamais) ; ignore les réponses obsolètes. */
+export function useHistory<T>(fetch: () => Promise<T>, deps: unknown[], refreshMs: number | null = 30_000): T | undefined {
   const [data, setData] = useState<T>();
   const gen = useRef(0);
   useEffect(() => {
@@ -45,6 +45,7 @@ export function useHistory<T>(fetch: () => Promise<T>, deps: unknown[], refreshM
         () => {},
       );
     void load();
+    if (refreshMs === null) return;
     const t = setInterval(load, refreshMs);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
