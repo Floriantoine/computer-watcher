@@ -70,3 +70,13 @@ table.tree tr:hover td { background: var(--panel); }
 .prot-list div { background: var(--panel-2); border-radius: 6px; padding: 6px 8px; }
 .toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 20; }
 .toast { background: var(--danger-bg); color: var(--danger-fg); border: 1px solid var(--danger-border); border-radius: 8px; padding: 8px 12px; }
+
+.settings { padding: 14px 20px 24px; max-width: 760px; display: flex; flex-direction: column; gap: 22px; }
+.settings h3 { margin: 0 0 8px; font-size: 14px; }
+.settings .hint { color: var(--muted); font-size: 12px; margin: 0 0 8px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; gap: 6px; align-items: center; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 2px 4px 2px 10px; }
+.chip.invalid { border-color: var(--bad); }
+.chip button { border: none; padding: 0 6px; }
+.row { display: flex; gap: 8px; align-items: center; }
+.warning { background: var(--danger-bg); color: var(--danger-fg); border-radius: 8px; padding: 8px 12px; }

@@ -3,6 +3,7 @@ import { compileProtection } from '../../core/protection';
 import type { Config, ConfigState, Group, KillSignal, ProcNode, Snapshot } from '../../core/types';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { DetailView } from './components/DetailView';
+import { SettingsView } from './components/SettingsView';
 import { Toasts } from './components/Toasts';
 import { MainView } from './components/MainView';
 import { SystemBar } from './components/SystemBar';
@@ -106,7 +107,19 @@ export function App() {
           onToggleProtect={toggleProtect}
         />
       )}
-      {/* Task 11 : SettingsView */}
+      {route.view === 'settings' && (
+        <SettingsView
+          state={configState}
+          onSave={(c) => void saveConfig(c)}
+          onBack={() => setRoute({ view: 'main' })}
+          onInstallDesktop={() =>
+            window.procWatch.installDesktopEntry().then(
+              (file) => pushToast(`Raccourci créé : ${file}`),
+              (e: Error) => pushToast(e.message),
+            )
+          }
+        />
+      )}
       {confirm && (
         <ConfirmDialog
           request={confirm}
