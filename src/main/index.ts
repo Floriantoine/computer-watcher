@@ -6,7 +6,7 @@ import { readProcesses } from '../core/collector/readProcesses';
 import { readSystem } from '../core/collector/readSystem';
 import { configDir, loadConfig, saveConfig, validateConfig } from '../core/config';
 import { buildGroups } from '../core/grouping/buildGroups';
-import { findProjectRoot } from '../core/grouping/projectRoot';
+import { createProjectRootCache } from '../core/grouping/projectRootCache';
 import { planKill, sendSignals } from '../core/kill';
 import { compileProtection } from '../core/protection';
 import type { ConfigState, KillResult, KillTarget, Snapshot } from '../core/types';
@@ -21,12 +21,7 @@ let protection = compileProtection(config.protected);
 const tracker = new CpuTracker();
 const uid = process.getuid!();
 
-const rootCache = new Map<string, string | null>();
-function projectRootOf(cwd: string): string | null {
-  if (rootCache.size > 5000) rootCache.clear();
-  if (!rootCache.has(cwd)) rootCache.set(cwd, findProjectRoot(cwd));
-  return rootCache.get(cwd)!;
-}
+const projectRootOf = createProjectRootCache();
 
 function takeSnapshot(): Snapshot {
   const procs = tracker.update(readProcesses(), Date.now());

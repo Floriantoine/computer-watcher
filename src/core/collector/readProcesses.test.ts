@@ -48,3 +48,12 @@ test('ignore les entrées non numériques de /proc', () => {
   addProc(root, { pid: 11, comm: 'alive', rssKB: 1 });
   expect(readProcesses(root)).toHaveLength(1);
 });
+
+test('wantCwd : ne lit le cwd que des processus demandés', () => {
+  const root = makeProcRoot();
+  addProc(root, { pid: 1, comm: 'node', rssKB: 1, cwd: '/home/u/p' });
+  addProc(root, { pid: 2, comm: 'chrome', rssKB: 1, cwd: '/home/u' });
+  const procs = readProcesses(root, { wantCwd: (n) => n === 'node' });
+  expect(procs.find((p) => p.pid === 1)!.cwd).toBe('/home/u/p');
+  expect(procs.find((p) => p.pid === 2)!).toMatchObject({ cwd: null, cwdDeleted: false });
+});

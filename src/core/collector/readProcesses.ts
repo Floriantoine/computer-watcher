@@ -16,7 +16,12 @@ function readCwd(dir: string): { cwd: string | null; cwdDeleted: boolean } {
   }
 }
 
-export function readProcesses(procRoot = '/proc'): ProcSample[] {
+export interface ReadOptions {
+  /** Si fourni : le lien cwd n'est lu que pour les noms acceptés (coûteux sur ~750 processus). */
+  wantCwd?: (name: string) => boolean;
+}
+
+export function readProcesses(procRoot = '/proc', opts: ReadOptions = {}): ProcSample[] {
   const uptimeSec = parseFloat(readFileSync(join(procRoot, 'uptime'), 'utf8').split(' ')[0]);
   const out: ProcSample[] = [];
   for (const entry of readdirSync(procRoot)) {
@@ -41,7 +46,7 @@ export function readProcesses(procRoot = '/proc'): ProcSample[] {
       cpuTicks: stat.utime + stat.stime,
       rssKB: status.rssKB,
       swapKB: status.swapKB,
-      ...readCwd(dir),
+      ...(opts.wantCwd && !opts.wantCwd(status.name) ? { cwd: null, cwdDeleted: false } : readCwd(dir)),
     });
   }
   return out;
