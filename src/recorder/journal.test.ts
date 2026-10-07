@@ -72,3 +72,28 @@ test('arrêt inattendu du suivi : unavailable puis nouvel essai ; stop() tue et 
   f.children[1].em.emit('exit');
   expect(f.timers.length).toBe(1);
 });
+
+test('la sonde ne passe pas -q (qui masquerait les avertissements d’accès au journal)', () => {
+  const calls: string[][] = [];
+  const stop = followEarlyoom(() => {}, () => {}, {
+    execFile: (_c, a) => {
+      calls.push(a);
+    },
+    spawn: () => {
+      throw new Error('pas de suivi');
+    },
+  });
+  stop();
+  expect(calls).toHaveLength(1);
+  expect(calls[0]).not.toContain('-q');
+  expect(calls[0]).not.toContain('--quiet');
+});
+
+test('classifyProbe : avertissements réels de journalctl sans -q', () => {
+  const hint = 'Hint: You are currently not seeing messages from other users and the system.\n      Users in groups \'adm\', \'systemd-journal\', \'wheel\' can see all messages.';
+  expect(classifyProbe(null, '-- No entries --\n', hint)).toBe('unavailable');
+  expect(classifyProbe(null, '', 'No journal files were opened due to insufficient permissions.')).toBe('unavailable');
+  expect(classifyProbe(null, '', 'No journal files were found.')).toBe('unavailable');
+  expect(classifyProbe(null, '-- No entries --\n', '')).toBe('ok');
+  expect(classifyProbe(null, 'oct. 07 10:00:00 host earlyoom[1]: mem avail: 1000 of 2000 MiB\n', '')).toBe('ok');
+});

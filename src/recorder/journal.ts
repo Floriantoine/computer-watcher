@@ -26,9 +26,12 @@ const realDeps: JournalDeps = {
 
 export const RETRY_MIN_MS = 30_000;
 export const RETRY_MAX_MS = 600_000;
-const UNREADABLE = /permission|not seeing messages|insufficient/i;
+const UNREADABLE = /permission|not seeing messages|insufficient|no journal files were/i;
 
-/** journalctl est-il utilisable ? Échec, ou message d'accès refusé / « not seeing messages » → indisponible. */
+/**
+ * journalctl est-il utilisable ? Échec, ou message d'accès refusé / « not seeing messages » / journal introuvable → indisponible.
+ * L'en-tête « -- No entries -- » seul est normal (earlyoom n'a encore rien écrit).
+ */
 export function classifyProbe(err: Error | null, stdout: string, stderr: string): 'ok' | 'unavailable' {
   if (err) return 'unavailable';
   return UNREADABLE.test(`${stdout}\n${stderr}`) ? 'unavailable' : 'ok';
@@ -76,7 +79,8 @@ export function followEarlyoom(
 
   const attempt = () => {
     if (stopped) return;
-    d.execFile('journalctl', ['-u', 'earlyoom', '-n', '1', '-q', '--no-pager'], (err, stdout, stderr) => {
+    // sans -q : -q masque justement les avertissements « not seeing messages » / journal inaccessible
+    d.execFile('journalctl', ['-u', 'earlyoom', '-n', '1', '--no-pager'], (err, stdout, stderr) => {
       if (stopped) return;
       if (classifyProbe(err, stdout, stderr) === 'ok') follow();
       else retry();
