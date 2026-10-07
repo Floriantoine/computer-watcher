@@ -1,9 +1,18 @@
 // Mesure mémoire (PSS) et CPU de l'app buildée : `npm run build && node scripts/measure-app.mjs [dossier…]`.
-// Lance l'app via Playwright avec un XDG_CONFIG_HOME temporaire, attend la stabilisation, échantillonne
-// chaque processus de l'arbre Electron, fenêtre visible puis réduite, affiche un tableau par type et ferme l'app.
-// Variables : MEASURE_SETTLE_S (20), MEASURE_SAMPLE_S (60), MEASURE_SCENARIOS (« visible,minimized »).
-import { _electron as electron } from 'playwright';
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+// Lance l'app directement (pas de Playwright : son instrumentation CDP du renderer fausserait la mesure) avec un
+// XDG_CONFIG_HOME temporaire, attend la stabilisation, échantillonne chaque processus de l'arbre Electron, fenêtre
+// visible puis réduite, affiche un tableau par type et ferme l'app. Les actions sur la fenêtre (minimize, focus…)
+// passent par l'inspecteur Node du seul processus main (--inspect), qui ne touche pas au renderer.
+// Scénarios : visible (fenêtre considérée active : un événement focus est émis toutes les 10 s, comme un utilisateur
+// présent), background (blur puis 62 s d'attente : rythme de fond), minimized (win.minimize()), hidden (win.hide()).
+// Affichage : par défaut l'app tourne dans un KWin imbriqué virtuel (kwin_wayland --virtual, bus D-Bus et config à part) :
+// la fenêtre est réellement affichée et active quel que soit l'état du bureau (écran verrouillé, autre bureau…), et
+// rien n'apparaît à l'écran. MEASURE_KWIN=0 : utiliser la session courante.
+// Variables : MEASURE_SETTLE_S (20), MEASURE_SAMPLE_S (60), MEASURE_SCENARIOS (« visible,minimized »),
+// MEASURE_MAXIMIZE (1 : fenêtre agrandie, plus de cartes à l'écran).
+import { spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -111,33 +120,121 @@ function print(title, rows) {
   console.log(`| **total** | **${total.pssMB.toFixed(0)} Mo** | **${total.cpu.toFixed(2)} %** |`);
 }
 
+const electronPath = createRequire(import.meta.url)('electron');
+
+/** KWin virtuel imbriqué ; renvoie le nom de son socket Wayland et de quoi l'arrêter. */
+async function startKwin() {
+  const socket = `pw-measure-${process.pid}`;
+  const cfg = mkdtempSync(join(tmpdir(), 'pw-kwin-'));
+  const child = spawn('dbus-run-session', ['--', 'kwin_wayland', '--virtual', '--no-lockscreen', '--socket', socket, '--width', '1600', '--height', '1000'], {
+    env: { ...process.env, XDG_CONFIG_HOME: cfg },
+    stdio: 'ignore',
+    detached: true, // groupe de processus à part : arrêté d'un coup à la fin
+  });
+  const path = join(process.env.XDG_RUNTIME_DIR ?? '/run/user/1000', socket);
+  for (let i = 0; i < 100 && !existsSync(path); i++) await sleep(100);
+  if (!existsSync(path)) throw new Error('kwin_wayland --virtual n\'a pas démarré');
+  return {
+    socket,
+    stop: async () => {
+      // Tout le groupe (dbus-run-session, dbus-daemon, kwin_wayland, Xwayland éventuel) ; SIGKILL s'il traîne.
+      const alive = () => readdirSync('/proc').some((e) => /^\d+$/.test(e) && Number((read(`/proc/${e}/stat`) ?? '').split(') ')[1]?.split(' ')[2]) === child.pid);
+      try {
+        process.kill(-child.pid, 'SIGTERM');
+      } catch {}
+      for (let i = 0; i < 50 && alive(); i++) await sleep(100);
+      if (alive())
+        try {
+          process.kill(-child.pid, 'SIGKILL');
+        } catch {}
+      rmSync(cfg, { recursive: true, force: true });
+    },
+  };
+}
+
+/** Lance une app et se connecte à l'inspecteur de son processus main. */
+async function launch(dir, kwin) {
+  const cfg = mkdtempSync(join(tmpdir(), 'pw-measure-'));
+  const env = { ...process.env, XDG_CONFIG_HOME: cfg };
+  if (kwin) {
+    env.WAYLAND_DISPLAY = kwin.socket;
+    delete env.DISPLAY;
+  }
+  const child = spawn(electronPath, ['--inspect=127.0.0.1:0', dir], { env, stdio: ['ignore', 'ignore', 'pipe'] });
+  const url = await new Promise((resolve, reject) => {
+    let err = '';
+    const t = setTimeout(() => reject(new Error(`pas d'inspecteur : ${err}`)), 20000);
+    child.stderr.on('data', (d) => {
+      err += d;
+      const m = /ws:\/\/[^\s]+/.exec(err);
+      if (m) {
+        clearTimeout(t);
+        resolve(m[0]);
+      }
+    });
+  });
+  const ws = new WebSocket(url);
+  await new Promise((r, j) => {
+    ws.onopen = r;
+    ws.onerror = j;
+  });
+  let id = 0;
+  const waiting = new Map();
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (waiting.has(msg.id)) waiting.get(msg.id)(msg);
+  };
+  /** Évalue `expr` dans le processus main (`win` = la fenêtre). */
+  const evaluate = (expr) =>
+    new Promise((resolve) => {
+      const n = ++id;
+      waiting.set(n, resolve);
+      ws.send(JSON.stringify({ id: n, method: 'Runtime.evaluate', params: { expression: `(() => { const win = process.mainModule.require('electron').BrowserWindow.getAllWindows()[0]; return ${expr}; })()`, returnByValue: true } }));
+    });
+  // Attendre la fenêtre et son renderer.
+  for (let i = 0; i < 100; i++) {
+    const r = await evaluate('!!win && !win.webContents.isLoading()');
+    if (r.result?.result?.value) break;
+    await sleep(200);
+  }
+  return { dir, cfg, child, ws, evaluate };
+}
+
 // Dossiers d'app à mesurer (défaut : celui-ci). Plusieurs dossiers : lancés et mesurés en même temps (comparaison A/B).
 const dirs = process.argv.slice(2).length ? process.argv.slice(2) : ['.'];
 const apps = [];
+const kwin = process.env.MEASURE_KWIN === '0' ? null : await startKwin();
 try {
-  for (const dir of dirs) {
-    const cfg = mkdtempSync(join(tmpdir(), 'pw-measure-'));
-    const app = await electron.launch({ args: [dir], env: { ...process.env, XDG_CONFIG_HOME: cfg } });
-    apps.push({ dir, cfg, app });
-    const win = await app.firstWindow();
-    await win.waitForSelector('[data-testid="snapshot-ready"]', { timeout: 20000 });
-  }
-  const roots = apps.map((a) => a.app.process().pid);
+  for (const dir of dirs) apps.push(await launch(dir, kwin));
+  const roots = apps.map((a) => a.child.pid);
   console.log(`apps ${apps.map((a, i) => `${a.dir} (PID ${roots[i]}, ${tree(roots[i]).length} processus)`).join(', ')} ; stabilisation ${SETTLE_S} s, échantillonnage ${SAMPLE_S} s`);
+  const onAll = (expr) => Promise.all(apps.map((a) => a.evaluate(expr)));
+  if (process.env.MEASURE_MAXIMIZE) await onAll('win.maximize()');
   await sleep(SETTLE_S * 1000);
   for (const sc of SCENARIOS) {
-    const action = sc === 'minimized' ? 'minimize' : sc === 'hidden' ? 'hide' : null;
-    if (action) {
-      for (const { app } of apps) await app.evaluate(({ BrowserWindow }, a) => BrowserWindow.getAllWindows()[0][a](), action);
-      await sleep(3000);
+    if (sc === 'minimized') await onAll('win.minimize()');
+    if (sc === 'hidden') await onAll('win.hide()');
+    if (sc === 'minimized' || sc === 'hidden') await sleep(3000);
+    if (sc === 'background') {
+      await onAll("win.emit('blur')");
+      await sleep(62_000);
     }
-    const label = sc === 'visible' ? 'visible' : sc === 'minimized' ? 'réduite' : 'cachée';
+    let keepFocus = null;
+    if (sc === 'visible') {
+      await onAll("win.emit('focus')");
+      keepFocus = setInterval(() => void onAll("win.emit('focus')").catch(() => {}), 10_000);
+    }
+    const label = { visible: 'visible', background: 'visible sans focus', minimized: 'réduite', hidden: 'cachée' }[sc] ?? sc;
     const results = await sample(roots, SAMPLE_S);
+    if (keepFocus) clearInterval(keepFocus);
     results.forEach((rows, i) => print(`Fenêtre ${label} (page Processus)${apps.length > 1 ? ` — ${apps[i].dir}` : ''}`, rows));
   }
 } finally {
-  for (const { app, cfg } of apps) {
-    await app.close().catch(() => {});
+  for (const { child, ws, cfg } of apps) {
+    ws.close();
+    child.kill('SIGTERM');
+    await new Promise((r) => (child.exitCode !== null ? r() : child.once('exit', r)));
     rmSync(cfg, { recursive: true, force: true });
   }
+  await kwin?.stop();
 }
