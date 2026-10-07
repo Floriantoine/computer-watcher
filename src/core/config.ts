@@ -1,0 +1,57 @@
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { DEFAULT_CONFIG } from './defaults';
+import type { Config } from './types';
+
+export { DEFAULT_CONFIG };
+
+const FILE = 'config.json';
+
+export function configDir(env: NodeJS.ProcessEnv = process.env, home: string = homedir()): string {
+  return join(env.XDG_CONFIG_HOME || join(home, '.config'), 'proc-watch');
+}
+
+export function validateConfig(raw: unknown): Config | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  if (r.version !== 1) return null;
+  if (!Array.isArray(r.protected) || !r.protected.every((x) => typeof x === 'string')) return null;
+  const t = r.othersThreshold as Record<string, unknown> | undefined;
+  if (!t || typeof t.memMB !== 'number' || typeof t.cpuPercent !== 'number') return null;
+  if (!(t.memMB >= 0) || !(t.cpuPercent >= 0)) return null;
+  return { version: 1, protected: [...r.protected], othersThreshold: { memMB: t.memMB, cpuPercent: t.cpuPercent } };
+}
+
+export function saveConfig(dir: string, config: Config): void {
+  mkdirSync(dir, { recursive: true });
+  const tmp = join(dir, `${FILE}.${process.pid}.tmp`);
+  writeFileSync(tmp, JSON.stringify(config, null, 2) + '\n');
+  renameSync(tmp, join(dir, FILE));
+}
+
+export function loadConfig(dir: string): { config: Config; warning: string | null } {
+  const file = join(dir, FILE);
+  let text: string;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') {
+      saveConfig(dir, DEFAULT_CONFIG);
+      return { config: structuredClone(DEFAULT_CONFIG), warning: null };
+    }
+    return { config: structuredClone(DEFAULT_CONFIG), warning: `config.json illisible (${code}) : valeurs par défaut utilisées, fichier non modifié` };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    parsed = undefined;
+  }
+  const config = validateConfig(parsed);
+  if (config) return { config, warning: null };
+  renameSync(file, `${file}.bak`);
+  saveConfig(dir, DEFAULT_CONFIG);
+  return { config: structuredClone(DEFAULT_CONFIG), warning: 'config.json invalide : sauvegardé en config.json.bak, valeurs par défaut restaurées' };
+}
