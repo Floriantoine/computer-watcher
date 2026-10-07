@@ -16,6 +16,7 @@
     "start": "electron-vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
+    "test:recorder": "electron-vite build && node scripts/recorder-e2e.mjs",
     "smoke": "electron-vite build && node scripts/smoke.mjs",
     "dist": "electron-vite build && electron-builder --linux"
   },
