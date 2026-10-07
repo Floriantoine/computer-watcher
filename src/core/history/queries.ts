@@ -168,14 +168,19 @@ export function queryCulprits(db: DatabaseSync, ts: number, o: QueryOpts, window
   const rows = db
     .prepare(
       `WITH w AS (SELECT s.group_id, s.ts, ${mem} AS mem FROM ${table} s WHERE s.ts >= ? AND s.ts <= ?),
-            first AS (SELECT group_id, mem FROM w WHERE (group_id, ts) IN (SELECT group_id, MIN(ts) FROM w GROUP BY group_id)),
+            first AS (SELECT group_id, ts, mem FROM w WHERE (group_id, ts) IN (SELECT group_id, MIN(ts) FROM w GROUP BY group_id)),
             last AS (SELECT group_id, mem FROM w WHERE (group_id, ts) IN (SELECT group_id, MAX(ts) FROM w GROUP BY group_id))
-       SELECT g.key, g.label, g.kind, last.mem - first.mem AS delta, last.mem AS mem
-       FROM last JOIN first USING (group_id) JOIN groups g ON g.id = last.group_id
-       ORDER BY delta DESC LIMIT ?`,
+       SELECT g.key, g.label, g.kind, last.mem AS mem, last.mem - first.mem AS delta, first.ts AS firstTs
+       FROM last JOIN first USING (group_id) JOIN groups g ON g.id = last.group_id`,
     )
-    .all(from, ts, limit) as { key: string; label: string; kind: GroupKind; delta: number; mem: number }[];
-  return rows.map((r) => ({ key: r.key, label: r.label, kind: r.kind, deltaKB: Math.round(r.delta), memKB: Math.round(r.mem) }));
+    .all(from, ts) as { key: string; label: string; kind: GroupKind; delta: number; mem: number; firstTs: number }[];
+  // Les petits groupes sont repliés dans « Petits groupes » : un groupe sans ligne au début de la fenêtre y est « apparu »
+  // (franchissement du seuil) ; sa mémoire de départ n'est pas 0 mais inconnue, on retient sa mémoire au dernier point.
+  const appearedAfter = from + (detail ? 2 * o.intervalSec * 1000 : 2 * M);
+  return rows
+    .map((r) => ({ key: r.key, label: r.label, kind: r.kind, deltaKB: Math.round(r.firstTs > appearedAfter ? r.mem : r.delta), memKB: Math.round(r.mem) }))
+    .sort((a, b) => b.deltaKB - a.deltaKB)
+    .slice(0, limit);
 }
 
 /**

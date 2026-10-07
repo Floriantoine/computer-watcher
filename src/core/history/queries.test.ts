@@ -89,6 +89,46 @@ test('queryCulprits : hausse sur les 5 min avant ts, triée', () => {
   expect(c[1]).toMatchObject({ key: 'project:/a', deltaKB: 0 });
 });
 
+function culpritDb(table: 'group_samples' | 'group_minute', rows: [number, number, number][]) {
+  const path = join(mkdtempSync(join(tmpdir(), 'pw-c-')), 'm.db');
+  const { db } = openHistoryDb(path);
+  db.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'app:flat','Flat','app'), (2,'app:new','New','app')`);
+  for (const [ts, gid, mem] of rows) {
+    if (table === 'group_samples') db.prepare('INSERT INTO group_samples VALUES (?,?,?,?,?,?)').run(ts, gid, mem, 0, 5, 3);
+    else db.prepare('INSERT INTO group_minute(ts,group_id,rss_kb_avg,swap_kb_avg,cpu_avg,mem_kb_max) VALUES (?,?,?,?,?,?)').run(ts, gid, mem, 0, 3, mem);
+  }
+  return db;
+}
+
+test('queryCulprits : groupe apparu au dernier tick (5 Mo -> 10 Go, replié avant) : delta = mémoire finale', () => {
+  const now = 10 * M;
+  const rows: [number, number, number][] = [];
+  for (let ts = 5 * M; ts <= now; ts += 5000) rows.push([ts, 1, 500 * 1024]);
+  rows.push([now, 2, 10 * 1024 * 1024]);
+  const c = queryCulprits(culpritDb('group_samples', rows), now, opts(now));
+  expect(c[0]).toMatchObject({ key: 'app:new', deltaKB: 10 * 1024 * 1024, memKB: 10 * 1024 * 1024 });
+  expect(c[1]).toMatchObject({ key: 'app:flat', deltaKB: 0 });
+});
+
+test('queryCulprits : groupe présent toute la fenêtre, delta inchangé (dernier - premier)', () => {
+  const now = 10 * M;
+  const rows: [number, number, number][] = [];
+  for (let ts = 5 * M; ts <= now; ts += 5000) rows.push([ts, 2, 1000 + (ts - 5 * M) / 5000]);
+  const c = queryCulprits(culpritDb('group_samples', rows), now, opts(now));
+  expect(c[0]).toMatchObject({ key: 'app:new', deltaKB: 60, memKB: 1060 });
+});
+
+test('queryCulprits : même règle sur la source minute', () => {
+  const now = 100 * H;
+  const at = 50 * H; // fenêtre plus vieille que la rétention détaillée : agrégats par minute
+  const rows: [number, number, number][] = [];
+  for (let m = 5; m >= 0; m--) rows.push([at - m * M, 1, 500 * 1024]);
+  rows.push([at, 2, 10 * 1024 * 1024]); // apparu à la dernière minute
+  const c = queryCulprits(culpritDb('group_minute', rows), at, opts(now));
+  expect(c[0]).toMatchObject({ key: 'app:new', deltaKB: 10 * 1024 * 1024 });
+  expect(c[1]).toMatchObject({ key: 'app:flat', deltaKB: 0 });
+});
+
 test('queryTop et queryEvents', () => {
   const { db } = seeded();
   const top = queryTop(db, { from: 0, to: 10 * M }, opts(10 * M)).byAvg;
