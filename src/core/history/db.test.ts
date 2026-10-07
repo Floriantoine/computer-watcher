@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -23,9 +23,12 @@ test('création : tables, version, WAL, auto_vacuum incrémental', () => {
 
 test('réouverture : rien de recréé', () => {
   const p = tmp();
-  openHistoryDb(p).db.close();
+  const first = openHistoryDb(p).db;
+  first.exec("INSERT INTO events(ts,type) VALUES(42,'keep')");
+  first.close();
   const { db, recreated } = openHistoryDb(p);
   expect(recreated).toBeNull();
+  expect(db.prepare('SELECT ts FROM events').all()).toEqual([{ ts: 42 }]);
   db.close();
 });
 
@@ -37,25 +40,88 @@ test('version inconnue → .bak-<date> et base neuve', () => {
   const { db, recreated } = openHistoryDb(p, { now: () => Date.UTC(2026, 9, 7, 9, 40) });
   expect(recreated).toBe(`${p}.bak-20261007T094000`);
   expect(existsSync(recreated!)).toBe(true);
+  const bak = new DatabaseSync(recreated!, { readOnly: true });
+  expect(tables(bak)).toEqual(['x']);
+  bak.close();
   expect(tables(db)).toContain('system_samples');
   db.close();
 });
 
 test('fichier corrompu → .bak et base neuve', () => {
   const p = tmp();
-  writeFileSync(p, 'ceci n est pas une base sqlite, vraiment pas du tout');
+  const junk = 'ceci n est pas une base sqlite, vraiment pas du tout';
+  writeFileSync(p, junk);
   const { db, recreated } = openHistoryDb(p);
   expect(recreated).not.toBeNull();
+  expect(readFileSync(recreated!, 'utf8')).toBe(junk);
   expect(tables(db)).toContain('events');
   db.close();
 });
 
 test('lecture seule : NO_DB si absente, lecture possible sinon', () => {
   const p = tmp();
+  const before = readdirSync(join(p, '..'));
   expect(() => openHistoryDb(p, { readOnly: true })).toThrow('NO_DB');
+  expect(readdirSync(join(p, '..'))).toEqual(before);
   openHistoryDb(p).db.close();
   const { db } = openHistoryDb(p, { readOnly: true });
   expect(() => db.exec('INSERT INTO events(ts,type) VALUES(1,"x")')).toThrow();
   db.close();
   expect(readdirSync(join(p, '..')).filter((f) => f.includes('.bak'))).toEqual([]);
+});
+
+test('-wal/-shm orphelins sans metrics.db : ignorés, base neuve saine', () => {
+  const p = tmp();
+  writeFileSync(`${p}-wal`, 'orphelin');
+  writeFileSync(`${p}-shm`, 'orphelin');
+  const { db, recreated } = openHistoryDb(p);
+  expect(recreated).toBeNull();
+  expect(tables(db)).toContain('events');
+  db.close();
+});
+
+test('fichier vide : recréé sans .bak', () => {
+  const p = tmp();
+  writeFileSync(p, '');
+  const { db, recreated } = openHistoryDb(p);
+  expect(recreated).toBeNull();
+  expect(tables(db)).toContain('events');
+  db.close();
+  expect(readdirSync(join(p, '..')).filter((f) => f.includes('.bak'))).toEqual([]);
+});
+
+test('base écartée : -wal/-shm suivent la sauvegarde', () => {
+  const p = tmp();
+  const raw = new DatabaseSync(p);
+  raw.exec('PRAGMA journal_mode = WAL; PRAGMA user_version = 99; CREATE TABLE x(a); INSERT INTO x VALUES(1);');
+  // base laissée ouverte : -wal présent
+  const { db, recreated } = openHistoryDb(p);
+  expect(existsSync(`${recreated}-wal`)).toBe(true);
+  const bak = new DatabaseSync(recreated!, { readOnly: true });
+  expect(bak.prepare('SELECT a FROM x').all()).toEqual([{ a: 1 }]);
+  bak.close();
+  db.close();
+  raw.close();
+});
+
+test('erreur non corruption (BUSY) : la base saine n’est jamais écartée', () => {
+  const p = tmp();
+  const raw = new DatabaseSync(p); // journal classique : un verrou exclusif bloque aussi la lecture
+  raw.exec('PRAGMA user_version = 1; CREATE TABLE x(a);');
+  raw.exec('BEGIN EXCLUSIVE');
+  expect(() => openHistoryDb(p)).toThrow(/locked|busy/i);
+  raw.exec('ROLLBACK');
+  raw.close();
+  expect(readdirSync(join(p, '..')).filter((f) => f.includes('.bak'))).toEqual([]);
+  expect(existsSync(p)).toBe(true);
+});
+
+test('permissions : dossier 0700, fichiers 0600', () => {
+  const p = join(mkdtempSync(join(tmpdir(), 'pw-db-')), 'sub', 'metrics.db');
+  const { db } = openHistoryDb(p);
+  db.exec("INSERT INTO events(ts,type) VALUES(1,'x')");
+  expect(statSync(join(p, '..')).mode & 0o777).toBe(0o700);
+  expect(statSync(p).mode & 0o777).toBe(0o600);
+  db.close();
+  rmSync(join(p, '..'), { recursive: true });
 });

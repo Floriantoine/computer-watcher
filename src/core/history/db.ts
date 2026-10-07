@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -56,17 +56,29 @@ function stamp(ms: number): string {
   return new Date(ms).toISOString().replace(/[-:]/g, '').slice(0, 15);
 }
 
+function secure(path: string): void {
+  for (const f of [path, `${path}-wal`, `${path}-shm`]) {
+    if (existsSync(f)) chmodSync(f, 0o600);
+  }
+}
+
+function removeOrphans(path: string): void {
+  rmSync(`${path}-wal`, { force: true });
+  rmSync(`${path}-shm`, { force: true });
+}
+
 function create(path: string): DatabaseSync {
   const db = new DatabaseSync(path);
+  db.exec('PRAGMA busy_timeout = 2000;');
   db.exec('PRAGMA auto_vacuum = INCREMENTAL;');
   db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;');
   db.exec('BEGIN;' + SCHEMA + `PRAGMA user_version = ${SCHEMA_VERSION}; COMMIT;`);
+  secure(path);
   return db;
 }
 
-function tune(db: DatabaseSync): void {
-  db.exec('PRAGMA busy_timeout = 2000;');
-}
+const SQLITE_CORRUPT = 11;
+const SQLITE_NOTADB = 26;
 
 export function openHistoryDb(
   path: string,
@@ -75,33 +87,47 @@ export function openHistoryDb(
   if (opts.readOnly) {
     if (!existsSync(path)) throw new Error('NO_DB');
     const db = new DatabaseSync(path, { readOnly: true });
-    tune(db);
+    db.exec('PRAGMA busy_timeout = 2000;');
     return { db, recreated: null };
   }
-  mkdirSync(dirname(path), { recursive: true });
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   if (!existsSync(path)) {
-    const db = create(path);
-    tune(db);
-    return { db, recreated: null };
+    removeOrphans(path);
+    return { db: create(path), recreated: null };
   }
   let db: DatabaseSync | null = null;
+  let empty = false;
   try {
     db = new DatabaseSync(path);
+    db.exec('PRAGMA busy_timeout = 2000;');
     const v = (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
     if (v === SCHEMA_VERSION) {
       db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;');
-      tune(db);
+      secure(path);
       return { db, recreated: null };
     }
-  } catch {
-    // fichier illisible ou corrompu : traité comme une version inconnue
+    if (v === 0) {
+      const n = (db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type='table'").get() as { n: number }).n;
+      empty = n === 0;
+    }
+  } catch (e) {
+    const code = (e as { errcode?: number }).errcode;
+    if (code !== SQLITE_NOTADB && code !== SQLITE_CORRUPT) {
+      db?.close();
+      throw e; // erreur transitoire (BUSY, I/O, droits...) : ne jamais écarter une base saine
+    }
   }
   db?.close();
+  if (empty) {
+    // fichier vide ou sans table (version 0) : rien à sauvegarder
+    rmSync(path, { force: true });
+    removeOrphans(path);
+    return { db: create(path), recreated: null };
+  }
   const bak = `${path}.bak-${stamp((opts.now ?? Date.now)())}`;
   renameSync(path, bak);
-  rmSync(`${path}-wal`, { force: true });
-  rmSync(`${path}-shm`, { force: true });
-  const fresh = create(path);
-  tune(fresh);
-  return { db: fresh, recreated: bak };
+  for (const ext of ['-wal', '-shm']) {
+    if (existsSync(`${path}${ext}`)) renameSync(`${path}${ext}`, `${bak}${ext}`);
+  }
+  return { db: create(path), recreated: bak };
 }
