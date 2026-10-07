@@ -1,4 +1,4 @@
-import type { Config, RecorderConfig } from './types';
+import type { Config, RecorderConfig, UiConfig } from './types';
 
 export const DEFAULT_RECORDER: RecorderConfig = {
   enabled: true,
@@ -12,6 +12,8 @@ export const DEFAULT_RECORDER: RecorderConfig = {
   leakMinGrowthMB: 300,
 };
 
+export const DEFAULT_UI: UiConfig = { reducedEffects: false };
+
 export const DEFAULT_CONFIG: Config = {
   version: 1,
   protected: [
@@ -23,4 +25,5 @@ export const DEFAULT_CONFIG: Config = {
   ],
   othersThreshold: { memMB: 100, cpuPercent: 1 },
   recorder: DEFAULT_RECORDER,
+  ui: DEFAULT_UI,
 };

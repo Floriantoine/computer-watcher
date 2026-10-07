@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { AnimatePresence, motion, useIsPresent } from 'motion/react';
-import { AppWindow, ArrowLeft, HardDrive, Layers, ShieldCheck, Trash2, TriangleAlert, Wrench, X } from 'lucide-react';
+import { AppWindow, ArrowLeft, HardDrive, Layers, ShieldCheck, Sparkles, Trash2, TriangleAlert, Wrench, X } from 'lucide-react';
 import { DEFAULT_CONFIG } from '../../../core/defaults';
 import type { Config, ConfigState, RecorderState } from '../../../core/types';
 import { formatKB } from '../format';
@@ -157,6 +157,24 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
             <label>Mémoire &lt; <input type="number" min="0" value={memMB} onChange={(e) => setMemMB(e.target.value)} style={{ width: 80 }} /> Mo</label>
             <label>et CPU &lt; <input type="number" min="0" step="0.5" value={cpu} onChange={(e) => setCpu(e.target.value)} style={{ width: 70 }} /> %</label>
             <button onClick={saveThresholds}>Enregistrer</button>
+          </div>
+        </section>
+
+        <section data-testid="effects-panel">
+          <h3><Sparkles size={15} strokeWidth={2} />Apparence</h3>
+          <p className="hint">Sans flou ni animations superflues : moins de travail pour la carte graphique et le processeur.</p>
+          <div className="rec-switch">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={config.ui.reducedEffects}
+              aria-label="Effets visuels réduits"
+              className="switch"
+              onClick={() => onSave({ ...config, ui: { ...config.ui, reducedEffects: !config.ui.reducedEffects } })}
+            >
+              <i />
+            </button>
+            <span>Effets visuels réduits</span>
           </div>
         </section>
 

@@ -102,11 +102,17 @@ export interface RecorderConfig {
   leakMinGrowthMB: number;
 }
 
+export interface UiConfig {
+  /** « Effets visuels réduits » : pas de flou, animations minimales */
+  reducedEffects: boolean;
+}
+
 export interface Config {
   version: 1;
   protected: string[];
   othersThreshold: { memMB: number; cpuPercent: number };
   recorder: RecorderConfig;
+  ui: UiConfig;
 }
 
 export interface ConfigState {

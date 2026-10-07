@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { motion, useReducedMotion } from 'motion/react';
+import { motion, useReducedMotionConfig } from 'motion/react';
 import uPlot from 'uplot';
 import { stackBands, toAligned, type ChartAxis, type ChartSeries } from './chartData';
 import { CURSOR_BG, formatAxisTime, formatTipTime, gradientFill, rgba, themedAxis, toneColors, type ValueFormat } from './uplotTheme';
@@ -52,7 +52,7 @@ function zeroBased(_u: uPlot, _min: number, max: number): uPlot.Range.MinMax {
 export function TimeChart({ ts, series, height, format, markers, onCursor, onSelectRange }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const plot = useRef<uPlot | null>(null);
-  const reduce = useReducedMotion();
+  const reduce = !!useReducedMotionConfig();
   const [tip, setTip] = useState<Tip | null>(null);
 
   // Valeurs lues par les hooks uPlot sans recréer l'instance.

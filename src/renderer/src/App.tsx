@@ -10,7 +10,7 @@ import { MainView } from './components/MainView';
 import { MetricsView } from './components/MetricsView';
 import { SystemBar, type SystemSparks } from './components/SystemBar';
 import { TopNav } from './components/TopNav';
-import { LiveBuffer, useHistory } from './history';
+import { LiveBuffer, setLive, useHistory } from './history';
 import { leakTimes } from './recorderForm';
 import { findGroup, visibleGroups, ipcErrorMessage, killResultMessages, killRequestForGroup, killRequestForProc, trackKills, type KillRequest, type ViewFilter } from './viewModel';
 
@@ -36,7 +36,8 @@ export function App() {
 
   useEffect(() => {
     window.procWatch.getConfig().then(setConfigState, (e: unknown) => setConfigError(ipcErrorMessage(e)));
-    return window.procWatch.onSnapshot((s) => {
+    const offLive = window.procWatch.onLive(setLive);
+    const offSnapshot = window.procWatch.onSnapshot((s) => {
       live.current.push(s.takenAt, s.system, s.groups.filter((g) => g.kind !== 'others'));
       setSnapshot(s);
       const present = new Set(s.groups.flatMap((g) => g.pids));
@@ -46,6 +47,10 @@ export function App() {
       setStuckPids(r.stuck);
       setPendingPids(new Set(r.pending.keys()));
     });
+    return () => {
+      offLive();
+      offSnapshot();
+    };
   }, []);
 
   // Le main n'envoie l'arbre que du groupe ouvert, et fait la recherche plein texte (commandes, dossiers).
@@ -120,6 +125,12 @@ export function App() {
     else void sendKill(req.targets, 'SIGTERM');
   }
 
+  const reducedEffects = !!configState?.config.ui.reducedEffects;
+  useEffect(() => {
+    if (reducedEffects) document.documentElement.dataset.effects = 'reduced';
+    else delete document.documentElement.dataset.effects;
+  }, [reducedEffects]);
+
   if (configError) return <p className="empty">Impossible de charger la configuration : {configError}</p>;
   if (!snapshot || !configState) return <p className="empty">Chargement…</p>;
 
@@ -157,7 +168,7 @@ export function App() {
         })();
 
   return (
-    <MotionConfig reducedMotion="user">
+    <MotionConfig reducedMotion={reducedEffects ? 'always' : 'user'}>
       <div data-testid="snapshot-ready">
         <TopNav route={route} onNavigate={setRoute} />
         <SystemBar system={snapshot.system} sparks={sparks} />

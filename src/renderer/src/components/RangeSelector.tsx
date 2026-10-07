@@ -1,5 +1,5 @@
 import { useId } from 'react';
-import { motion, useReducedMotion } from 'motion/react';
+import { motion, useReducedMotionConfig } from 'motion/react';
 import type { RangePreset } from '../../../core/types';
 
 export const RANGE_PRESETS: RangePreset[] = ['1h', '6h', '24h', '7d', '30d'];
@@ -9,7 +9,7 @@ export const RANGE_LABELS: Record<RangePreset, string> = { '1h': '1 h', '6h': '6
 /** Contrôle segmenté vitré ; l'indicateur glisse d'une plage à l'autre. */
 export function RangeSelector({ value, onChange }: { value: RangePreset; onChange: (r: RangePreset) => void }) {
   const layoutId = `range-${useId()}`;
-  const reduce = useReducedMotion();
+  const reduce = !!useReducedMotionConfig();
   return (
     <div className="range-selector" role="radiogroup" aria-label="Plage de temps">
       {RANGE_PRESETS.map((p) => (

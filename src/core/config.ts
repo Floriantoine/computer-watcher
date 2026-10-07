@@ -1,9 +1,9 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_CONFIG, DEFAULT_RECORDER } from './defaults';
+import { DEFAULT_CONFIG, DEFAULT_RECORDER, DEFAULT_UI } from './defaults';
 import { inBounds, RECORDER_BOUNDS, type RecorderNumField } from './recorderBounds';
-import type { Config, RecorderConfig } from './types';
+import type { Config, RecorderConfig, UiConfig } from './types';
 
 export { DEFAULT_CONFIG };
 
@@ -33,6 +33,14 @@ function validateRecorder(raw: unknown): RecorderConfig | null {
   };
 }
 
+function validateUi(raw: unknown): UiConfig | null {
+  if (raw === undefined) return { ...DEFAULT_UI };
+  if (typeof raw !== 'object' || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.reducedEffects !== 'boolean') return null;
+  return { reducedEffects: r.reducedEffects };
+}
+
 export function validateConfig(raw: unknown): Config | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const r = raw as Record<string, unknown>;
@@ -43,7 +51,9 @@ export function validateConfig(raw: unknown): Config | null {
   if (!(t.memMB >= 0) || !(t.cpuPercent >= 0)) return null;
   const recorder = validateRecorder(r.recorder);
   if (!recorder) return null;
-  return { version: 1, protected: [...r.protected], othersThreshold: { memMB: t.memMB, cpuPercent: t.cpuPercent }, recorder };
+  const ui = validateUi(r.ui);
+  if (!ui) return null;
+  return { version: 1, protected: [...r.protected], othersThreshold: { memMB: t.memMB, cpuPercent: t.cpuPercent }, recorder, ui };
 }
 
 export function saveConfig(dir: string, config: Config): void {

@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, test } from 'vitest';
+import { describe, expect, test } from 'vitest';
 import { DEFAULT_CONFIG, configDir, loadConfig, saveConfig, validateConfig } from './config';
 import { DEFAULT_RECORDER } from './defaults';
 
@@ -127,4 +127,20 @@ test('recorder.groupMinMemMB : 20 Mo par défaut, ajouté si absent (config d\'u
   expect(validateConfig({ ...DEFAULT_CONFIG, recorder: { ...old, intervalSec: 10 } })?.recorder).toEqual({ ...DEFAULT_RECORDER, intervalSec: 10 });
   expect(validateConfig({ ...DEFAULT_CONFIG, recorder: { ...DEFAULT_RECORDER, groupMinMemMB: 0 } })?.recorder.groupMinMemMB).toBe(0);
   expect(validateConfig({ ...DEFAULT_CONFIG, recorder: { ...DEFAULT_RECORDER, groupMinMemMB: 1024 } })?.recorder.groupMinMemMB).toBe(1024);
+});
+
+describe('section ui', () => {
+  test('par défaut : effets visuels complets', () => {
+    expect(DEFAULT_CONFIG.ui).toEqual({ reducedEffects: false });
+  });
+  test('config sans section ui : valide, défaut ajouté', () => {
+    const { ui: _u, ...old } = DEFAULT_CONFIG;
+    expect(validateConfig(old)?.ui).toEqual({ reducedEffects: false });
+  });
+  test('reducedEffects conservé', () => {
+    expect(validateConfig({ ...DEFAULT_CONFIG, ui: { reducedEffects: true } })?.ui).toEqual({ reducedEffects: true });
+  });
+  test.each([[null], ['oui'], [{}], [{ reducedEffects: 'true' }]])('ui = %j → config invalide', (ui) => {
+    expect(validateConfig({ ...DEFAULT_CONFIG, ui })).toBeNull();
+  });
 });
