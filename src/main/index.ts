@@ -35,7 +35,7 @@ let systemdOk = false;
 
 const execArgs = () => recorderExecArgs({ appImage: process.env.APPIMAGE, execPath: process.execPath, appPath: app.getAppPath() });
 
-async function syncRecorder(): Promise<void> {
+async function doSync(): Promise<void> {
   systemdOk = await systemctlAvailable(defaultSystemctl);
   if (!systemdOk) return;
   try {
@@ -43,6 +43,13 @@ async function syncRecorder(): Promise<void> {
   } catch (e) {
     console.error('recorder service:', e);
   }
+}
+
+let syncing: Promise<void> = Promise.resolve();
+/** Sérialise les synchronisations pour éviter des appels systemctl concurrents. */
+function syncRecorder(): Promise<void> {
+  syncing = syncing.then(doSync, doSync);
+  return syncing;
 }
 
 const recorderState = (): RecorderState =>
@@ -139,8 +146,9 @@ ipcMain.handle('history:events', (_e, r: unknown) => (isRange(r) ? history.event
 ipcMain.handle('recorder:status', () => recorderState());
 ipcMain.handle('recorder:setEnabled', async (_e, enabled: unknown) => {
   if (typeof enabled !== 'boolean') throw new Error('Valeur invalide');
-  config = { ...config, recorder: { ...config.recorder, enabled } };
-  saveConfig(dir, config);
+  const next = { ...config, recorder: { ...config.recorder, enabled } };
+  saveConfig(dir, next);
+  config = next;
   await syncRecorder();
   return recorderState();
 });

@@ -1,5 +1,5 @@
 // src/main/history.ts
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
 import { openHistoryDb } from '../core/history/db';
 import {
@@ -10,12 +10,32 @@ import type { RangePreset, RecorderConfig, RecorderStatus, TimeRange } from '../
 
 export function createHistoryReader(dataDir: string, getConfig: () => RecorderConfig) {
   let db: DatabaseSync | null = null;
+  let identity = '';
+  const closeDb = (): void => {
+    try {
+      db?.close();
+    } catch {
+      // déjà fermée
+    }
+    db = null;
+  };
   const conn = (): DatabaseSync | null => {
+    const path = dbPath(dataDir);
+    let id: string;
+    try {
+      const st = statSync(path);
+      id = `${st.dev}:${st.ino}`;
+    } catch {
+      closeDb(); // pas (ou plus) de base
+      return null;
+    }
+    if (db && id !== identity) closeDb(); // fichier remplacé par le service
     if (db) return db;
     try {
-      db = openHistoryDb(dbPath(dataDir), { readOnly: true }).db;
+      db = openHistoryDb(path, { readOnly: true }).db;
+      identity = id;
     } catch {
-      db = null; // pas encore de base
+      db = null;
     }
     return db;
   };
@@ -29,12 +49,7 @@ export function createHistoryReader(dataDir: string, getConfig: () => RecorderCo
       return fn(d);
     } catch (e) {
       console.error('history:', e);
-      try {
-        d.close();
-      } catch {
-        // déjà fermée
-      }
-      db = null;
+      closeDb();
       return fallback;
     }
   };
