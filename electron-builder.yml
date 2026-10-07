@@ -1,0 +1,18 @@
+appId: io.github.floriantoine.procwatch
+productName: proc-watch
+directories:
+  output: release
+files:
+  - out/**/*
+  - package.json
+linux:
+  target:
+    - AppImage
+    - deb
+  category: System
+  executableName: proc-watch
+  synopsis: Voir et tuer les processus gourmands
+artifactName: ${productName}-${version}-${arch}.${ext}
+publish:
+  provider: github
+  releaseType: release
