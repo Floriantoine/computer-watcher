@@ -96,3 +96,38 @@ test('clearHistory, base d\'une version plus récente : supprimée par l\'app m�
   expect(existsSync(dbPath(dir))).toBe(false);
   expect(existsSync(clearRequestPath(dir))).toBe(false);
 });
+
+test('clearHistory, service jugé arrêté mais processus vivant : passe par clear-request, base conservée', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pw-hist-'));
+  makeDb(dir, Date.now());
+  const seen: number[] = [];
+  const isAlive = (pid: number) => (seen.push(pid), true);
+  expect(clearHistory(dir, { running: false, pid: 4242, isAlive })).toEqual({ mode: 'requested', backups: 0 });
+  expect(seen).toEqual([4242]);
+  expect(existsSync(dbPath(dir))).toBe(true);
+  expect(existsSync(clearRequestPath(dir))).toBe(true);
+});
+
+test('clearHistory, service arrêté et processus mort (ou pid inconnu) : suppression par l\'app', () => {
+  for (const pid of [4242, undefined]) {
+    const dir = mkdtempSync(join(tmpdir(), 'pw-hist-'));
+    makeDb(dir, Date.now());
+    expect(clearHistory(dir, { running: false, pid, isAlive: () => false })).toEqual({ mode: 'deleted', backups: 0 });
+    expect(existsSync(dbPath(dir))).toBe(false);
+  }
+});
+
+test('clearHistory, pid absent : isAlive n\'est pas appelé', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pw-hist-'));
+  makeDb(dir, Date.now());
+  expect(clearHistory(dir, { running: false, isAlive: () => { throw new Error('non'); } }).mode).toBe('deleted');
+});
+
+test('clearHistory, base plus récente et processus vivant : suppression autorisée', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pw-hist-'));
+  makeDb(dir, Date.now());
+  const { db } = openHistoryDb(dbPath(dir));
+  db.exec('PRAGMA user_version = 99');
+  db.close();
+  expect(clearHistory(dir, { running: false, pid: 1, isAlive: () => true }).mode).toBe('deleted');
+});

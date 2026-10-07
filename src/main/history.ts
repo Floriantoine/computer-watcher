@@ -89,20 +89,36 @@ function dbIsNewer(path: string): boolean {
   }
 }
 
+/** Le processus du service est-il vivant ? `kill(pid, 0)` puis `/proc/<pid>/cmdline` (le pid peut avoir été réattribué). */
+export function recorderProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ESRCH') return false;
+  }
+  try {
+    return readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes('recorder.js');
+  } catch {
+    return false;
+  }
+}
+
 /**
  * « Vider l'historique ». Service actif (et base à sa version) : demande au service (`clear-request`), traitée à sa
- * prochaine minute. Sinon l'app supprime elle-même la base (+ -wal/-shm), recréée au prochain démarrage du service.
+ * prochaine minute. « Actif » inclut un service jugé arrêté dont le processus (`pid`) est encore vivant (tick en retard,
+ * base ouverte) : on ne supprime jamais une base que le service tient ouverte. Sinon l'app supprime elle-même la base (+ -wal/-shm), recréée au prochain démarrage du service.
  * Les copies de sécurité (`.pre-vN-*`, `.bak-*`) sont supprimées dans tous les cas.
  */
 export function clearHistory(
   dataDir: string,
-  o: { running: boolean; beforeDelete?: () => void },
+  o: { running: boolean; pid?: number; isAlive?: (pid: number) => boolean; beforeDelete?: () => void },
 ): { mode: 'deleted' | 'requested'; backups: number } {
   const path = dbPath(dataDir);
   const backups = historyBackups(path);
   for (const b of backups) rmSync(b.file, { force: true });
   const count = backups.filter((b) => !/-(wal|shm)$/.test(b.file)).length;
-  if (o.running && !dbIsNewer(path)) {
+  const alive = o.running || (o.pid !== undefined && (o.isAlive ?? recorderProcessAlive)(o.pid));
+  if (alive && !dbIsNewer(path)) {
     mkdirSync(dataDir, { recursive: true });
     writeFileSync(clearRequestPath(dataDir), '');
     return { mode: 'requested', backups: count };
