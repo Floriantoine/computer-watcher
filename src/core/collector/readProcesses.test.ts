@@ -1,8 +1,8 @@
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test } from 'vitest';
 import { addProc, makeProcRoot } from './fakeProc';
-import { readProcesses } from './readProcesses';
+import { readProcesses, type CwdEntry } from './readProcesses';
 
 test('lit un processus complet', () => {
   const root = makeProcRoot(1000);
@@ -64,10 +64,37 @@ test('cmdlineCache : la 2e passe ne relit pas cmdline, et purge les absents', ()
   addProc(root, { pid: 21, comm: 'node', rssKB: 1, starttime: 6, cmdline: ['node', 'b'] });
   const cache = new Map<string, string>();
   expect(readProcesses(root, { cmdlineCache: cache }).map((p) => p.cmdline)).toEqual(['node a', 'node b']);
-  expect([...cache.keys()].sort()).toEqual(['20:5', '21:6']);
+  expect([...cache.keys()].sort()).toEqual(['20:5:node', '21:6:node']);
   rmSync(join(root, '20', 'cmdline'));
   expect(readProcesses(root, { cmdlineCache: cache }).find((p) => p.pid === 20)?.cmdline).toBe('node a');
   rmSync(join(root, '21'), { recursive: true });
   readProcesses(root, { cmdlineCache: cache });
-  expect([...cache.keys()]).toEqual(['20:5']);
+  expect([...cache.keys()]).toEqual(['20:5:node']);
+});
+
+test('cmdlineCache : un exec (même PID et starttime, autre nom) force la relecture', () => {
+  const root = makeProcRoot();
+  addProc(root, { pid: 40, comm: 'zsh', rssKB: 1, starttime: 9, cmdline: ['zsh'] });
+  const cache = new Map<string, string>();
+  readProcesses(root, { cmdlineCache: cache });
+  rmSync(join(root, '40'), { recursive: true });
+  addProc(root, { pid: 40, comm: 'node', rssKB: 1, starttime: 9, cmdline: ['node', 'server.js'] });
+  expect(readProcesses(root, { cmdlineCache: cache })[0]!.cmdline).toBe('node server.js');
+  expect([...cache.keys()]).toEqual(['40:9:node']);
+});
+
+test('cwdCache : relu au plus toutes les maxAgeMs par processus, purge les absents', () => {
+  const root = makeProcRoot();
+  addProc(root, { pid: 30, comm: 'node', rssKB: 1, starttime: 7, cwd: '/home/u/a' });
+  addProc(root, { pid: 31, comm: 'node', rssKB: 1, starttime: 8, cwd: '/home/u/old (deleted)' });
+  const entries = new Map<string, CwdEntry>();
+  const pass = (now: number) => readProcesses(root, { cwdCache: { entries, now, maxAgeMs: 30_000 } });
+  expect(pass(0).map((p) => [p.cwd, p.cwdDeleted])).toEqual([['/home/u/a', false], ['/home/u/old', true]]);
+  rmSync(join(root, '30', 'cwd'));
+  symlinkSync('/home/u/b', join(root, '30', 'cwd'));
+  expect(pass(29_000).find((p) => p.pid === 30)!.cwd).toBe('/home/u/a'); // encore en cache
+  expect(pass(30_000).find((p) => p.pid === 30)!.cwd).toBe('/home/u/b'); // rafraîchi
+  rmSync(join(root, '31'), { recursive: true });
+  pass(31_000);
+  expect([...entries.keys()]).toEqual(['30:7:node']);
 });

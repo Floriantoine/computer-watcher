@@ -21,9 +21,19 @@ export interface StatusFields {
   swapKB: number;
 }
 
+/** Valeur de la ligne `key:` (sans les blancs de tête). Recherche par indexOf : appelée ~3 000 fois par passe. */
 function field(content: string, key: string): string | undefined {
-  const m = content.match(new RegExp(`^${key}:\\s*(.*)$`, 'm'));
-  return m ? m[1] : undefined;
+  const tag = `${key}:`;
+  let start: number;
+  if (content.startsWith(tag)) start = tag.length;
+  else {
+    const i = content.indexOf(`\n${tag}`);
+    if (i < 0) return undefined;
+    start = i + 1 + tag.length;
+  }
+  let end = content.indexOf('\n', start);
+  if (end < 0) end = content.length;
+  return content.slice(start, end).trimStart();
 }
 
 export function parseStatus(content: string): StatusFields {

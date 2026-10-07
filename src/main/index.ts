@@ -3,11 +3,12 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { CpuTracker } from '../core/collector/cpuTracker';
-import { readProcesses } from '../core/collector/readProcesses';
+import { readProcesses, type CwdEntry } from '../core/collector/readProcesses';
 import { readSystem } from '../core/collector/readSystem';
 import { configDir, loadConfig, saveConfig, validateConfig } from '../core/config';
 import { buildGroups } from '../core/grouping/buildGroups';
 import { createProjectRootCache } from '../core/grouping/projectRootCache';
+import { recordSeparate, stickyIds } from '../core/grouping/stickyCards';
 import { planKill, sendSignals } from '../core/kill';
 import { compileProtection } from '../core/protection';
 import { formatAppEvent } from '../core/history/events';
@@ -16,10 +17,10 @@ import { buildSnapshot, groupProcs, isWatch, type FullSnapshot } from '../core/s
 import type { ConfigState, KillResult, KillTarget, RecorderState, Watch } from '../core/types';
 import { installDesktopEntry } from './desktopEntry';
 import { clearHistory, createHistoryReader } from './history';
+import { pollDelay, type WindowActivity } from './pollPolicy';
 import { isGroupKeys, isRange, isTopOptions, recorderState as computeRecorderState } from './historyIpc';
 import { autoManageService, defaultSystemctl, ensureRecorderService, recorderExecArgs, systemctlAvailable, unitPath } from './recorderService';
 
-const POLL_MS = 2000;
 const dir = configDir();
 const loaded = loadConfig(dir);
 let config = loaded.config;
@@ -61,15 +62,27 @@ function syncRecorder(explicit: boolean): Promise<void> {
 const recorderState = (): RecorderState =>
   computeRecorderState({ available: systemdOk, enabled: config.recorder.enabled, intervalSec: config.recorder.intervalSec, status: history.status(), now: Date.now() });
 
+// Caches de collecte : cmdline lue une fois par processus, lien cwd relu au plus toutes les 30 s par processus.
+const cmdlineCache = new Map<string, string>();
+const cwdEntries = new Map<string, CwdEntry>();
+const CWD_MAX_AGE_MS = 30_000;
+/** Une carte affichée reste affichée 30 s après être repassée sous les seuils de « Autres » (pas de clignotement). */
+const separateSeen = new Map<string, number>();
+const CARD_HOLD_MS = 30_000;
+
 function takeSnapshot(): FullSnapshot {
-  const procs = tracker.update(readProcesses(), Date.now());
+  const now = Date.now();
+  const procs = tracker.update(readProcesses('/proc', { cmdlineCache, cwdCache: { entries: cwdEntries, now, maxAgeMs: CWD_MAX_AGE_MS } }), now);
+  const sticky = stickyIds(separateSeen, now, CARD_HOLD_MS);
   const groups = buildGroups(procs, {
     home: homedir(),
     currentUid: uid,
     isProtected: protection.isProtected,
     othersThreshold: config.othersThreshold,
     projectRootOf,
+    keepSeparate: (id) => sticky.has(id),
   });
+  recordSeparate(separateSeen, groups, now);
   return { takenAt: Date.now(), currentUid: uid, system: readSystem(), groups };
 }
 
@@ -111,9 +124,57 @@ function createWindow(): void {
       console.error('snapshot failed:', err);
     }
   };
-  win.webContents.on('did-finish-load', push);
-  const timer = setInterval(push, POLL_MS);
-  win.on('closed', () => clearInterval(timer));
+  // Collecte en direct : arrêtée fenêtre réduite ou cachée, ralentie après une minute sans focus (voir pollPolicy).
+  const activity: WindowActivity = { hidden: false, blurredAt: null };
+  let timer: NodeJS.Timeout | null = null;
+  let timerDelay: number | null = null;
+  const schedule = () => {
+    if (timer) clearTimeout(timer);
+    timer = null;
+    timerDelay = pollDelay(activity, Date.now());
+    if (timerDelay !== null)
+      timer = setTimeout(() => {
+        push();
+        schedule();
+      }, timerDelay);
+  };
+  const setLive = (live: boolean) => {
+    if (!win.isDestroyed()) win.webContents.send('live', live);
+  };
+  const pause = () => {
+    activity.hidden = true;
+    schedule();
+    setLive(false);
+  };
+  const resume = () => {
+    const wasHidden = activity.hidden;
+    activity.hidden = false;
+    push(); // snapshot frais tout de suite
+    schedule();
+    if (wasHidden) setLive(true);
+  };
+  win.on('minimize', pause);
+  win.on('hide', pause);
+  win.on('restore', resume);
+  win.on('show', () => activity.hidden && resume());
+  win.on('blur', () => {
+    activity.blurredAt = Date.now();
+  });
+  win.on('focus', () => {
+    const slowed = timerDelay !== pollDelay({ ...activity, blurredAt: null }, Date.now());
+    activity.blurredAt = null;
+    // Sous Wayland, une fenêtre réduite par l'app puis restaurée par le compositeur ne reçoit que `focus`.
+    if (activity.hidden || slowed) resume();
+  });
+  win.webContents.on('did-finish-load', () => {
+    push();
+    schedule();
+  });
+  win.on('closed', () => {
+    if (timer) clearTimeout(timer);
+    timer = null;
+    mainWin = null;
+  });
   if (process.env.ELECTRON_RENDERER_URL) win.loadURL(process.env.ELECTRON_RENDERER_URL);
   else win.loadFile(join(__dirname, '../renderer/index.html'));
 }

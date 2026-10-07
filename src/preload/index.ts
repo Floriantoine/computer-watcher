@@ -12,6 +12,14 @@ const api = {
       ipcRenderer.removeListener('snapshot', handler);
     };
   },
+  /** false quand la collecte en direct est suspendue (fenêtre réduite ou cachée), true à la reprise. */
+  onLive(cb: (live: boolean) => void): () => void {
+    const handler = (_e: IpcRendererEvent, live: boolean) => cb(live);
+    ipcRenderer.on('live', handler);
+    return () => {
+      ipcRenderer.removeListener('live', handler);
+    };
+  },
   /** Groupe ouvert dans le détail (son arbre arrive dans les snapshots) et recherche en cours. */
   watch: (w: Watch): Promise<void> => ipcRenderer.invoke('watch', w),
   /** Processus d'un groupe (dernier snapshot), pour préparer un kill de groupe. */

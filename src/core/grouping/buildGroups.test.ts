@@ -122,6 +122,17 @@ describe('carte « Autres »', () => {
     expect(others.pids.sort()).toEqual([2, 3]);
   });
 
+  test('keepSeparate : un petit groupe encore « collant » garde sa carte', () => {
+    const groups = buildGroups([
+      proc({ pid: 1, name: 'big', rssKB: 500 * 1024 }),
+      proc({ pid: 2, name: 'tiny1', rssKB: 1024 }),
+      proc({ pid: 3, name: 'tiny2', rssKB: 2048 }),
+      proc({ pid: 4, name: 'tiny3', rssKB: 512 }),
+    ], opts({ keepSeparate: (id) => id === 'command:tiny1' }));
+    expect(groups.map((g) => g.id)).toEqual(['command:big', 'command:tiny1', 'others']);
+    expect(byId(groups, 'others').subgroups.map((g) => g.id)).toEqual(['command:tiny2', 'command:tiny3']);
+  });
+
   test('un seul petit groupe → pas de carte Autres', () => {
     const groups = buildGroups([proc({ pid: 1, name: 'big', rssKB: 500 * 1024 }), proc({ pid: 2, name: 'tiny', rssKB: 1 })], opts());
     expect(groups.find((g) => g.id === 'others')).toBeUndefined();

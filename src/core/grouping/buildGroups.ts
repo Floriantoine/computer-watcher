@@ -9,6 +9,8 @@ export interface GroupingOptions {
   isProtected: (name: string) => boolean;
   othersThreshold: { memMB: number; cpuPercent: number };
   projectRootOf: (cwd: string) => string | null;
+  /** Groupes à ne pas ranger dans « Autres » même sous les seuils (hystérésis des cartes, voir stickyCards). */
+  keepSeparate?: (id: string) => boolean;
 }
 
 interface Meta {
@@ -105,7 +107,7 @@ export function buildGroups(procs: ProcInfo[], opts: GroupingOptions): Group[] {
   }
 
   const groups = [...members].map(([key, list]) => makeGroup(key, meta.get(key)!, list, opts));
-  return applyOthers(groups, opts.othersThreshold);
+  return applyOthers(groups, opts.othersThreshold, opts.keepSeparate);
 }
 
 function makeGroup(id: string, { kind, label }: Meta, list: ProcInfo[], opts: GroupingOptions): Group {
@@ -149,8 +151,8 @@ function makeGroup(id: string, { kind, label }: Meta, list: ProcInfo[], opts: Gr
   };
 }
 
-function applyOthers(groups: Group[], t: { memMB: number; cpuPercent: number }): Group[] {
-  const isSmall = (g: Group) => mem(g) < t.memMB * 1024 && g.cpuPercent < t.cpuPercent;
+function applyOthers(groups: Group[], t: { memMB: number; cpuPercent: number }, keepSeparate?: (id: string) => boolean): Group[] {
+  const isSmall = (g: Group) => mem(g) < t.memMB * 1024 && g.cpuPercent < t.cpuPercent && !keepSeparate?.(g.id);
   const small = groups.filter(isSmall).sort(byMemDesc);
   if (small.length < 2) return groups.sort(byMemDesc);
   const big = groups.filter((g) => !isSmall(g)).sort(byMemDesc);
