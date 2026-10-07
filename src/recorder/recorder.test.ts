@@ -1,5 +1,5 @@
 // src/recorder/recorder.test.ts
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -128,5 +128,25 @@ test('une étape de minuteJob en échec ne bloque pas la purge ; erreurs par tra
   expect(s.jobErrors?.minute).toMatch(/^minute: événements app/);
   expect(s.lastError).toMatch(/^minute: /);
   expect(db().prepare('SELECT COUNT(*) n FROM system_samples').get()).toEqual({ n: 0 }); // purge exécutée malgré tout
+  rec.stop();
+});
+
+test('base d\'une version plus récente : statut en erreur, inactif, aucune écriture', () => {
+  const { rec, base, db } = setup();
+  mkdirSync(join(base, 'data'), { recursive: true });
+  const p = join(base, 'data', 'metrics.db');
+  const raw = new DatabaseSync(p);
+  raw.exec('PRAGMA user_version = 99; CREATE TABLE x(a); INSERT INTO x VALUES(1);');
+  raw.close();
+  const before = readFileSync(p);
+  rec.start();
+  rec.tick();
+  rec.minuteJob();
+  const status = JSON.parse(readFileSync(join(base, 'data', 'recorder-status.json'), 'utf8'));
+  expect(status.lastError).toContain('version plus récente');
+  expect(status.lastSampleAt).toBeNull();
+  expect(readFileSync(p).equals(before)).toBe(true);
+  expect(readdirSync(join(base, 'data')).filter((f) => f.includes('.bak'))).toEqual([]);
+  expect(db().prepare('SELECT a FROM x').all()).toEqual([{ a: 1 }]);
   rec.stop();
 });

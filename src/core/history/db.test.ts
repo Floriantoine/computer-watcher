@@ -1,6 +1,6 @@
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { expect, test } from 'vitest';
 import { SCHEMA_VERSION, openHistoryDb } from './db';
@@ -32,10 +32,10 @@ test('réouverture : rien de recréé', () => {
   db.close();
 });
 
-test('version inconnue → .bak-<date> et base neuve', () => {
+test('version ancienne non migrable → .bak-<date> et base neuve', () => {
   const p = tmp();
   const raw = new DatabaseSync(p);
-  raw.exec('PRAGMA user_version = 99; CREATE TABLE x(a);');
+  raw.exec('PRAGMA user_version = 1; CREATE TABLE x(a);');
   raw.close();
   const { db, recreated } = openHistoryDb(p, { now: () => Date.UTC(2026, 9, 7, 9, 40) });
   expect(recreated).toBe(`${p}.bak-20261007T094000`);
@@ -93,7 +93,7 @@ test('fichier vide : recréé sans .bak', () => {
 test('base écartée : -wal/-shm suivent la sauvegarde', () => {
   const p = tmp();
   const raw = new DatabaseSync(p);
-  raw.exec('PRAGMA journal_mode = WAL; PRAGMA user_version = 99; CREATE TABLE x(a); INSERT INTO x VALUES(1);');
+  raw.exec('PRAGMA journal_mode = WAL; PRAGMA user_version = 1; CREATE TABLE x(a); INSERT INTO x VALUES(1);');
   // base laissée ouverte : -wal présent
   const { db, recreated } = openHistoryDb(p);
   expect(existsSync(`${recreated}-wal`)).toBe(true);
@@ -156,4 +156,46 @@ test('lecture seule sur une base v1 : ne migre pas, lit normalement', () => {
   expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(1);
   expect(db.prepare('SELECT * FROM procs').all()).toEqual([]);
   db.close();
+});
+
+test('version plus récente : erreur typée, fichier intact, pas de .bak, lecture seule possible', () => {
+  const p = tmp();
+  const raw = new DatabaseSync(p);
+  raw.exec('PRAGMA user_version = 3; CREATE TABLE x(a); INSERT INTO x VALUES(1);');
+  raw.close();
+  const before = readFileSync(p);
+  expect(() => openHistoryDb(p)).toThrow('HISTORY_DB_NEWER');
+  try { openHistoryDb(p); } catch (e) { expect(e).toMatchObject({ code: 'HISTORY_DB_NEWER', version: 3 }); }
+  expect(readFileSync(p).equals(before)).toBe(true);
+  expect(readdirSync(join(p, '..')).filter((f) => f.includes('.bak'))).toEqual([]);
+  const { db } = openHistoryDb(p, { readOnly: true });
+  expect(db.prepare('SELECT a FROM x').all()).toEqual([{ a: 1 }]);
+  db.close();
+});
+
+test('migration : copie pre-v2 valide (v1, 0600), seule la plus récente conservée', () => {
+  const mkV1 = (p: string) => {
+    const { db } = openHistoryDb(p);
+    db.exec("INSERT INTO groups(id,key,label,kind) VALUES (1,'g','g','app')");
+    db.exec('ALTER TABLE procs DROP COLUMN ppid');
+    db.exec("INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id) VALUES (1,10,100,'a','a',1)");
+    db.exec('PRAGMA user_version = 1');
+    db.close();
+  };
+  const p = tmp();
+  mkV1(p);
+  openHistoryDb(p, { now: () => Date.UTC(2026, 9, 7, 9, 40) }).db.close();
+  const first = `${p}.pre-v2-20261007T094000`;
+  expect(existsSync(first)).toBe(true);
+  expect(statSync(first).mode & 0o777).toBe(0o600);
+  const c = new DatabaseSync(first, { readOnly: true });
+  expect((c.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(1);
+  expect(c.prepare('SELECT pid FROM procs').all()).toEqual([{ pid: 10 }]);
+  c.close();
+  // seconde migration (base ramenée en v1) : l'ancienne copie est remplacée
+  const d = new DatabaseSync(p);
+  d.exec('ALTER TABLE procs DROP COLUMN ppid; PRAGMA user_version = 1');
+  d.close();
+  openHistoryDb(p, { now: () => Date.UTC(2026, 9, 8, 9, 40) }).db.close();
+  expect(readdirSync(join(p, '..')).filter((f) => f.includes('.pre-v2-'))).toEqual([`${basename(p)}.pre-v2-20261008T094000`]);
 });

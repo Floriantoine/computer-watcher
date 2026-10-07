@@ -178,3 +178,20 @@ test('queryProcsAt : état à l\'instant demandé, mort/naissance, tri, repli mi
   const m = queryProcsAt(db, 'g', 30_000, old);
   expect(m.map((p) => [p.pid, p.ppid, p.swapKB])).toEqual([[11, 10, null], [10, 1, null]]);
 });
+
+test('queryProcsAt sur une base v1 avec lignes, ouverte en lecture seule : ppid null', () => {
+  const p = join(mkdtempSync(join(tmpdir(), 'pw-v1-')), 'm.db');
+  const w = openHistoryDb(p).db;
+  w.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'g','g','app');
+          ALTER TABLE procs DROP COLUMN ppid;
+          INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id) VALUES (1,10,1,'a','a',1);
+          INSERT INTO proc_samples VALUES (1000,1,500,5,2);
+          INSERT INTO proc_minute VALUES (0,1,505,600,2);
+          PRAGMA user_version = 1;`);
+  w.close();
+  const { db } = openHistoryDb(p, { readOnly: true });
+  const want = { pid: 10, startTicks: 1, ppid: null, name: 'a', cmdline: 'a' };
+  expect(queryProcsAt(db, 'g', 1000, { now: 2000, detailHours: 24, intervalSec: 5 })).toEqual([{ ...want, rssKB: 500, swapKB: 5, cpu: 2 }]);
+  expect(queryProcsAt(db, 'g', 1000, { now: 100 * H, detailHours: 24, intervalSec: 5 })).toEqual([{ ...want, rssKB: 505, swapKB: null, cpu: 2 }]);
+  db.close();
+});

@@ -1,5 +1,5 @@
-import { chmodSync, existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { chmodSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 export const SCHEMA_VERSION = 2;
@@ -78,6 +78,18 @@ function create(path: string): DatabaseSync {
 }
 
 /** v1 -> v2 : ajoute procs.ppid (NULL pour l'historique existant). Idempotent, atomique. */
+/** Copie de sécurité avant migration (0600) ; seule la plus récente est conservée. */
+function backupBeforeMigration(db: DatabaseSync, path: string, now: number): void {
+  const dest = `${path}.pre-v2-${stamp(now)}`;
+  rmSync(dest, { force: true });
+  db.exec(`VACUUM INTO '${dest.replace(/'/g, "''")}'`);
+  chmodSync(dest, 0o600);
+  const prefix = `${basename(path)}.pre-v2-`;
+  for (const f of readdirSync(dirname(path))) {
+    if (f.startsWith(prefix) && join(dirname(path), f) !== dest) rmSync(join(dirname(path), f), { force: true });
+  }
+}
+
 function migrateV1(db: DatabaseSync): void {
   db.exec('BEGIN IMMEDIATE');
   try {
@@ -118,10 +130,15 @@ export function openHistoryDb(
     db = new DatabaseSync(path);
     db.exec('PRAGMA busy_timeout = 2000;');
     const v = (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
+    if (v > SCHEMA_VERSION) {
+      // base créée par une version plus récente : jamais écartée ni modifiée (retour arrière possible)
+      throw Object.assign(new Error('HISTORY_DB_NEWER'), { code: 'HISTORY_DB_NEWER', version: v });
+    }
     // v1 reconnue (table procs présente) : migration en place ; sinon traitée comme inconnue (.bak)
     const migratable = v === 1 && hasColumn(db, 'procs', 'id');
     if (migratable) {
       db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;');
+      backupBeforeMigration(db, path, (opts.now ?? Date.now)());
       migrateV1(db);
     }
     if (migratable || v === SCHEMA_VERSION) {

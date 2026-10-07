@@ -99,7 +99,19 @@ export function createRecorder(deps: RecorderDeps): Recorder {
 
     start() {
       mkdirSync(deps.dataDir, { recursive: true, mode: 0o700 });
-      const opened = openHistoryDb(dbPath(deps.dataDir), { now });
+      let opened: ReturnType<typeof openHistoryDb>;
+      try {
+        opened = openHistoryDb(dbPath(deps.dataDir), { now });
+      } catch (e) {
+        if ((e as { code?: string }).code !== 'HISTORY_DB_NEWER') throw e;
+        // base d'une version plus récente : on reste inactif (aucune écriture), sans planter en boucle
+        jobErrors.tick = "Base d'historique créée par une version plus récente de proc-watch : enregistrement suspendu";
+        errorAt.tick = ++errSeq;
+        refreshLastError();
+        log(jobErrors.tick);
+        writeStatus();
+        return;
+      }
       db = opened.db;
       writer = new HistoryWriter(db);
       if (opened.recreated) {
