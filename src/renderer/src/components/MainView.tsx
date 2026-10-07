@@ -1,9 +1,12 @@
 import { AnimatePresence } from 'motion/react';
+import { useState } from 'react';
 import { ChevronDown, Search } from 'lucide-react';
 import type { Group } from '../../../core/types';
 import type { SortKey, ViewFilter } from '../viewModel';
 import { visibleGroups } from '../viewModel';
 import { GroupCard } from './GroupCard';
+import { GroupList } from './GroupList';
+import { ViewToggle, loadView, type ViewMode } from './ViewToggle';
 
 interface Props {
   groups: Group[];
@@ -21,6 +24,7 @@ interface Props {
 const AGES: [string, number][] = [['Tous', 0], ['> 1 h', 3600], ['> 1 j', 86400], ['> 7 j', 7 * 86400]];
 
 export function MainView({ groups, memTotalKB, filter, onFilter, stuckPids, pendingPids, onOpen, onKillGroup, onForce, sparkOf }: Props) {
+  const [view, setView] = useState<ViewMode>(loadView);
   const shown = visibleGroups(groups, filter);
   const layoutKey = shown.map((g) => g.id).join('\n');
   return (
@@ -45,9 +49,12 @@ export function MainView({ groups, memTotalKB, filter, onFilter, stuckPids, pend
           </select>
           <ChevronDown size={14} />
         </label>
+        <ViewToggle value={view} onChange={setView} />
       </div>
       {shown.length === 0 ? (
         <p className="empty">Aucun groupe ne correspond.</p>
+      ) : view === 'list' ? (
+        <GroupList groups={shown} sparkOf={sparkOf} stuckPids={stuckPids} pendingPids={pendingPids} onOpen={onOpen} onKill={onKillGroup} onForce={onForce} />
       ) : (
         <div className="cards">
           <AnimatePresence mode="popLayout" initial={false}>

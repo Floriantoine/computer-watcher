@@ -431,3 +431,28 @@ table.tree td.act { width: 1%; text-align: right; }
   *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
   .is-pending { animation: none !important; box-shadow: 0 0 0 2px rgba(255, 92, 138, 0.4); }
 }
+
+/* ---------- Bascule cartes / liste ---------- */
+.view-toggle { display: inline-flex; gap: 2px; padding: 2px; background: var(--surface-3); border: 1px solid var(--border-2); border-radius: var(--r-md); }
+.view-toggle button { width: 30px; height: 28px; padding: 0; justify-content: center; border: none; background: none; color: var(--muted); border-radius: var(--r-sm); }
+.view-toggle button.active { background: rgba(255, 255, 255, 0.1); color: var(--text); }
+
+/* ---------- Vue liste ---------- */
+.list-panel { margin-top: 16px; }
+table.group-list { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+table.group-list th { text-align: left; font-weight: 500; color: var(--label); font-size: 11px; padding: 4px 10px; border-bottom: 1px solid var(--border); background: rgba(255, 255, 255, 0.02); }
+table.group-list th.num, table.group-list td.num { text-align: right; }
+table.group-list th[aria-sort='ascending'] .th-btn, table.group-list th[aria-sort='descending'] .th-btn { color: var(--text); }
+.th-btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 2px; border: none; background: none; color: inherit; font: inherit; border-radius: 5px; }
+.th-btn:hover:not(:disabled) { background: none; border: none; color: var(--text); }
+table.group-list td { padding: 7px 10px; border-bottom: 1px solid rgba(255, 255, 255, 0.045); white-space: nowrap; }
+table.group-list tbody tr:last-child td { border-bottom: none; }
+table.group-list tbody tr { cursor: pointer; transition: background-color 0.12s; }
+table.group-list tbody tr:hover { background: rgba(255, 255, 255, 0.04); }
+table.group-list td.name { width: 100%; max-width: 0; }
+.name-cell { display: inline-flex; align-items: center; gap: 9px; max-width: 100%; }
+.name-cell .label { overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+.name-cell .ico { width: 22px; height: 22px; border-radius: 7px; }
+table.group-list td.spark-cell { width: 80px; padding-top: 0; padding-bottom: 0; }
+table.group-list td.spark-cell .spark { display: block; width: 80px; }
+table.group-list td.act { width: 1%; text-align: right; }
