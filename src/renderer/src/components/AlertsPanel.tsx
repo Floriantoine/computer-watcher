@@ -30,7 +30,7 @@ export function AlertsPanel({ events, onPick }: Props) {
                 <span className="alert-ico" style={{ color: a.color, background: `${a.color}1f` }}>
                   <Icon size={13} strokeWidth={2.2} />
                 </span>
-                <span className="name">{a.label}</span>
+                <span className="name" title={a.label}>{a.label}</span>
                 <span className="mono">{formatInstant(a.ts)}</span>
               </li>
             );

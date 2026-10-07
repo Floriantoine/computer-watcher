@@ -33,7 +33,7 @@ export function TopConsumers({ top, canOpen, onOpenGroup }: Props) {
                 onClick={open ? () => onOpenGroup(t.key) : undefined}
               >
                 <GroupIcon id={t.key} kind={t.kind} size="sm" />
-                <span className="name">{t.label}</span>
+                <span className="name" title={t.label}>{t.label}</span>
                 <span className="row-spark"><Sparkline values={t.spark} tone="mem" height={22} /></span>
                 <span className="num">{formatKB(t.maxKB)}</span>
                 <span className="num muted">{formatKB(t.avgKB)}</span>

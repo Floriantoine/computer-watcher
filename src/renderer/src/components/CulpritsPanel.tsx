@@ -19,14 +19,13 @@ function delta(kb: number): string {
   return '0';
 }
 
-/** Panneau « Coupables » : groupes triés par hausse de mémoire sur les 5 min avant l'instant choisi. */
+/** Colonne « instant cliqué » : groupes triés par hausse de mémoire sur les 5 min avant l'instant choisi. */
 export function CulpritsPanel({ ts, culprits, canOpen, onOpenGroup, onClose }: Props) {
   return (
-    <aside className="culprits" data-testid="culprits-panel">
+    <div className="culprits" data-testid="culprits-panel">
       <div className="culprits-head">
         <div>
-          <h3>À {formatInstant(ts)}</h3>
-          <div className="sub">Hausse sur les 5 min précédentes</div>
+          <h3>À {formatInstant(ts)} <span className="sub">— hausse sur 5 min</span></h3>
         </div>
         <button className="icon-btn sm" title="Fermer" aria-label="Fermer" onClick={onClose}>
           <X size={14} strokeWidth={2} />
@@ -48,7 +47,7 @@ export function CulpritsPanel({ ts, culprits, canOpen, onOpenGroup, onClose }: P
                 onClick={open ? () => onOpenGroup(c.key) : undefined}
               >
                 <GroupIcon id={c.key} kind={c.kind} size="sm" />
-                <span className="name">{c.label}</span>
+                <span className="name" title={c.label}>{c.label}</span>
                 <span className={`delta${c.deltaKB > 0 ? ' up' : ''}`}>{delta(c.deltaKB)}</span>
                 <span className="mono total">{formatKB(c.memKB)}</span>
                 <ChevronRight size={14} strokeWidth={2} className={open ? '' : 'hidden'} />
@@ -57,6 +56,6 @@ export function CulpritsPanel({ ts, culprits, canOpen, onOpenGroup, onClose }: P
           })}
         </ul>
       )}
-    </aside>
+    </div>
   );
 }

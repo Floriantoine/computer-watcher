@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Activity, CircleAlert, Cpu, Gauge, HardDrive, MemoryStick, Power, RefreshCw, RotateCcw, Search, ZoomIn } from 'lucide-react';
+import { Activity, CircleAlert, Cpu, Gauge, HardDrive, MemoryStick, MousePointerClick, Power, RefreshCw, RotateCcw, Search, ZoomIn } from 'lucide-react';
 import type { Culprit, RangePreset, TimeRange } from '../../../core/types';
 import { formatKB } from '../format';
 import { useHistory } from '../history';
@@ -201,8 +201,6 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
         <section className="chart-panel inv-chart" data-testid="investigation">
           <div className="chart-panel-head">
             <h3><Search size={14} strokeWidth={2} /> Enquête — mémoire par groupe</h3>
-            <span className="spacer" />
-            {cursor === null && inv && <span className="sub">Cliquez un instant pour voir les coupables</span>}
           </div>
           {inv ? (
             <>
@@ -211,35 +209,50 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
                   <span key={i}><i style={{ background: s.tone }} />{s.label}</span>
                 ))}
               </div>
-              <TimeChart ts={inv.ts} series={inv.series} height={260} format={KB} markers={markers} onCursor={setCursor} onSelectRange={onSelectRange} />
+              <TimeChart ts={inv.ts} series={inv.series} height={320} format={KB} markers={markers} onCursor={setCursor} onSelectRange={onSelectRange} />
             </>
           ) : (
             <div className="chart-empty tall">{data === undefined ? 'Chargement…' : 'Pas encore assez de données pour l’enquête'}</div>
           )}
         </section>
-        <AnimatePresence initial={false}>
-          {cursor !== null && (
-            <motion.div
-              key="culprits"
-              className="culprits-wrap"
-              initial={{ opacity: 0, x: 32 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: 32 }}
-              transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-            >
-              <CulpritsPanel
-                ts={cursor}
-                culprits={culprits && culprits.ts === cursor ? culprits.list : undefined}
-                canOpen={canOpen}
-                onOpenGroup={onOpenGroup}
-                onClose={() => setCursor(null)}
-              />
-            </motion.div>
-          )}
-        </AnimatePresence>
       </div>
 
+      {/* Trois colonnes de même hauteur : instant cliqué | top | alertes ; chacune défile si besoin. */}
       <div className="metrics-bottom">
+        <section className="chart-panel culprits-col" data-testid="culprits-col">
+          <AnimatePresence initial={false} mode="wait">
+            {cursor !== null ? (
+              <motion.div
+                key="culprits"
+                className="culprits-anim"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 10 }}
+                transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+              >
+                <CulpritsPanel
+                  ts={cursor}
+                  culprits={culprits && culprits.ts === cursor ? culprits.list : undefined}
+                  canOpen={canOpen}
+                  onOpenGroup={onOpenGroup}
+                  onClose={() => setCursor(null)}
+                />
+              </motion.div>
+            ) : (
+              <motion.div
+                key="hint"
+                className="culprits-hint"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.18 }}
+              >
+                <MousePointerClick size={18} strokeWidth={1.8} />
+                <span>Cliquez un instant du graphe pour voir ce qui a grossi</span>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </section>
         <TopConsumers top={data?.top} canOpen={canOpen} onOpenGroup={onOpenGroup} />
         <AlertsPanel events={events} onPick={setCursor} />
       </div>
