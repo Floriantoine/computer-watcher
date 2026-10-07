@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { AnimatePresence, MotionConfig, motion, useIsPresent } from 'motion/react';
 import { compileProtection } from '../../core/protection';
 import type { Config, ConfigState, Group, KillSignal, KillTarget, ProcNode, Snapshot } from '../../core/types';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { DetailView } from './components/DetailView';
 import { SettingsView } from './components/SettingsView';
-import { Toasts } from './components/Toasts';
+import { Toasts, type Toast } from './components/Toasts';
 import { MainView } from './components/MainView';
 import { SystemBar } from './components/SystemBar';
 import { findGroup, flattenProcs, ipcErrorMessage, killResultMessages, killRequestForGroup, killRequestForProc, trackKills, type KillRequest, type ViewFilter } from './viewModel';
@@ -17,7 +18,10 @@ export function App() {
   const [route, setRoute] = useState<Route>({ view: 'main' });
   const [filter, setFilter] = useState<ViewFilter>({ query: '', sort: 'mem', minAgeSec: 0 });
   const [stuckPids, setStuckPids] = useState<Set<number>>(new Set());
-  const [toasts, setToasts] = useState<string[]>([]);
+  // Miroir d'affichage de `pending` (SIGTERM envoyé, processus encore là) : fait pulser les boutons kill.
+  const [pendingPids, setPendingPids] = useState<Set<number>>(new Set());
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const toastId = useRef(0);
   const [confirm, setConfirm] = useState<KillRequest | null>(null);
   const [configError, setConfigError] = useState<string | null>(null);
   const pending = useRef(new Map<number, number>());
@@ -33,13 +37,15 @@ export function App() {
       pending.current = r.pending;
       for (const pid of [...sentTicks.current.keys()]) if (!r.pending.has(pid)) sentTicks.current.delete(pid);
       setStuckPids(r.stuck);
+      setPendingPids(new Set(r.pending.keys()));
     });
   }, []);
 
   const isProtected = useMemo(() => compileProtection(configState?.config.protected ?? []).isProtected, [configState]);
 
-  const pushToast = (msg: string) => {
-    setToasts((t) => [...t, msg]);
+  const pushToast = (message: string, kind: Toast['kind'] = 'error') => {
+    const id = ++toastId.current;
+    setToasts((t) => [...t, { id, message, kind }]);
     setTimeout(() => setToasts((t) => t.slice(1)), 5000);
   };
 
@@ -59,6 +65,7 @@ export function App() {
         if (t) sentTicks.current.set(r.pid, t.startTicks);
       }
     }
+    setPendingPids(new Set(pending.current.keys()));
     for (const msg of killResultMessages(results)) pushToast(msg);
   }
 
@@ -80,6 +87,8 @@ export function App() {
   if (configError) return <p className="empty">Impossible de charger la configuration : {configError}</p>;
   if (!snapshot || !configState) return <p className="empty">Chargement…</p>;
 
+  const routeKey = route.view === 'detail' ? `detail:${route.groupId}` : route.view;
+
   const killGroup = (g: Group) => requestKill(killRequestForGroup(g, isProtected, snapshot.currentUid));
   const killProc = (n: ProcNode) => requestKill(killRequestForProc(n.proc, isProtected, snapshot.currentUid));
 
@@ -98,62 +107,89 @@ export function App() {
   }
 
   return (
-    <div data-testid="snapshot-ready">
-      <SystemBar system={snapshot.system} />
-      {route.view === 'main' && (
-        <MainView
-          groups={snapshot.groups}
-          memTotalKB={snapshot.system.memTotalKB}
-          filter={filter}
-          onFilter={setFilter}
-          stuckPids={stuckPids}
-          onOpen={(g) => setRoute({ view: 'detail', groupId: g.id })}
-          onKillGroup={killGroup}
-          onForce={forceKill}
-          onSettings={() => setRoute({ view: 'settings' })}
-        />
-      )}
-      {route.view === 'detail' && (
-        <DetailView
-          group={findGroup(snapshot.groups, route.groupId)}
-          stuckPids={stuckPids}
-          currentUid={snapshot.currentUid}
-          rootProtectedByName={(() => {
-            const g = findGroup(snapshot.groups, route.groupId);
-            return !!g && configState.config.protected.includes(g.rootName);
-          })()}
-          onBack={() => setRoute({ view: 'main' })}
-          onOpenGroup={(id) => setRoute({ view: 'detail', groupId: id })}
-          onKillGroup={killGroup}
-          onKillProc={killProc}
-          onForce={forceKill}
-          onToggleProtect={toggleProtect}
-        />
-      )}
-      {route.view === 'settings' && (
-        <SettingsView
-          state={configState}
-          onSave={(c) => void saveConfig(c)}
-          onBack={() => setRoute({ view: 'main' })}
-          onInstallDesktop={() =>
-            window.procWatch.installDesktopEntry().then(
-              (file) => pushToast(`Raccourci créé : ${file}`),
-              (e: unknown) => pushToast(ipcErrorMessage(e)),
-            )
-          }
-        />
-      )}
-      {confirm && (
-        <ConfirmDialog
-          request={confirm}
-          onConfirm={() => {
-            void sendKill(confirm.targets, 'SIGTERM');
-            setConfirm(null);
-          }}
-          onCancel={() => setConfirm(null)}
-        />
-      )}
-      <Toasts messages={toasts} />
-    </div>
+    <MotionConfig reducedMotion="user">
+      <div data-testid="snapshot-ready">
+        <SystemBar system={snapshot.system} />
+        <AnimatePresence mode="wait" initial={false}>
+          <RouteFade key={routeKey}>
+            {route.view === 'main' && (
+              <MainView
+                groups={snapshot.groups}
+                memTotalKB={snapshot.system.memTotalKB}
+                filter={filter}
+                onFilter={setFilter}
+                stuckPids={stuckPids}
+                pendingPids={pendingPids}
+                onOpen={(g) => setRoute({ view: 'detail', groupId: g.id })}
+                onKillGroup={killGroup}
+                onForce={forceKill}
+                onSettings={() => setRoute({ view: 'settings' })}
+              />
+            )}
+            {route.view === 'detail' && (
+              <DetailView
+                group={findGroup(snapshot.groups, route.groupId)}
+                stuckPids={stuckPids}
+                pendingPids={pendingPids}
+                currentUid={snapshot.currentUid}
+                rootProtectedByName={(() => {
+                  const g = findGroup(snapshot.groups, route.groupId);
+                  return !!g && configState.config.protected.includes(g.rootName);
+                })()}
+                onBack={() => setRoute({ view: 'main' })}
+                onOpenGroup={(id) => setRoute({ view: 'detail', groupId: id })}
+                onKillGroup={killGroup}
+                onKillProc={killProc}
+                onForce={forceKill}
+                onToggleProtect={toggleProtect}
+              />
+            )}
+            {route.view === 'settings' && (
+              <SettingsView
+                state={configState}
+                onSave={(c) => void saveConfig(c)}
+                onBack={() => setRoute({ view: 'main' })}
+                onInstallDesktop={() =>
+                  window.procWatch.installDesktopEntry().then(
+                    (file) => pushToast(`Raccourci créé : ${file}`, 'info'),
+                    (e: unknown) => pushToast(ipcErrorMessage(e)),
+                  )
+                }
+              />
+            )}
+          </RouteFade>
+        </AnimatePresence>
+        <AnimatePresence>
+          {confirm && (
+            <ConfirmDialog
+              key="confirm"
+              request={confirm}
+              onConfirm={() => {
+                void sendKill(confirm.targets, 'SIGTERM');
+                setConfirm(null);
+              }}
+              onCancel={() => setConfirm(null)}
+            />
+          )}
+        </AnimatePresence>
+        <Toasts toasts={toasts} />
+      </div>
+    </MotionConfig>
+  );
+}
+
+/** Transition de route : fondu + glissement de 8 px ; la vue sortante n'accepte plus de clics. */
+function RouteFade({ children }: { children: ReactNode }) {
+  const isPresent = useIsPresent();
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -8 }}
+      transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+      style={{ pointerEvents: isPresent ? undefined : 'none' }}
+    >
+      {children}
+    </motion.div>
   );
 }

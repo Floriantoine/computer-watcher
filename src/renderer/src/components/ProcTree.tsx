@@ -1,6 +1,8 @@
 import { useState, type ReactElement } from 'react';
 import type { ProcNode } from '../../../core/types';
+import { ChevronRight } from 'lucide-react';
 import { formatAge, formatCpu, formatKB } from '../format';
+import { ForceButton, KillButton } from './ui';
 
 const DAY = 86400;
 const COLLAPSE_ABOVE = 20;
@@ -12,12 +14,13 @@ function count(nodes: ProcNode[]): number {
 interface Props {
   roots: ProcNode[];
   stuckPids: Set<number>;
+  pendingPids: Set<number>;
   currentUid: number;
   onKill: (node: ProcNode) => void;
   onForce: (pid: number) => void;
 }
 
-export function ProcTree({ roots, stuckPids, currentUid, onKill, onForce }: Props) {
+export function ProcTree({ roots, stuckPids, pendingPids, currentUid, onKill, onForce }: Props) {
   const [expanded, setExpanded] = useState<Set<number>>(() =>
     count(roots) > COLLAPSE_ABOVE ? new Set() : new Set(collectPids(roots)),
   );
@@ -36,21 +39,29 @@ export function ProcTree({ roots, stuckPids, currentUid, onKill, onForce }: Prop
       const open = expanded.has(p.pid);
       rows.push(
         <tr key={p.pid}>
-          <td style={{ paddingLeft: 8 + depth * 18 }}>
-            <span className="toggle" onClick={() => toggle(p.pid)}>{n.children.length ? (open ? '▾' : '▸') : ''}</span>
-            {p.pid}
+          <td className="pid mono" style={{ paddingLeft: 6 + depth * 18 }}>
+            <span className="pid-cell">
+              {n.children.length ? (
+                <button className={`toggle ${open ? 'open' : ''}`} aria-label={open ? 'Replier' : 'Déplier'} aria-expanded={open} onClick={() => toggle(p.pid)}>
+                  <ChevronRight size={13} strokeWidth={2.2} />
+                </button>
+              ) : (
+                <span className="toggle-spacer" />
+              )}
+              {p.pid}
+            </span>
           </td>
           <td className="cmd mono" title={p.cmdline}>{p.cmdline}</td>
-          <td className="mono" title={p.cwd ?? ''}>{p.cwdDeleted ? '(supprimé) ' : ''}{p.cwd ?? '—'}</td>
-          <td>{formatCpu(p.cpuPercent)}</td>
-          <td>{formatKB(p.rssKB)}</td>
-          <td>{formatKB(p.swapKB)}</td>
-          <td className={p.ageSec > DAY ? 'old' : ''}>{formatAge(p.ageSec)}</td>
-          <td>
+          <td className="cwd mono" title={p.cwd ?? ''}>{p.cwdDeleted ? '(supprimé) ' : ''}{p.cwd ?? '—'}</td>
+          <td className="num mono">{formatCpu(p.cpuPercent)}</td>
+          <td className="num mono">{formatKB(p.rssKB)}</td>
+          <td className="num mono">{formatKB(p.swapKB)}</td>
+          <td className={`num mono ${p.ageSec > DAY ? 'old' : ''}`}>{formatAge(p.ageSec)}</td>
+          <td className="act">
             {stuckPids.has(p.pid) ? (
-              <button className="danger" onClick={() => onForce(p.pid)}>Forcer (SIGKILL)</button>
+              <ForceButton onClick={() => onForce(p.pid)} />
             ) : (
-              <button className="danger" disabled={p.uid !== currentUid} onClick={() => onKill(n)}>Kill</button>
+              <KillButton size="sm" pending={pendingPids.has(p.pid)} disabled={p.uid !== currentUid} onClick={() => onKill(n)} />
             )}
           </td>
         </tr>,
@@ -61,12 +72,16 @@ export function ProcTree({ roots, stuckPids, currentUid, onKill, onForce }: Prop
   walk(roots, 0);
 
   return (
-    <table className="tree">
-      <thead>
-        <tr><th>PID</th><th>Commande</th><th>Dossier</th><th>CPU</th><th>RAM</th><th>Swap</th><th>Depuis</th><th /></tr>
-      </thead>
-      <tbody>{rows}</tbody>
-    </table>
+    <div className="panel">
+      <div className="panel-scroll">
+        <table className="tree">
+          <thead>
+            <tr><th>PID</th><th>Commande</th><th>Dossier</th><th className="num">CPU</th><th className="num">RAM</th><th className="num">Swap</th><th className="num">Depuis</th><th /></tr>
+          </thead>
+          <tbody>{rows}</tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 

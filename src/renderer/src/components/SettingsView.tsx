@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { AppWindow, ArrowLeft, Layers, ShieldCheck, TriangleAlert, Wrench, X } from 'lucide-react';
 import { DEFAULT_CONFIG } from '../../../core/defaults';
 import type { Config, ConfigState } from '../../../core/types';
 
@@ -30,21 +31,30 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop }: Props)
 
   return (
     <>
-      <div className="detail-head">
-        <button className="link" onClick={onBack}>← Retour</button>
+      <div className="page-head">
+        <button className="back" title="Retour" aria-label="Retour" onClick={onBack}>
+          <ArrowLeft size={16} strokeWidth={2} />
+        </button>
         <h2>Réglages</h2>
       </div>
       <div className="settings">
-        {warning && <div className="warning">{warning}</div>}
+        {warning && (
+          <div className="warning">
+            <TriangleAlert size={15} strokeWidth={2.2} />
+            <span>{warning}</span>
+          </div>
+        )}
 
         <section>
-          <h3>Programmes protégés</h3>
+          <h3><ShieldCheck size={15} strokeWidth={2} />Programmes protégés</h3>
           <p className="hint">Nom exact du processus, ou expression régulière entre slashs (ex. <code>/^systemd/</code>). Les tuer demande toujours une confirmation.</p>
-          <div className="chips">
+          <div className="pills">
             {config.protected.map((p) => (
-              <span key={p} className={`chip ${invalid.includes(p) ? 'invalid' : ''}`} title={invalid.includes(p) ? 'Regex invalide, ignorée' : ''}>
+              <span key={p} className={`pill ${invalid.includes(p) ? 'invalid' : ''}`} title={invalid.includes(p) ? 'Regex invalide, ignorée' : ''}>
                 {p}
-                <button onClick={() => remove(p)} aria-label={`Retirer ${p}`}>✕</button>
+                <button onClick={() => remove(p)} aria-label={`Retirer ${p}`} title={`Retirer ${p}`}>
+                  <X size={12} strokeWidth={2.4} />
+                </button>
               </span>
             ))}
           </div>
@@ -56,7 +66,7 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop }: Props)
         </section>
 
         <section>
-          <h3>Carte « Autres »</h3>
+          <h3><Layers size={15} strokeWidth={2} />Carte « Autres »</h3>
           <p className="hint">Les groupes sous ces deux seuils sont rassemblés dans une seule carte.</p>
           <div className="row">
             <label>Mémoire &lt; <input type="number" min="0" value={memMB} onChange={(e) => setMemMB(e.target.value)} style={{ width: 80 }} /> Mo</label>
@@ -66,13 +76,13 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop }: Props)
         </section>
 
         <section>
-          <h3>Menu des applications</h3>
+          <h3><AppWindow size={15} strokeWidth={2} />Menu des applications</h3>
           <p className="hint">Crée un raccourci proc-watch dans le menu de ton bureau (version AppImage ou .deb).</p>
           <button onClick={onInstallDesktop}>Ajouter au menu des applications</button>
         </section>
 
         <section>
-          <h3>earlyoom</h3>
+          <h3><Wrench size={15} strokeWidth={2} />earlyoom</h3>
           <p className="hint">Bientôt : configurer earlyoom depuis proc-watch.</p>
         </section>
       </div>
