@@ -34,6 +34,8 @@ test('rangeFromPreset / pickSource / bucketMs', () => {
   expect(pickSource({ from: 9 * H, to: 10 * H }, 10 * H, 24)).toBe('detail');
   expect(pickSource({ from: 0, to: 48 * H }, 48 * H, 24)).toBe('minute');
   expect(pickSource({ from: 0, to: 1 * H }, 48 * H, 24)).toBe('minute'); // plus vieux que la rétention détaillée
+  expect(pickSource({ from: 24 * H, to: 48 * H }, 48 * H, 48)).toBe('minute'); // bucket détaillé 90 s >= 1 min
+  expect(pickSource({ from: 42 * H, to: 48 * H }, 48 * H, 24)).toBe('detail'); // bucket 25 s
   expect(bucketMs({ from: 0, to: H }, 'detail', 5)).toBe(5000);
   expect(bucketMs({ from: 0, to: 24 * H }, 'detail', 5)).toBe(90_000);
   expect(bucketMs({ from: 0, to: 30 * 24 * H }, 'minute', 5)).toBe(44 * M);
@@ -99,4 +101,17 @@ test('lecture seule pendant qu\'un écrivain tient une transaction : pas d\'erre
   expect(() => querySystem(reader, { from: 0, to: 11 * M }, opts(11 * M))).not.toThrow();
   db.exec('COMMIT');
   reader.close();
+});
+
+test('au plus 1000 points même quand from n\'est pas aligné sur le bucket', () => {
+  const path = join(mkdtempSync(join(tmpdir(), 'pw-q-')), 'm.db');
+  const { db } = openHistoryDb(path);
+  db.exec('BEGIN');
+  const ins = db.prepare('INSERT INTO system_samples VALUES (?,?,?,?,?,?,?,?)');
+  for (let ts = 0; ts <= 5_010_000; ts += 1000) ins.run(ts, 1, 1, 1, 1, null, 0, 0);
+  db.exec('COMMIT');
+  const to = 5_004_000;
+  const s = querySystem(db, { from: 4000, to }, { now: to, detailHours: 24, intervalSec: 5 });
+  expect(s.ts.length).toBe(1000);
+  expect(s.ts[0]).toBe(4000);
 });

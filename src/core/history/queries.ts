@@ -7,6 +7,8 @@ import { alignSeries } from './series';
 
 const M = 60_000;
 const H = 3600_000;
+const I = 'CAST(? AS INTEGER)';
+// node:sqlite lie les nombres JS en REAL : la division du bucket doit être castée en entier.
 const PRESET_MS: Record<RangePreset, number> = { '1h': H, '6h': 6 * H, '24h': 24 * H, '7d': 7 * 24 * H, '30d': 30 * 24 * H };
 
 export interface QueryOpts {
@@ -17,8 +19,10 @@ export interface QueryOpts {
 
 export const rangeFromPreset = (p: RangePreset, now: number): TimeRange => ({ from: now - PRESET_MS[p], to: now });
 
-export function pickSource(range: TimeRange, now: number, detailHours: number): 'detail' | 'minute' {
-  return range.from >= now - detailHours * H && range.to - range.from <= 24 * H ? 'detail' : 'minute';
+export function pickSource(range: TimeRange, now: number, detailHours: number, intervalSec = 5): 'detail' | 'minute' {
+  if (range.from < now - detailHours * H || range.to - range.from > 24 * H) return 'minute';
+  // Dès que le bucket détaillé atteint la minute, les agrégats donnent le même rendu avec ~12x moins de lignes.
+  return bucketMs(range, 'detail', intervalSec) >= M ? 'minute' : 'detail';
 }
 
 export function bucketMs(range: TimeRange, source: 'detail' | 'minute', intervalSec: number, maxPoints = 1000): number {
@@ -28,7 +32,7 @@ export function bucketMs(range: TimeRange, source: 'detail' | 'minute', interval
 }
 
 function plan(range: TimeRange, o: QueryOpts) {
-  const source = pickSource(range, o.now, o.detailHours);
+  const source = pickSource(range, o.now, o.detailHours, o.intervalSec);
   return { source, bucket: bucketMs(range, source, o.intervalSec) };
 }
 
@@ -36,13 +40,13 @@ export function querySystem(db: DatabaseSync, range: TimeRange, o: QueryOpts): S
   const { source, bucket } = plan(range, o);
   const sql =
     source === 'detail'
-      ? `SELECT (ts / ?) * ? AS t, MAX(mem_used_kb) mem, MAX(swap_used_kb) swap, MAX(mem_total_kb) mt, MAX(swap_total_kb) st,
+      ? `SELECT (CAST(? AS INTEGER) + ((ts - CAST(? AS INTEGER)) / CAST(? AS INTEGER)) * CAST(? AS INTEGER)) AS t, MAX(mem_used_kb) mem, MAX(swap_used_kb) swap, MAX(mem_total_kb) mt, MAX(swap_total_kb) st,
                 MAX(psi_some10) psi, MAX(cpu_percent) cpu, MAX(load1) load
          FROM system_samples WHERE ts >= ? AND ts < ? GROUP BY t ORDER BY t`
-      : `SELECT (ts / ?) * ? AS t, MAX(mem_used_kb_max) mem, MAX(swap_used_kb_max) swap, MAX(mem_total_kb) mt, MAX(swap_total_kb) st,
+      : `SELECT (CAST(? AS INTEGER) + ((ts - CAST(? AS INTEGER)) / CAST(? AS INTEGER)) * CAST(? AS INTEGER)) AS t, MAX(mem_used_kb_max) mem, MAX(swap_used_kb_max) swap, MAX(mem_total_kb) mt, MAX(swap_total_kb) st,
                 MAX(psi_max) psi, AVG(cpu_avg) cpu, AVG(load1_avg) load
          FROM system_minute WHERE ts >= ? AND ts < ? GROUP BY t ORDER BY t`;
-  const rows = db.prepare(sql).all(bucket, bucket, range.from, range.to) as {
+  const rows = db.prepare(sql).all(range.from, range.from, bucket, bucket, range.from, range.to) as {
     t: number; mem: number; swap: number; mt: number; st: number; psi: number | null; cpu: number; load: number;
   }[];
   return {
@@ -57,43 +61,64 @@ export function querySystem(db: DatabaseSync, range: TimeRange, o: QueryOpts): S
   };
 }
 
-function groupMeta(db: DatabaseSync, keys: Iterable<string>) {
-  const out = new Map<string, { label: string; kind: GroupKind }>();
-  const st = db.prepare('SELECT label, kind FROM groups WHERE key = ?');
-  for (const k of keys) {
-    const r = st.get(k) as { label: string; kind: GroupKind } | undefined;
-    if (r) out.set(k, r);
+interface GroupMeta { id: number; key: string; label: string; kind: GroupKind }
+
+/**
+ * Agrège par group_id, une requête par groupe : chaque requête est un parcours ordonné de la clé primaire
+ * (group_id, ts), sans B-tree temporaire ni jointure ; ~2x plus rapide qu'un GROUP BY global sur 100 groupes.
+ */
+function groupRows(db: DatabaseSync, source: 'detail' | 'minute', bucket: number, range: TimeRange, ids: number[] | null) {
+  const table = source === 'detail' ? 'group_samples' : 'group_minute';
+  const v = source === 'detail' ? 'MAX(rss_kb + swap_kb)' : 'MAX(mem_kb_max)';
+  const gids = ids ?? (db.prepare('SELECT id FROM groups').all() as { id: number }[]).map((r) => r.id);
+  const st = db.prepare(
+    `SELECT (${I} + ((ts - ${I}) / ${I}) * ${I}) AS t, ${v} AS v FROM ${table} WHERE group_id = ? AND ts >= ? AND ts < ? GROUP BY t`,
+  );
+  st.setReturnArrays(true);
+  const out: { t: number; gid: number; v: number }[] = [];
+  for (const gid of gids) {
+    for (const [t, val] of st.all(range.from, range.from, bucket, bucket, gid, range.from, range.to) as unknown as [number, number][]) {
+      out.push({ t, gid, v: val });
+    }
   }
   return out;
 }
 
-export function queryGroups(db: DatabaseSync, range: TimeRange, o: QueryOpts, keys?: string[]): GroupsHistory {
-  const { source, bucket } = plan(range, o);
-  const filter = keys && keys.length ? `AND g.key IN (${keys.map(() => '?').join(',')})` : '';
-  const sql =
-    source === 'detail'
-      ? `SELECT (s.ts / ?) * ? AS t, g.key AS key, MAX(s.rss_kb + s.swap_kb) AS v
-         FROM group_samples s JOIN groups g ON g.id = s.group_id WHERE s.ts >= ? AND s.ts < ? ${filter} GROUP BY t, g.key`
-      : `SELECT (s.ts / ?) * ? AS t, g.key AS key, MAX(s.mem_kb_max) AS v
-         FROM group_minute s JOIN groups g ON g.id = s.group_id WHERE s.ts >= ? AND s.ts < ? ${filter} GROUP BY t, g.key`;
-  const rows = db.prepare(sql).all(bucket, bucket, range.from, range.to, ...(keys ?? [])) as { t: number; key: string; v: number }[];
-  const { ts, byKey } = alignSeries(rows);
-  const meta = groupMeta(db, byKey.keys());
+function groupsHistory(db: DatabaseSync, source: 'detail' | 'minute', bucket: number, range: TimeRange, metas: GroupMeta[] | null): GroupsHistory {
+  const rows = groupRows(db, source, bucket, range, metas ? metas.map((m) => m.id) : null);
+  const { ts, byKey } = alignSeries(rows.map((r) => ({ t: r.t, key: String(r.gid), v: r.v })));
+  const meta = metas ?? (db.prepare('SELECT id, key, label, kind FROM groups').all() as unknown as GroupMeta[]);
+  const byId = new Map(meta.map((m) => [String(m.id), m]));
   return {
     ts,
-    series: [...byKey].map(([key, memKB]) => ({ key, label: meta.get(key)?.label ?? key, kind: meta.get(key)?.kind ?? 'command', memKB })),
+    series: [...byKey].flatMap(([gid, memKB]) => {
+      const m = byId.get(gid);
+      return m ? [{ key: m.key, label: m.label, kind: m.kind, memKB }] : [];
+    }),
   };
+}
+
+export function queryGroups(db: DatabaseSync, range: TimeRange, o: QueryOpts, keys?: string[]): GroupsHistory {
+  const { source, bucket } = plan(range, o);
+  let metas: GroupMeta[] | null = null;
+  if (keys && keys.length) {
+    metas = db
+      .prepare(`SELECT id, key, label, kind FROM groups WHERE key IN (${keys.map(() => '?').join(',')})`)
+      .all(...keys) as unknown as GroupMeta[];
+    if (metas.length === 0) return { ts: [], series: [] };
+  }
+  return groupsHistory(db, source, bucket, range, metas);
 }
 
 export function queryGroup(db: DatabaseSync, key: string, range: TimeRange, o: QueryOpts): GroupHistory {
   const { source, bucket } = plan(range, o);
   const sql =
     source === 'detail'
-      ? `SELECT (s.ts / ?) * ? AS t, MAX(s.rss_kb) rss, MAX(s.swap_kb) swap, MAX(s.cpu_percent) cpu
+      ? `SELECT (CAST(? AS INTEGER) + ((s.ts - CAST(? AS INTEGER)) / CAST(? AS INTEGER)) * CAST(? AS INTEGER)) AS t, MAX(s.rss_kb) rss, MAX(s.swap_kb) swap, MAX(s.cpu_percent) cpu
          FROM group_samples s JOIN groups g ON g.id = s.group_id WHERE g.key = ? AND s.ts >= ? AND s.ts < ? GROUP BY t ORDER BY t`
-      : `SELECT (s.ts / ?) * ? AS t, MAX(s.rss_kb_avg) rss, MAX(s.swap_kb_avg) swap, AVG(s.cpu_avg) cpu
+      : `SELECT (CAST(? AS INTEGER) + ((s.ts - CAST(? AS INTEGER)) / CAST(? AS INTEGER)) * CAST(? AS INTEGER)) AS t, MAX(s.rss_kb_avg) rss, MAX(s.swap_kb_avg) swap, AVG(s.cpu_avg) cpu
          FROM group_minute s JOIN groups g ON g.id = s.group_id WHERE g.key = ? AND s.ts >= ? AND s.ts < ? GROUP BY t ORDER BY t`;
-  const rows = db.prepare(sql).all(bucket, bucket, key, range.from, range.to) as { t: number; rss: number; swap: number; cpu: number }[];
+  const rows = db.prepare(sql).all(range.from, range.from, bucket, bucket, key, range.from, range.to) as { t: number; rss: number; swap: number; cpu: number }[];
   return { ts: rows.map((r) => r.t), rssKB: rows.map((r) => r.rss), swapKB: rows.map((r) => r.swap), cpu: rows.map((r) => r.cpu) };
 }
 
@@ -101,13 +126,13 @@ export function queryProcs(db: DatabaseSync, groupKey: string, range: TimeRange,
   const { source, bucket } = plan(range, o);
   const sql =
     source === 'detail'
-      ? `SELECT (s.ts / ?) * ? AS t, p.pid || ':' || p.start_ticks AS key, MAX(s.rss_kb + s.swap_kb) AS v
+      ? `SELECT (CAST(? AS INTEGER) + ((s.ts - CAST(? AS INTEGER)) / CAST(? AS INTEGER)) * CAST(? AS INTEGER)) AS t, p.pid || ':' || p.start_ticks AS key, MAX(s.rss_kb + s.swap_kb) AS v
          FROM proc_samples s JOIN procs p ON p.id = s.proc_id JOIN groups g ON g.id = p.group_id
          WHERE g.key = ? AND s.ts >= ? AND s.ts < ? GROUP BY t, key`
-      : `SELECT (s.ts / ?) * ? AS t, p.pid || ':' || p.start_ticks AS key, MAX(s.mem_kb_max) AS v
+      : `SELECT (CAST(? AS INTEGER) + ((s.ts - CAST(? AS INTEGER)) / CAST(? AS INTEGER)) * CAST(? AS INTEGER)) AS t, p.pid || ':' || p.start_ticks AS key, MAX(s.mem_kb_max) AS v
          FROM proc_minute s JOIN procs p ON p.id = s.proc_id JOIN groups g ON g.id = p.group_id
          WHERE g.key = ? AND s.ts >= ? AND s.ts < ? GROUP BY t, key`;
-  const rows = db.prepare(sql).all(bucket, bucket, groupKey, range.from, range.to) as { t: number; key: string; v: number }[];
+  const rows = db.prepare(sql).all(range.from, range.from, bucket, bucket, groupKey, range.from, range.to) as { t: number; key: string; v: number }[];
   const { ts, byKey } = alignSeries(rows);
   return {
     ts,
@@ -137,23 +162,27 @@ export function queryCulprits(db: DatabaseSync, ts: number, o: QueryOpts, window
 }
 
 export function queryTop(db: DatabaseSync, range: TimeRange, o: QueryOpts, limit = 10): TopConsumer[] {
-  const source = pickSource(range, o.now, o.detailHours);
+  const { source, bucket } = plan(range, o);
   const table = source === 'detail' ? 'group_samples' : 'group_minute';
-  const avg = source === 'detail' ? 'AVG(s.rss_kb + s.swap_kb)' : 'AVG(s.rss_kb_avg + s.swap_kb_avg)';
-  const max = source === 'detail' ? 'MAX(s.rss_kb + s.swap_kb)' : 'MAX(s.mem_kb_max)';
-  const rows = db
-    .prepare(
-      `SELECT g.key, g.label, g.kind, ${avg} AS avg, ${max} AS max FROM ${table} s JOIN groups g ON g.id = s.group_id
-       WHERE s.ts >= ? AND s.ts < ? GROUP BY g.id ORDER BY avg DESC LIMIT ?`,
-    )
-    .all(range.from, range.to, limit) as { key: string; label: string; kind: GroupKind; avg: number; max: number }[];
-  if (rows.length === 0) return [];
-  const spark = queryGroups(db, range, { ...o, intervalSec: o.intervalSec }, rows.map((r) => r.key));
+  const avg = source === 'detail' ? 'AVG(rss_kb + swap_kb)' : 'AVG(rss_kb_avg + swap_kb_avg)';
+  const max = source === 'detail' ? 'MAX(rss_kb + swap_kb)' : 'MAX(mem_kb_max)';
+  const top = db
+    .prepare(`SELECT group_id AS gid, ${avg} AS avg, ${max} AS max FROM ${table} WHERE ts >= ? AND ts < ? GROUP BY group_id ORDER BY avg DESC LIMIT ?`)
+    .all(range.from, range.to, limit) as { gid: number; avg: number; max: number }[];
+  if (top.length === 0) return [];
+  const metas = db
+    .prepare(`SELECT id, key, label, kind FROM groups WHERE id IN (${top.map(() => '?').join(',')})`)
+    .all(...top.map((t) => t.gid)) as unknown as GroupMeta[];
+  const spark = groupsHistory(db, source, bucket, range, metas);
   // Les mini-courbes du top sont ramenées à ~60 points.
   const step = Math.max(1, Math.ceil(spark.ts.length / 60));
   const thin = (s: (number | null)[]) => s.filter((_, i) => i % step === 0).map((v) => v ?? 0);
-  const byKey = new Map(spark.series.map((s) => [s.key, s.memKB]));
-  return rows.map((r) => ({ key: r.key, label: r.label, kind: r.kind, avgKB: Math.round(r.avg), maxKB: r.max, spark: thin(byKey.get(r.key) ?? []) }));
+  const sparkByKey = new Map(spark.series.map((s) => [s.key, s.memKB]));
+  const metaById = new Map(metas.map((m) => [m.id, m]));
+  return top.flatMap((r) => {
+    const m = metaById.get(r.gid);
+    return m ? [{ key: m.key, label: m.label, kind: m.kind, avgKB: Math.round(r.avg), maxKB: r.max, spark: thin(sparkByKey.get(m.key) ?? []) }] : [];
+  });
 }
 
 export function queryEvents(db: DatabaseSync, range: TimeRange): HistoryEvent[] {
