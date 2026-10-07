@@ -130,4 +130,4 @@ export interface RecorderState {
   running: boolean; // statut écrit il y a moins de 3 intervalles
   status: RecorderStatus | null;
 }
-export interface RecorderStatus { pid: number; startedAt: number; lastSampleAt: number | null; lastError: string | null; earlyoomSource: 'ok' | 'unavailable'; dbSizeBytes: number; jobErrors?: Record<'tick' | 'minute' | 'earlyoom', string | null> }
+export interface RecorderStatus { pid: number; startedAt: number; lastSampleAt: number | null; lastError: string | null; earlyoomSource: 'ok' | 'unavailable'; dbSizeBytes: number; /** Avertissement non bloquant (ex. migration faite sans copie de sécurité) */ warning?: string | null; jobErrors?: Record<'tick' | 'minute' | 'earlyoom', string | null> }

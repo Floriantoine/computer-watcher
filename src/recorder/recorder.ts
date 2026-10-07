@@ -9,11 +9,11 @@ import { loadConfig } from '../core/config';
 import { buildGroups } from '../core/grouping/buildGroups';
 import { createProjectRootCache } from '../core/grouping/projectRootCache';
 import { DEV_TOOL } from '../core/grouping/rules';
-import { openHistoryDb } from '../core/history/db';
+import { historyBackups, openHistoryDb } from '../core/history/db';
 import {
   detectGap, insertEvent, lastEventTs, lastSampleTs, parseEarlyoom, parseJournalLine, shouldRecordPressure, takeAppEvents,
 } from '../core/history/events';
-import { aggregateMinute, clearAll, leakCandidates, purge } from '../core/history/maintenance';
+import { aggregateHour, aggregateMinute, clearAll, leakCandidates, purge } from '../core/history/maintenance';
 import { HistoryWriter } from '../core/history/writer';
 import { appEventsPath, clearRequestPath, dbPath, statusPath } from '../core/paths';
 import type { RecorderConfig, RecorderStatus } from '../core/types';
@@ -40,6 +40,9 @@ export interface Recorder {
 }
 
 const M = 60_000;
+const H = 3600_000;
+/** Le nettoyage des processus/groupes orphelins (parcours complet) ne tourne qu'une minute sur 10. */
+const ORPHANS_EVERY = 10;
 
 export function createRecorder(deps: RecorderDeps): Recorder {
   const now = deps.now ?? Date.now;
@@ -54,7 +57,10 @@ export function createRecorder(deps: RecorderDeps): Recorder {
   let db: DatabaseSync | null = null;
   let writer: HistoryWriter | null = null;
   let lastMinute = 0;
-  const st: RecorderStatus = { pid: process.pid, startedAt: now(), lastSampleAt: null, lastError: null, earlyoomSource: 'unavailable', dbSizeBytes: 0 };
+  /** Première heure pas encore close dans les tables horaires. */
+  let lastHour = 0;
+  let purges = 0;
+  const st: RecorderStatus = { pid: process.pid, startedAt: now(), lastSampleAt: null, lastError: null, earlyoomSource: 'unavailable', dbSizeBytes: 0, warning: null };
 
   type Job = 'tick' | 'minute' | 'earlyoom';
   const jobErrors: Record<Job, string | null> = { tick: null, minute: null, earlyoom: null };
@@ -68,7 +74,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       const size = (p: string) => (existsSync(p) ? statSync(p).size : 0);
       st.dbSizeBytes = size(dbPath(deps.dataDir)) + size(`${dbPath(deps.dataDir)}-wal`);
       const tmp = `${statusPath(deps.dataDir)}.${process.pid}.tmp`;
-      writeFileSync(tmp, JSON.stringify(st));
+      writeFileSync(tmp, JSON.stringify(st), { mode: 0o600 });
       renameSync(tmp, statusPath(deps.dataDir));
     } catch (e) {
       log(`status: ${(e as Error).message}`);
@@ -114,6 +120,8 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       }
       db = opened.db;
       writer = new HistoryWriter(db);
+      st.warning = opened.warning;
+      if (opened.warning) log(opened.warning);
       if (opened.recreated) {
         insertEvent(db, now(), 'gap', null, { reason: 'base illisible, recréée', backup: opened.recreated });
       }
@@ -123,6 +131,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       const current = Math.floor(now() / M) * M;
       // reprend à la minute du dernier échantillon (l'agrégation est idempotente) ; les échantillons plus vieux que detailHours sont déjà purgés
       lastMinute = last === null ? current : Math.max(Math.floor(last / M) * M, current - cfg.detailHours * 3600_000);
+      lastHour = Math.floor(lastMinute / H) * H;
       lastPressureTs = lastEventTs(db, 'pressure');
       writeStatus();
     },
@@ -174,6 +183,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
           clearAll(d);
           w.forget();
           lastMinute = Math.floor(t / M) * M;
+          lastHour = Math.floor(lastMinute / H) * H;
           rmSync(clearRequestPath(deps.dataDir), { force: true });
         }
       });
@@ -183,6 +193,15 @@ export function createRecorder(deps: RecorderDeps): Recorder {
           aggregateMinute(d, lastMinute);
           lastMinute += M;
         }
+      });
+      step('agrégation horaire', () => {
+        // heures dont toutes les minutes sont agrégées, puis l'heure en cours (recalculée à chaque minute)
+        const open = Math.floor(lastMinute / H) * H;
+        while (lastHour < open) {
+          aggregateHour(d, lastHour);
+          lastHour += H;
+        }
+        aggregateHour(d, open);
       });
       step('événements app', () => {
         const taken = takeAppEvents(appEventsPath(deps.dataDir));
@@ -202,8 +221,13 @@ export function createRecorder(deps: RecorderDeps): Recorder {
         }
       });
       step('purge', () => {
-        purge(d, t, cfg.detailHours, cfg.summaryDays);
-        w.forget();
+        const orphans = purges++ % ORPHANS_EVERY === 0;
+        purge(d, t, cfg.detailHours, cfg.summaryDays, { orphans });
+        if (orphans) w.forget(); // des lignes procs ont pu disparaître
+      });
+      step('copies de sécurité', () => {
+        const cut = t - cfg.summaryDays * 86400_000;
+        for (const b of historyBackups(dbPath(deps.dataDir))) if (b.ts < cut) rmSync(b.file, { force: true });
       });
       if (firstError) fail('minute', 'minute', new Error(firstError));
       else {

@@ -1,5 +1,5 @@
 // src/recorder/recorder.test.ts
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -148,5 +148,86 @@ test('base d\'une version plus récente : statut en erreur, inactif, aucune écr
   expect(readFileSync(p).equals(before)).toBe(true);
   expect(readdirSync(join(base, 'data')).filter((f) => f.includes('.bak'))).toEqual([]);
   expect(db().prepare('SELECT a FROM x').all()).toEqual([{ a: 1 }]);
+  rec.stop();
+});
+
+test('minuteJob : tables horaires alimentées (heure en cours recalculée), vidées par clear-request', () => {
+  const { rec, advance, db, base } = setup();
+  rec.start();
+  rec.tick(); // t = 1_000_000 : heure 0
+  advance(60_000);
+  rec.minuteJob();
+  expect(db().prepare('SELECT COUNT(*) n FROM group_hour WHERE ts = 0').get()).toEqual({ n: 3 });
+  expect(db().prepare('SELECT COUNT(*) n FROM system_hour WHERE ts = 0').get()).toEqual({ n: 1 });
+  advance(3600_000); // heure 0 finie, minutes rattrapées puis heure close
+  rec.tick();
+  advance(60_000);
+  rec.minuteJob();
+  expect(db().prepare('SELECT ts FROM system_hour ORDER BY ts').all()).toEqual([{ ts: 0 }, { ts: 3600_000 }]);
+  writeFileSync(join(base, 'data', 'clear-request'), '');
+  rec.minuteJob();
+  expect(db().prepare('SELECT COUNT(*) n FROM group_hour').get()).toEqual({ n: 0 });
+  rec.stop();
+});
+
+test('recorder-status.json en 0600', () => {
+  const { rec, base } = setup();
+  rec.start();
+  rec.tick();
+  expect(statSync(join(base, 'data', 'recorder-status.json')).mode & 0o777).toBe(0o600);
+  rec.stop();
+});
+
+test('nettoyage des processus orphelins : une fois toutes les 10 minutes', () => {
+  const { rec, advance, base } = setup();
+  rec.start();
+  rec.tick();
+  advance(60_000);
+  rec.minuteJob(); // 1er passage : nettoyage
+  const w = new DatabaseSync(join(base, 'data', 'metrics.db'));
+  w.exec("INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id) VALUES (999,9,9,'o','o',1)");
+  const orphan = () => (w.prepare('SELECT COUNT(*) n FROM procs WHERE id = 999').get() as { n: number }).n;
+  for (let i = 0; i < 9; i++) {
+    advance(60_000);
+    rec.minuteJob();
+  }
+  expect(orphan()).toBe(1);
+  advance(60_000);
+  rec.minuteJob(); // 11e passage = 10 minutes après le précédent nettoyage
+  expect(orphan()).toBe(0);
+  w.close();
+  rec.stop();
+});
+
+test('copies de sécurité plus vieilles que summaryDays supprimées (avec -wal/-shm), les récentes gardées', () => {
+  const { rec, advance, base } = setup();
+  rec.start();
+  const data = join(base, 'data');
+  const old = ['metrics.db.pre-v2-19691101T000000', 'metrics.db.bak-19691101T000000', 'metrics.db.bak-19691101T000000-wal'];
+  const recent = ['metrics.db.pre-v3-19700101T000000', 'metrics.db.bak-19700101T000000-shm', 'metrics.db.notes'];
+  for (const f of [...old, ...recent]) writeFileSync(join(data, f), 'x');
+  advance(60_000);
+  rec.minuteJob();
+  for (const f of old) expect(existsSync(join(data, f))).toBe(false);
+  for (const f of recent) expect(existsSync(join(data, f))).toBe(true);
+  rec.stop();
+});
+
+test('migration sans copie de sécurité possible : avertissement dans le statut, enregistrement actif', () => {
+  const { rec, base, db } = setup();
+  const data = join(base, 'data');
+  // base v2 : schéma d'une base neuve ramené en v2 (sans tables horaires)
+  rec.start();
+  rec.stop();
+  const w = new DatabaseSync(join(data, 'metrics.db'));
+  w.exec('DROP TABLE group_hour; DROP TABLE system_hour; PRAGMA user_version = 2;');
+  w.close();
+  mkdirSync(join(data, 'metrics.db.pre-v3-19700101T001640')); // la copie ne peut pas être écrite à cet endroit
+  rec.start();
+  rec.tick();
+  const status = JSON.parse(readFileSync(join(data, 'recorder-status.json'), 'utf8'));
+  expect(status.warning).toMatch(/copie de sécurité/i);
+  expect(status.lastError).toBeNull();
+  expect(db().prepare('PRAGMA user_version').get()).toEqual({ user_version: 3 });
   rec.stop();
 });

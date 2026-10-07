@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'vitest';
 import { openHistoryDb } from './db';
-import { aggregateMinute, clearAll, leakCandidates, purge } from './maintenance';
+import { aggregateHour, aggregateMinute, clearAll, leakCandidates, purge } from './maintenance';
 
 const open = () => openHistoryDb(join(mkdtempSync(join(tmpdir(), 'pw-m-')), 'm.db')).db;
 const M = 60_000;
@@ -104,4 +104,57 @@ test('clearAll vide aussi les tables minute', () => {
   for (const t of ['system_minute', 'group_minute', 'proc_minute']) {
     expect(db.prepare(`SELECT COUNT(*) n FROM ${t}`).get()).toEqual({ n: 0 });
   }
+});
+
+const H = 3600_000;
+
+test('aggregateHour : moyenne des minutes, max des pics, heure suivante intacte, idempotent', () => {
+  const db = open();
+  db.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'a','a','app')`);
+  const gm = db.prepare('INSERT INTO group_minute VALUES (?,?,?,?,?,?)');
+  const sm = db.prepare('INSERT INTO system_minute VALUES (?,?,?,?,?,?,?,?,?,?,?)');
+  for (const [ts, v] of [[H, 100], [H + 30 * M, 300], [2 * H, 999]]) {
+    gm.run(ts, 1, v, 0, v * 2, 4);
+    sm.run(ts, v, v * 2, 8000, 0, 0, 100, 1, 2, 0.5, 10);
+  }
+  aggregateHour(db, H);
+  aggregateHour(db, H);
+  expect(db.prepare('SELECT * FROM group_hour').all()).toEqual([{ ts: H, group_id: 1, rss_kb_avg: 200, swap_kb_avg: 0, mem_kb_max: 600, cpu_avg: 4 }]);
+  expect(db.prepare('SELECT ts, mem_used_kb_avg, mem_used_kb_max FROM system_hour').all()).toEqual([{ ts: H, mem_used_kb_avg: 200, mem_used_kb_max: 600 }]);
+});
+
+test('purge : tables horaires suivent summaryDays, groupe référencé par group_hour conservé', () => {
+  const db = open();
+  db.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'a','a','app'),(2,'b','b','app');
+           INSERT INTO group_hour VALUES (0,1,1,0,1,0), (${40 * 86400_000 - H},2,1,0,1,0);
+           INSERT INTO system_hour VALUES (0,1,1,1,0,0,1,NULL,NULL,0,0);`);
+  purge(db, 40 * 86400_000, 1, 30);
+  expect(db.prepare('SELECT group_id FROM group_hour').all()).toEqual([{ group_id: 2 }]);
+  expect(db.prepare('SELECT COUNT(*) n FROM system_hour').get()).toEqual({ n: 0 });
+  expect(db.prepare('SELECT id FROM groups').all()).toEqual([{ id: 2 }]);
+});
+
+test('purge : nettoyage des processus orphelins seulement si demandé', () => {
+  const db = open();
+  db.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'a','a','app');
+           INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id) VALUES (1,1,1,'p','p',1);
+           INSERT INTO group_minute VALUES (${2 * H},1,1,0,1,0);`);
+  purge(db, 2 * H, 1, 30, { orphans: false });
+  expect(db.prepare('SELECT COUNT(*) n FROM procs').get()).toEqual({ n: 1 });
+  purge(db, 2 * H, 1, 30);
+  expect(db.prepare('SELECT COUNT(*) n FROM procs').get()).toEqual({ n: 0 });
+});
+
+test('clearAll vide aussi les tables horaires', () => {
+  const db = open();
+  db.exec(`INSERT INTO group_hour VALUES (0,1,1,0,1,0); INSERT INTO system_hour VALUES (0,1,1,1,0,0,1,NULL,NULL,0,0);`);
+  clearAll(db);
+  for (const t of ['group_hour', 'system_hour']) expect(db.prepare(`SELECT COUNT(*) n FROM ${t}`).get()).toEqual({ n: 0 });
+});
+
+test('leakCandidates : jamais pour « Petits groupes » (somme de groupes variables)', () => {
+  const db = open();
+  db.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'others:small','Petits groupes','others');`);
+  for (let i = 0; i <= 60; i++) db.prepare('INSERT INTO group_minute VALUES (?,?,?,?,?,?)').run(i * M, 1, 1000 + i * 10 * 1024, 0, 0, 0);
+  expect(leakCandidates(db, 61 * M, 60, 300)).toEqual([]);
 });

@@ -186,6 +186,7 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
             {st && <span>Kills earlyoom : {st.earlyoomSource === 'ok' ? 'suivis' : 'indisponibles'}</span>}
           </div>
           {st?.lastError && <p className="rec-error">{st.lastError}</p>}
+          {st?.warning && <p className="hint rec-note">{st.warning}</p>}
           {jobErrors.map(([k, v]) => (
             <p key={k} className="rec-error">{k} : {v}</p>
           ))}
