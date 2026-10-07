@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
 import { ArrowLeft, ChartLine, ChevronRight, Lock, Shield, ShieldOff, X } from 'lucide-react';
-import type { Group, ProcNode, RangePreset } from '../../../core/types';
+import type { GroupSummary as Group, ProcNode, RangePreset } from '../../../core/types';
 import { formatAge, formatKB } from '../format';
 import { procSparkMap, useHistory } from '../history';
 import { groupChartSeries } from './charts/chartData';
@@ -13,6 +13,8 @@ import { AnimatedNumber, ForceButton, GroupIcon } from './ui';
 
 interface Props {
   group: Group | undefined;
+  /** Arbre du groupe (envoyé par le main pour le seul groupe ouvert) ; null tant qu'il n'est pas arrivé. */
+  roots: ProcNode[] | null;
   stuckPids: Set<number>;
   pendingPids: Set<number>;
   currentUid: number;
@@ -137,9 +139,11 @@ export function DetailView(props: Props) {
             </div>
           ))}
         </div>
+      ) : !props.roots ? (
+        <div className="panel"><p className="empty">Chargement…</p></div>
       ) : (
         <ProcTree
-          roots={group.roots}
+          roots={props.roots}
           stuckPids={props.stuckPids}
           pendingPids={props.pendingPids}
           currentUid={props.currentUid}

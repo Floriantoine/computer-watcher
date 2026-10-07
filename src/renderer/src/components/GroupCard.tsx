@@ -1,7 +1,7 @@
 import type { MouseEvent, Ref } from 'react';
 import { motion, useIsPresent } from 'motion/react';
 import { Lock } from 'lucide-react';
-import type { Group } from '../../../core/types';
+import type { GroupSummary as Group } from '../../../core/types';
 import { formatAge, formatCpu } from '../format';
 import { cardTone } from '../theme';
 import { Sparkline } from './charts/Sparkline';

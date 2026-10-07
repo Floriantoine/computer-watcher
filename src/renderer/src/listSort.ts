@@ -1,4 +1,4 @@
-import type { Group } from '../../core/types';
+import type { GroupSummary as Group } from '../../core/types';
 
 export type ListColumn = 'name' | 'procs' | 'mem' | 'swap' | 'cpu' | 'age';
 

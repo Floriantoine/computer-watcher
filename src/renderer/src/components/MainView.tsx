@@ -1,7 +1,7 @@
 import { AnimatePresence } from 'motion/react';
 import { useState } from 'react';
 import { ChevronDown, Search } from 'lucide-react';
-import type { Group } from '../../../core/types';
+import type { GroupSummary as Group } from '../../../core/types';
 import type { SortKey, ViewFilter } from '../viewModel';
 import { visibleGroups } from '../viewModel';
 import { GroupCard } from './GroupCard';
@@ -10,6 +10,8 @@ import { ViewToggle, loadView, type ViewMode } from './ViewToggle';
 
 interface Props {
   groups: Group[];
+  /** Ids retenus par la recherche (calculée côté main), null sans recherche. */
+  matches: Set<string> | null;
   memTotalKB: number;
   filter: ViewFilter;
   onFilter: (f: ViewFilter) => void;
@@ -26,9 +28,9 @@ interface Props {
 
 const AGES: [string, number][] = [['Tous', 0], ['> 1 h', 3600], ['> 1 j', 86400], ['> 7 j', 7 * 86400]];
 
-export function MainView({ groups, memTotalKB, filter, onFilter, stuckPids, pendingPids, onOpen, onKillGroup, onForce, sparkOf, leakAt, onLeak }: Props) {
+export function MainView({ groups, matches, memTotalKB, filter, onFilter, stuckPids, pendingPids, onOpen, onKillGroup, onForce, sparkOf, leakAt, onLeak }: Props) {
   const [view, setView] = useState<ViewMode>(loadView);
-  const shown = visibleGroups(groups, filter);
+  const shown = visibleGroups(groups, filter, matches);
   const layoutKey = shown.map((g) => g.id).join('\n');
   return (
     <>

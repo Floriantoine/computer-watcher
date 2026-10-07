@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import type { Group, ProcInfo, SystemInfo } from '../../core/types';
+import type { GroupSummary, ProcInfo, SystemInfo } from '../../core/types';
 import {
   findGroup, ipcErrorMessage, killErrorMessage, killResultMessages, killRequestForGroup, killRequestForProc, pressureLevel, trackKills, visibleGroups,
 } from './viewModel';
@@ -9,8 +9,8 @@ const proc = (pid: number, name: string, extra: Partial<ProcInfo> = {}): ProcInf
   rssKB: 0, swapKB: 0, cwd: null, cwdDeleted: false, ...extra,
 });
 
-const group = (id: string, procs: ProcInfo[], extra: Partial<Group> = {}): Group => ({
-  id, kind: 'command', label: id, tags: [], rootName: procs[0]?.name ?? '', roots: procs.map((p) => ({ proc: p, children: [] })),
+const group = (id: string, procs: ProcInfo[], extra: Partial<GroupSummary> = {}): GroupSummary => ({
+  id, kind: 'command', label: id, tags: [], rootName: procs[0]?.name ?? '',
   pids: procs.map((p) => p.pid), procCount: procs.length, cpuPercent: 0, rssKB: 0, swapKB: 0, oldestAgeSec: 10,
   protected: false, killable: true, subgroups: [], ...extra,
 });
@@ -31,9 +31,10 @@ describe('visibleGroups', () => {
     expect(visibleGroups(groups, { query: '', sort: 'age', minAgeSec: 0 }).map((g) => g.id)).toEqual(['a', 'b', 'others']);
   });
 
-  test('recherche dans libellé, commande, dossier et sous-groupes', () => {
-    expect(visibleGroups(groups, { query: 'ACME', sort: 'mem', minAgeSec: 0 }).map((g) => g.id)).toEqual(['a']);
-    expect(visibleGroups(groups, { query: 'cron', sort: 'mem', minAgeSec: 0 }).map((g) => g.id)).toEqual(['others']);
+  test('recherche : ne garde que les ids retenus côté main', () => {
+    expect(visibleGroups(groups, { query: 'ACME', sort: 'mem', minAgeSec: 0 }, new Set(['a'])).map((g) => g.id)).toEqual(['a']);
+    expect(visibleGroups(groups, { query: 'cron', sort: 'mem', minAgeSec: 0 }, new Set(['others'])).map((g) => g.id)).toEqual(['others']);
+    expect(visibleGroups(groups, { query: 'zzz', sort: 'mem', minAgeSec: 0 }, new Set()).map((g) => g.id)).toEqual([]);
   });
 
   test('filtre d\'ancienneté', () => {
@@ -65,15 +66,15 @@ describe('requêtes de kill', () => {
   const isProtected = (n: string) => n === 'zsh';
 
   test('groupe : toujours une confirmation, processus protégés listés', () => {
-    const g = group('w', [proc(1, 'warp'), proc(2, 'zsh')], { label: 'Warp' });
-    const r = killRequestForGroup(g, isProtected, 1000);
+    const procs = [proc(1, 'warp'), proc(2, 'zsh')];
+    const r = killRequestForGroup(group('w', procs, { label: 'Warp' }), procs, isProtected, 1000);
     expect(r).toMatchObject({ targets: [{ pid: 1, startTicks: 0 }, { pid: 2, startTicks: 0 }], needsConfirm: true, title: 'Tuer 2 processus « Warp » ?' });
     expect(r.protectedProcs.map((p) => p.pid)).toEqual([2]);
   });
 
   test('groupe : ne cible que les processus de l\'utilisateur', () => {
-    const g = group('a', [proc(1, 'apache2', { uid: 33 }), proc(2, 'apache2')]);
-    expect(killRequestForGroup(g, isProtected, 1000).targets).toEqual([{ pid: 2, startTicks: 0 }]);
+    const procs = [proc(1, 'apache2', { uid: 33 }), proc(2, 'apache2')];
+    expect(killRequestForGroup(group('a', procs), procs, isProtected, 1000).targets).toEqual([{ pid: 2, startTicks: 0 }]);
   });
 
   test('processus seul : cible = pid + startTicks', () => {

@@ -61,12 +61,32 @@ export interface Group {
   subgroups: Group[];
 }
 
+/** Groupe sans son arbre de processus : ce que reçoit le renderer à chaque snapshot. */
+export interface GroupSummary extends Omit<Group, 'roots' | 'subgroups'> {
+  subgroups: GroupSummary[];
+}
+
+/** Ce que le renderer suit : le groupe ouvert dans le détail (son arbre est envoyé) et la recherche en cours. */
+export interface Watch {
+  groupId: string | null;
+  query: string;
+}
+
 export interface Snapshot {
   takenAt: number;
   /** UID de l'utilisateur qui fait tourner proc-watch */
   currentUid: number;
   system: SystemInfo;
-  groups: Group[];
+  /** Les sous-groupes de « Autres » ne sont détaillés que quand « Autres » ou l'un d'eux est suivi (sinon liste vide). */
+  groups: GroupSummary[];
+  /** Ids de tous les groupes, sous-groupes de « Autres » compris */
+  groupIds: string[];
+  /** Recherche (déjà nettoyée) pour laquelle `matches` a été calculé */
+  query: string;
+  /** Ids des groupes de premier niveau dont le libellé, une commande ou un dossier contient `query` ; null sans recherche */
+  matches: string[] | null;
+  /** Arbre du groupe suivi (`Watch.groupId`), null si aucun ou s'il n'existe plus */
+  detail: { groupId: string; roots: ProcNode[] } | null;
 }
 
 export interface RecorderConfig {

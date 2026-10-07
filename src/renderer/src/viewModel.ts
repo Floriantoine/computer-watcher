@@ -1,4 +1,4 @@
-import type { Group, KillResult, KillTarget, ProcInfo, ProcNode, SystemInfo } from '../../core/types';
+import type { GroupSummary, KillResult, KillTarget, ProcInfo, SystemInfo } from '../../core/types';
 
 export type SortKey = 'mem' | 'cpu' | 'age' | 'name';
 
@@ -8,41 +8,26 @@ export interface ViewFilter {
   minAgeSec: number;
 }
 
-const mem = (g: Group) => g.rssKB + g.swapKB;
+const mem = (g: GroupSummary) => g.rssKB + g.swapKB;
 
-function flattenNodes(nodes: ProcNode[], out: ProcInfo[] = []): ProcInfo[] {
-  for (const n of nodes) {
-    out.push(n.proc);
-    flattenNodes(n.children, out);
-  }
-  return out;
-}
-
-export function flattenProcs(g: Group): ProcInfo[] {
-  return [...flattenNodes(g.roots), ...g.subgroups.flatMap(flattenProcs)];
-}
-
-function matches(g: Group, query: string): boolean {
-  if (!query) return true;
-  const q = query.toLowerCase();
-  if (g.label.toLowerCase().includes(q)) return true;
-  return flattenProcs(g).some((p) => p.cmdline.toLowerCase().includes(q) || (p.cwd ?? '').toLowerCase().includes(q));
-}
-
-const comparators: Record<SortKey, (a: Group, b: Group) => number> = {
+const comparators: Record<SortKey, (a: GroupSummary, b: GroupSummary) => number> = {
   mem: (a, b) => mem(b) - mem(a),
   cpu: (a, b) => b.cpuPercent - a.cpuPercent,
   age: (a, b) => b.oldestAgeSec - a.oldestAgeSec,
   name: (a, b) => a.label.localeCompare(b.label, 'fr'),
 };
 
-export function visibleGroups(groups: Group[], f: ViewFilter): Group[] {
-  const kept = groups.filter((g) => g.oldestAgeSec >= f.minAgeSec && matches(g, f.query.trim()));
+/**
+ * Groupes affichés, triés, « Autres » en dernier. La recherche plein texte est faite côté main (les arbres n'arrivent
+ * pas ici) : `matches` = ids retenus pour la recherche en cours, null sans recherche.
+ */
+export function visibleGroups(groups: GroupSummary[], f: ViewFilter, matches: Set<string> | null = null): GroupSummary[] {
+  const kept = groups.filter((g) => g.oldestAgeSec >= f.minAgeSec && (!matches || matches.has(g.id)));
   const regular = kept.filter((g) => g.kind !== 'others').sort(comparators[f.sort]);
   return [...regular, ...kept.filter((g) => g.kind === 'others')];
 }
 
-export function findGroup(groups: Group[], id: string): Group | undefined {
+export function findGroup(groups: GroupSummary[], id: string): GroupSummary | undefined {
   for (const g of groups) {
     if (g.id === id) return g;
     const inner = findGroup(g.subgroups, id);
@@ -74,8 +59,9 @@ export interface KillRequest {
   protectedProcs: ProcInfo[];
 }
 
-export function killRequestForGroup(g: Group, isProtected: (n: string) => boolean, currentUid: number): KillRequest {
-  const procs = flattenProcs(g).filter((p) => p.uid === currentUid);
+/** `all` : processus du groupe au dernier snapshot (`window.procWatch.groupProcs`). */
+export function killRequestForGroup(g: GroupSummary, all: ProcInfo[], isProtected: (n: string) => boolean, currentUid: number): KillRequest {
+  const procs = all.filter((p) => p.uid === currentUid);
   return {
     targets: procs.map(targetOf),
     title: `Tuer ${procs.length} processus « ${g.label} » ?`,

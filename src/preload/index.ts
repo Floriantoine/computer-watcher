@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import type {
-  Config, ConfigState, Culprit, GroupHistory, GroupsHistory, HistoryEvent, KillResult, KillTarget, KillSignal, ProcsHistory, RangePreset,
+  Config, ConfigState, Culprit, ProcInfo, Watch, GroupHistory, GroupsHistory, HistoryEvent, KillResult, KillTarget, KillSignal, ProcsHistory, RangePreset,
   RecorderState, Snapshot, SystemSeries, TimeRange, TopOptions, TopResult,
 } from '../core/types';
 
@@ -12,6 +12,10 @@ const api = {
       ipcRenderer.removeListener('snapshot', handler);
     };
   },
+  /** Groupe ouvert dans le détail (son arbre arrive dans les snapshots) et recherche en cours. */
+  watch: (w: Watch): Promise<void> => ipcRenderer.invoke('watch', w),
+  /** Processus d'un groupe (dernier snapshot), pour préparer un kill de groupe. */
+  groupProcs: (groupId: string): Promise<ProcInfo[]> => ipcRenderer.invoke('group:procs', groupId),
   kill: (targets: KillTarget[], signal: KillSignal): Promise<KillResult[]> => ipcRenderer.invoke('kill', targets, signal),
   getConfig: (): Promise<ConfigState> => ipcRenderer.invoke('config:get'),
   setConfig: (c: Config): Promise<ConfigState> => ipcRenderer.invoke('config:set', c),

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AnimatePresence, MotionConfig, motion, useIsPresent } from 'motion/react';
 import { compileProtection } from '../../core/protection';
-import type { Config, ConfigState, Group, KillSignal, KillTarget, ProcNode, Snapshot } from '../../core/types';
+import type { Config, ConfigState, GroupSummary, KillSignal, KillTarget, ProcNode, Snapshot } from '../../core/types';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { DetailView } from './components/DetailView';
 import { SettingsView } from './components/SettingsView';
@@ -12,7 +12,7 @@ import { SystemBar, type SystemSparks } from './components/SystemBar';
 import { TopNav } from './components/TopNav';
 import { LiveBuffer, useHistory } from './history';
 import { leakTimes } from './recorderForm';
-import { findGroup, flattenProcs, visibleGroups, ipcErrorMessage, killResultMessages, killRequestForGroup, killRequestForProc, trackKills, type KillRequest, type ViewFilter } from './viewModel';
+import { findGroup, visibleGroups, ipcErrorMessage, killResultMessages, killRequestForGroup, killRequestForProc, trackKills, type KillRequest, type ViewFilter } from './viewModel';
 
 export type Route = { view: 'main' } | { view: 'detail'; groupId: string } | { view: 'settings' } | { view: 'metrics'; at?: number };
 
@@ -37,9 +37,9 @@ export function App() {
   useEffect(() => {
     window.procWatch.getConfig().then(setConfigState, (e: unknown) => setConfigError(ipcErrorMessage(e)));
     return window.procWatch.onSnapshot((s) => {
-      live.current.push(s.takenAt, s.system, s.groups.flatMap((g) => (g.kind === 'others' ? g.subgroups : [g])));
+      live.current.push(s.takenAt, s.system, s.groups.filter((g) => g.kind !== 'others'));
       setSnapshot(s);
-      const present = new Set(s.groups.flatMap((g) => flattenProcs(g).map((p) => p.pid)));
+      const present = new Set(s.groups.flatMap((g) => g.pids));
       const r = trackKills(pending.current, present, Date.now());
       pending.current = r.pending;
       for (const pid of [...sentTicks.current.keys()]) if (!r.pending.has(pid)) sentTicks.current.delete(pid);
@@ -48,10 +48,17 @@ export function App() {
     });
   }, []);
 
+  // Le main n'envoie l'arbre que du groupe ouvert, et fait la recherche plein texte (commandes, dossiers).
+  const detailId = route.view === 'detail' ? route.groupId : null;
+  useEffect(() => {
+    window.procWatch.watch({ groupId: detailId, query: filter.query }).catch(() => {});
+  }, [detailId, filter.query]);
+  const matches = useMemo(() => (snapshot?.matches ? new Set(snapshot.matches) : null), [snapshot]);
+
   // Clés des cartes affichées (hors « Autres »), triées pour ne relancer la requête que si l'ensemble change.
   const visibleKeys = useMemo(
-    () => (snapshot ? visibleGroups(snapshot.groups, filter).filter((g) => g.kind !== 'others').map((g) => g.id).sort() : []),
-    [snapshot, filter],
+    () => (snapshot ? visibleGroups(snapshot.groups, filter, matches).filter((g) => g.kind !== 'others').map((g) => g.id).sort() : []),
+    [snapshot, filter, matches],
   );
   const keysId = visibleKeys.join('|');
   const sysHist = useHistory(() => window.procWatch.history.system('1h'), []);
@@ -67,6 +74,8 @@ export function App() {
 
   const events24h = useHistory(() => window.procWatch.history.events('24h'), [], 60_000);
   const leakAt = useMemo(() => leakTimes(events24h), [events24h]);
+
+  const groupIds = useMemo(() => new Set(snapshot?.groupIds ?? []), [snapshot]);
 
   const isProtected = useMemo(() => compileProtection(configState?.config.protected ?? []).isProtected, [configState]);
 
@@ -116,7 +125,13 @@ export function App() {
 
   const routeKey = route.view === 'detail' ? `detail:${route.groupId}` : route.view;
 
-  const killGroup = (g: Group) => requestKill(killRequestForGroup(g, isProtected, snapshot.currentUid));
+  const currentUid = snapshot.currentUid;
+  const killGroup = (g: GroupSummary) => {
+    window.procWatch.groupProcs(g.id).then(
+      (procs) => requestKill(killRequestForGroup(g, procs, isProtected, currentUid)),
+      (e: unknown) => pushToast(ipcErrorMessage(e)),
+    );
+  };
   const killProc = (n: ProcNode) => requestKill(killRequestForProc(n.proc, isProtected, snapshot.currentUid));
 
   async function saveConfig(next: Config) {
@@ -127,7 +142,7 @@ export function App() {
     }
   }
 
-  function toggleProtect(g: Group) {
+  function toggleProtect(g: GroupSummary) {
     const cfg = configState!.config;
     const list = cfg.protected.includes(g.rootName) ? cfg.protected.filter((x) => x !== g.rootName) : [...cfg.protected, g.rootName];
     void saveConfig({ ...cfg, protected: list });
@@ -151,6 +166,7 @@ export function App() {
             {route.view === 'main' && (
               <MainView
                 groups={snapshot.groups}
+                matches={matches}
                 memTotalKB={snapshot.system.memTotalKB}
                 filter={filter}
                 onFilter={setFilter}
@@ -167,6 +183,7 @@ export function App() {
             {route.view === 'detail' && (
               <DetailView
                 group={findGroup(snapshot.groups, route.groupId)}
+                roots={snapshot.detail?.groupId === route.groupId ? snapshot.detail.roots : null}
                 stuckPids={stuckPids}
                 pendingPids={pendingPids}
                 currentUid={snapshot.currentUid}
@@ -185,8 +202,8 @@ export function App() {
             {route.view === 'metrics' && (
               <MetricsView
                 at={route.at}
-                canOpen={(key) => !!findGroup(snapshot.groups, key)}
-                onOpenGroup={(key) => findGroup(snapshot.groups, key) && setRoute({ view: 'detail', groupId: key })}
+                canOpen={(key) => groupIds.has(key)}
+                onOpenGroup={(key) => groupIds.has(key) && setRoute({ view: 'detail', groupId: key })}
               />
             )}
             {route.view === 'settings' && (

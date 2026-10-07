@@ -12,7 +12,8 @@ import { planKill, sendSignals } from '../core/kill';
 import { compileProtection } from '../core/protection';
 import { formatAppEvent } from '../core/history/events';
 import { appEventsPath, dataDir } from '../core/paths';
-import type { ConfigState, KillResult, KillTarget, RecorderState, Snapshot } from '../core/types';
+import { buildSnapshot, groupProcs, isWatch, type FullSnapshot } from '../core/snapshot';
+import type { ConfigState, KillResult, KillTarget, RecorderState, Watch } from '../core/types';
 import { installDesktopEntry } from './desktopEntry';
 import { clearHistory, createHistoryReader } from './history';
 import { isGroupKeys, isRange, isTopOptions, recorderState as computeRecorderState } from './historyIpc';
@@ -60,7 +61,7 @@ function syncRecorder(explicit: boolean): Promise<void> {
 const recorderState = (): RecorderState =>
   computeRecorderState({ available: systemdOk, enabled: config.recorder.enabled, intervalSec: config.recorder.intervalSec, status: history.status(), now: Date.now() });
 
-function takeSnapshot(): Snapshot {
+function takeSnapshot(): FullSnapshot {
   const procs = tracker.update(readProcesses(), Date.now());
   const groups = buildGroups(procs, {
     home: homedir(),
@@ -70,6 +71,16 @@ function takeSnapshot(): Snapshot {
     projectRootOf,
   });
   return { takenAt: Date.now(), currentUid: uid, system: readSystem(), groups };
+}
+
+/** Dernier snapshot complet (arbres compris) : sert au kill de groupe et aux réponses immédiates à `watch`. */
+let last: FullSnapshot | null = null;
+let watch: Watch = { groupId: null, query: '' };
+let mainWin: BrowserWindow | null = null;
+
+function send(): void {
+  if (!mainWin || mainWin.isDestroyed() || !last) return;
+  mainWin.webContents.send('snapshot', buildSnapshot(last, watch));
 }
 
 const configState = (): ConfigState => ({ config, warning, invalid: protection.invalid });
@@ -90,10 +101,12 @@ function createWindow(): void {
   win.removeMenu();
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', (e) => e.preventDefault());
+  mainWin = win;
   const push = () => {
     if (win.isDestroyed()) return;
     try {
-      win.webContents.send('snapshot', takeSnapshot());
+      last = takeSnapshot();
+      send();
     } catch (err) {
       console.error('snapshot failed:', err);
     }
@@ -126,6 +139,14 @@ ipcMain.handle('kill', (_e, targets: unknown, signal: unknown): KillResult[] => 
 });
 
 ipcMain.handle('config:get', () => configState());
+
+// Le renderer dit ce qu'il suit ; on renvoie tout de suite le dernier snapshot recalculé (sans relire /proc).
+ipcMain.handle('watch', (_e, w: unknown) => {
+  if (!isWatch(w)) return;
+  watch = { groupId: w.groupId, query: w.query };
+  send();
+});
+ipcMain.handle('group:procs', (_e, id: unknown) => (typeof id === 'string' && last ? groupProcs(last.groups, id) : []));
 
 ipcMain.handle('config:set', (_e, next: unknown) => {
   const valid = validateConfig(next);

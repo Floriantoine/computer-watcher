@@ -1,7 +1,7 @@
 import { useState, type MouseEvent, type Ref } from 'react';
 import { AnimatePresence, motion, useIsPresent } from 'motion/react';
 import { ChevronDown, ChevronUp, Lock } from 'lucide-react';
-import type { Group } from '../../../core/types';
+import type { GroupSummary as Group } from '../../../core/types';
 import { formatAge, formatCpu, formatKB } from '../format';
 import { sortForList, type ListColumn } from '../listSort';
 import { Sparkline } from './charts/Sparkline';
