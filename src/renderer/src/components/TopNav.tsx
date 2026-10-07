@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { motion } from 'motion/react';
 import { ChartLine, Cpu, Settings } from 'lucide-react';
 import type { Route } from '../App';
@@ -7,7 +8,11 @@ interface Props {
   onNavigate: (r: Route) => void;
 }
 
-export function TopNav({ route, onNavigate }: Props) {
+/**
+ * Mémoïsée : son indicateur d'onglet (layoutId) déclencherait sinon, à chaque snapshot, une mesure de mise en page
+ * de tous les éléments animés de la page (cartes comprises).
+ */
+export const TopNav = memo(function TopNav({ route, onNavigate }: Props) {
   const active = route.view === 'metrics' ? 'metrics' : route.view === 'settings' ? null : 'main';
   const tabs = [
     { id: 'main', label: 'Processus', icon: Cpu, to: { view: 'main' } as Route },
@@ -29,4 +34,4 @@ export function TopNav({ route, onNavigate }: Props) {
       </button>
     </nav>
   );
-}
+});

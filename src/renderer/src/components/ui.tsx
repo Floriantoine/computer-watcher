@@ -1,8 +1,9 @@
-import { useEffect, type MouseEvent } from 'react';
-import { animate, motion, useMotionValue, useReducedMotion, useTransform } from 'motion/react';
+import { useLayoutEffect, useRef, type MouseEvent } from 'react';
+import { motion, useReducedMotionConfig } from 'motion/react';
 import { AppWindow, Bot, Folder, Package, SquareTerminal, Trash2, TrendingUp, X, Zap, type LucideIcon } from 'lucide-react';
 import type { GroupKind } from '../../../core/types';
 import { formatKB } from '../format';
+import { TWEEN_TICK_MS, tweenSteps, worthAnimating } from '../motionBudget';
 import { groupIconColor } from '../theme';
 
 const KIND_ICONS: Record<GroupKind, LucideIcon> = {
@@ -26,24 +27,40 @@ export function GroupIcon({ id, kind, size = 'md' }: { id: string; kind: GroupKi
 }
 
 /**
- * Nombre (en Ko) qui glisse doucement vers sa nouvelle valeur, affiché avec `format`.
- * Pas d'animation si le texte affiché ne change pas : un snapshot identique ne relance rien.
+ * Nombre (en Ko) qui glisse vers sa nouvelle valeur, affiché avec `format`.
+ * Le texte est écrit directement dans le DOM, 20 fois par seconde au plus (pas une image par rafraîchissement d'écran),
+ * et seulement si le glissement afficherait une valeur intermédiaire ; sinon, ou animations réduites (système ou réglage), saut direct.
  */
 export function AnimatedNumber({ value, format = formatKB, className }: { value: number; format?: (n: number) => string; className?: string }) {
-  const mv = useMotionValue(value);
-  const text = useTransform(mv, (v) => format(Math.round(v)));
-  const reduce = useReducedMotion();
-  useEffect(() => {
-    const from = mv.get();
-    if (from === value) return;
-    if (reduce || format(Math.round(from)) === format(value)) {
-      mv.jump(value);
+  const ref = useRef<HTMLSpanElement>(null);
+  const shown = useRef<number | null>(null);
+  // Préférence système ou réglage « Effets visuels réduits » (MotionConfig).
+  const reduce = !!useReducedMotionConfig();
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const show = (v: number) => {
+      shown.current = v;
+      const text = format(Math.round(v));
+      // Modifier le nœud texte existant (et pas textContent) évite de recréer son objet de mise en page.
+      if (el.firstChild) {
+        if (el.firstChild.nodeValue !== text) el.firstChild.nodeValue = text;
+      } else el.textContent = text;
+    };
+    const from = shown.current;
+    if (from === null || reduce || !worthAnimating(from, value, format)) {
+      show(value);
       return;
     }
-    const controls = animate(mv, value, { duration: 0.7, ease: [0.22, 1, 0.36, 1] });
-    return () => controls.stop();
-  }, [value, reduce, format, mv]);
-  return <motion.span className={className}>{text}</motion.span>;
+    const steps = tweenSteps(from, value);
+    let i = 0;
+    const timer = setInterval(() => {
+      show(steps[i++]!);
+      if (i >= steps.length) clearInterval(timer);
+    }, TWEEN_TICK_MS);
+    return () => clearInterval(timer);
+  }, [value, reduce, format]);
+  return <span ref={ref} className={className} />;
 }
 
 interface KillProps {

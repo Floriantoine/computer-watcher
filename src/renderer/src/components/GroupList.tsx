@@ -1,9 +1,11 @@
-import { useState, type MouseEvent, type Ref } from 'react';
+import { memo, useLayoutEffect, useRef, useState, type MouseEvent, type Ref } from 'react';
 import { AnimatePresence, motion, useIsPresent } from 'motion/react';
 import { ChevronDown, ChevronUp, Lock } from 'lucide-react';
 import type { GroupSummary as Group } from '../../../core/types';
 import { formatAge, formatCpu, formatKB } from '../format';
 import { sortForList, type ListColumn } from '../listSort';
+import { rowDisplayEqual, sameSeries } from '../renderEquality';
+import type { GroupActions } from './GroupCard';
 import { Sparkline } from './charts/Sparkline';
 import { AnimatedNumber, ForceButton, GroupIcon, KillButton, LeakBadge } from './ui';
 
@@ -14,11 +16,8 @@ interface Props {
   sparkOf: (groupId: string) => (number | null)[];
   stuckPids: Set<number>;
   pendingPids: Set<number>;
-  onOpen: (g: Group) => void;
-  onKill: (g: Group) => void;
-  onForce: (pids: number[]) => void;
+  actions: GroupActions;
   leakAt?: Map<string, number>;
-  onLeak?: (ts: number) => void;
 }
 
 const COLUMNS: { col: ListColumn; label: string; num: boolean }[] = [
@@ -36,15 +35,12 @@ interface RowProps {
   stuck: boolean;
   pending: boolean;
   leak?: boolean;
-  onLeak?: () => void;
   layoutKey: string;
-  onOpen: () => void;
-  onKill: () => void;
-  onForce: () => void;
+  actions: GroupActions;
   ref?: Ref<HTMLTableRowElement>;
 }
 
-function GroupRow({ group, spark, stuck, pending, leak, onLeak, layoutKey, onOpen, onKill, onForce, ref }: RowProps) {
+function GroupRowImpl({ group, spark, stuck, pending, leak, layoutKey, actions, ref }: RowProps) {
   const isPresent = useIsPresent();
   const stop = (fn: () => void) => (e: MouseEvent) => {
     e.stopPropagation();
@@ -55,7 +51,7 @@ function GroupRow({ group, spark, stuck, pending, leak, onLeak, layoutKey, onOpe
       ref={ref}
       data-testid="group-row"
       onClick={() => {
-        if (isPresent) onOpen();
+        if (isPresent) actions.open(group.id);
       }}
       layout="position"
       layoutDependency={layoutKey}
@@ -74,7 +70,7 @@ function GroupRow({ group, spark, stuck, pending, leak, onLeak, layoutKey, onOpe
               <Lock size={12} strokeWidth={2.4} />
             </span>
           )}
-          {leak && <LeakBadge onClick={stop(() => onLeak?.())} />}
+          {leak && <LeakBadge onClick={stop(() => actions.leak(group.id))} />}
         </span>
       </td>
       <td className="num">{group.procCount}</td>
@@ -85,15 +81,37 @@ function GroupRow({ group, spark, stuck, pending, leak, onLeak, layoutKey, onOpe
       <td className={`num ${group.oldestAgeSec > DAY ? 'old' : ''}`}>{formatAge(group.oldestAgeSec)}</td>
       <td className="act">
         {group.kind !== 'others' &&
-          (stuck ? <ForceButton onClick={stop(onForce)} /> : <KillButton size="sm" pending={pending} disabled={!group.killable} onClick={stop(onKill)} />)}
+          (stuck ? (
+            <ForceButton onClick={stop(() => actions.force(group.id))} />
+          ) : (
+            <KillButton size="sm" pending={pending} disabled={!group.killable} onClick={stop(() => actions.kill(group.id))} />
+          ))}
       </td>
     </motion.tr>
   );
 }
 
-export function GroupList({ groups, sparkOf, stuckPids, pendingPids, onOpen, onKill, onForce, leakAt, onLeak }: Props) {
+const GroupRow = memo(
+  GroupRowImpl,
+  (a, b) =>
+    a.actions === b.actions &&
+    a.ref === b.ref &&
+    a.layoutKey === b.layoutKey &&
+    a.stuck === b.stuck &&
+    a.pending === b.pending &&
+    a.leak === b.leak &&
+    sameSeries(a.spark, b.spark) &&
+    rowDisplayEqual(a.group, b.group),
+);
+
+export function GroupList({ groups, sparkOf, stuckPids, pendingPids, actions, leakAt }: Props) {
   const [sort, setSort] = useState<{ col: ListColumn; dir: 'asc' | 'desc' }>({ col: 'mem', dir: 'desc' });
-  const rows = sortForList(groups, sort.col, sort.dir);
+  const order = useRef<{ key: string; ids: string[] }>({ key: '', ids: [] });
+  const sortKey = `${sort.col}:${sort.dir}`;
+  const rows = sortForList(groups, sort.col, sort.dir, order.current.key === sortKey ? order.current.ids : []);
+  useLayoutEffect(() => {
+    order.current = { key: sortKey, ids: rows.map((g) => g.id) };
+  });
   const layoutKey = rows.map((g) => g.id).join('\n');
   const toggle = (col: ListColumn) =>
     setSort((s) => (s.col === col ? { col, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { col, dir: col === 'name' ? 'asc' : 'desc' }));
@@ -124,24 +142,18 @@ export function GroupList({ groups, sparkOf, stuckPids, pendingPids, onOpen, onK
         </thead>
         <tbody>
           <AnimatePresence mode="popLayout" initial={false}>
-            {rows.map((g) => {
-              const stuck = g.pids.filter((pid) => stuckPids.has(pid));
-              return (
-                <GroupRow
-                  key={g.id}
-                  group={g}
-                  spark={sparkOf(g.id)}
-                  stuck={stuck.length > 0}
-                  pending={g.pids.some((pid) => pendingPids.has(pid))}
-                  leak={leakAt?.has(g.id)}
-                  onLeak={() => onLeak?.(leakAt!.get(g.id)!)}
-                  layoutKey={layoutKey}
-                  onOpen={() => onOpen(g)}
-                  onKill={() => onKill(g)}
-                  onForce={() => onForce(stuck)}
-                />
-              );
-            })}
+            {rows.map((g) => (
+              <GroupRow
+                key={g.id}
+                group={g}
+                spark={sparkOf(g.id)}
+                stuck={g.pids.some((pid) => stuckPids.has(pid))}
+                pending={g.pids.some((pid) => pendingPids.has(pid))}
+                leak={leakAt?.has(g.id)}
+                layoutKey={layoutKey}
+                actions={actions}
+              />
+            ))}
           </AnimatePresence>
         </tbody>
       </table>

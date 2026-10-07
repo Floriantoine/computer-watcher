@@ -1,5 +1,6 @@
 import type { SystemInfo } from '../../../core/types';
 import { formatKB } from '../format';
+import { barWidth } from '../motionBudget';
 import { gaugeTone, metricLevels } from '../theme';
 import { swapPercent, type Level } from '../viewModel';
 import { Sparkline, type SparkTone } from './charts/Sparkline';
@@ -30,7 +31,7 @@ function Stat({ label, value, format, sub, percent, tone, level = 'ok', spark }:
       </div>
       {spark && <Sparkline values={spark} tone={(tone ?? 'cpu') as SparkTone} height={26} />}
       {percent !== undefined && (
-        <div className="bar"><i className={`tone-${tone}`} style={{ width: `${Math.min(100, Math.max(0, percent))}%` }} /></div>
+        <div className="bar"><i className={`tone-${tone}`} style={{ width: barWidth(percent) }} /></div>
       )}
     </div>
   );

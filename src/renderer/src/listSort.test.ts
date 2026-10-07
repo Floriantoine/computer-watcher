@@ -14,3 +14,10 @@ test('tri par colonne, Autres en dernier quel que soit le sens', () => {
   expect(sortForList(list, 'cpu', 'desc').map((x) => x.id)).toEqual(['b', 'a', 'others']);
   expect(sortForList(list, 'name', 'asc').map((x) => x.id)).toEqual(['a', 'b', 'others']);
 });
+
+test('RAM : ordre précédent gardé sous la tolérance, dans les deux sens', () => {
+  const list = [g('a', { rssKB: 100_000 }), g('b', { rssKB: 103_000 })];
+  expect(sortForList(list, 'mem', 'desc', ['a', 'b']).map((x) => x.id)).toEqual(['a', 'b']);
+  expect(sortForList(list, 'mem', 'asc', ['b', 'a']).map((x) => x.id)).toEqual(['b', 'a']);
+  expect(sortForList(list, 'mem', 'asc').map((x) => x.id)).toEqual(['a', 'b']);
+});

@@ -37,6 +37,16 @@ describe('visibleGroups', () => {
     expect(visibleGroups(groups, { query: 'zzz', sort: 'mem', minAgeSec: 0 }, new Set()).map((g) => g.id)).toEqual([]);
   });
 
+  test('ordre précédent gardé tant que l\'écart de mémoire reste sous la tolérance', () => {
+    const near = [group('x', [], { rssKB: 100_000 }), group('y', [], { rssKB: 102_000 })];
+    const f = { query: '', sort: 'mem' as const, minAgeSec: 0 };
+    expect(visibleGroups(near, f).map((g) => g.id)).toEqual(['y', 'x']);
+    expect(visibleGroups(near, f, null, ['x', 'y']).map((g) => g.id)).toEqual(['x', 'y']);
+    expect(visibleGroups([near[0]!, group('y', [], { rssKB: 300_000 })], f, null, ['x', 'y']).map((g) => g.id)).toEqual(['y', 'x']);
+    // tri par nom : jamais de tolérance
+    expect(visibleGroups(near, { ...f, sort: 'name' }, null, ['y', 'x']).map((g) => g.id)).toEqual(['x', 'y']);
+  });
+
   test('filtre d\'ancienneté', () => {
     expect(visibleGroups(groups, { query: '', sort: 'mem', minAgeSec: 86400 }).map((g) => g.id)).toEqual(['a', 'others']);
   });

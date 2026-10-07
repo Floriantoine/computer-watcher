@@ -1,10 +1,10 @@
 import { AnimatePresence } from 'motion/react';
-import { useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, Search } from 'lucide-react';
 import type { GroupSummary as Group } from '../../../core/types';
 import type { SortKey, ViewFilter } from '../viewModel';
 import { visibleGroups } from '../viewModel';
-import { GroupCard } from './GroupCard';
+import { GroupCard, type GroupActions } from './GroupCard';
 import { GroupList } from './GroupList';
 import { ViewToggle, loadView, type ViewMode } from './ViewToggle';
 
@@ -28,9 +28,39 @@ interface Props {
 
 const AGES: [string, number][] = [['Tous', 0], ['> 1 h', 3600], ['> 1 j', 86400], ['> 7 j', 7 * 86400]];
 
-export function MainView({ groups, matches, memTotalKB, filter, onFilter, stuckPids, pendingPids, onOpen, onKillGroup, onForce, sparkOf, leakAt, onLeak }: Props) {
+export function MainView(props: Props) {
+  const { groups, matches, memTotalKB, filter, onFilter, stuckPids, pendingPids, sparkOf, leakAt } = props;
   const [view, setView] = useState<ViewMode>(loadView);
-  const shown = visibleGroups(groups, filter, matches);
+  // Actions stables (par id, résolues sur les dernières props) : une carte inchangée n'a pas à se re-rendre.
+  const latest = useRef(props);
+  latest.current = props;
+  const actions = useMemo<GroupActions>(() => {
+    const find = (id: string) => latest.current.groups.find((g) => g.id === id);
+    return {
+      open: (id) => {
+        const g = find(id);
+        if (g) latest.current.onOpen(g);
+      },
+      kill: (id) => {
+        const g = find(id);
+        if (g) latest.current.onKillGroup(g);
+      },
+      force: (id) => {
+        const g = find(id);
+        if (g) latest.current.onForce(g.pids.filter((pid) => latest.current.stuckPids.has(pid)));
+      },
+      leak: (id) => {
+        const ts = latest.current.leakAt?.get(id);
+        if (ts !== undefined) latest.current.onLeak?.(ts);
+      },
+    };
+  }, []);
+  // Ordre affiché au rendu précédent (même tri) : tri mémoire/CPU avec tolérance, les cartes ne permutent pas sans cesse.
+  const order = useRef<{ sort: SortKey; ids: string[] }>({ sort: filter.sort, ids: [] });
+  const shown = visibleGroups(groups, filter, matches, order.current.sort === filter.sort ? order.current.ids : []);
+  useLayoutEffect(() => {
+    order.current = { sort: filter.sort, ids: shown.map((g) => g.id) };
+  });
   const layoutKey = shown.map((g) => g.id).join('\n');
   return (
     <>
@@ -59,29 +89,23 @@ export function MainView({ groups, matches, memTotalKB, filter, onFilter, stuckP
       {shown.length === 0 ? (
         <p className="empty">Aucun groupe ne correspond.</p>
       ) : view === 'list' ? (
-        <GroupList groups={shown} sparkOf={sparkOf} stuckPids={stuckPids} pendingPids={pendingPids} onOpen={onOpen} onKill={onKillGroup} onForce={onForce} leakAt={leakAt} onLeak={onLeak} />
+        <GroupList groups={shown} sparkOf={sparkOf} stuckPids={stuckPids} pendingPids={pendingPids} actions={actions} leakAt={leakAt} />
       ) : (
         <div className="cards">
           <AnimatePresence mode="popLayout" initial={false}>
-            {shown.map((g) => {
-              const stuck = g.pids.filter((pid) => stuckPids.has(pid));
-              return (
-                <GroupCard
-                  key={g.id}
-                  group={g}
-                  memTotalKB={memTotalKB}
-                  spark={sparkOf(g.id)}
-                  stuck={stuck.length > 0}
-                  pending={g.pids.some((pid) => pendingPids.has(pid))}
-                  leak={leakAt?.has(g.id)}
-                  onLeak={() => onLeak?.(leakAt!.get(g.id)!)}
-                  layoutKey={layoutKey}
-                  onOpen={() => onOpen(g)}
-                  onKill={() => onKillGroup(g)}
-                  onForce={() => onForce(stuck)}
-                />
-              );
-            })}
+            {shown.map((g) => (
+              <GroupCard
+                key={g.id}
+                group={g}
+                memTotalKB={memTotalKB}
+                spark={sparkOf(g.id)}
+                stuck={g.pids.some((pid) => stuckPids.has(pid))}
+                pending={g.pids.some((pid) => pendingPids.has(pid))}
+                leak={leakAt?.has(g.id)}
+                layoutKey={layoutKey}
+                actions={actions}
+              />
+            ))}
           </AnimatePresence>
         </div>
       )}

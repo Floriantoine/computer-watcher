@@ -1,13 +1,23 @@
-import type { MouseEvent, Ref } from 'react';
+import { memo, type MouseEvent, type Ref } from 'react';
 import { motion, useIsPresent } from 'motion/react';
 import { Lock } from 'lucide-react';
 import type { GroupSummary as Group } from '../../../core/types';
 import { formatAge, formatCpu } from '../format';
+import { barWidth } from '../motionBudget';
+import { cardDisplayEqual, sameSeries } from '../renderEquality';
 import { cardTone } from '../theme';
 import { Sparkline } from './charts/Sparkline';
 import { AnimatedNumber, ForceButton, GroupIcon, KillButton, LeakBadge } from './ui';
 
 const DAY = 86400;
+
+/** Actions des cartes et lignes, par id de groupe : objet stable, pour que les cartes inchangées ne se re-rendent pas. */
+export interface GroupActions {
+  open: (id: string) => void;
+  kill: (id: string) => void;
+  force: (id: string) => void;
+  leak: (id: string) => void;
+}
 
 interface Props {
   group: Group;
@@ -16,16 +26,13 @@ interface Props {
   stuck: boolean;
   pending: boolean;
   leak?: boolean;
-  onLeak?: () => void;
   /** Change seulement quand l'ordre des cartes change : seul cas où le layout s'anime. */
   layoutKey: string;
-  onOpen: () => void;
-  onKill: () => void;
-  onForce: () => void;
+  actions: GroupActions;
   ref?: Ref<HTMLDivElement>;
 }
 
-export function GroupCard({ group, memTotalKB, spark, stuck, pending, leak, onLeak, layoutKey, onOpen, onKill, onForce, ref }: Props) {
+function GroupCardImpl({ group, memTotalKB, spark, stuck, pending, leak, layoutKey, actions, ref }: Props) {
   const isPresent = useIsPresent();
   const total = group.rssKB + group.swapKB;
   const pct = Math.min(100, (total / memTotalKB) * 100);
@@ -43,7 +50,7 @@ export function GroupCard({ group, memTotalKB, spark, stuck, pending, leak, onLe
       ref={ref}
       className="card"
       data-testid="group-card"
-      onClick={guard(onOpen)}
+      onClick={guard(() => actions.open(group.id))}
       layout="position"
       layoutDependency={layoutKey}
       initial={{ opacity: 0, scale: 0.96 }}
@@ -63,25 +70,39 @@ export function GroupCard({ group, memTotalKB, spark, stuck, pending, leak, onLe
                 <Lock size={12} strokeWidth={2.4} />
               </span>
             )}
-            {leak && <LeakBadge onClick={stop(() => onLeak?.())} />}
+            {leak && <LeakBadge onClick={stop(() => actions.leak(group.id))} />}
           </div>
           <div className="sub" title={sub}>{sub}</div>
         </div>
       </div>
       <AnimatedNumber className="big" value={total} />
       <Sparkline values={spark} tone={cardTone(pct)} height={28} />
-      <div className="bar"><i className={`tone-${cardTone(pct)}`} style={{ width: `${pct}%` }} /></div>
+      <div className="bar"><i className={`tone-${cardTone(pct)}`} style={{ width: barWidth(pct) }} /></div>
       <div className="card-foot">
         <span className="mono">
           {formatCpu(group.cpuPercent)} CPU · <span className={group.oldestAgeSec > DAY ? 'old' : ''}>{formatAge(group.oldestAgeSec)}</span>
         </span>
         {group.kind !== 'others' &&
           (stuck ? (
-            <ForceButton onClick={stop(onForce)} />
+            <ForceButton onClick={stop(() => actions.force(group.id))} />
           ) : (
-            <KillButton pending={pending} disabled={!group.killable} onClick={stop(onKill)} />
+            <KillButton pending={pending} disabled={!group.killable} onClick={stop(() => actions.kill(group.id))} />
           ))}
       </div>
     </motion.div>
   );
 }
+
+/** Ne se re-rend que si ce qu'elle affiche change (voir cardDisplayEqual). */
+export const GroupCard = memo(
+  GroupCardImpl,
+  (a, b) =>
+    a.actions === b.actions &&
+    a.ref === b.ref &&
+    a.layoutKey === b.layoutKey &&
+    a.stuck === b.stuck &&
+    a.pending === b.pending &&
+    a.leak === b.leak &&
+    sameSeries(a.spark, b.spark) &&
+    cardDisplayEqual(a.group, b.group, a.memTotalKB, b.memTotalKB),
+);

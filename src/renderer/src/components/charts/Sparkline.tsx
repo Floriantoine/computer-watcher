@@ -1,5 +1,6 @@
 import { memo, useId } from 'react';
 import { motion } from 'motion/react';
+import { sameSeries } from '../../renderEquality';
 import { sparkPath } from './sparkPath';
 
 export type SparkTone = 'mem' | 'swap' | 'psi' | 'cpu' | 'warn' | 'bad';
@@ -39,7 +40,4 @@ function SparklineImpl({ values, tone, height = 28 }: Props) {
 }
 
 /** Ne se redessine que si les valeurs changent réellement (les snapshots arrivent toutes les 2 s). */
-export const Sparkline = memo(SparklineImpl, (a, b) => {
-  if (a.tone !== b.tone || a.height !== b.height || a.values.length !== b.values.length) return false;
-  return a.values === b.values || a.values.every((v, i) => v === b.values[i]);
-});
+export const Sparkline = memo(SparklineImpl, (a, b) => a.tone === b.tone && a.height === b.height && sameSeries(a.values, b.values));
