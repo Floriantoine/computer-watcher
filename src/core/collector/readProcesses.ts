@@ -19,11 +19,15 @@ function readCwd(dir: string): { cwd: string | null; cwdDeleted: boolean } {
 export interface ReadOptions {
   /** Si fourni : le lien cwd n'est lu que pour les noms acceptés (coûteux sur ~750 processus). */
   wantCwd?: (name: string) => boolean;
+  /** Cache cmdline `${pid}:${starttime}` → ligne de commande : lue une seule fois par processus, purgée des absents à chaque passe. */
+  cmdlineCache?: Map<string, string>;
 }
 
 export function readProcesses(procRoot = '/proc', opts: ReadOptions = {}): ProcSample[] {
   const uptimeSec = parseFloat(readFileSync(join(procRoot, 'uptime'), 'utf8').split(' ')[0]);
   const out: ProcSample[] = [];
+  const cache = opts.cmdlineCache;
+  const seen = cache ? new Set<string>() : null;
   for (const entry of readdirSync(procRoot)) {
     if (!/^\d+$/.test(entry)) continue;
     const dir = join(procRoot, entry);
@@ -31,7 +35,18 @@ export function readProcesses(procRoot = '/proc', opts: ReadOptions = {}): ProcS
     try {
       stat = parseStat(readFileSync(join(dir, 'stat'), 'utf8'));
       status = parseStatus(readFileSync(join(dir, 'status'), 'utf8'));
-      cmdline = parseCmdline(readFileSync(join(dir, 'cmdline'), 'utf8'));
+      if (cache) {
+        const key = `${entry}:${stat.starttime}`;
+        seen!.add(key);
+        let c = cache.get(key);
+        if (c === undefined) {
+          c = parseCmdline(readFileSync(join(dir, 'cmdline'), 'utf8'));
+          cache.set(key, c);
+        }
+        cmdline = c;
+      } else {
+        cmdline = parseCmdline(readFileSync(join(dir, 'cmdline'), 'utf8'));
+      }
     } catch {
       continue; // processus terminé entre readdir et la lecture
     }
@@ -49,5 +64,6 @@ export function readProcesses(procRoot = '/proc', opts: ReadOptions = {}): ProcS
       ...(opts.wantCwd && !opts.wantCwd(status.name) ? { cwd: null, cwdDeleted: false } : readCwd(dir)),
     });
   }
+  if (cache && seen) for (const k of cache.keys()) if (!seen.has(k)) cache.delete(k);
   return out;
 }

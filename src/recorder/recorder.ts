@@ -47,6 +47,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
   const procRoot = deps.procRoot ?? '/proc';
   const ncpu = deps.cpuCount ?? Math.max(1, cpus().length);
   const tracker = new CpuTracker();
+  const cmdlineCache = new Map<string, string>();
   const projectRootOf = createProjectRootCache();
   const wantCwd = (name: string) => DEV_TOOL.test(name);
   let cfg: RecorderConfig = loadConfig(deps.configDir).config.recorder;
@@ -94,7 +95,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       if (!db || !writer) return;
       try {
         const ts = now();
-        const procs = tracker.update(readProcesses(procRoot, { wantCwd }), ts);
+        const procs = tracker.update(readProcesses(procRoot, { wantCwd, cmdlineCache }), ts);
         const system = readSystem(procRoot);
         const groups = buildGroups(procs, {
           home: homedir(),

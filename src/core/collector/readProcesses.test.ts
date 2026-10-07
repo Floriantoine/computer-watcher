@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test } from 'vitest';
 import { addProc, makeProcRoot } from './fakeProc';
@@ -56,4 +56,18 @@ test('wantCwd : ne lit le cwd que des processus demandés', () => {
   const procs = readProcesses(root, { wantCwd: (n) => n === 'node' });
   expect(procs.find((p) => p.pid === 1)!.cwd).toBe('/home/u/p');
   expect(procs.find((p) => p.pid === 2)!).toMatchObject({ cwd: null, cwdDeleted: false });
+});
+
+test('cmdlineCache : la 2e passe ne relit pas cmdline, et purge les absents', () => {
+  const root = makeProcRoot();
+  addProc(root, { pid: 20, comm: 'node', rssKB: 1, starttime: 5, cmdline: ['node', 'a'] });
+  addProc(root, { pid: 21, comm: 'node', rssKB: 1, starttime: 6, cmdline: ['node', 'b'] });
+  const cache = new Map<string, string>();
+  expect(readProcesses(root, { cmdlineCache: cache }).map((p) => p.cmdline)).toEqual(['node a', 'node b']);
+  expect([...cache.keys()].sort()).toEqual(['20:5', '21:6']);
+  rmSync(join(root, '20', 'cmdline'));
+  expect(readProcesses(root, { cmdlineCache: cache }).find((p) => p.pid === 20)?.cmdline).toBe('node a');
+  rmSync(join(root, '21'), { recursive: true });
+  readProcesses(root, { cmdlineCache: cache });
+  expect([...cache.keys()]).toEqual(['20:5']);
 });
