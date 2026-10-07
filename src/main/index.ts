@@ -6,7 +6,7 @@ import { CpuTracker } from '../core/collector/cpuTracker';
 import { readProcesses, type CwdEntry, type StatusEntry } from '../core/collector/readProcesses';
 import { readSystem } from '../core/collector/readSystem';
 import { configDir, loadConfig, saveConfig, validateConfig } from '../core/config';
-import { buildGroups } from '../core/grouping/buildGroups';
+import { buildGroups, isOverThreshold } from '../core/grouping/buildGroups';
 import { createProjectRootCache } from '../core/grouping/projectRootCache';
 import { recordSeparate, stickyIds } from '../core/grouping/stickyCards';
 import { planKill, sendSignals } from '../core/kill';
@@ -93,7 +93,7 @@ function takeSnapshot(): FullSnapshot {
     projectRootOf,
     keepSeparate: (id) => sticky.has(id),
   });
-  recordSeparate(separateSeen, groups, now);
+  recordSeparate(separateSeen, groups, now, (g) => isOverThreshold(g, config.othersThreshold));
   return { takenAt: Date.now(), currentUid: uid, system: readSystem(), groups };
 }
 

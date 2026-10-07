@@ -151,8 +151,13 @@ function makeGroup(id: string, { kind, label }: Meta, list: ProcInfo[], opts: Gr
   };
 }
 
+/** Groupe assez gros (mémoire) ou actif (CPU) pour avoir sa carte par lui-même, sans l'hystérésis. */
+export function isOverThreshold(g: { rssKB: number; swapKB: number; cpuPercent: number }, t: { memMB: number; cpuPercent: number }): boolean {
+  return mem(g) >= t.memMB * 1024 || g.cpuPercent >= t.cpuPercent;
+}
+
 function applyOthers(groups: Group[], t: { memMB: number; cpuPercent: number }, keepSeparate?: (id: string) => boolean): Group[] {
-  const isSmall = (g: Group) => mem(g) < t.memMB * 1024 && g.cpuPercent < t.cpuPercent && !keepSeparate?.(g.id);
+  const isSmall = (g: Group) => !isOverThreshold(g, t) && !keepSeparate?.(g.id);
   const small = groups.filter(isSmall).sort(byMemDesc);
   if (small.length < 2) return groups.sort(byMemDesc);
   const big = groups.filter((g) => !isSmall(g)).sort(byMemDesc);

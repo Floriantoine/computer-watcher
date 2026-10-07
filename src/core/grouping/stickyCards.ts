@@ -2,9 +2,12 @@
 // de 1 %, par exemple) ferait apparaître et disparaître sa carte à chaque snapshot, avec animations de sortie et de
 // réorganisation. Une carte affichée reste donc affichée HOLD ms après être repassée sous les seuils.
 
-/** Note les groupes affichés à part (hors « Autres ») à l'instant `now`. */
-export function recordSeparate(seen: Map<string, number>, groups: { id: string; kind: string }[], now: number): void {
-  for (const g of groups) if (g.kind !== 'others') seen.set(g.id, now);
+/**
+ * Note à l'instant `now` les groupes à part **par eux-mêmes** (`overThreshold`) : ni ceux gardés seulement par
+ * l'hystérésis (sinon ils ne retomberaient jamais dans « Autres »), ni le dernier petit groupe laissé seul.
+ */
+export function recordSeparate<G extends { id: string; kind: string }>(seen: Map<string, number>, groups: G[], now: number, overThreshold: (g: G) => boolean): void {
+  for (const g of groups) if (g.kind !== 'others' && overThreshold(g)) seen.set(g.id, now);
 }
 
 /** Groupes à garder à part : affichés il y a moins de `holdMs`. Oublie les autres. */
