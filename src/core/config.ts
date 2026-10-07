@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { DEFAULT_CONFIG, DEFAULT_RECORDER } from './defaults';
+import { inBounds, RECORDER_BOUNDS, type RecorderNumField } from './recorderBounds';
 import type { Config, RecorderConfig } from './types';
 
 export { DEFAULT_CONFIG };
@@ -12,20 +13,12 @@ export function configDir(env: NodeJS.ProcessEnv = process.env, home: string = h
   return join(env.XDG_CONFIG_HOME || join(home, '.config'), 'proc-watch');
 }
 
-const intIn = (v: unknown, min: number, max: number) => Number.isInteger(v) && (v as number) >= min && (v as number) <= max;
-const numMin = (v: unknown, min: number) => typeof v === 'number' && Number.isFinite(v) && v >= min;
-
 function validateRecorder(raw: unknown): RecorderConfig | null {
   if (raw === undefined) return { ...DEFAULT_RECORDER };
   if (typeof raw !== 'object' || raw === null) return null;
   const r = raw as Record<string, unknown>;
   if (typeof r.enabled !== 'boolean') return null;
-  if (!intIn(r.intervalSec, 1, 60)) return null;
-  if (!intIn(r.detailHours, 1, 168)) return null;
-  if (!intIn(r.summaryDays, 1, 365)) return null;
-  if (!numMin(r.procMinMemMB, 0) || !numMin(r.procMinCpuPercent, 0)) return null;
-  if (!intIn(r.leakMinMinutes, 5, 24 * 60)) return null;
-  if (!numMin(r.leakMinGrowthMB, 0)) return null;
+  for (const f of Object.keys(RECORDER_BOUNDS) as RecorderNumField[]) if (!inBounds(r[f], RECORDER_BOUNDS[f])) return null;
   return {
     enabled: r.enabled,
     intervalSec: r.intervalSec as number,

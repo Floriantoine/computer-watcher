@@ -5,7 +5,7 @@ import type { Group } from '../../../core/types';
 import { formatAge, formatCpu, formatKB } from '../format';
 import { sortForList, type ListColumn } from '../listSort';
 import { Sparkline } from './charts/Sparkline';
-import { AnimatedNumber, ForceButton, GroupIcon, KillButton } from './ui';
+import { AnimatedNumber, ForceButton, GroupIcon, KillButton, LeakBadge } from './ui';
 
 const DAY = 86400;
 
@@ -17,6 +17,8 @@ interface Props {
   onOpen: (g: Group) => void;
   onKill: (g: Group) => void;
   onForce: (pids: number[]) => void;
+  leakAt?: Map<string, number>;
+  onLeak?: (ts: number) => void;
 }
 
 const COLUMNS: { col: ListColumn; label: string; num: boolean }[] = [
@@ -33,6 +35,8 @@ interface RowProps {
   spark: (number | null)[];
   stuck: boolean;
   pending: boolean;
+  leak?: boolean;
+  onLeak?: () => void;
   layoutKey: string;
   onOpen: () => void;
   onKill: () => void;
@@ -40,7 +44,7 @@ interface RowProps {
   ref?: Ref<HTMLTableRowElement>;
 }
 
-function GroupRow({ group, spark, stuck, pending, layoutKey, onOpen, onKill, onForce, ref }: RowProps) {
+function GroupRow({ group, spark, stuck, pending, leak, onLeak, layoutKey, onOpen, onKill, onForce, ref }: RowProps) {
   const isPresent = useIsPresent();
   const stop = (fn: () => void) => (e: MouseEvent) => {
     e.stopPropagation();
@@ -70,6 +74,7 @@ function GroupRow({ group, spark, stuck, pending, layoutKey, onOpen, onKill, onF
               <Lock size={12} strokeWidth={2.4} />
             </span>
           )}
+          {leak && <LeakBadge onClick={stop(() => onLeak?.())} />}
         </span>
       </td>
       <td className="num">{group.procCount}</td>
@@ -86,7 +91,7 @@ function GroupRow({ group, spark, stuck, pending, layoutKey, onOpen, onKill, onF
   );
 }
 
-export function GroupList({ groups, sparkOf, stuckPids, pendingPids, onOpen, onKill, onForce }: Props) {
+export function GroupList({ groups, sparkOf, stuckPids, pendingPids, onOpen, onKill, onForce, leakAt, onLeak }: Props) {
   const [sort, setSort] = useState<{ col: ListColumn; dir: 'asc' | 'desc' }>({ col: 'mem', dir: 'desc' });
   const rows = sortForList(groups, sort.col, sort.dir);
   const layoutKey = rows.map((g) => g.id).join('\n');
@@ -128,6 +133,8 @@ export function GroupList({ groups, sparkOf, stuckPids, pendingPids, onOpen, onK
                   spark={sparkOf(g.id)}
                   stuck={stuck.length > 0}
                   pending={g.pids.some((pid) => pendingPids.has(pid))}
+                  leak={leakAt?.has(g.id)}
+                  onLeak={() => onLeak?.(leakAt!.get(g.id)!)}
                   layoutKey={layoutKey}
                   onOpen={() => onOpen(g)}
                   onKill={() => onKill(g)}

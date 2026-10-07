@@ -11,6 +11,7 @@ import { MetricsView } from './components/MetricsView';
 import { SystemBar, type SystemSparks } from './components/SystemBar';
 import { TopNav } from './components/TopNav';
 import { LiveBuffer, useHistory } from './history';
+import { leakTimes } from './recorderForm';
 import { findGroup, flattenProcs, visibleGroups, ipcErrorMessage, killResultMessages, killRequestForGroup, killRequestForProc, trackKills, type KillRequest, type ViewFilter } from './viewModel';
 
 export type Route = { view: 'main' } | { view: 'detail'; groupId: string } | { view: 'settings' } | { view: 'metrics'; at?: number };
@@ -63,6 +64,9 @@ export function App() {
     const h = histByKey.get(id);
     return h && h.length >= 2 ? h : live.current.group(id);
   };
+
+  const events24h = useHistory(() => window.procWatch.history.events('24h'), [], 60_000);
+  const leakAt = useMemo(() => leakTimes(events24h), [events24h]);
 
   const isProtected = useMemo(() => compileProtection(configState?.config.protected ?? []).isProtected, [configState]);
 
@@ -156,6 +160,8 @@ export function App() {
                 onKillGroup={killGroup}
                 onForce={forceKill}
                 sparkOf={sparkOf}
+                leakAt={leakAt}
+                onLeak={(ts) => setRoute({ view: 'metrics', at: ts })}
               />
             )}
             {route.view === 'detail' && (
@@ -188,6 +194,8 @@ export function App() {
                 state={configState}
                 onSave={(c) => void saveConfig(c)}
                 onBack={() => setRoute({ view: 'main' })}
+                onToast={pushToast}
+                onConfigChanged={() => void window.procWatch.getConfig().then(setConfigState, () => {})}
                 onInstallDesktop={() =>
                   window.procWatch.installDesktopEntry().then(
                     (file) => pushToast(`Raccourci créé : ${file}`, 'info'),

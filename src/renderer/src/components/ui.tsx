@@ -1,6 +1,6 @@
 import { useEffect, type MouseEvent } from 'react';
 import { animate, motion, useMotionValue, useReducedMotion, useTransform } from 'motion/react';
-import { AppWindow, Bot, Folder, Package, SquareTerminal, Trash2, X, Zap, type LucideIcon } from 'lucide-react';
+import { AppWindow, Bot, Folder, Package, SquareTerminal, Trash2, TrendingUp, X, Zap, type LucideIcon } from 'lucide-react';
 import type { GroupKind } from '../../../core/types';
 import { formatKB } from '../format';
 import { groupIconColor } from '../theme';
@@ -86,5 +86,14 @@ export function ForceButton({ onClick }: { onClick: (e: MouseEvent) => void }) {
       <Zap size={13} strokeWidth={2.4} />
       Forcer (SIGKILL)
     </motion.button>
+  );
+}
+
+/** Badge ambre « fuite ? » ; le clic ouvre Métriques sans ouvrir le détail du groupe. */
+export function LeakBadge({ onClick }: { onClick: (e: MouseEvent) => void }) {
+  return (
+    <button type="button" className="leak-badge" data-testid="leak-badge" title="Mémoire en hausse continue — voir Métriques" onClick={onClick}>
+      <TrendingUp size={11} strokeWidth={2.4} />fuite ?
+    </button>
   );
 }

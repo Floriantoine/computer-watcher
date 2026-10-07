@@ -585,3 +585,24 @@ table.tree td.spark-cell .spark { width: 64px; }
 .tree-toggle-all { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; font-size: 11.5px; color: var(--label); background: var(--surface-2); border: 1px solid var(--border-2); border-radius: var(--r-md); }
 .tree-toggle-all:hover { color: var(--text); }
 table.tree small.branch-total { display: block; white-space: nowrap; color: var(--label); font-size: 10.5px; font-family: var(--font-mono); }
+
+/* ---------- Réglages : enregistrement ---------- */
+.rec-switch { display: flex; align-items: center; gap: 10px; color: var(--text-2); margin-bottom: 8px; }
+.switch { width: 38px; height: 22px; padding: 0; border-radius: 99px; position: relative; justify-content: flex-start; background: var(--track); border: 1px solid var(--border-2); transition: background 0.18s var(--ease-out); }
+.switch i { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 99px; background: var(--text-2); transition: transform 0.18s var(--ease-out), background 0.18s; }
+.switch[aria-checked='true'] { background: var(--accent-soft); border-color: var(--accent); }
+.switch[aria-checked='true'] i { transform: translateX(16px); background: #fff; }
+.switch:disabled { opacity: 0.45; cursor: not-allowed; }
+.rec-note { color: var(--amber); margin: 0 0 8px; }
+.rec-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; color: var(--muted); font-size: 12px; margin-bottom: 12px; }
+.rec-status strong { color: var(--text); font-weight: 600; }
+.rec-status .dot { width: 8px; height: 8px; border-radius: 99px; margin-right: -8px; background: var(--muted); }
+.rec-status .dot.ok { background: var(--success); box-shadow: 0 0 8px rgba(34, 211, 166, 0.6); }
+.rec-status .dot.warn { background: var(--amber); }
+.rec-error { margin: 0 0 8px; color: #ffc2d3; font-size: 12px; overflow-wrap: anywhere; }
+.rec-fields { display: flex; flex-wrap: wrap; gap: 10px 18px; }
+.rec-field { display: flex; flex-direction: column; gap: 4px; }
+.rec-field input[aria-invalid='true'] { border-color: rgba(255, 92, 138, 0.6); }
+.field-error { color: var(--danger); font-size: 11.5px; }
+.leak-badge { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; font-size: 11px; font-weight: 500; border-radius: 99px; color: var(--amber); background: rgba(255, 181, 71, 0.12); border: 1px solid rgba(255, 181, 71, 0.3); }
+.leak-badge:hover:not(:disabled) { background: rgba(255, 181, 71, 0.2); border-color: rgba(255, 181, 71, 0.5); color: var(--amber); }

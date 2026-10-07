@@ -5,7 +5,7 @@ import type { Group } from '../../../core/types';
 import { formatAge, formatCpu } from '../format';
 import { cardTone } from '../theme';
 import { Sparkline } from './charts/Sparkline';
-import { AnimatedNumber, ForceButton, GroupIcon, KillButton } from './ui';
+import { AnimatedNumber, ForceButton, GroupIcon, KillButton, LeakBadge } from './ui';
 
 const DAY = 86400;
 
@@ -15,6 +15,8 @@ interface Props {
   spark: (number | null)[];
   stuck: boolean;
   pending: boolean;
+  leak?: boolean;
+  onLeak?: () => void;
   /** Change seulement quand l'ordre des cartes change : seul cas où le layout s'anime. */
   layoutKey: string;
   onOpen: () => void;
@@ -23,7 +25,7 @@ interface Props {
   ref?: Ref<HTMLDivElement>;
 }
 
-export function GroupCard({ group, memTotalKB, spark, stuck, pending, layoutKey, onOpen, onKill, onForce, ref }: Props) {
+export function GroupCard({ group, memTotalKB, spark, stuck, pending, leak, onLeak, layoutKey, onOpen, onKill, onForce, ref }: Props) {
   const isPresent = useIsPresent();
   const total = group.rssKB + group.swapKB;
   const pct = Math.min(100, (total / memTotalKB) * 100);
@@ -61,6 +63,7 @@ export function GroupCard({ group, memTotalKB, spark, stuck, pending, layoutKey,
                 <Lock size={12} strokeWidth={2.4} />
               </span>
             )}
+            {leak && <LeakBadge onClick={stop(() => onLeak?.())} />}
           </div>
           <div className="sub" title={sub}>{sub}</div>
         </div>

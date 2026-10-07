@@ -19,11 +19,14 @@ interface Props {
   onKillGroup: (g: Group) => void;
   onForce: (pids: number[]) => void;
   sparkOf: (groupId: string) => (number | null)[];
+  /** Groupes en fuite -> horodatage du dernier événement (Map stable, renouvelée au plus toutes les 60 s). */
+  leakAt?: Map<string, number>;
+  onLeak?: (ts: number) => void;
 }
 
 const AGES: [string, number][] = [['Tous', 0], ['> 1 h', 3600], ['> 1 j', 86400], ['> 7 j', 7 * 86400]];
 
-export function MainView({ groups, memTotalKB, filter, onFilter, stuckPids, pendingPids, onOpen, onKillGroup, onForce, sparkOf }: Props) {
+export function MainView({ groups, memTotalKB, filter, onFilter, stuckPids, pendingPids, onOpen, onKillGroup, onForce, sparkOf, leakAt, onLeak }: Props) {
   const [view, setView] = useState<ViewMode>(loadView);
   const shown = visibleGroups(groups, filter);
   const layoutKey = shown.map((g) => g.id).join('\n');
@@ -54,7 +57,7 @@ export function MainView({ groups, memTotalKB, filter, onFilter, stuckPids, pend
       {shown.length === 0 ? (
         <p className="empty">Aucun groupe ne correspond.</p>
       ) : view === 'list' ? (
-        <GroupList groups={shown} sparkOf={sparkOf} stuckPids={stuckPids} pendingPids={pendingPids} onOpen={onOpen} onKill={onKillGroup} onForce={onForce} />
+        <GroupList groups={shown} sparkOf={sparkOf} stuckPids={stuckPids} pendingPids={pendingPids} onOpen={onOpen} onKill={onKillGroup} onForce={onForce} leakAt={leakAt} onLeak={onLeak} />
       ) : (
         <div className="cards">
           <AnimatePresence mode="popLayout" initial={false}>
@@ -68,6 +71,8 @@ export function MainView({ groups, memTotalKB, filter, onFilter, stuckPids, pend
                   spark={sparkOf(g.id)}
                   stuck={stuck.length > 0}
                   pending={g.pids.some((pid) => pendingPids.has(pid))}
+                  leak={leakAt?.has(g.id)}
+                  onLeak={() => onLeak?.(leakAt!.get(g.id)!)}
                   layoutKey={layoutKey}
                   onOpen={() => onOpen(g)}
                   onKill={() => onKillGroup(g)}
