@@ -1,8 +1,9 @@
-import { useState, type ReactElement } from 'react';
+import { useMemo, useState, type ReactElement } from 'react';
 import type { ProcNode } from '../../../core/types';
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
 import { formatAge, formatCpu, formatKB } from '../format';
 import { Sparkline } from './charts/Sparkline';
+import { allExpandableKeys, branchTotals, nodeKey } from '../tree';
 import { ForceButton, KillButton } from './ui';
 
 const DAY = 86400;
@@ -24,28 +25,38 @@ interface Props {
 }
 
 export function ProcTree({ roots, stuckPids, pendingPids, currentUid, sparkOf, onKill, onForce }: Props) {
-  const [expanded, setExpanded] = useState<Set<number>>(() =>
-    count(roots) > COLLAPSE_ABOVE ? new Set() : new Set(collectPids(roots)),
+  const [expanded, setExpanded] = useState<Set<string>>(() =>
+    count(roots) > COLLAPSE_ABOVE ? new Set() : new Set(allExpandableKeys(roots)),
   );
-  const toggle = (pid: number) =>
+  const toggle = (key: string) =>
     setExpanded((s) => {
       const next = new Set(s);
-      if (next.has(pid)) next.delete(pid);
-      else next.add(pid);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
+  const totals = useMemo(() => branchTotals(roots), [roots]);
+  const sortedRoots = useMemo(
+    () => [...roots].sort((a, b) => (totals.get(nodeKey(b))?.memKB ?? 0) - (totals.get(nodeKey(a))?.memKB ?? 0)),
+    [roots, totals],
+  );
+  const expandable = useMemo(() => allExpandableKeys(roots), [roots]);
+  const allOpen = expandable.length > 0 && expandable.every((k) => expanded.has(k));
+  const toggleAll = () => setExpanded(allOpen ? new Set() : new Set(expandable));
 
   const rows: ReactElement[] = [];
   const walk = (nodes: ProcNode[], depth: number) => {
     for (const n of nodes) {
       const p = n.proc;
-      const open = expanded.has(p.pid);
+      const key = nodeKey(n);
+      const open = expanded.has(key);
+      const total = n.children.length ? totals.get(key) : undefined;
       rows.push(
-        <tr key={p.pid}>
+        <tr key={key}>
           <td className="pid mono" style={{ paddingLeft: 6 + depth * 18 }}>
             <span className="pid-cell">
               {n.children.length ? (
-                <button className={`toggle ${open ? 'open' : ''}`} aria-label={open ? 'Replier' : 'Déplier'} aria-expanded={open} onClick={() => toggle(p.pid)}>
+                <button className={`toggle ${open ? 'open' : ''}`} aria-label={open ? 'Replier' : 'Déplier'} aria-expanded={open} onClick={() => toggle(key)}>
                   <ChevronRight size={13} strokeWidth={2.2} />
                 </button>
               ) : (
@@ -58,7 +69,10 @@ export function ProcTree({ roots, stuckPids, pendingPids, currentUid, sparkOf, o
           <td className="cwd mono" title={p.cwd ?? ''}>{p.cwdDeleted ? '(supprimé) ' : ''}{p.cwd ?? '—'}</td>
           <td className="spark-cell">{spark(sparkOf?.(p.pid, p.startTicks))}</td>
           <td className="num mono">{formatCpu(p.cpuPercent)}</td>
-          <td className="num mono">{formatKB(p.rssKB)}</td>
+          <td className="num mono">
+            {formatKB(p.rssKB)}
+            {total && <small className="branch-total" data-testid="branch-total" title="RAM + swap de la branche (ce processus et ses descendants)">Σ {formatKB(total.memKB)} · {total.count} proc</small>}
+          </td>
           <td className="num mono">{formatKB(p.swapKB)}</td>
           <td className={`num mono ${p.ageSec > DAY ? 'old' : ''}`}>{formatAge(p.ageSec)}</td>
           <td className="act">
@@ -73,10 +87,20 @@ export function ProcTree({ roots, stuckPids, pendingPids, currentUid, sparkOf, o
       if (open) walk(n.children, depth + 1);
     }
   };
-  walk(roots, 0);
+  walk(sortedRoots, 0);
 
   return (
     <div className="panel">
+      <div className="panel-head">
+        <h3>Processus</h3>
+        <span className="spacer" />
+        {expandable.length > 0 && (
+          <button className="tree-toggle-all" data-testid="toggle-all" onClick={toggleAll}>
+            {allOpen ? <ChevronsDownUp size={14} strokeWidth={2} /> : <ChevronsUpDown size={14} strokeWidth={2} />}
+            {allOpen ? 'Tout replier' : 'Tout déplier'}
+          </button>
+        )}
+      </div>
       <div className="panel-scroll">
         <table className="tree">
           <thead>
@@ -91,12 +115,4 @@ export function ProcTree({ roots, stuckPids, pendingPids, currentUid, sparkOf, o
 
 function spark(values: (number | null)[] | undefined) {
   return values && values.filter((v) => v !== null).length >= 2 ? <Sparkline values={values} tone="mem" height={18} /> : <span className="mono">—</span>;
-}
-
-function collectPids(nodes: ProcNode[], out: number[] = []): number[] {
-  for (const n of nodes) {
-    out.push(n.proc.pid);
-    collectPids(n.children, out);
-  }
-  return out;
 }

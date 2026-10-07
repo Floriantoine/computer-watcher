@@ -578,3 +578,10 @@ table.tree td.spark-cell .spark { width: 64px; }
   .culprits-wrap { width: 100%; height: 340px; }
   .metrics-toolbar .hint { display: none; }
 }
+/* Arbre : total de branche et bascule globale */
+.panel-head { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.panel-head h3 { margin: 0; font-size: 12.5px; font-weight: 600; color: var(--text); }
+.panel-head .spacer { flex: 1; }
+.tree-toggle-all { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; font-size: 11.5px; color: var(--label); background: var(--surface-2); border: 1px solid var(--border-2); border-radius: var(--r-md); }
+.tree-toggle-all:hover { color: var(--text); }
+table.tree small.branch-total { display: block; white-space: nowrap; color: var(--label); font-size: 10.5px; font-family: var(--font-mono); }
