@@ -127,3 +127,13 @@ describe('carte « Autres »', () => {
     expect(groups.find((g) => g.id === 'others')).toBeUndefined();
   });
 });
+
+test('cycle de ppid : le groupe est quand même construit', () => {
+  const groups = buildGroups([
+    proc({ pid: 70, name: 'node', ppid: 71, cwd: '/home/u/proj' }),
+    proc({ pid: 71, name: 'node', ppid: 70, cwd: '/home/u/proj' }),
+  ], opts());
+  const g = byId(groups, 'project:/home/u/proj');
+  expect(g.procCount).toBe(2);
+  expect(g.roots.length).toBeGreaterThan(0);
+});

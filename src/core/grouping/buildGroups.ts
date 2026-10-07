@@ -117,6 +117,13 @@ function makeGroup(id: string, { kind, label }: Meta, list: ProcInfo[], opts: Gr
     if (parent) parent.children.push(node);
     else roots.push(node);
   }
+  if (roots.length === 0) {
+    // Cycle de ppid : tous les membres ont leur parent dans le groupe. On casse le cycle sur le premier.
+    const first = nodes.get(list[0]!.pid)!;
+    const parent = nodes.get(list[0]!.ppid);
+    if (parent) parent.children = parent.children.filter((c) => c !== first);
+    roots.push(first);
+  }
   const sortNodes = (ns: ProcNode[]) => {
     ns.sort((a, b) => mem(b.proc) - mem(a.proc));
     ns.forEach((n) => sortNodes(n.children));
