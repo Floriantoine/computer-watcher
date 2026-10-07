@@ -28,10 +28,10 @@ function Stat({ label, value, format, sub, percent, tone, level = 'ok', spark }:
         <AnimatedNumber value={value} format={format} className="b" />
         {sub && <span className="sub">{sub}</span>}
       </div>
+      {spark && <Sparkline values={spark} tone={(tone ?? 'cpu') as SparkTone} height={26} />}
       {percent !== undefined && (
         <div className="bar"><i className={`tone-${tone}`} style={{ width: `${Math.min(100, Math.max(0, percent))}%` }} /></div>
       )}
-      {spark && <Sparkline values={spark} tone={(tone ?? 'cpu') as SparkTone} height={26} />}
     </div>
   );
 }
