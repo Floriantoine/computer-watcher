@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { compileProtection } from '../../core/protection';
-import type { ConfigState, Group, KillSignal, Snapshot } from '../../core/types';
+import type { Config, ConfigState, Group, KillSignal, ProcNode, Snapshot } from '../../core/types';
+import { ConfirmDialog } from './components/ConfirmDialog';
+import { DetailView } from './components/DetailView';
+import { Toasts } from './components/Toasts';
 import { MainView } from './components/MainView';
 import { SystemBar } from './components/SystemBar';
-import { flattenProcs, killErrorMessage, killRequestForGroup, trackKills, type KillRequest, type ViewFilter } from './viewModel';
+import { findGroup, flattenProcs, killErrorMessage, killRequestForGroup, killRequestForProc, trackKills, type KillRequest, type ViewFilter } from './viewModel';
 
 export type Route = { view: 'main' } | { view: 'detail'; groupId: string } | { view: 'settings' };
 
@@ -54,6 +57,21 @@ export function App() {
   if (!snapshot || !configState) return <p className="empty">Chargement…</p>;
 
   const killGroup = (g: Group) => requestKill(killRequestForGroup(g, isProtected, snapshot.currentUid));
+  const killProc = (n: ProcNode) => requestKill(killRequestForProc(n.proc, isProtected, snapshot.currentUid));
+
+  async function saveConfig(next: Config) {
+    try {
+      setConfigState(await window.procWatch.setConfig(next));
+    } catch (e) {
+      pushToast(`Réglages non enregistrés : ${(e as Error).message}`);
+    }
+  }
+
+  function toggleProtect(g: Group) {
+    const cfg = configState!.config;
+    const list = cfg.protected.includes(g.rootName) ? cfg.protected.filter((x) => x !== g.rootName) : [...cfg.protected, g.rootName];
+    void saveConfig({ ...cfg, protected: list });
+  }
 
   return (
     <div data-testid="snapshot-ready">
@@ -71,14 +89,35 @@ export function App() {
           onSettings={() => setRoute({ view: 'settings' })}
         />
       )}
-      {/* Task 10 : DetailView, ConfirmDialog, Toasts. Task 11 : SettingsView. */}
-      {confirm && (
-        <div className="empty">
-          {confirm.title} <button className="danger" onClick={() => { void sendKill(confirm.pids, 'SIGTERM'); setConfirm(null); }}>Confirmer</button>
-          <button onClick={() => setConfirm(null)}>Annuler</button>
-        </div>
+      {route.view === 'detail' && (
+        <DetailView
+          group={findGroup(snapshot.groups, route.groupId)}
+          stuckPids={stuckPids}
+          currentUid={snapshot.currentUid}
+          rootProtectedByName={(() => {
+            const g = findGroup(snapshot.groups, route.groupId);
+            return !!g && configState.config.protected.includes(g.rootName);
+          })()}
+          onBack={() => setRoute({ view: 'main' })}
+          onOpenGroup={(id) => setRoute({ view: 'detail', groupId: id })}
+          onKillGroup={killGroup}
+          onKillProc={killProc}
+          onForce={(pids) => void sendKill(pids, 'SIGKILL')}
+          onToggleProtect={toggleProtect}
+        />
       )}
-      {toasts.map((t, i) => <p key={i} className="empty">{t}</p>)}
+      {/* Task 11 : SettingsView */}
+      {confirm && (
+        <ConfirmDialog
+          request={confirm}
+          onConfirm={() => {
+            void sendKill(confirm.pids, 'SIGTERM');
+            setConfirm(null);
+          }}
+          onCancel={() => setConfirm(null)}
+        />
+      )}
+      <Toasts messages={toasts} />
     </div>
   );
 }

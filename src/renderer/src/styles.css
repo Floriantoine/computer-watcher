@@ -45,3 +45,28 @@ input, select { font: inherit; color: inherit; background: var(--panel-2); borde
 .card-actions { display: flex; gap: 6px; }
 .tag { font-size: 10px; padding: 1px 6px; border-radius: 9px; background: var(--border); color: #9aa1ad; margin-right: 4px; }
 .empty { padding: 40px 20px; color: var(--muted); }
+
+.detail-head { display: flex; align-items: center; gap: 12px; padding: 14px 20px 0; }
+.detail-head h2 { margin: 0; font-size: 17px; }
+.detail-head .spacer { flex: 1; }
+.link { color: var(--accent); border: none; padding: 0; }
+.summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 14px 20px; }
+.summary div { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+.summary b { display: block; font-size: 11px; color: var(--muted); font-weight: 500; }
+.summary span { font-size: 19px; font-weight: 600; }
+table.tree { width: calc(100% - 40px); margin: 0 20px 24px; border-collapse: collapse; }
+table.tree th { text-align: left; font-weight: 500; color: var(--muted); font-size: 11px; padding: 8px; border-bottom: 1px solid var(--border); }
+table.tree td { padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+table.tree td.cmd { max-width: 420px; overflow: hidden; text-overflow: ellipsis; }
+table.tree tr:hover td { background: var(--panel); }
+.toggle { display: inline-block; width: 16px; cursor: pointer; color: var(--muted); }
+.subgroup { padding: 8px 20px; display: flex; justify-content: space-between; border-bottom: 1px solid var(--line); cursor: pointer; }
+.subgroup:hover { background: var(--panel); }
+.overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55); display: flex; align-items: center; justify-content: center; z-index: 10; }
+.dialog { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; width: min(620px, 92vw); display: flex; flex-direction: column; gap: 12px; }
+.dialog h3 { margin: 0; font-size: 15px; }
+.dialog .actions { display: flex; justify-content: flex-end; gap: 8px; }
+.prot-list { max-height: 240px; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+.prot-list div { background: var(--panel-2); border-radius: 6px; padding: 6px 8px; }
+.toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 20; }
+.toast { background: var(--danger-bg); color: var(--danger-fg); border: 1px solid var(--danger-border); border-radius: 8px; padding: 8px 12px; }
