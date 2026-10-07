@@ -12,8 +12,24 @@ export function planKill(
   for (const p of procs) children.set(p.ppid, [...(children.get(p.ppid) ?? []), p.pid]);
 
   const forbidden = new Set<number>([1, guards.selfPid]);
-  for (let cur = byPid.get(guards.selfPid); cur && !forbidden.has(cur.ppid) && cur.ppid > 0; cur = byPid.get(cur.ppid)) {
-    forbidden.add(cur.ppid);
+  // Fail closed : si la chaîne d'ancêtres de l'app n'est pas entièrement connue, on refuse tout.
+  let chainKnown = byPid.has(guards.selfPid);
+  if (chainKnown) {
+    const seen = new Set<number>([guards.selfPid]);
+    let cur = byPid.get(guards.selfPid)!;
+    while (cur.ppid > 1) {
+      const parent = byPid.get(cur.ppid);
+      if (!parent || seen.has(parent.pid)) {
+        chainKnown = false;
+        break;
+      }
+      seen.add(parent.pid);
+      forbidden.add(parent.pid);
+      cur = parent;
+    }
+  }
+  if (!chainKnown) {
+    return { ordered: [], refused: [...new Set(pids)].map((pid) => ({ pid, ok: false, error: 'SELF' })) };
   }
   const stack = [...(children.get(guards.selfPid) ?? [])];
   while (stack.length) {
@@ -48,6 +64,7 @@ export function planKill(
 
 export function sendSignals(pids: number[], signal: KillSignal, kill: KillFn = (pid, s) => process.kill(pid, s)): KillResult[] {
   return pids.map((pid) => {
+    if (!Number.isInteger(pid) || pid <= 1) return { pid, ok: false, error: 'EINVAL' };
     try {
       kill(pid, signal);
       return { pid, ok: true };

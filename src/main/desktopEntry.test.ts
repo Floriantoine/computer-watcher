@@ -20,3 +20,8 @@ test('écrit dans XDG_DATA_HOME/applications, sinon ~/.local/share/applications'
   const data = mkdtempSync(join(tmpdir(), 'procwatch-data-'));
   expect(installDesktopEntry('/x/app', { XDG_DATA_HOME: data }, home)).toBe(join(data, 'applications/proc-watch.desktop'));
 });
+
+test('échappe \\ " ` $ et % dans Exec', () => {
+  const c = desktopEntryContent('/a/b"c$d%e`f\\g');
+  expect(c).toContain('Exec="/a/b\\"c\\$d%%e\\`f\\\\g"');
+});

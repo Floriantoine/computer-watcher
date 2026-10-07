@@ -37,6 +37,40 @@ test('sendSignals renvoie le code errno de chaque échec', () => {
     if (pid === 2) throw Object.assign(new Error('x'), { code: 'ESRCH' });
     sent.push([pid, sig]);
   };
-  expect(sendSignals([1, 2], 'SIGTERM', kill)).toEqual([{ pid: 1, ok: true }, { pid: 2, ok: false, error: 'ESRCH' }]);
-  expect(sent).toEqual([[1, 'SIGTERM']]);
+  expect(sendSignals([3, 2], 'SIGTERM', kill)).toEqual([{ pid: 3, ok: true }, { pid: 2, ok: false, error: 'ESRCH' }]);
+  expect(sent).toEqual([[3, 'SIGTERM']]);
+});
+
+test('fail closed : selfPid absent du snapshot → tout refusé SELF', () => {
+  const r = planKill([12, 20], tree.filter((x) => x.pid !== 50), guards);
+  expect(r.ordered).toEqual([]);
+  expect(r.refused).toEqual([{ pid: 12, ok: false, error: 'SELF' }, { pid: 20, ok: false, error: 'SELF' }]);
+});
+
+test('fail closed : chaîne d\'ancêtres cassée → tout refusé SELF', () => {
+  const broken = tree.filter((x) => x.pid !== 10 && x.pid !== 1);
+  const r = planKill([12, 20], broken, guards);
+  expect(r.ordered).toEqual([]);
+  expect(r.refused.map((x) => x.error)).toEqual(['SELF', 'SELF']);
+});
+
+test('un descendant à deux niveaux est refusé', () => {
+  const t = [...tree, p(52, 51)];
+  expect(planKill([52], t, guards).refused).toEqual([{ pid: 52, ok: false, error: 'SELF' }]);
+});
+
+test('un frère de l\'app (même parent) est autorisé', () => {
+  const t = [...tree, p(60, 11)];
+  expect(planKill([60], t, guards).ordered).toEqual([60]);
+});
+
+test('parent donné avant l\'enfant → enfant en premier', () => {
+  expect(planKill([12, 20], tree, guards).ordered).toEqual([20, 12]);
+});
+
+test('sendSignals refuse les PID invalides sans appeler kill', () => {
+  const kill = () => { throw new Error('ne doit pas être appelé'); };
+  expect(sendSignals([0, -1, 1.5, 1], 'SIGTERM', kill)).toEqual(
+    [0, -1, 1.5, 1].map((pid) => ({ pid, ok: false, error: 'EINVAL' })),
+  );
 });
