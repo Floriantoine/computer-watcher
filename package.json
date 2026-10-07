@@ -20,6 +20,8 @@
     "dist": "electron-vite build && electron-builder --linux"
   },
   "devDependencies": {
+    "@fontsource/inter": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
     "@types/node": "^26.6.4",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
@@ -27,6 +29,8 @@
     "electron": "^44.6.0",
     "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
+    "lucide-react": "^1.52.0",
+    "motion": "^14.0.0",
     "playwright": "^1.63.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
