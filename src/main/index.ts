@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
+import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { CpuTracker } from '../core/collector/cpuTracker';
@@ -9,8 +10,13 @@ import { buildGroups } from '../core/grouping/buildGroups';
 import { createProjectRootCache } from '../core/grouping/projectRootCache';
 import { planKill, sendSignals } from '../core/kill';
 import { compileProtection } from '../core/protection';
-import type { ConfigState, KillResult, KillTarget, Snapshot } from '../core/types';
+import { formatAppEvent } from '../core/history/events';
+import { appEventsPath, clearRequestPath, dataDir } from '../core/paths';
+import type { ConfigState, KillResult, KillTarget, RecorderState, Snapshot } from '../core/types';
 import { installDesktopEntry } from './desktopEntry';
+import { createHistoryReader } from './history';
+import { isRange, recorderState as computeRecorderState } from './historyIpc';
+import { defaultSystemctl, ensureRecorderService, recorderExecArgs, systemctlAvailable, unitPath } from './recorderService';
 
 const POLL_MS = 2000;
 const dir = configDir();
@@ -22,6 +28,25 @@ const tracker = new CpuTracker();
 const uid = process.getuid!();
 
 const projectRootOf = createProjectRootCache();
+
+const data = dataDir();
+const history = createHistoryReader(data, () => config.recorder);
+let systemdOk = false;
+
+const execArgs = () => recorderExecArgs({ appImage: process.env.APPIMAGE, execPath: process.execPath, appPath: app.getAppPath() });
+
+async function syncRecorder(): Promise<void> {
+  systemdOk = await systemctlAvailable(defaultSystemctl);
+  if (!systemdOk) return;
+  try {
+    await ensureRecorderService({ enabled: config.recorder.enabled, args: execArgs(), path: unitPath(), run: defaultSystemctl });
+  } catch (e) {
+    console.error('recorder service:', e);
+  }
+}
+
+const recorderState = (): RecorderState =>
+  computeRecorderState({ available: systemdOk, enabled: config.recorder.enabled, intervalSec: config.recorder.intervalSec, status: history.status(), now: Date.now() });
 
 function takeSnapshot(): Snapshot {
   const procs = tracker.update(readProcesses(), Date.now());
@@ -75,7 +100,17 @@ ipcMain.handle('kill', (_e, targets: unknown, signal: unknown): KillResult[] => 
   if (!Array.isArray(targets) || !targets.every(isKillTarget)) return [];
   if (signal !== 'SIGTERM' && signal !== 'SIGKILL') return [];
   const { ordered, refused } = planKill(targets.map(({ pid, startTicks }) => ({ pid, startTicks })), readProcesses(), { selfPid: process.pid, currentUid: uid });
-  return [...refused, ...sendSignals(ordered, signal)];
+  const results = [...refused, ...sendSignals(ordered, signal)];
+  const killed = results.filter((r) => r.ok).map((r) => r.pid);
+  if (killed.length) {
+    try {
+      mkdirSync(data, { recursive: true });
+      appendFileSync(appEventsPath(data), formatAppEvent({ ts: Date.now(), type: 'app_kill', groupKey: null, detail: { pids: killed, signal } }));
+    } catch (e) {
+      console.error('app event:', e);
+    }
+  }
+  return results;
 });
 
 ipcMain.handle('config:get', () => configState());
@@ -83,11 +118,35 @@ ipcMain.handle('config:get', () => configState());
 ipcMain.handle('config:set', (_e, next: unknown) => {
   const valid = validateConfig(next);
   if (!valid) throw new Error('Configuration invalide');
+  const recorderChanged = valid.recorder.enabled !== config.recorder.enabled;
   config = valid;
   protection = compileProtection(config.protected);
   warning = null;
   saveConfig(dir, config);
+  if (recorderChanged) void syncRecorder();
   return configState();
+});
+
+ipcMain.handle('history:system', (_e, r: unknown) => (isRange(r) ? history.system(r) : null));
+ipcMain.handle('history:groups', (_e, r: unknown, keys: unknown) =>
+  isRange(r) && (keys === undefined || (Array.isArray(keys) && keys.every((k) => typeof k === 'string'))) ? history.groups(r, keys as string[] | undefined) : null,
+);
+ipcMain.handle('history:group', (_e, key: unknown, r: unknown) => (typeof key === 'string' && isRange(r) ? history.group(key, r) : null));
+ipcMain.handle('history:procs', (_e, key: unknown, r: unknown) => (typeof key === 'string' && isRange(r) ? history.procs(key, r) : null));
+ipcMain.handle('history:culprits', (_e, ts: unknown) => (Number.isFinite(ts) ? history.culprits(ts as number) : []));
+ipcMain.handle('history:top', (_e, r: unknown) => (isRange(r) ? history.top(r) : []));
+ipcMain.handle('history:events', (_e, r: unknown) => (isRange(r) ? history.events(r) : []));
+ipcMain.handle('recorder:status', () => recorderState());
+ipcMain.handle('recorder:setEnabled', async (_e, enabled: unknown) => {
+  if (typeof enabled !== 'boolean') throw new Error('Valeur invalide');
+  config = { ...config, recorder: { ...config.recorder, enabled } };
+  saveConfig(dir, config);
+  await syncRecorder();
+  return recorderState();
+});
+ipcMain.handle('recorder:clearHistory', () => {
+  mkdirSync(data, { recursive: true });
+  writeFileSync(clearRequestPath(data), '');
 });
 
 ipcMain.handle('desktop:install', () => {
@@ -95,5 +154,8 @@ ipcMain.handle('desktop:install', () => {
   return installDesktopEntry(process.env.APPIMAGE || process.execPath);
 });
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  createWindow();
+  void syncRecorder();
+});
 app.on('window-all-closed', () => app.quit());

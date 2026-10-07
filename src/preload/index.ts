@@ -1,5 +1,8 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
-import type { Config, ConfigState, KillResult, KillTarget, KillSignal, Snapshot } from '../core/types';
+import type {
+  Config, ConfigState, Culprit, GroupHistory, GroupsHistory, HistoryEvent, KillResult, KillTarget, KillSignal, ProcsHistory, RangePreset,
+  RecorderState, Snapshot, SystemSeries, TimeRange, TopConsumer,
+} from '../core/types';
 
 const api = {
   onSnapshot(cb: (s: Snapshot) => void): () => void {
@@ -13,6 +16,20 @@ const api = {
   getConfig: (): Promise<ConfigState> => ipcRenderer.invoke('config:get'),
   setConfig: (c: Config): Promise<ConfigState> => ipcRenderer.invoke('config:set', c),
   installDesktopEntry: (): Promise<string> => ipcRenderer.invoke('desktop:install'),
+  history: {
+    system: (r: RangePreset | TimeRange): Promise<SystemSeries | null> => ipcRenderer.invoke('history:system', r),
+    groups: (r: RangePreset | TimeRange, keys?: string[]): Promise<GroupsHistory | null> => ipcRenderer.invoke('history:groups', r, keys),
+    group: (key: string, r: RangePreset | TimeRange): Promise<GroupHistory | null> => ipcRenderer.invoke('history:group', key, r),
+    procs: (key: string, r: RangePreset | TimeRange): Promise<ProcsHistory | null> => ipcRenderer.invoke('history:procs', key, r),
+    culprits: (ts: number): Promise<Culprit[]> => ipcRenderer.invoke('history:culprits', ts),
+    top: (r: RangePreset | TimeRange): Promise<TopConsumer[]> => ipcRenderer.invoke('history:top', r),
+    events: (r: RangePreset | TimeRange): Promise<HistoryEvent[]> => ipcRenderer.invoke('history:events', r),
+  },
+  recorder: {
+    status: (): Promise<RecorderState> => ipcRenderer.invoke('recorder:status'),
+    setEnabled: (enabled: boolean): Promise<RecorderState> => ipcRenderer.invoke('recorder:setEnabled', enabled),
+    clearHistory: (): Promise<void> => ipcRenderer.invoke('recorder:clearHistory'),
+  },
 };
 
 contextBridge.exposeInMainWorld('procWatch', api);
