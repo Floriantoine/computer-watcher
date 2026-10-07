@@ -5,3 +5,4 @@ release/
 .superpowers/
 smoke.png
 smoke-*.png
+.worktrees/
