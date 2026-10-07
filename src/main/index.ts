@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
-import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { CpuTracker } from '../core/collector/cpuTracker';
@@ -11,11 +11,11 @@ import { createProjectRootCache } from '../core/grouping/projectRootCache';
 import { planKill, sendSignals } from '../core/kill';
 import { compileProtection } from '../core/protection';
 import { formatAppEvent } from '../core/history/events';
-import { appEventsPath, clearRequestPath, dataDir } from '../core/paths';
+import { appEventsPath, dataDir } from '../core/paths';
 import type { ConfigState, KillResult, KillTarget, RecorderState, Snapshot } from '../core/types';
 import { installDesktopEntry } from './desktopEntry';
-import { createHistoryReader } from './history';
-import { isRange, isTopOptions, recorderState as computeRecorderState } from './historyIpc';
+import { clearHistory, createHistoryReader } from './history';
+import { isGroupKeys, isRange, isTopOptions, recorderState as computeRecorderState } from './historyIpc';
 import { defaultSystemctl, ensureRecorderService, recorderExecArgs, systemctlAvailable, unitPath } from './recorderService';
 
 const POLL_MS = 2000;
@@ -135,13 +135,11 @@ ipcMain.handle('config:set', (_e, next: unknown) => {
 });
 
 ipcMain.handle('history:system', (_e, r: unknown) => (isRange(r) ? history.system(r) : null));
-ipcMain.handle('history:groups', (_e, r: unknown, keys: unknown) =>
-  isRange(r) && (keys === undefined || (Array.isArray(keys) && keys.every((k) => typeof k === 'string'))) ? history.groups(r, keys as string[] | undefined) : null,
-);
+ipcMain.handle('history:groups', (_e, r: unknown, keys: unknown) => (isRange(r) && isGroupKeys(keys) ? history.groups(r, keys) : null));
 ipcMain.handle('history:group', (_e, key: unknown, r: unknown) => (typeof key === 'string' && isRange(r) ? history.group(key, r) : null));
 ipcMain.handle('history:procs', (_e, key: unknown, r: unknown) => (typeof key === 'string' && isRange(r) ? history.procs(key, r) : null));
 ipcMain.handle('history:culprits', (_e, ts: unknown) => (Number.isFinite(ts) ? history.culprits(ts as number) : []));
-ipcMain.handle('history:top', (_e, r: unknown, o: unknown) => (isRange(r) && isTopOptions(o) ? history.top(r, o) : []));
+ipcMain.handle('history:top', (_e, r: unknown, o: unknown) => (isRange(r) && isTopOptions(o) ? history.top(r, o) : { byAvg: [], byMax: [] }));
 ipcMain.handle('history:events', (_e, r: unknown) => (isRange(r) ? history.events(r) : []));
 ipcMain.handle('recorder:status', () => recorderState());
 ipcMain.handle('recorder:setEnabled', async (_e, enabled: unknown) => {
@@ -152,10 +150,7 @@ ipcMain.handle('recorder:setEnabled', async (_e, enabled: unknown) => {
   await syncRecorder();
   return recorderState();
 });
-ipcMain.handle('recorder:clearHistory', () => {
-  mkdirSync(data, { recursive: true });
-  writeFileSync(clearRequestPath(data), '');
-});
+ipcMain.handle('recorder:clearHistory', () => clearHistory(data, { running: recorderState().running, beforeDelete: history.close }));
 
 ipcMain.handle('desktop:install', () => {
   if (!app.isPackaged) throw new Error('Disponible uniquement dans la version installée (AppImage ou .deb)');

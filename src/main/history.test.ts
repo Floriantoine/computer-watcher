@@ -1,13 +1,13 @@
-import { mkdtempSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'vitest';
 import { DEFAULT_RECORDER } from '../core/defaults';
 import { openHistoryDb } from '../core/history/db';
 import { HistoryWriter } from '../core/history/writer';
-import { dbPath, statusPath } from '../core/paths';
+import { clearRequestPath, dbPath, statusPath } from '../core/paths';
 import type { Group, ProcInfo, SystemInfo } from '../core/types';
-import { createHistoryReader } from './history';
+import { clearHistory, createHistoryReader } from './history';
 
 const sys: SystemInfo = { memTotalKB: 1000, memAvailableKB: 400, swapTotalKB: 2000, swapFreeKB: 500, load1: 1.5, psiSome10: 3 };
 const p: ProcInfo = {
@@ -31,7 +31,7 @@ test('createHistoryReader : null sans base, données avec base, récupère aprè
   const reader = createHistoryReader(dir, () => DEFAULT_RECORDER);
   const range = { from: Date.now() - 60_000, to: Date.now() + 60_000 };
   expect(reader.system(range)).toBeNull();
-  expect(reader.top(range)).toEqual([]);
+  expect(reader.top(range)).toEqual({ byAvg: [], byMax: [] });
   expect(reader.status()).toBeNull();
 
   makeDb(dir, Date.now());
@@ -60,4 +60,39 @@ test('createHistoryReader : null sans base, données avec base, récupère aprè
 
   writeFileSync(statusPath(dir), JSON.stringify({ pid: 1, startedAt: 0, lastSampleAt: 5, lastError: null, earlyoomSource: 'ok', dbSizeBytes: 1 }));
   expect(reader.status()?.pid).toBe(1);
+});
+
+const backups = ['metrics.db.pre-v2-20261007T094000', 'metrics.db.bak-20261001T000000', 'metrics.db.bak-20261001T000000-wal'];
+
+test('clearHistory, service arrêté : l\'app supprime la base (+wal/shm) et les copies de sécurité', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pw-hist-'));
+  makeDb(dir, Date.now());
+  writeFileSync(dbPath(dir) + '-wal', '');
+  for (const f of backups) writeFileSync(join(dir, f), 'x');
+  const reader = createHistoryReader(dir, () => DEFAULT_RECORDER);
+  expect(reader.system({ from: 0, to: Date.now() + 1 })).not.toBeNull(); // connexion ouverte
+  expect(clearHistory(dir, { running: false, beforeDelete: reader.close })).toEqual({ mode: 'deleted', backups: 2 });
+  expect(readdirSync(dir)).toEqual([]);
+  expect(reader.system({ from: 0, to: Date.now() + 1 })).toBeNull();
+});
+
+test('clearHistory, service actif : demande au service, copies de sécurité supprimées, base intacte', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pw-hist-'));
+  makeDb(dir, Date.now());
+  for (const f of backups) writeFileSync(join(dir, f), 'x');
+  expect(clearHistory(dir, { running: true })).toEqual({ mode: 'requested', backups: 2 });
+  expect(existsSync(dbPath(dir))).toBe(true);
+  expect(existsSync(clearRequestPath(dir))).toBe(true);
+  expect(readdirSync(dir).filter((f) => f.includes('.bak') || f.includes('.pre-v'))).toEqual([]);
+});
+
+test('clearHistory, base d\'une version plus récente : supprimée par l\'app même si le service répond', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pw-hist-'));
+  makeDb(dir, Date.now());
+  const { db } = openHistoryDb(dbPath(dir));
+  db.exec('PRAGMA user_version = 99');
+  db.close();
+  expect(clearHistory(dir, { running: true })).toEqual({ mode: 'deleted', backups: 0 });
+  expect(existsSync(dbPath(dir))).toBe(false);
+  expect(existsSync(clearRequestPath(dir))).toBe(false);
 });

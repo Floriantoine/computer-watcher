@@ -1,7 +1,7 @@
 // src/core/history/queries.ts
 import type { DatabaseSync } from 'node:sqlite';
 import type {
-  Culprit, GroupHistory, GroupKind, GroupsHistory, HistoryEvent, ProcsHistory, RangePreset, SystemSeries, TimeRange, TopConsumer, TopOptions,
+  Culprit, GroupHistory, GroupKind, GroupsHistory, HistoryEvent, ProcsHistory, RangePreset, SystemSeries, TimeRange, TopConsumer, TopOptions, TopResult,
 } from '../types';
 import { hasColumn } from './db';
 import { alignSeries } from './series';
@@ -21,25 +21,38 @@ export interface QueryOpts {
 
 export const rangeFromPreset = (p: RangePreset, now: number): TimeRange => ({ from: now - PRESET_MS[p], to: now });
 
-export function pickSource(range: TimeRange, now: number, detailHours: number, intervalSec = 5): 'detail' | 'minute' {
+export type Source = 'detail' | 'minute' | 'hour';
+/** Au-delà de 48 h, les tables horaires : ≤ 720 lignes par groupe pour 30 jours au lieu de 43 200. */
+const HOUR_SOURCE_MIN_SPAN = 48 * H;
+
+export function pickSource(range: TimeRange, now: number, detailHours: number, intervalSec = 5): Source {
+  if (range.to - range.from > HOUR_SOURCE_MIN_SPAN || bucketMs(range, 'minute', intervalSec) >= H) return 'hour';
   if (range.from < now - detailHours * H || range.to - range.from > 24 * H) return 'minute';
   // Dès que le bucket détaillé atteint 15 s, les agrégats par minute donnent un rendu quasi identique avec bien moins de lignes.
   return bucketMs(range, 'detail', intervalSec) >= DETAIL_MAX_BUCKET ? 'minute' : 'detail';
 }
 
-export function bucketMs(range: TimeRange, source: 'detail' | 'minute', intervalSec: number, maxPoints = 1000): number {
-  const base = source === 'detail' ? intervalSec * 1000 : M;
+export function bucketMs(range: TimeRange, source: Source, intervalSec: number, maxPoints = 1000): number {
+  const base = source === 'detail' ? intervalSec * 1000 : source === 'minute' ? M : H;
   const span = Math.max(1, range.to - range.from);
   return Math.max(base, Math.ceil(span / maxPoints / base) * base);
 }
 
-function plan(range: TimeRange, o: QueryOpts) {
-  const source = pickSource(range, o.now, o.detailHours, o.intervalSec);
+const hasTable = (db: DatabaseSync, name: string) =>
+  db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !== undefined;
+
+function plan(db: DatabaseSync, range: TimeRange, o: QueryOpts) {
+  let source = pickSource(range, o.now, o.detailHours, o.intervalSec);
+  // base v2 pas encore migrée par le service (lecture seule) : pas de tables horaires
+  if (source === 'hour' && !hasTable(db, 'group_hour')) source = 'minute';
   return { source, bucket: bucketMs(range, source, o.intervalSec) };
 }
 
+const SYSTEM_TABLE: Record<Source, string> = { detail: 'system_samples', minute: 'system_minute', hour: 'system_hour' };
+const GROUP_TABLE: Record<Source, string> = { detail: 'group_samples', minute: 'group_minute', hour: 'group_hour' };
+
 export function querySystem(db: DatabaseSync, range: TimeRange, o: QueryOpts): SystemSeries {
-  const { source, bucket } = plan(range, o);
+  const { source, bucket } = plan(db, range, o);
   const sql =
     source === 'detail'
       ? `SELECT (CAST(? AS INTEGER) + ((ts - CAST(? AS INTEGER)) / CAST(? AS INTEGER)) * CAST(? AS INTEGER)) AS t, MAX(mem_used_kb) mem, MAX(swap_used_kb) swap, MAX(mem_total_kb) mt, MAX(swap_total_kb) st,
@@ -47,7 +60,7 @@ export function querySystem(db: DatabaseSync, range: TimeRange, o: QueryOpts): S
          FROM system_samples WHERE ts >= ? AND ts < ? GROUP BY t ORDER BY t`
       : `SELECT (CAST(? AS INTEGER) + ((ts - CAST(? AS INTEGER)) / CAST(? AS INTEGER)) * CAST(? AS INTEGER)) AS t, MAX(mem_used_kb_max) mem, MAX(swap_used_kb_max) swap, MAX(mem_total_kb) mt, MAX(swap_total_kb) st,
                 MAX(psi_max) psi, AVG(cpu_avg) cpu, AVG(load1_avg) load
-         FROM system_minute WHERE ts >= ? AND ts < ? GROUP BY t ORDER BY t`;
+         FROM ${SYSTEM_TABLE[source]} WHERE ts >= ? AND ts < ? GROUP BY t ORDER BY t`;
   const rows = db.prepare(sql).all(range.from, range.from, bucket, bucket, range.from, range.to) as {
     t: number; mem: number; swap: number; mt: number; st: number; psi: number | null; cpu: number; load: number;
   }[];
@@ -69,8 +82,8 @@ interface GroupMeta { id: number; key: string; label: string; kind: GroupKind }
  * Agrège par group_id, une requête par groupe : chaque requête est un parcours ordonné de la clé primaire
  * (group_id, ts), sans B-tree temporaire ni jointure ; ~2x plus rapide qu'un GROUP BY global sur 100 groupes.
  */
-function groupRows(db: DatabaseSync, source: 'detail' | 'minute', bucket: number, range: TimeRange, ids: number[] | null) {
-  const table = source === 'detail' ? 'group_samples' : 'group_minute';
+function groupRows(db: DatabaseSync, source: Source, bucket: number, range: TimeRange, ids: number[] | null) {
+  const table = GROUP_TABLE[source];
   const v = source === 'detail' ? 'MAX(rss_kb + swap_kb)' : 'MAX(mem_kb_max)';
   const gids = ids ?? (db.prepare('SELECT id FROM groups').all() as { id: number }[]).map((r) => r.id);
   const st = db.prepare(
@@ -86,7 +99,7 @@ function groupRows(db: DatabaseSync, source: 'detail' | 'minute', bucket: number
   return out;
 }
 
-function groupsHistory(db: DatabaseSync, source: 'detail' | 'minute', bucket: number, range: TimeRange, metas: GroupMeta[] | null): GroupsHistory {
+function groupsHistory(db: DatabaseSync, source: Source, bucket: number, range: TimeRange, metas: GroupMeta[] | null): GroupsHistory {
   const rows = groupRows(db, source, bucket, range, metas ? metas.map((m) => m.id) : null);
   const { ts, byKey } = alignSeries(rows.map((r) => ({ t: r.t, key: String(r.gid), v: r.v })));
   const meta = metas ?? (db.prepare('SELECT id, key, label, kind FROM groups').all() as unknown as GroupMeta[]);
@@ -101,7 +114,7 @@ function groupsHistory(db: DatabaseSync, source: 'detail' | 'minute', bucket: nu
 }
 
 export function queryGroups(db: DatabaseSync, range: TimeRange, o: QueryOpts, keys?: string[]): GroupsHistory {
-  const { source, bucket } = plan(range, o);
+  const { source, bucket } = plan(db, range, o);
   let metas: GroupMeta[] | null = null;
   if (keys && keys.length) {
     metas = db
@@ -113,20 +126,21 @@ export function queryGroups(db: DatabaseSync, range: TimeRange, o: QueryOpts, ke
 }
 
 export function queryGroup(db: DatabaseSync, key: string, range: TimeRange, o: QueryOpts): GroupHistory {
-  const { source, bucket } = plan(range, o);
+  const { source, bucket } = plan(db, range, o);
   const sql =
     source === 'detail'
       ? `SELECT (CAST(? AS INTEGER) + ((s.ts - CAST(? AS INTEGER)) / CAST(? AS INTEGER)) * CAST(? AS INTEGER)) AS t, MAX(s.rss_kb) rss, MAX(s.swap_kb) swap, MAX(s.cpu_percent) cpu
          FROM group_samples s JOIN groups g ON g.id = s.group_id WHERE g.key = ? AND s.ts >= ? AND s.ts < ? GROUP BY t ORDER BY t`
       : `SELECT (CAST(? AS INTEGER) + ((s.ts - CAST(? AS INTEGER)) / CAST(? AS INTEGER)) * CAST(? AS INTEGER)) AS t, MAX(s.rss_kb_avg) rss, MAX(s.swap_kb_avg) swap, AVG(s.cpu_avg) cpu
-         FROM group_minute s JOIN groups g ON g.id = s.group_id WHERE g.key = ? AND s.ts >= ? AND s.ts < ? GROUP BY t ORDER BY t`;
+         FROM ${GROUP_TABLE[source]} s JOIN groups g ON g.id = s.group_id WHERE g.key = ? AND s.ts >= ? AND s.ts < ? GROUP BY t ORDER BY t`;
   const rows = db.prepare(sql).all(range.from, range.from, bucket, bucket, key, range.from, range.to) as { t: number; rss: number; swap: number; cpu: number }[];
   return { ts: rows.map((r) => r.t), rssKB: rows.map((r) => r.rss), swapKB: rows.map((r) => r.swap), cpu: rows.map((r) => r.cpu) };
 }
 
 export function queryProcs(db: DatabaseSync, groupKey: string, range: TimeRange, o: QueryOpts): ProcsHistory {
-  const { source, bucket } = plan(range, o);
+  const { source, bucket } = plan(db, range, o);
   // GROUP BY p.id et non par l'alias `key` : dans un GROUP BY, `key` désignerait la colonne groups.key.
+  // Pas de table horaire par processus : au-delà de 48 h, proc_minute avec des buckets d'une heure (un seul groupe).
   const sql =
     source === 'detail'
       ? `SELECT (CAST(? AS INTEGER) + ((s.ts - CAST(? AS INTEGER)) / CAST(? AS INTEGER)) * CAST(? AS INTEGER)) AS t, p.pid || ':' || p.start_ticks AS key, MAX(s.rss_kb + s.swap_kb) AS v
@@ -164,37 +178,38 @@ export function queryCulprits(db: DatabaseSync, ts: number, o: QueryOpts, window
   return rows.map((r) => ({ key: r.key, label: r.label, kind: r.kind, deltaKB: Math.round(r.delta), memKB: Math.round(r.mem) }));
 }
 
-/** Top des groupes sur la plage, par moyenne (avec mini-courbes) ou par pic (`by: 'max'`, sans mini-courbes). */
-export function queryTop(db: DatabaseSync, range: TimeRange, o: QueryOpts, { by = 'avg', limit = 10 }: TopOptions = {}): TopConsumer[] {
-  const { source, bucket } = plan(range, o);
-  const table = source === 'detail' ? 'group_samples' : 'group_minute';
+/**
+ * Top des groupes sur la plage, en un seul parcours GROUP BY : `byAvg` (par moyenne, avec mini-courbes, `limit`)
+ * et `byMax` (par pic, sans mini-courbes, `peakLimit`).
+ */
+export function queryTop(db: DatabaseSync, range: TimeRange, o: QueryOpts, { limit = 10, peakLimit = 8 }: TopOptions = {}): TopResult {
+  const { source, bucket } = plan(db, range, o);
+  const table = GROUP_TABLE[source];
   const avg = source === 'detail' ? 'AVG(rss_kb + swap_kb)' : 'AVG(rss_kb_avg + swap_kb_avg)';
-  // Par minute, mem_kb_max garde le pic d'une minute : un pic court survit aux plages de 7 j / 30 j.
+  // Par minute/heure, mem_kb_max garde le pic : un pic court survit aux plages de 7 j / 30 j.
   const max = source === 'detail' ? 'MAX(rss_kb + swap_kb)' : 'MAX(mem_kb_max)';
-  const top = db
-    .prepare(`SELECT group_id AS gid, ${avg} AS avg, ${max} AS max FROM ${table} WHERE ts >= ? AND ts < ? GROUP BY group_id ORDER BY ${by === 'max' ? 'max' : 'avg'} DESC LIMIT ?`)
-    .all(range.from, range.to, limit) as { gid: number; avg: number; max: number }[];
-  if (top.length === 0) return [];
+  const all = db
+    .prepare(`SELECT group_id AS gid, ${avg} AS avg, ${max} AS max FROM ${table} WHERE ts >= ? AND ts < ? GROUP BY group_id`)
+    .all(range.from, range.to) as { gid: number; avg: number; max: number }[];
+  if (all.length === 0) return { byAvg: [], byMax: [] };
+  const byAvgRows = [...all].sort((a, b) => b.avg - a.avg).slice(0, limit);
+  const byMaxRows = [...all].sort((a, b) => b.max - a.max).slice(0, peakLimit);
+  const ids = [...new Set([...byAvgRows, ...byMaxRows].map((r) => r.gid))];
   const metas = db
-    .prepare(`SELECT id, key, label, kind FROM groups WHERE id IN (${top.map(() => '?').join(',')})`)
-    .all(...top.map((t) => t.gid)) as unknown as GroupMeta[];
-  if (by === 'max') {
-    const metaById = new Map(metas.map((m) => [m.id, m]));
-    return top.flatMap((r) => {
-      const m = metaById.get(r.gid);
-      return m ? [{ key: m.key, label: m.label, kind: m.kind, avgKB: Math.round(r.avg), maxKB: r.max, spark: [] }] : [];
-    });
-  }
-  const spark = groupsHistory(db, source, bucket, range, metas);
+    .prepare(`SELECT id, key, label, kind FROM groups WHERE id IN (${ids.map(() => '?').join(',')})`)
+    .all(...ids) as unknown as GroupMeta[];
+  const metaById = new Map(metas.map((m) => [m.id, m]));
+  const avgMetas = byAvgRows.flatMap((r) => metaById.get(r.gid) ?? []);
+  const spark = groupsHistory(db, source, bucket, range, avgMetas);
   // Les mini-courbes du top sont ramenées à ~60 points.
   const step = Math.max(1, Math.ceil(spark.ts.length / 60));
   const thin = (s: (number | null)[]) => s.filter((_, i) => i % step === 0).map((v) => v ?? 0);
   const sparkByKey = new Map(spark.series.map((s) => [s.key, s.memKB]));
-  const metaById = new Map(metas.map((m) => [m.id, m]));
-  return top.flatMap((r) => {
+  const toConsumer = (r: { gid: number; avg: number; max: number }, withSpark: boolean): TopConsumer[] => {
     const m = metaById.get(r.gid);
-    return m ? [{ key: m.key, label: m.label, kind: m.kind, avgKB: Math.round(r.avg), maxKB: r.max, spark: thin(sparkByKey.get(m.key) ?? []) }] : [];
-  });
+    return m ? [{ key: m.key, label: m.label, kind: m.kind, avgKB: Math.round(r.avg), maxKB: r.max, spark: withSpark ? thin(sparkByKey.get(m.key) ?? []) : [] }] : [];
+  };
+  return { byAvg: byAvgRows.flatMap((r) => toConsumer(r, true)), byMax: byMaxRows.flatMap((r) => toConsumer(r, false)) };
 }
 
 export function queryEvents(db: DatabaseSync, range: TimeRange): HistoryEvent[] {

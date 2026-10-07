@@ -37,6 +37,12 @@ test('rangeFromPreset / pickSource / bucketMs', () => {
   expect(pickSource({ from: 24 * H, to: 48 * H }, 48 * H, 48)).toBe('minute'); // bucket détaillé 90 s >= 1 min
   expect(pickSource({ from: 42 * H, to: 48 * H }, 48 * H, 24)).toBe('minute'); // 6 h : bucket détaillé 25 s >= 15 s (était 'detail' avant le seuil de 15 s)
   expect(pickSource({ from: 46 * H, to: 48 * H }, 48 * H, 24)).toBe('detail'); // 2 h : bucket 10 s
+  expect(pickSource({ from: 0, to: 48 * H }, 100 * H, 24)).toBe('minute'); // 48 h tout juste : encore les minutes
+  expect(pickSource({ from: 0, to: 49 * H }, 100 * H, 24)).toBe('hour'); // > 48 h : tables horaires
+  expect(pickSource(rangeFromPreset('7d', 1000 * H), 1000 * H, 24)).toBe('hour');
+  expect(pickSource(rangeFromPreset('30d', 1000 * H), 1000 * H, 24)).toBe('hour');
+  expect(pickSource(rangeFromPreset('24h', 1000 * H), 1000 * H, 24)).toBe('minute');
+  expect(bucketMs(rangeFromPreset('30d', 1000 * H), 'hour', 5)).toBe(H);
   expect(bucketMs({ from: 0, to: H }, 'detail', 5)).toBe(5000);
   expect(bucketMs({ from: 0, to: 24 * H }, 'detail', 5)).toBe(90_000);
   expect(bucketMs({ from: 0, to: 30 * 24 * H }, 'minute', 5)).toBe(44 * M);
@@ -85,7 +91,7 @@ test('queryCulprits : hausse sur les 5 min avant ts, triée', () => {
 
 test('queryTop et queryEvents', () => {
   const { db } = seeded();
-  const top = queryTop(db, { from: 0, to: 10 * M }, opts(10 * M));
+  const top = queryTop(db, { from: 0, to: 10 * M }, opts(10 * M)).byAvg;
   expect(top[0].key).toBe('app:chrome');
   expect(top[0].spark.length).toBeLessThanOrEqual(60);
   expect(queryEvents(db, { from: 0, to: 10 * M })).toEqual([
@@ -107,13 +113,12 @@ test('queryTop by max : un pic court et une moyenne basse remontent par le max, 
     aggregateMinute(db, m * M);
   }
   const r = { from: 0, to: 10 * M };
-  const byAvg = queryTop(db, r, opts(10 * M), { limit: 2 });
-  const byMax = queryTop(db, r, opts(10 * M), { by: 'max', limit: 2 });
+  const { byAvg, byMax } = queryTop(db, r, opts(10 * M), { limit: 2, peakLimit: 2 });
   expect(byAvg.map((t) => t.key)).toEqual(['app:chrome', 'project:/a']);
   expect(byMax.map((t) => t.key)).toEqual(['command:vitest', 'app:chrome']);
   expect(byMax[0].maxKB).toBe(2 * 1024 * 1024);
   // Sur une plage ancienne (agrégats minute), le pic survit grâce à mem_kb_max.
-  const old = queryTop(db, r, opts(48 * H), { by: 'max', limit: 1 });
+  const old = queryTop(db, r, opts(48 * H), { limit: 1, peakLimit: 1 }).byMax;
   expect(old.map((t) => [t.key, t.maxKB])).toEqual([['command:vitest', 2 * 1024 * 1024]]);
 });
 
@@ -194,4 +199,67 @@ test('queryProcsAt sur une base v1 avec lignes, ouverte en lecture seule : ppid 
   expect(queryProcsAt(db, 'g', 1000, { now: 2000, detailHours: 24, intervalSec: 5 })).toEqual([{ ...want, rssKB: 500, swapKB: 5, cpu: 2 }]);
   expect(queryProcsAt(db, 'g', 1000, { now: 100 * H, detailHours: 24, intervalSec: 5 })).toEqual([{ ...want, rssKB: 505, swapKB: null, cpu: 2 }]);
   db.close();
+});
+
+test('queryTop : moyenne et pic en un seul parcours GROUP BY', () => {
+  const { db } = seeded();
+  const sqls: string[] = [];
+  const spy = new Proxy(db, {
+    get(t, k) {
+      if (k === 'prepare') return (sql: string) => (sqls.push(sql), t.prepare(sql));
+      const v = Reflect.get(t, k);
+      return typeof v === 'function' ? v.bind(t) : v;
+    },
+  });
+  const r = queryTop(spy, { from: 0, to: 10 * M }, opts(10 * M), { limit: 1, peakLimit: 2 });
+  expect(r.byAvg.map((t) => t.key)).toEqual(['app:chrome']);
+  expect(r.byMax.map((t) => t.key)).toEqual(['app:chrome', 'project:/a']);
+  expect(sqls.filter((q) => /GROUP BY group_id\b/.test(q))).toHaveLength(1);
+});
+
+function hourSeeded() {
+  const { db } = openHistoryDb(join(mkdtempSync(join(tmpdir(), 'pw-q-')), 'm.db'));
+  db.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'app:a','A','app'), (2,'others:small','Petits groupes','others');
+           INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id) VALUES (1,10,100,'a','a',1);`);
+  // 10 jours : seules les tables horaires (et proc_minute) sont remplies, pour vérifier la source choisie
+  for (let h = 0; h < 240; h++) {
+    db.prepare('INSERT INTO group_hour VALUES (?,?,?,?,?,?)').run(h * H, 1, 1000 + h, 0, 2000 + h, 5);
+    db.prepare('INSERT INTO group_hour VALUES (?,?,?,?,?,?)').run(h * H, 2, 300, 0, 300, 1);
+    db.prepare('INSERT INTO system_hour VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(h * H, 5000, 6000 + h, 8000, 0, 0, 100, 1, 2, 0.5, 10);
+    db.prepare('INSERT INTO proc_minute VALUES (?,?,?,?,?)').run(h * H, 1, 900, 950 + h, 5);
+  }
+  return db;
+}
+
+test('plages > 48 h : système, groupes, groupe, top et processus lus dans les tables horaires', () => {
+  const db = hourSeeded();
+  const now = 240 * H;
+  const o = opts(now);
+  const r = rangeFromPreset('7d', now);
+  const sys = querySystem(db, r, o);
+  expect(sys.ts).toHaveLength(168);
+  expect(sys.memUsedKB.at(-1)).toBe(6000 + 239);
+  const g = queryGroups(db, r, o, ['app:a']);
+  expect(g.series[0].memKB.at(-1)).toBe(2000 + 239);
+  expect(queryGroup(db, 'app:a', r, o).rssKB.at(-1)).toBe(1000 + 239);
+  const top = queryTop(db, r, o);
+  expect(top.byAvg.map((t) => t.key)).toEqual(['app:a', 'others:small']);
+  expect(top.byMax[0]).toMatchObject({ key: 'app:a', maxKB: 2000 + 239 });
+  expect(queryProcs(db, 'app:a', r, o).series[0].memKB.at(-1)).toBe(950 + 239);
+});
+
+test('base v2 (sans tables horaires, lecture seule) : les plages > 48 h retombent sur les minutes', () => {
+  const path = join(mkdtempSync(join(tmpdir(), 'pw-q-')), 'm.db');
+  const { db: w } = openHistoryDb(path);
+  w.exec(`DROP TABLE group_hour; DROP TABLE system_hour; PRAGMA user_version = 2;
+          INSERT INTO groups(id,key,label,kind) VALUES (1,'app:a','A','app');`);
+  for (let m = 0; m < 3; m++) {
+    w.prepare('INSERT INTO group_minute VALUES (?,?,?,?,?,?)').run(100 * H + m * M, 1, 10, 0, 10, 0);
+    w.prepare('INSERT INTO system_minute VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(100 * H + m * M, 1, 1, 8, 0, 0, 1, null, null, 0, 0);
+  }
+  w.close();
+  const { db } = openHistoryDb(path, { readOnly: true });
+  const r = rangeFromPreset('7d', 101 * H);
+  expect(querySystem(db, r, opts(101 * H)).ts.length).toBeGreaterThan(0);
+  expect(queryTop(db, r, opts(101 * H)).byAvg.map((t) => t.key)).toEqual(['app:a']);
 });

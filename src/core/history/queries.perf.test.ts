@@ -42,8 +42,8 @@ test('performance : 24 h x 100 groupes à 5 s', () => {
   time('queryGroups 24h', () => expect(queryGroups(db, rangeFromPreset('24h', now), o).series).toHaveLength(100));
   time('queryGroups 1h', () => expect(queryGroups(db, rangeFromPreset('1h', now), o).series).toHaveLength(100));
   time('queryGroups 6h', () => expect(queryGroups(db, rangeFromPreset('6h', now), o).series).toHaveLength(100));
-  time('queryTop 6h', () => expect(queryTop(db, rangeFromPreset('6h', now), o)).toHaveLength(10));
-  time('queryTop 24h', () => expect(queryTop(db, rangeFromPreset('24h', now), o)).toHaveLength(10));
+  time('queryTop 6h', () => expect(queryTop(db, rangeFromPreset('6h', now), o).byAvg).toHaveLength(10));
+  time('queryTop 24h', () => expect(queryTop(db, rangeFromPreset('24h', now), o).byAvg).toHaveLength(10));
   time('queryProcsAt détail (100 procs)', () => {
     expect(queryProcsAt(db, 'app:g1', now - 12 * H, o)).toHaveLength(100);
     expect(queryProcsAt(db, 'app:g1', now - 1, o)).toHaveLength(100);

@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import type {
   Config, ConfigState, Culprit, GroupHistory, GroupsHistory, HistoryEvent, KillResult, KillTarget, KillSignal, ProcsHistory, RangePreset,
-  RecorderState, Snapshot, SystemSeries, TimeRange, TopConsumer, TopOptions,
+  RecorderState, Snapshot, SystemSeries, TimeRange, TopOptions, TopResult,
 } from '../core/types';
 
 const api = {
@@ -22,13 +22,13 @@ const api = {
     group: (key: string, r: RangePreset | TimeRange): Promise<GroupHistory | null> => ipcRenderer.invoke('history:group', key, r),
     procs: (key: string, r: RangePreset | TimeRange): Promise<ProcsHistory | null> => ipcRenderer.invoke('history:procs', key, r),
     culprits: (ts: number): Promise<Culprit[]> => ipcRenderer.invoke('history:culprits', ts),
-    top: (r: RangePreset | TimeRange, o?: TopOptions): Promise<TopConsumer[]> => ipcRenderer.invoke('history:top', r, o),
+    top: (r: RangePreset | TimeRange, o?: TopOptions): Promise<TopResult> => ipcRenderer.invoke('history:top', r, o),
     events: (r: RangePreset | TimeRange): Promise<HistoryEvent[]> => ipcRenderer.invoke('history:events', r),
   },
   recorder: {
     status: (): Promise<RecorderState> => ipcRenderer.invoke('recorder:status'),
     setEnabled: (enabled: boolean): Promise<RecorderState> => ipcRenderer.invoke('recorder:setEnabled', enabled),
-    clearHistory: (): Promise<void> => ipcRenderer.invoke('recorder:clearHistory'),
+    clearHistory: (): Promise<{ mode: 'deleted' | 'requested'; backups: number }> => ipcRenderer.invoke('recorder:clearHistory'),
   },
 };
 

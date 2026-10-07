@@ -1,5 +1,5 @@
 import { stackSeries, topKeysByMax } from '../../core/history/series';
-import type { GroupsHistory, HistoryEvent, SystemSeries, TimeRange, TopConsumer, TopOptions } from '../../core/types';
+import type { GroupsHistory, HistoryEvent, RangePreset, SystemSeries, TimeRange, TopOptions, TopResult } from '../../core/types';
 import { formatKB } from './format';
 
 /**
@@ -69,7 +69,7 @@ export const INVESTIGATION_LAYERS = 8;
 
 interface MetricsApi {
   system: (r: TimeRange) => Promise<SystemSeries | null>;
-  top: (r: TimeRange, o?: TopOptions) => Promise<TopConsumer[]>;
+  top: (r: TimeRange, o?: TopOptions) => Promise<TopResult>;
   events: (r: TimeRange) => Promise<HistoryEvent[]>;
   groups: (r: TimeRange, keys?: string[]) => Promise<GroupsHistory | null>;
 }
@@ -79,7 +79,15 @@ interface MetricsApi {
  * au plus haut pic de la plage — un pic court mais énorme y figure — ; la liste « Top » reste classée par moyenne.
  */
 export async function fetchMetrics(h: MetricsApi, r: TimeRange) {
-  const [system, top, peaks, events] = await Promise.all([h.system(r), h.top(r), h.top(r, { by: 'max', limit: INVESTIGATION_LAYERS }), h.events(r)]);
-  const groups = peaks.length ? await h.groups(r, peaks.map((t) => t.key)) : null;
-  return { system, top, events, groups };
+  // un seul appel : les deux classements sortent du même parcours de la base
+  const [system, top, events] = await Promise.all([h.system(r), h.top(r, { peakLimit: INVESTIGATION_LAYERS }), h.events(r)]);
+  const groups = top.byMax.length ? await h.groups(r, top.byMax.map((t) => t.key)) : null;
+  return { system, top: top.byAvg, events, groups };
+}
+
+const AUTO_REFRESH_MS = 30_000;
+
+/** Rafraîchissement automatique : toutes les 30 s jusqu'à 24 h ; jamais pour 7 j / 30 j (bouton « Actualiser ») ni en zoom. */
+export function refreshMsFor(preset: RangePreset, zoomed: boolean): number | null {
+  return zoomed || preset === '7d' || preset === '30d' ? null : AUTO_REFRESH_MS;
 }

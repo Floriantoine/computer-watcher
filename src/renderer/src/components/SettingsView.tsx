@@ -73,8 +73,14 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
   const clearHistory = async () => {
     setConfirmClear(false);
     try {
-      await window.procWatch.recorder.clearHistory();
-      onToast("Historique vidé (effectif d'ici une minute)", 'info');
+      const r = await window.procWatch.recorder.clearHistory();
+      const copies = r.backups ? ` et ${r.backups} copie${r.backups > 1 ? 's' : ''} de sécurité supprimée${r.backups > 1 ? 's' : ''}` : '';
+      onToast(
+        r.mode === 'deleted'
+          ? `Historique supprimé${copies} ; une base neuve sera créée au prochain démarrage du service`
+          : `Vidage demandé au service : effectif d'ici une minute${copies}`,
+        'info',
+      );
     } catch (e) {
       onToast(`Historique non vidé : ${e instanceof Error ? e.message : String(e)}`);
     }

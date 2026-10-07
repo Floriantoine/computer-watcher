@@ -120,9 +120,11 @@ export interface GroupHistory { ts: number[]; rssKB: (number | null)[]; swapKB: 
 export interface ProcSeries { pid: number; startTicks: number; memKB: (number | null)[] }
 export interface ProcsHistory { ts: number[]; series: ProcSeries[] }
 export interface Culprit { key: string; label: string; kind: GroupKind; deltaKB: number; memKB: number }
-/** Classement du top : par moyenne (défaut) ou par pic sur la plage. */
-export interface TopOptions { by?: 'avg' | 'max'; limit?: number }
+/** Taille du top par moyenne (`limit`, 10) et du top par pic (`peakLimit`, 8). */
+export interface TopOptions { limit?: number; peakLimit?: number }
 export interface TopConsumer { key: string; label: string; kind: GroupKind; avgKB: number; maxKB: number; spark: number[] }
+/** Les deux classements, calculés en un seul parcours. */
+export interface TopResult { byAvg: TopConsumer[]; byMax: TopConsumer[] }
 export interface HistoryEvent { ts: number; type: string; groupKey: string | null; groupLabel: string | null; detail: Record<string, unknown> }
 export interface RecorderState {
   available: boolean; // systemd utilisateur disponible

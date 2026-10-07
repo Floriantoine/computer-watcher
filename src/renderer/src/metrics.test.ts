@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { alertsFrom, eventMarkers, fetchMetrics, formatInstant, investigationSeries } from './metrics';
+import { alertsFrom, eventMarkers, fetchMetrics, formatInstant, investigationSeries, refreshMsFor } from './metrics';
 
 test('investigationSeries : top n + Reste, cumulé', () => {
   const h = {
@@ -59,17 +59,20 @@ test('formatInstant : HH:mm:ss aujourd\'hui, dd/MM HH:mm:ss sinon', () => {
   expect(formatInstant(new Date(2026, 9, 5, 23, 59, 1).getTime(), now)).toBe('05/10 23:59:01');
 });
 
-test('fetchMetrics : couches de l\'enquête = top par max, liste Top = top par moyenne', async () => {
+test('fetchMetrics : un seul appel au top ; couches de l\'enquête = top par pic, liste Top = top par moyenne', async () => {
   const calls: unknown[] = [];
   const r = { from: 0, to: 10 };
+  let topCalls = 0;
   const api = {
     system: async () => ({ ts: [0, 5], memUsedKB: [100, 100], swapUsedKB: [0, 0], memTotalKB: 1, swapTotalKB: 0, psi: [0, 0], cpu: [0, 0], load: [0, 0] }),
     events: async () => [],
-    top: async (_r: unknown, o?: { by?: 'avg' | 'max'; limit?: number }) => {
+    top: async (_r: unknown, o?: { limit?: number; peakLimit?: number }) => {
+      topCalls++;
       calls.push(o);
-      return o?.by === 'max'
-        ? [{ key: 'spike', label: 'S', kind: 'command' as const, avgKB: 1, maxKB: 90, spark: [] }]
-        : [{ key: 'steady', label: 'T', kind: 'app' as const, avgKB: 50, maxKB: 50, spark: [] }];
+      return {
+        byAvg: [{ key: 'steady', label: 'T', kind: 'app' as const, avgKB: 50, maxKB: 50, spark: [] }],
+        byMax: [{ key: 'spike', label: 'S', kind: 'command' as const, avgKB: 1, maxKB: 90, spark: [] }],
+      };
     },
     groups: async (_r: unknown, keys?: string[]) => {
       calls.push(keys);
@@ -77,7 +80,17 @@ test('fetchMetrics : couches de l\'enquête = top par max, liste Top = top par m
     },
   };
   const d = await fetchMetrics(api, r);
+  expect(topCalls).toBe(1);
   expect(d.top.map((t) => t.key)).toEqual(['steady']);
-  expect(calls).toContainEqual({ by: 'max', limit: 8 });
+  expect(calls).toContainEqual({ peakLimit: 8 });
   expect(calls).toContainEqual(['spike']);
+});
+
+test('refreshMsFor : 30 s jusqu\'à 24 h, jamais pour 7 j / 30 j ni en zoom', () => {
+  expect(refreshMsFor('1h', false)).toBe(30_000);
+  expect(refreshMsFor('6h', false)).toBe(30_000);
+  expect(refreshMsFor('24h', false)).toBe(30_000);
+  expect(refreshMsFor('7d', false)).toBeNull();
+  expect(refreshMsFor('30d', false)).toBeNull();
+  expect(refreshMsFor('1h', true)).toBeNull();
 });

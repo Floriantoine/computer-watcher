@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Activity, CircleAlert, Cpu, Gauge, HardDrive, MemoryStick, Power, RotateCcw, Search, ZoomIn } from 'lucide-react';
+import { Activity, CircleAlert, Cpu, Gauge, HardDrive, MemoryStick, Power, RefreshCw, RotateCcw, Search, ZoomIn } from 'lucide-react';
 import type { Culprit, RangePreset, TimeRange } from '../../../core/types';
 import { formatKB } from '../format';
 import { useHistory } from '../history';
 import { ipcErrorMessage } from '../viewModel';
-import { eventMarkers, fetchMetrics, formatInstant, INVESTIGATION_LAYERS, investigationSeries } from '../metrics';
+import { eventMarkers, fetchMetrics, formatInstant, INVESTIGATION_LAYERS, investigationSeries, refreshMsFor } from '../metrics';
 import { AlertsPanel } from './AlertsPanel';
 import { CulpritsPanel } from './CulpritsPanel';
 import type { ChartSeries } from './charts/chartData';
@@ -23,7 +23,6 @@ interface Props {
 
 const H = 3_600_000;
 const PRESET_MS: Record<RangePreset, number> = { '1h': H, '6h': 6 * H, '24h': 24 * H, '7d': 7 * 24 * H, '30d': 30 * 24 * H };
-const REFRESH_MS = 30_000;
 const MIN_ZOOM_MS = 10 * 60_000;
 /** Teintes des couches de l'enquête (de la plus grosse à la 8e), puis « Reste » en gris. */
 const LAYER_TONES: ChartTone[] = ['#7c5cff', '#ff5c8a', '#22d3a6', '#ffb547', '#3dd6ff', '#ff8a3d', '#c084fc', '#a3e635'];
@@ -56,6 +55,7 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
   const [cursor, setCursor] = useState<number | null>(at ?? null);
   const [statusGen, setStatusGen] = useState(0);
   const [enableError, setEnableError] = useState<string | null>(null);
+  const [reloadGen, setReloadGen] = useState(0);
 
   useEffect(() => {
     if (at === undefined) return;
@@ -70,8 +70,8 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
   const data = useHistory(
     // Enquête : on ne charge que les groupes aux plus hauts pics ; le reste est déduit de la mémoire totale du système.
     () => fetchMetrics(window.procWatch.history, zoom ?? { from: Date.now() - PRESET_MS[preset], to: Date.now() }),
-    [preset, zoom],
-    zoom ? null : REFRESH_MS,
+    [preset, zoom, reloadGen],
+    refreshMsFor(preset, zoom !== null),
   );
   const system = data?.system;
   const events = data?.events;
@@ -155,6 +155,11 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
               <RotateCcw size={13} strokeWidth={2} /> Réinitialiser le zoom
             </button>
           </>
+        )}
+        {!zoom && refreshMsFor(preset, false) === null && (
+          <button onClick={() => setReloadGen((n) => n + 1)} data-testid="metrics-refresh" title="Les plages de 7 et 30 jours ne se rafraîchissent pas toutes seules">
+            <RefreshCw size={13} strokeWidth={2} /> Actualiser
+          </button>
         )}
         <span className="spacer" />
         <span className="sub hint">Glisser pour zoomer · double-clic pour revenir · clic pour les coupables</span>
