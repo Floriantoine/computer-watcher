@@ -55,7 +55,7 @@ export function GroupCard({ group, memTotalKB, stuck, pending, layoutKey, onOpen
           <div className="card-title">
             <span className="label">{group.label}</span>
             {group.protected && (
-              <span className="lock" title="Contient des processus protégés" aria-label="Contient des processus protégés">
+              <span className="lock" title="Contient des processus protégés" aria-label="Contient des processus protégés" role="img">
                 <Lock size={12} strokeWidth={2.4} />
               </span>
             )}

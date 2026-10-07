@@ -47,7 +47,7 @@ function createWindow(): void {
     width: 1200,
     height: 800,
     title: 'proc-watch',
-    backgroundColor: '#14161a',
+    backgroundColor: '#0b0c10',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,

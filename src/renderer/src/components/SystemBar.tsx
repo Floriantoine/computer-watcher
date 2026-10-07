@@ -53,7 +53,7 @@ export function SystemBar({ system }: { system: SystemInfo }) {
         <Stat label="Pression mémoire" value={system.psiSome10} format={pct} percent={system.psiSome10} tone={gaugeTone('psi', levels.psi)} level={levels.psi} />
       )}
       {/* Charge ×100 pour que l'arrondi de AnimatedNumber garde une décimale. */}
-      <Stat label="Charge" value={Math.round(system.load1 * 100)} format={load} sub={CORES ? `${CORES} cœurs` : undefined} />
+      <Stat label="Charge" value={Math.round(system.load1 * 100)} format={load} sub={CORES ? `${CORES} threads` : undefined} />
     </div>
   );
 }
