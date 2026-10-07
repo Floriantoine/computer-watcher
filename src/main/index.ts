@@ -21,6 +21,9 @@ import { pollDelay, type WindowActivity } from './pollPolicy';
 import { isGroupKeys, isRange, isTopOptions, recorderState as computeRecorderState } from './historyIpc';
 import { autoManageService, defaultSystemctl, ensureRecorderService, recorderExecArgs, systemctlAvailable, unitPath } from './recorderService';
 
+// Service réseau dans le processus main : l'app ne charge que des fichiers locaux, un processus de moins (~20 Mo).
+app.commandLine.appendSwitch('enable-features', 'NetworkServiceInProcess2');
+
 const dir = configDir();
 const loaded = loadConfig(dir);
 let config = loaded.config;
