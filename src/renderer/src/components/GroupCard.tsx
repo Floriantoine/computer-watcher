@@ -4,6 +4,7 @@ import { Lock } from 'lucide-react';
 import type { Group } from '../../../core/types';
 import { formatAge, formatCpu } from '../format';
 import { cardTone } from '../theme';
+import { Sparkline } from './charts/Sparkline';
 import { AnimatedNumber, ForceButton, GroupIcon, KillButton } from './ui';
 
 const DAY = 86400;
@@ -11,6 +12,7 @@ const DAY = 86400;
 interface Props {
   group: Group;
   memTotalKB: number;
+  spark: (number | null)[];
   stuck: boolean;
   pending: boolean;
   /** Change seulement quand l'ordre des cartes change : seul cas où le layout s'anime. */
@@ -21,7 +23,7 @@ interface Props {
   ref?: Ref<HTMLDivElement>;
 }
 
-export function GroupCard({ group, memTotalKB, stuck, pending, layoutKey, onOpen, onKill, onForce, ref }: Props) {
+export function GroupCard({ group, memTotalKB, spark, stuck, pending, layoutKey, onOpen, onKill, onForce, ref }: Props) {
   const isPresent = useIsPresent();
   const total = group.rssKB + group.swapKB;
   const pct = Math.min(100, (total / memTotalKB) * 100);
@@ -64,6 +66,7 @@ export function GroupCard({ group, memTotalKB, stuck, pending, layoutKey, onOpen
         </div>
       </div>
       <AnimatedNumber className="big" value={total} />
+      <Sparkline values={spark} tone={cardTone(pct)} height={28} />
       <div className="bar"><i className={`tone-${cardTone(pct)}`} style={{ width: `${pct}%` }} /></div>
       <div className="card-foot">
         <span className="mono">

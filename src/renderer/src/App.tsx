@@ -7,10 +7,12 @@ import { DetailView } from './components/DetailView';
 import { SettingsView } from './components/SettingsView';
 import { Toasts, type Toast } from './components/Toasts';
 import { MainView } from './components/MainView';
-import { SystemBar } from './components/SystemBar';
-import { findGroup, flattenProcs, ipcErrorMessage, killResultMessages, killRequestForGroup, killRequestForProc, trackKills, type KillRequest, type ViewFilter } from './viewModel';
+import { SystemBar, type SystemSparks } from './components/SystemBar';
+import { TopNav } from './components/TopNav';
+import { LiveBuffer, useHistory } from './history';
+import { findGroup, flattenProcs, visibleGroups, ipcErrorMessage, killResultMessages, killRequestForGroup, killRequestForProc, trackKills, type KillRequest, type ViewFilter } from './viewModel';
 
-export type Route = { view: 'main' } | { view: 'detail'; groupId: string } | { view: 'settings' };
+export type Route = { view: 'main' } | { view: 'detail'; groupId: string } | { view: 'settings' } | { view: 'metrics'; at?: number };
 
 export function App() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
@@ -28,9 +30,12 @@ export function App() {
   // startTicks relevé à l'envoi du SIGTERM : le SIGKILL « Forcer » le réutilise pour ne pas viser un PID réutilisé.
   const sentTicks = useRef(new Map<number, number>());
 
+  const live = useRef(new LiveBuffer());
+
   useEffect(() => {
     window.procWatch.getConfig().then(setConfigState, (e: unknown) => setConfigError(ipcErrorMessage(e)));
     return window.procWatch.onSnapshot((s) => {
+      live.current.push(s.takenAt, s.system, s.groups.flatMap((g) => (g.kind === 'others' ? g.subgroups : [g])));
       setSnapshot(s);
       const present = new Set(s.groups.flatMap((g) => flattenProcs(g).map((p) => p.pid)));
       const r = trackKills(pending.current, present, Date.now());
@@ -40,6 +45,23 @@ export function App() {
       setPendingPids(new Set(r.pending.keys()));
     });
   }, []);
+
+  // Clés des cartes affichées (hors « Autres »), triées pour ne relancer la requête que si l'ensemble change.
+  const visibleKeys = useMemo(
+    () => (snapshot ? visibleGroups(snapshot.groups, filter).filter((g) => g.kind !== 'others').map((g) => g.id).sort() : []),
+    [snapshot, filter],
+  );
+  const keysId = visibleKeys.join('|');
+  const sysHist = useHistory(() => window.procWatch.history.system('1h'), []);
+  const groupHist = useHistory(
+    () => (visibleKeys.length ? window.procWatch.history.groups('1h', visibleKeys) : Promise.resolve(null)),
+    [keysId],
+  );
+  const histByKey = useMemo(() => new Map((groupHist?.series ?? []).map((s) => [s.key, s.memKB])), [groupHist]);
+  const sparkOf = (id: string): (number | null)[] => {
+    const h = histByKey.get(id);
+    return h && h.length >= 2 ? h : live.current.group(id);
+  };
 
   const isProtected = useMemo(() => compileProtection(configState?.config.protected ?? []).isProtected, [configState]);
 
@@ -106,10 +128,19 @@ export function App() {
     void saveConfig({ ...cfg, protected: list });
   }
 
+  const sparks: SystemSparks =
+    sysHist && sysHist.ts.length >= 2
+      ? { mem: sysHist.memUsedKB, swap: sysHist.swapUsedKB, psi: sysHist.psi, load: sysHist.load }
+      : (() => {
+          const pts = live.current.system();
+          return { mem: pts.map((p) => p.memUsedKB), swap: pts.map((p) => p.swapUsedKB), psi: pts.map((p) => p.psi), load: pts.map((p) => p.load) };
+        })();
+
   return (
     <MotionConfig reducedMotion="user">
       <div data-testid="snapshot-ready">
-        <SystemBar system={snapshot.system} />
+        <TopNav route={route} onNavigate={setRoute} />
+        <SystemBar system={snapshot.system} sparks={sparks} />
         <AnimatePresence mode="wait" initial={false}>
           <RouteFade key={routeKey}>
             {route.view === 'main' && (
@@ -123,7 +154,7 @@ export function App() {
                 onOpen={(g) => setRoute({ view: 'detail', groupId: g.id })}
                 onKillGroup={killGroup}
                 onForce={forceKill}
-                onSettings={() => setRoute({ view: 'settings' })}
+                sparkOf={sparkOf}
               />
             )}
             {route.view === 'detail' && (
@@ -144,6 +175,7 @@ export function App() {
                 onToggleProtect={toggleProtect}
               />
             )}
+            {route.view === 'metrics' && <p className="empty">Vue Métriques : à venir.</p>}
             {route.view === 'settings' && (
               <SettingsView
                 state={configState}

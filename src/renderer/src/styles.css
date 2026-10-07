@@ -152,9 +152,57 @@ select option { background: var(--surface-solid); color: var(--text); }
 .stat.lvl-warn { border-color: rgba(255, 181, 71, 0.28); }
 .stat.lvl-bad { border-color: rgba(255, 92, 138, 0.35); box-shadow: 0 0 0 1px rgba(255, 92, 138, 0.08), 0 0 24px -8px rgba(255, 92, 138, 0.45); }
 .stat small { display: block; color: var(--label); font-size: 11px; }
+.stat .spark { margin-top: 7px; }
 .stat-value { display: flex; align-items: baseline; gap: 5px; margin: 2px 0 7px; white-space: nowrap; }
 .stat-value .b { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
 .stat-value .sub { overflow: hidden; text-overflow: ellipsis; }
+
+/* ---------- Onglets ---------- */
+.topnav { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px var(--gutter) 0; }
+.tabs {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  backdrop-filter: blur(12px);
+}
+.tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--label);
+  border-radius: var(--r-sm);
+}
+.tab:hover:not(:disabled) { background: transparent; color: var(--text); }
+.tab.active { color: var(--text); }
+.tab > svg, .tab > span:not(.tab-indicator) { position: relative; z-index: 1; }
+.tab-indicator {
+  position: absolute;
+  inset: 0;
+  background: var(--surface-3);
+  border: 1px solid var(--border-hover);
+  border-radius: var(--r-sm);
+  box-shadow: 0 0 0 1px rgba(124, 92, 255, 0.12), 0 4px 14px -6px var(--glow);
+}
+.icon-btn.active { border-color: var(--accent-soft); color: var(--text); }
+
+/* ---------- Mini-courbes ---------- */
+.spark { display: block; width: 100%; overflow: visible; }
+.spark-line { stroke: var(--s2); }
+.spark-stop-a { stop-color: var(--s1); }
+.spark-stop-b { stop-color: transparent; }
+.spark-mem { --s1: #7c5cff; --s2: #b56bff; }
+.spark-swap { --s1: #ff5c8a; --s2: #ff8a3d; }
+.spark-psi { --s1: #22d3a6; --s2: #3dd6ff; }
+.spark-cpu { --s1: #9aa0ad; --s2: #c9cdd6; }
+.spark-warn { --s1: #ffb547; --s2: #ff8a3d; }
+.spark-bad { --s1: #ff5c8a; --s2: #ff3d5e; }
 
 /* ---------- Barre d'outils ---------- */
 .toolbar { display: flex; gap: 8px; align-items: center; padding: 16px var(--gutter) 0; }

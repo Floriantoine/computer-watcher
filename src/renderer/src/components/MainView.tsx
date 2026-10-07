@@ -1,5 +1,5 @@
 import { AnimatePresence } from 'motion/react';
-import { ChevronDown, Search, Settings } from 'lucide-react';
+import { ChevronDown, Search } from 'lucide-react';
 import type { Group } from '../../../core/types';
 import type { SortKey, ViewFilter } from '../viewModel';
 import { visibleGroups } from '../viewModel';
@@ -15,12 +15,12 @@ interface Props {
   onOpen: (g: Group) => void;
   onKillGroup: (g: Group) => void;
   onForce: (pids: number[]) => void;
-  onSettings: () => void;
+  sparkOf: (groupId: string) => (number | null)[];
 }
 
 const AGES: [string, number][] = [['Tous', 0], ['> 1 h', 3600], ['> 1 j', 86400], ['> 7 j', 7 * 86400]];
 
-export function MainView({ groups, memTotalKB, filter, onFilter, stuckPids, pendingPids, onOpen, onKillGroup, onForce, onSettings }: Props) {
+export function MainView({ groups, memTotalKB, filter, onFilter, stuckPids, pendingPids, onOpen, onKillGroup, onForce, sparkOf }: Props) {
   const shown = visibleGroups(groups, filter);
   const layoutKey = shown.map((g) => g.id).join('\n');
   return (
@@ -45,9 +45,6 @@ export function MainView({ groups, memTotalKB, filter, onFilter, stuckPids, pend
           </select>
           <ChevronDown size={14} />
         </label>
-        <button className="icon-btn" title="Réglages" aria-label="Réglages" onClick={onSettings}>
-          <Settings size={16} strokeWidth={2} />
-        </button>
       </div>
       {shown.length === 0 ? (
         <p className="empty">Aucun groupe ne correspond.</p>
@@ -61,6 +58,7 @@ export function MainView({ groups, memTotalKB, filter, onFilter, stuckPids, pend
                   key={g.id}
                   group={g}
                   memTotalKB={memTotalKB}
+                  spark={sparkOf(g.id)}
                   stuck={stuck.length > 0}
                   pending={g.pids.some((pid) => pendingPids.has(pid))}
                   layoutKey={layoutKey}
