@@ -74,3 +74,34 @@ test('leakCandidates : groupe en montée sur 61 minutes, pas deux fois dans l\'h
   db.prepare("INSERT INTO events(ts,type,group_id) VALUES (?, 'leak', 1)").run(now - 10 * M);
   expect(leakCandidates(db, now, 60, 300)).toEqual([]);
 });
+
+test('leakCandidates : now non aligné sur la minute', () => {
+  const db = open();
+  db.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'project:/a','a','project');`);
+  for (let i = 0; i <= 60; i++) db.prepare('INSERT INTO group_minute VALUES (?,?,?,?,?,?)').run(i * M, 1, 1000 + i * 10 * 1024, 0, 0, 0);
+  expect(leakCandidates(db, 61 * M + 12_345, 60, 300)).toHaveLength(1);
+});
+
+test('purge : conserve les lignes encore référencées', () => {
+  const db = open();
+  db.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'a','a','app'),(2,'b','b','app'),(3,'c','c','app');
+           INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id) VALUES (1,1,1,'p','p',2),(2,2,2,'q','q',3);
+           INSERT INTO events(ts,type,group_id) VALUES (1000000,'leak',1);
+           INSERT INTO proc_samples VALUES (0,1,1,0,0);
+           INSERT INTO proc_minute VALUES (0,2,1,1,0);`);
+  purge(db, 2 * 3600_000, 1, 30);
+  // proc 1 : samples purgés, plus de référence -> supprimé ; proc 2 : proc_minute -> gardé
+  expect(db.prepare('SELECT id FROM procs').all()).toEqual([{ id: 2 }]);
+  // groupe 1 : événement ; groupe 3 : procs 2 ; groupe 2 : orphelin
+  expect(db.prepare('SELECT id FROM groups ORDER BY id').all()).toEqual([{ id: 1 }, { id: 3 }]);
+});
+
+test('clearAll vide aussi les tables minute', () => {
+  const db = open();
+  seed(db);
+  aggregateMinute(db, 0);
+  clearAll(db);
+  for (const t of ['system_minute', 'group_minute', 'proc_minute']) {
+    expect(db.prepare(`SELECT COUNT(*) n FROM ${t}`).get()).toEqual({ n: 0 });
+  }
+});
