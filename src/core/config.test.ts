@@ -57,6 +57,30 @@ test('écriture atomique : aucun fichier temporaire ne reste', () => {
   expect(readdirSync(dir)).toEqual(['config.json']);
 });
 
+test('premier lancement en dossier illisible → défauts et avertissement, sans crash', () => {
+  if (process.getuid?.() === 0) return; // root écrit partout
+  const parent = tmp();
+  const dir = join(parent, 'proc-watch');
+  chmodSync(parent, 0o500);
+  const r = loadConfig(dir);
+  expect(r.config).toEqual(DEFAULT_CONFIG);
+  expect(r.warning).not.toBeNull();
+  expect(r.warning).toMatch(/Impossible d'écrire/);
+  chmodSync(parent, 0o755); // cleanup pour teardown
+});
+
+test('fichier invalide en dossier illisible → défauts et avertissement, sans crash', () => {
+  if (process.getuid?.() === 0) return; // root écrit partout
+  const dir = tmp();
+  writeFileSync(join(dir, 'config.json'), '{ pas du json');
+  chmodSync(dir, 0o500);
+  const r = loadConfig(dir);
+  expect(r.config).toEqual(DEFAULT_CONFIG);
+  expect(r.warning).not.toBeNull();
+  expect(r.warning).toMatch(/Impossible d'écrire/);
+  chmodSync(dir, 0o755); // cleanup pour teardown
+});
+
 test('validateConfig rejette seuils négatifs et entrées non textuelles', () => {
   expect(validateConfig({ ...DEFAULT_CONFIG, othersThreshold: { memMB: -1, cpuPercent: 1 } })).toBeNull();
   expect(validateConfig({ ...DEFAULT_CONFIG, protected: [1] })).toBeNull();

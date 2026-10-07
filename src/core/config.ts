@@ -38,8 +38,13 @@ export function loadConfig(dir: string): { config: Config; warning: string | nul
   } catch (e) {
     const code = (e as NodeJS.ErrnoException).code;
     if (code === 'ENOENT') {
-      saveConfig(dir, DEFAULT_CONFIG);
-      return { config: structuredClone(DEFAULT_CONFIG), warning: null };
+      try {
+        saveConfig(dir, DEFAULT_CONFIG);
+        return { config: structuredClone(DEFAULT_CONFIG), warning: null };
+      } catch (e) {
+        const saveCode = (e as NodeJS.ErrnoException).code;
+        return { config: structuredClone(DEFAULT_CONFIG), warning: `Impossible d'écrire la configuration (${saveCode}) : valeurs par défaut utilisées` };
+      }
     }
     return { config: structuredClone(DEFAULT_CONFIG), warning: `config.json illisible (${code}) : valeurs par défaut utilisées, fichier non modifié` };
   }
@@ -51,7 +56,12 @@ export function loadConfig(dir: string): { config: Config; warning: string | nul
   }
   const config = validateConfig(parsed);
   if (config) return { config, warning: null };
-  renameSync(file, `${file}.bak`);
-  saveConfig(dir, DEFAULT_CONFIG);
-  return { config: structuredClone(DEFAULT_CONFIG), warning: 'config.json invalide : sauvegardé en config.json.bak, valeurs par défaut restaurées' };
+  try {
+    renameSync(file, `${file}.bak`);
+    saveConfig(dir, DEFAULT_CONFIG);
+    return { config: structuredClone(DEFAULT_CONFIG), warning: 'config.json invalide : sauvegardé en config.json.bak, valeurs par défaut restaurées' };
+  } catch (e) {
+    const errCode = (e as NodeJS.ErrnoException).code;
+    return { config: structuredClone(DEFAULT_CONFIG), warning: `Impossible d'écrire la configuration (${errCode}) : valeurs par défaut utilisées` };
+  }
 }
