@@ -14,6 +14,8 @@ Né d'un PC gelé dix minutes par 19 Go de swap : vieilles sessions de terminal,
 - **Page de détail** : arbre parent → enfants, commande complète, dossier de travail, CPU, RAM, swap.
 - **Kill** : `SIGTERM`, puis bouton « Forcer (SIGKILL) » si le processus résiste 3 secondes.
 - **Programmes protégés** : terminaux, shells, Claude, bureau… Les tuer demande une confirmation qui dit exactement ce qui va mourir. La liste se modifie dans les Réglages et est conservée dans `~/.config/proc-watch/config.json`.
+- **Mini-courbes** de mémoire sur chaque carte et **vue liste** compacte en alternative aux cartes.
+- **Historique en arrière-plan** et onglet **Métriques** (voir plus bas).
 - proc-watch refuse de tuer lui-même, ses parents (ton terminal) et les processus des autres utilisateurs.
 
 ## Installation
@@ -41,7 +43,7 @@ npm install
 npm run dev
 ```
 
-Avec npm 11.10+ (dont npm 12), les scripts d'installation des dépendances sont bloqués par défaut ; le champ `allowScripts` de `package.json` autorise le script d'installation d'`electron`, qui télécharge le binaire Electron (indispensable) ; celui d'`esbuild` n'est qu'une optimisation de démarrage, il n'est pas requis. Un simple `npm install` suffit.
+Avec npm 11.10+ (dont npm 12), les scripts d'installation des dépendances sont bloqués par défaut. Le champ `allowScripts` de `package.json` n'autorise en pratique que celui d'`esbuild`, une simple optimisation de démarrage qui n'est pas requise. Le paquet `electron` 44 n'a pas de script d'installation : son binaire est téléchargé au premier `require('electron')`. Un simple `npm install` suffit.
 
 ## Développement
 
@@ -50,10 +52,26 @@ Avec npm 11.10+ (dont npm 12), les scripts d'installation des dépendances sont 
 | `npm run dev` | lance l'app avec rechargement à chaud |
 | `npm test` | tests unitaires (Vitest) |
 | `npm run typecheck` | vérification TypeScript |
+| `npm run test:recorder` | build, test de performance du service d'enregistrement et test de bout en bout (base, événements, reprise) |
 | `npm run smoke` | build + lancement réel de l'app via Playwright |
 | `npm run dist` | produit l'AppImage et le .deb dans `release/` |
 
 La logique (lecture de `/proc`, regroupement, protection, kill) vit dans `src/core/`, sans dépendance à Electron, et se teste sur de faux répertoires `/proc`. Pour reconnaître une nouvelle appli multi-processus ou un nouvel outil de dev, modifier `src/core/grouping/rules.ts`.
+
+## Historique en arrière-plan
+
+Au premier lancement, proc-watch installe automatiquement un service systemd utilisateur, `proc-watch-recorder` (sans sudo). Il échantillonne le système en continu, même quand la fenêtre est fermée, pour répondre à « qu'est-ce qui a fait geler la machine à 3 h du matin ? ».
+
+- **Couper l'enregistrement** : Réglages → Enregistrement, ou `systemctl --user disable --now proc-watch-recorder`.
+- **Données** : `~/.local/share/proc-watch/metrics.db` (SQLite, schéma v2). Rétention par défaut : 24 h détaillées, 30 jours résumés (modifiable dans les Réglages). À la mise à jour du schéma, une copie `metrics.db.pre-v2-*` est faite avant migration. Une base d'une version plus récente n'est jamais écrasée : l'enregistrement se met en pause.
+- **Coût mesuré** : un tick du service dure environ 22 à 28 ms sur ~750 processus, et le service occupe environ 39 à 48 Mo de PSS.
+
+### Onglet Métriques
+
+- **Enquête** : courbes de mémoire, swap et pression sur la période choisie, pour retrouver ce qui se passait à un instant donné.
+- **Coupables** : les groupes et processus qui ont le plus pesé sur la période.
+- **Alertes de fuite** : un groupe dont la mémoire monte de façon continue (par défaut au moins 300 Mo sur 60 minutes) est signalé.
+- **Kills earlyoom** : les processus tués par earlyoom sont retrouvés dans l'historique, avec le contexte mémoire autour.
 
 ## Va bien avec earlyoom
 
