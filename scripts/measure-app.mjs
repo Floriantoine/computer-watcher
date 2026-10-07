@@ -5,14 +5,14 @@
 // passent par l'inspecteur Node du seul processus main (--inspect), qui ne touche pas au renderer.
 // Scénarios : visible (fenêtre considérée active : un événement focus est émis toutes les 10 s, comme un utilisateur
 // présent), background (blur puis 62 s d'attente : rythme de fond), minimized (win.minimize()), hidden (win.hide()).
-// Affichage : par défaut l'app tourne dans un KWin imbriqué virtuel (kwin_wayland --virtual, bus D-Bus et config à part) :
+// Affichage : par défaut chaque app tourne dans son propre KWin imbriqué virtuel (kwin_wayland --virtual, bus D-Bus et config à part) :
 // la fenêtre est réellement affichée et active quel que soit l'état du bureau (écran verrouillé, autre bureau…), et
 // rien n'apparaît à l'écran. MEASURE_KWIN=0 : utiliser la session courante.
 // Variables : MEASURE_SETTLE_S (20), MEASURE_SAMPLE_S (60), MEASURE_SCENARIOS (« visible,minimized »),
 // MEASURE_MAXIMIZE (1 : fenêtre agrandie, plus de cartes à l'écran).
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -123,8 +123,8 @@ function print(title, rows) {
 const electronPath = createRequire(import.meta.url)('electron');
 
 /** KWin virtuel imbriqué ; renvoie le nom de son socket Wayland et de quoi l'arrêter. */
-async function startKwin() {
-  const socket = `pw-measure-${process.pid}`;
+async function startKwin(n) {
+  const socket = `pw-measure-${process.pid}-${n}`;
   const cfg = mkdtempSync(join(tmpdir(), 'pw-kwin-'));
   const child = spawn('dbus-run-session', ['--', 'kwin_wayland', '--virtual', '--no-lockscreen', '--socket', socket, '--width', '1600', '--height', '1000'], {
     env: { ...process.env, XDG_CONFIG_HOME: cfg },
@@ -152,9 +152,15 @@ async function startKwin() {
   };
 }
 
-/** Lance une app et se connecte à l'inspecteur de son processus main. */
-async function launch(dir, kwin) {
+/** Lance une app (`dossier` ou `dossier:reduced` pour « Effets visuels réduits ») et se connecte à l'inspecteur de son main. */
+async function launch(spec, kwin) {
+  const [dir, variant] = spec.split(':');
   const cfg = mkdtempSync(join(tmpdir(), 'pw-measure-'));
+  if (variant === 'reduced') {
+    mkdirSync(join(cfg, 'proc-watch'));
+    const config = { version: 1, protected: [], othersThreshold: { memMB: 100, cpuPercent: 1 }, ui: { reducedEffects: true } };
+    writeFileSync(join(cfg, 'proc-watch', 'config.json'), JSON.stringify(config));
+  }
   const env = { ...process.env, XDG_CONFIG_HOME: cfg };
   if (kwin) {
     env.WAYLAND_DISPLAY = kwin.socket;
@@ -197,15 +203,20 @@ async function launch(dir, kwin) {
     if (r.result?.result?.value) break;
     await sleep(200);
   }
-  return { dir, cfg, child, ws, evaluate };
+  return { dir: spec, cfg, child, ws, evaluate };
 }
 
-// Dossiers d'app à mesurer (défaut : celui-ci). Plusieurs dossiers : lancés et mesurés en même temps (comparaison A/B).
+// Dossiers d'app à mesurer (défaut : celui-ci ; suffixe :reduced = effets réduits). Plusieurs : mesurés en même temps (A/B).
 const dirs = process.argv.slice(2).length ? process.argv.slice(2) : ['.'];
 const apps = [];
-const kwin = process.env.MEASURE_KWIN === '0' ? null : await startKwin();
+// Un KWin par app : chaque fenêtre est entièrement visible (des fenêtres superposées ne seraient pas toutes redessinées).
+const kwins = [];
 try {
-  for (const dir of dirs) apps.push(await launch(dir, kwin));
+  for (const [i, dir] of dirs.entries()) {
+    const kwin = process.env.MEASURE_KWIN === '0' ? null : await startKwin(i);
+    if (kwin) kwins.push(kwin);
+    apps.push(await launch(dir, kwin));
+  }
   const roots = apps.map((a) => a.child.pid);
   console.log(`apps ${apps.map((a, i) => `${a.dir} (PID ${roots[i]}, ${tree(roots[i]).length} processus)`).join(', ')} ; stabilisation ${SETTLE_S} s, échantillonnage ${SAMPLE_S} s`);
   const onAll = (expr) => Promise.all(apps.map((a) => a.evaluate(expr)));
@@ -236,5 +247,5 @@ try {
     await new Promise((r) => (child.exitCode !== null ? r() : child.once('exit', r)));
     rmSync(cfg, { recursive: true, force: true });
   }
-  await kwin?.stop();
+  for (const kwin of kwins) await kwin.stop();
 }
