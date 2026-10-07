@@ -12,6 +12,7 @@ const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1', XDG_DATA_HOME: join(bas
 const child = spawn(electron, ['out/main/recorder.js'], { env, stdio: ['ignore', 'inherit', 'inherit'] });
 child.on('error', (e) => {
   console.error(`spawn: ${e.message}`);
+  rmSync(base, { recursive: true, force: true });
   process.exit(1);
 });
 let pss = 0;
