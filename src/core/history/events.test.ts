@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { expect, test } from 'vitest';
 import { openHistoryDb } from './db';
 import {
-  detectGap, formatAppEvent, ingestAppEvents, insertEvent, lastEventTs, lastSampleTs, parseAppEvents, parseEarlyoom, parseJournalLine, shouldRecordPressure,
+  detectGap, formatAppEvent, takeAppEvents, insertEvent, lastEventTs, lastSampleTs, parseAppEvents, parseEarlyoom, parseJournalLine, shouldRecordPressure,
 } from './events';
 
 test('parseEarlyoom : format récent avec uid', () => {
@@ -25,6 +25,7 @@ test('parseJournalLine', () => {
   expect(parseJournalLine(JSON.stringify({ __REALTIME_TIMESTAMP: '1791380400000000', MESSAGE: 'hello' }))).toEqual({ ts: 1791380400000, message: 'hello' });
   expect(parseJournalLine('pas du json')).toBeNull();
   expect(parseJournalLine(JSON.stringify({ MESSAGE: 'x' }))).toBeNull();
+  expect(parseJournalLine(JSON.stringify({ __REALTIME_TIMESTAMP: 'abc', MESSAGE: 'x' }))).toBeNull();
 });
 
 test('detectGap', () => {
@@ -41,17 +42,70 @@ test('shouldRecordPressure : ≥ 25 %, au plus une fois par minute', () => {
   expect(shouldRecordPressure(40, 0, 60_000)).toBe(true);
 });
 
-test('app events : format, parse tolérant, ingestion qui vide le fichier', () => {
+test('app events : format, parse validation stricte', () => {
   const e = { ts: 5, type: 'app_kill' as const, groupKey: 'app:chrome', detail: { pids: [1, 2], signal: 'SIGTERM' } };
   const text = formatAppEvent(e) + 'ligne cassée\n' + JSON.stringify({ ts: 'x' }) + '\n';
   expect(parseAppEvents(text)).toEqual([e]);
+  // missing groupKey
+  expect(parseAppEvents(JSON.stringify({ ts: 5, type: 'app_kill', detail: { pids: [1], signal: 'SIGTERM' } }))).toEqual([]);
+  // numeric groupKey
+  expect(parseAppEvents(JSON.stringify({ ts: 5, type: 'app_kill', groupKey: 5, detail: { pids: [1], signal: 'SIGTERM' } }))).toEqual([]);
+  // non-numeric pid
+  expect(parseAppEvents(JSON.stringify({ ts: 5, type: 'app_kill', groupKey: 'app:chrome', detail: { pids: ['x'], signal: 'SIGTERM' } }))).toEqual([]);
+  // missing signal
+  expect(parseAppEvents(JSON.stringify({ ts: 5, type: 'app_kill', groupKey: 'app:chrome', detail: { pids: [1] } }))).toEqual([]);
+  // null line
+  expect(parseAppEvents('null\n')).toEqual([]);
+});
+
+test('takeAppEvents : flux normal, fichier vide après ack', () => {
   const dir = mkdtempSync(join(tmpdir(), 'pw-e-'));
   const p = join(dir, 'app-events.jsonl');
-  expect(ingestAppEvents(p)).toEqual([]);
-  writeFileSync(p, text);
-  expect(ingestAppEvents(p)).toEqual([e]);
+  const e = { ts: 5, type: 'app_kill' as const, groupKey: 'app:chrome', detail: { pids: [1, 2], signal: 'SIGTERM' } };
+  const text = formatAppEvent(e) + 'ligne cassée\n';
+
+  // no file
+  let result = takeAppEvents(p);
+  expect(result.events).toEqual([]);
   expect(existsSync(p)).toBe(false);
   expect(existsSync(`${p}.ingest`)).toBe(false);
+
+  // write file
+  writeFileSync(p, text);
+
+  // take events
+  result = takeAppEvents(p);
+  expect(result.events).toEqual([e]);
+  expect(existsSync(p)).toBe(false); // original gone
+  expect(existsSync(`${p}.ingest`)).toBe(true); // moved to .ingest
+
+  // ack
+  result.ack();
+  expect(existsSync(`${p}.ingest`)).toBe(false); // deleted after ack
+});
+
+test('takeAppEvents : traite le .ingest laissé, laisse les nouveaux appends', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pw-e-'));
+  const p = join(dir, 'app-events.jsonl');
+  const e1 = { ts: 5, type: 'app_kill' as const, groupKey: 'app:chrome', detail: { pids: [1], signal: 'SIGTERM' } };
+  const e2 = { ts: 10, type: 'app_kill' as const, groupKey: 'app:firefox', detail: { pids: [2], signal: 'SIGKILL' } };
+
+  // leftover .ingest from crash
+  writeFileSync(`${p}.ingest`, formatAppEvent(e1));
+
+  // new appends meanwhile
+  writeFileSync(p, formatAppEvent(e2));
+
+  // take events
+  const result = takeAppEvents(p);
+  expect(result.events).toEqual([e1]); // from .ingest, not from p
+  expect(existsSync(p)).toBe(true); // new appends stay
+  expect(existsSync(`${p}.ingest`)).toBe(true);
+
+  // ack
+  result.ack();
+  expect(existsSync(`${p}.ingest`)).toBe(false);
+  expect(existsSync(p)).toBe(true); // new appends still there
 });
 
 test('insertEvent résout le groupe ; lastSampleTs / lastEventTs', () => {
