@@ -89,17 +89,25 @@ function dbIsNewer(path: string): boolean {
   }
 }
 
-/** Le processus du service est-il vivant ? `kill(pid, 0)` puis `/proc/<pid>/cmdline` (le pid peut avoir été réattribué). */
-export function recorderProcessAlive(pid: number): boolean {
+/**
+ * Le processus du service est-il vivant ? Seules ESRCH (`kill(pid, 0)`) et ENOENT (lecture de `/proc/<pid>/cmdline`) prouvent
+ * la mort ; toute autre erreur, ou un pid invalide, vaut « vivant » (on passe alors par `clear-request`, sans suppression).
+ * Un pid vivant dont la ligne de commande n'est pas `recorder.js` est un pid réattribué : le service est mort.
+ */
+export function recorderProcessAlive(
+  pid: number,
+  readCmdline: (pid: number) => string = (p) => readFileSync(`/proc/${p}/cmdline`, 'utf8'),
+): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return true;
   try {
     process.kill(pid, 0);
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === 'ESRCH') return false;
   }
   try {
-    return readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes('recorder.js');
-  } catch {
-    return false;
+    return readCmdline(pid).includes('recorder.js');
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code !== 'ENOENT';
   }
 }
 

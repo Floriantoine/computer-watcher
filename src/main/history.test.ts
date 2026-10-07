@@ -7,7 +7,7 @@ import { openHistoryDb } from '../core/history/db';
 import { HistoryWriter } from '../core/history/writer';
 import { clearRequestPath, dbPath, statusPath } from '../core/paths';
 import type { Group, ProcInfo, SystemInfo } from '../core/types';
-import { clearHistory, createHistoryReader } from './history';
+import { clearHistory, createHistoryReader, recorderProcessAlive } from './history';
 
 const sys: SystemInfo = { memTotalKB: 1000, memAvailableKB: 400, swapTotalKB: 2000, swapFreeKB: 500, load1: 1.5, psiSome10: 3 };
 const p: ProcInfo = {
@@ -130,4 +130,18 @@ test('clearHistory, base plus récente et processus vivant : suppression autoris
   db.exec('PRAGMA user_version = 99');
   db.close();
   expect(clearHistory(dir, { running: false, pid: 1, isAlive: () => true }).mode).toBe('deleted');
+});
+
+test('recorderProcessAlive (réel) : pid réattribué, mort, invalide, cmdline illisible', async () => {
+  const { spawn } = await import('node:child_process');
+  expect(recorderProcessAlive(process.pid)).toBe(false); // vivant mais pas recorder.js : pid réutilisé
+  expect(recorderProcessAlive(process.pid, () => 'node\0recorder.js\0')).toBe(true);
+  const child = spawn(process.execPath, ['-e', '0']);
+  await new Promise((r) => child.on('exit', r));
+  expect(recorderProcessAlive(child.pid!)).toBe(false);
+  for (const bad of [0, -1, NaN, '12' as unknown as number]) expect(recorderProcessAlive(bad)).toBe(true);
+  const eacces = () => { throw Object.assign(new Error('x'), { code: 'EACCES' }); };
+  expect(recorderProcessAlive(process.pid, eacces)).toBe(true);
+  const enoent = () => { throw Object.assign(new Error('x'), { code: 'ENOENT' }); };
+  expect(recorderProcessAlive(process.pid, enoent)).toBe(false);
 });

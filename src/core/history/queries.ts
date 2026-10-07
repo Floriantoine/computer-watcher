@@ -176,7 +176,15 @@ export function queryCulprits(db: DatabaseSync, ts: number, o: QueryOpts, window
     .all(from, ts) as { key: string; label: string; kind: GroupKind; delta: number; mem: number; firstTs: number }[];
   // Les petits groupes sont repliés dans « Petits groupes » : un groupe sans ligne au début de la fenêtre y est « apparu »
   // (franchissement du seuil) ; sa mémoire de départ n'est pas 0 mais inconnue, on retient sa mémoire au dernier point.
-  const appearedAfter = from + (detail ? 2 * o.intervalSec * 1000 : 2 * M);
+  // Seulement si le service échantillonnait déjà au début de la fenêtre (sinon trou, redémarrage : rien ne prouve l'apparition).
+  const sampled = db
+    .prepare(
+      detail
+        ? 'SELECT MIN(t) AS t FROM (SELECT MIN(ts) AS t FROM system_samples WHERE ts >= ? AND ts <= ? UNION ALL SELECT MIN(ts) FROM group_samples WHERE ts >= ? AND ts <= ?)'
+        : 'SELECT MIN(ts) AS t FROM system_minute WHERE ts >= ? AND ts <= ?',
+    )
+    .get(...(detail ? [from, ts, from, ts] : [from, ts])) as { t: number | null };
+  const appearedAfter = Math.max(from, sampled.t ?? from) + (detail ? 2 * o.intervalSec * 1000 : 2 * M);
   return rows
     .map((r) => ({ key: r.key, label: r.label, kind: r.kind, deltaKB: Math.round(r.firstTs > appearedAfter ? r.mem : r.delta), memKB: Math.round(r.mem) }))
     .sort((a, b) => b.deltaKB - a.deltaKB)

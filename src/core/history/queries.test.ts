@@ -124,9 +124,29 @@ test('queryCulprits : même règle sur la source minute', () => {
   const rows: [number, number, number][] = [];
   for (let m = 5; m >= 0; m--) rows.push([at - m * M, 1, 500 * 1024]);
   rows.push([at, 2, 10 * 1024 * 1024]); // apparu à la dernière minute
-  const c = queryCulprits(culpritDb('group_minute', rows), at, opts(now));
+  const db = culpritDb('group_minute', rows);
+  for (let m = 5; m >= 0; m--) db.prepare('INSERT INTO system_minute VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(at - m * M, 1, 1, 100, 0, 0, 100, 0, 0, 1, 1);
+  const c = queryCulprits(db, at, opts(now));
   expect(c[0]).toMatchObject({ key: 'app:new', deltaKB: 10 * 1024 * 1024 });
   expect(c[1]).toMatchObject({ key: 'app:flat', deltaKB: 0 });
+});
+
+test('queryCulprits : trou du recorder au début de la fenêtre, groupe stable : pas de faux « apparu » (détaillé)', () => {
+  const now = 10 * M;
+  const rows: [number, number, number][] = [];
+  for (let ts = 5 * M + 3 * M; ts <= now; ts += 5000) rows.push([ts, 2, 2 * 1024 * 1024 + (ts - 8 * M) / 5000]);
+  const c = queryCulprits(culpritDb('group_samples', rows), now, opts(now));
+  expect(c[0]).toMatchObject({ key: 'app:new', deltaKB: 24 });
+});
+
+test('queryCulprits : trou du recorder au début de la fenêtre (minute)', () => {
+  const now = 100 * H;
+  const at = 50 * H;
+  const rows: [number, number, number][] = [];
+  for (let m = 2; m >= 0; m--) rows.push([at - m * M, 2, 2 * 1024 * 1024]);
+  const db = culpritDb('group_minute', rows);
+  for (let m = 2; m >= 0; m--) db.prepare('INSERT INTO system_minute VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(at - m * M, 1, 1, 100, 0, 0, 100, 0, 0, 1, 1);
+  expect(queryCulprits(db, at, opts(now))[0]).toMatchObject({ key: 'app:new', deltaKB: 0 });
 });
 
 test('queryTop et queryEvents', () => {
