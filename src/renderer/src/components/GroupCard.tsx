@@ -46,7 +46,7 @@ export function GroupCard({ group, memTotalKB, stuck, pending, layoutKey, onOpen
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.9, transition: { duration: 0.18, ease: 'easeIn' } }}
       whileHover={{ y: -2 }}
-      transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1], layout: { type: 'spring', stiffness: 380, damping: 34 } }}
+      transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1], layout: { duration: 0.32, ease: [0.22, 1, 0.36, 1] } }}
       style={{ pointerEvents: isPresent ? undefined : 'none' }}
     >
       <div className="card-head">
