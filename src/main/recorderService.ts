@@ -18,6 +18,9 @@ export function recorderUnit(args: string[]): string {
   return [
     '[Unit]',
     'Description=proc-watch recorder (historique des processus)',
+    // au plus 5 démarrages en 5 min : pas de boucle infinie si le binaire a disparu
+    'StartLimitIntervalSec=300',
+    'StartLimitBurst=5',
     '',
     '[Service]',
     'Environment=ELECTRON_RUN_AS_NODE=1',
@@ -34,6 +37,15 @@ export function recorderUnit(args: string[]): string {
 
 export function unitPath(env: NodeJS.ProcessEnv = process.env, home: string = homedir()): string {
   return join(env.XDG_CONFIG_HOME || join(home, '.config'), 'systemd/user', UNIT_NAME);
+}
+
+/**
+ * Installer/activer le service au démarrage de l'app ? Oui pour une version installée ; pour un clone de dev,
+ * seulement avec PROC_WATCH_RECORDER_DEV=1 (pas de service permanent installé en silence). Le réglage
+ * « Enregistrer l'historique », action explicite, gère le service dans tous les cas.
+ */
+export function autoManageService(isPackaged: boolean, env: NodeJS.ProcessEnv = process.env): boolean {
+  return isPackaged || env.PROC_WATCH_RECORDER_DEV === '1';
 }
 
 export type Systemctl = (args: string[]) => Promise<{ ok: boolean; stdout: string }>;

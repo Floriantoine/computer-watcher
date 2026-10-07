@@ -16,7 +16,7 @@ import type { ConfigState, KillResult, KillTarget, RecorderState, Snapshot } fro
 import { installDesktopEntry } from './desktopEntry';
 import { clearHistory, createHistoryReader } from './history';
 import { isGroupKeys, isRange, isTopOptions, recorderState as computeRecorderState } from './historyIpc';
-import { defaultSystemctl, ensureRecorderService, recorderExecArgs, systemctlAvailable, unitPath } from './recorderService';
+import { autoManageService, defaultSystemctl, ensureRecorderService, recorderExecArgs, systemctlAvailable, unitPath } from './recorderService';
 
 const POLL_MS = 2000;
 const dir = configDir();
@@ -35,9 +35,10 @@ let systemdOk = false;
 
 const execArgs = () => recorderExecArgs({ appImage: process.env.APPIMAGE, execPath: process.execPath, appPath: app.getAppPath() });
 
-async function doSync(): Promise<void> {
+/** `explicit` : action de l'utilisateur (réglage) ; sinon synchronisation au démarrage, réservée à autoManageService. */
+async function doSync(explicit: boolean): Promise<void> {
   systemdOk = await systemctlAvailable(defaultSystemctl);
-  if (!systemdOk) return;
+  if (!systemdOk || (!explicit && !autoManageService(app.isPackaged))) return;
   try {
     await ensureRecorderService({ enabled: config.recorder.enabled, args: execArgs(), path: unitPath(), run: defaultSystemctl });
   } catch (e) {
@@ -47,8 +48,9 @@ async function doSync(): Promise<void> {
 
 let syncing: Promise<void> = Promise.resolve();
 /** Sérialise les synchronisations pour éviter des appels systemctl concurrents. */
-function syncRecorder(): Promise<void> {
-  syncing = syncing.then(doSync, doSync);
+function syncRecorder(explicit: boolean): Promise<void> {
+  const run = () => doSync(explicit);
+  syncing = syncing.then(run, run);
   return syncing;
 }
 
@@ -130,7 +132,7 @@ ipcMain.handle('config:set', (_e, next: unknown) => {
   protection = compileProtection(config.protected);
   warning = null;
   saveConfig(dir, config);
-  if (recorderChanged) void syncRecorder();
+  if (recorderChanged) void syncRecorder(true);
   return configState();
 });
 
@@ -147,7 +149,7 @@ ipcMain.handle('recorder:setEnabled', async (_e, enabled: unknown) => {
   const next = { ...config, recorder: { ...config.recorder, enabled } };
   saveConfig(dir, next);
   config = next;
-  await syncRecorder();
+  await syncRecorder(true);
   return recorderState();
 });
 ipcMain.handle('recorder:clearHistory', () => clearHistory(data, { running: recorderState().running, beforeDelete: history.close }));
@@ -159,6 +161,6 @@ ipcMain.handle('desktop:install', () => {
 
 app.whenReady().then(() => {
   createWindow();
-  void syncRecorder();
+  void syncRecorder(false);
 });
 app.on('window-all-closed', () => app.quit());

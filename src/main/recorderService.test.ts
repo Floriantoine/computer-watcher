@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { expect, test } from 'vitest';
-import { ensureRecorderService, recorderExecArgs, recorderUnit, systemdQuote, unitPath, type Systemctl } from './recorderService';
+import { autoManageService, ensureRecorderService, recorderExecArgs, recorderUnit, systemdQuote, unitPath, type Systemctl } from './recorderService';
 
 test('systemdQuote échappe \\ " $ % et entoure de guillemets', () => {
   expect(systemdQuote('/opt/My App/p%w$x"y\\z')).toBe('"/opt/My App/p%%w$$x\\"y\\\\z"');
@@ -68,4 +68,18 @@ test('ensure : installe, puis inchangé, puis mis à jour, puis retiré', async 
   f.calls.length = 0;
   expect(await ensureRecorderService({ enabled: false, args: [], path, run: f.run })).toBe('absent');
   expect(f.calls).toEqual([]);
+});
+
+test('recorderUnit : redémarrages limités (pas de boucle infinie si le binaire disparaît)', () => {
+  const unit = recorderUnit(['/a', '/b']);
+  const unitSection = unit.slice(unit.indexOf('[Unit]'), unit.indexOf('[Service]'));
+  expect(unitSection).toContain('StartLimitIntervalSec=300\n');
+  expect(unitSection).toContain('StartLimitBurst=5\n');
+});
+
+test('autoManageService : version installée, ou clone de dev avec PROC_WATCH_RECORDER_DEV=1', () => {
+  expect(autoManageService(true, {})).toBe(true);
+  expect(autoManageService(false, {})).toBe(false);
+  expect(autoManageService(false, { PROC_WATCH_RECORDER_DEV: '1' })).toBe(true);
+  expect(autoManageService(false, { PROC_WATCH_RECORDER_DEV: '0' })).toBe(false);
 });
