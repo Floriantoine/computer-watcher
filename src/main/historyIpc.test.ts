@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import type { RecorderStatus } from '../core/types';
-import { isRange, recorderState } from './historyIpc';
+import { isRange, isTopOptions, recorderState } from './historyIpc';
 
 test('isRange : préréglages et plages valides uniquement', () => {
   for (const ok of ['1h', '6h', '24h', '7d', '30d', { from: 0, to: 10 }]) expect(isRange(ok)).toBe(true);
@@ -17,4 +17,9 @@ test('recorderState : running selon lastSampleAt (3 intervalles + 2 s)', () => {
   expect(recorderState({ ...base, status: status(100_000 - 17_000) }).running).toBe(false);
   const s = status(99_000);
   expect(recorderState({ ...base, available: false, enabled: false, status: s })).toEqual({ available: false, enabled: false, running: true, status: s });
+});
+
+test('isTopOptions : absent, ou by avg/max et limit entier 1..50', () => {
+  for (const ok of [undefined, {}, { by: 'avg' }, { by: 'max', limit: 8 }, { limit: 50 }]) expect(isTopOptions(ok)).toBe(true);
+  for (const bad of [null, 'max', { by: 'min' }, { limit: 0 }, { limit: 51 }, { limit: 2.5 }, { limit: '8' }]) expect(isTopOptions(bad)).toBe(false);
 });

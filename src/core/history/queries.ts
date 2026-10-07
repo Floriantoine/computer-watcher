@@ -1,7 +1,7 @@
 // src/core/history/queries.ts
 import type { DatabaseSync } from 'node:sqlite';
 import type {
-  Culprit, GroupHistory, GroupKind, GroupsHistory, HistoryEvent, ProcsHistory, RangePreset, SystemSeries, TimeRange, TopConsumer,
+  Culprit, GroupHistory, GroupKind, GroupsHistory, HistoryEvent, ProcsHistory, RangePreset, SystemSeries, TimeRange, TopConsumer, TopOptions,
 } from '../types';
 import { alignSeries } from './series';
 
@@ -163,18 +163,27 @@ export function queryCulprits(db: DatabaseSync, ts: number, o: QueryOpts, window
   return rows.map((r) => ({ key: r.key, label: r.label, kind: r.kind, deltaKB: Math.round(r.delta), memKB: Math.round(r.mem) }));
 }
 
-export function queryTop(db: DatabaseSync, range: TimeRange, o: QueryOpts, limit = 10): TopConsumer[] {
+/** Top des groupes sur la plage, par moyenne (avec mini-courbes) ou par pic (`by: 'max'`, sans mini-courbes). */
+export function queryTop(db: DatabaseSync, range: TimeRange, o: QueryOpts, { by = 'avg', limit = 10 }: TopOptions = {}): TopConsumer[] {
   const { source, bucket } = plan(range, o);
   const table = source === 'detail' ? 'group_samples' : 'group_minute';
   const avg = source === 'detail' ? 'AVG(rss_kb + swap_kb)' : 'AVG(rss_kb_avg + swap_kb_avg)';
+  // Par minute, mem_kb_max garde le pic d'une minute : un pic court survit aux plages de 7 j / 30 j.
   const max = source === 'detail' ? 'MAX(rss_kb + swap_kb)' : 'MAX(mem_kb_max)';
   const top = db
-    .prepare(`SELECT group_id AS gid, ${avg} AS avg, ${max} AS max FROM ${table} WHERE ts >= ? AND ts < ? GROUP BY group_id ORDER BY avg DESC LIMIT ?`)
+    .prepare(`SELECT group_id AS gid, ${avg} AS avg, ${max} AS max FROM ${table} WHERE ts >= ? AND ts < ? GROUP BY group_id ORDER BY ${by === 'max' ? 'max' : 'avg'} DESC LIMIT ?`)
     .all(range.from, range.to, limit) as { gid: number; avg: number; max: number }[];
   if (top.length === 0) return [];
   const metas = db
     .prepare(`SELECT id, key, label, kind FROM groups WHERE id IN (${top.map(() => '?').join(',')})`)
     .all(...top.map((t) => t.gid)) as unknown as GroupMeta[];
+  if (by === 'max') {
+    const metaById = new Map(metas.map((m) => [m.id, m]));
+    return top.flatMap((r) => {
+      const m = metaById.get(r.gid);
+      return m ? [{ key: m.key, label: m.label, kind: m.kind, avgKB: Math.round(r.avg), maxKB: r.max, spark: [] }] : [];
+    });
+  }
   const spark = groupsHistory(db, source, bucket, range, metas);
   // Les mini-courbes du top sont ramenées à ~60 points.
   const step = Math.max(1, Math.ceil(spark.ts.length / 60));

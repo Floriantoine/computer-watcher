@@ -6,7 +6,7 @@ import {
   queryCulprits, queryEvents, queryGroup, queryGroups, queryProcs, querySystem, queryTop, rangeFromPreset, type QueryOpts,
 } from '../core/history/queries';
 import { dbPath, statusPath } from '../core/paths';
-import type { RangePreset, RecorderConfig, RecorderStatus, TimeRange } from '../core/types';
+import type { RangePreset, RecorderConfig, RecorderStatus, TimeRange, TopOptions } from '../core/types';
 
 export function createHistoryReader(dataDir: string, getConfig: () => RecorderConfig) {
   let db: DatabaseSync | null = null;
@@ -59,7 +59,7 @@ export function createHistoryReader(dataDir: string, getConfig: () => RecorderCo
     group: (key: string, r: RangePreset | TimeRange) => run((d) => queryGroup(d, key, toRange(r), opts()), null),
     procs: (key: string, r: RangePreset | TimeRange) => run((d) => queryProcs(d, key, toRange(r), opts()), null),
     culprits: (ts: number) => run((d) => queryCulprits(d, ts, opts()), []),
-    top: (r: RangePreset | TimeRange) => run((d) => queryTop(d, toRange(r), opts()), []),
+    top: (r: RangePreset | TimeRange, o?: TopOptions) => run((d) => queryTop(d, toRange(r), opts(), o), []),
     events: (r: RangePreset | TimeRange) => run((d) => queryEvents(d, toRange(r)), []),
     status: (): RecorderStatus | null => {
       try {

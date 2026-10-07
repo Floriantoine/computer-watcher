@@ -1,5 +1,5 @@
 import { stackSeries, topKeysByMax } from '../../core/history/series';
-import type { GroupsHistory, HistoryEvent } from '../../core/types';
+import type { GroupsHistory, HistoryEvent, SystemSeries, TimeRange, TopConsumer, TopOptions } from '../../core/types';
 import { formatKB } from './format';
 
 /**
@@ -33,7 +33,14 @@ function label(e: HistoryEvent): string {
   switch (e.type) {
     case 'earlyoom_kill': return `Kill earlyoom : ${String(d.name ?? '?')}`;
     case 'pressure': return `Pression ${Math.round(Number(d.psi))} %`;
-    case 'gap': return `Trou d'enregistrement (${Math.round((Number(d.to) - Number(d.from)) / 60_000)} min)`;
+    case 'gap':
+      if (d.reason !== undefined || d.backup !== undefined) return 'Base recréée';
+      {
+        const from = Number(d.from ?? NaN);
+        const to = Number(d.to ?? NaN);
+        if (!Number.isFinite(from) || !Number.isFinite(to)) return "Trou d'enregistrement";
+        return `Trou d'enregistrement (${Math.round((to - from) / 60_000)} min)`;
+      }
     case 'app_kill': return 'Kill depuis proc-watch';
     case 'leak': return `Fuite probable : ${e.groupLabel ?? '?'} +${formatKB(Number(d.growthKB))}`;
     default: return e.type;
@@ -46,4 +53,33 @@ export function eventMarkers(events: HistoryEvent[]) {
 
 export function alertsFrom(events: HistoryEvent[]): HistoryEvent[] {
   return events.filter((e) => e.type !== 'app_kill').sort((a, b) => b.ts - a.ts);
+}
+
+const p2 = (n: number) => String(n).padStart(2, '0');
+
+/** Instant à la seconde : « HH:mm:ss » si c'est le jour de `now`, « dd/MM HH:mm:ss » sinon. */
+export function formatInstant(ts: number, now = Date.now()): string {
+  const d = new Date(ts);
+  const hms = `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
+  return d.toDateString() === new Date(now).toDateString() ? hms : `${p2(d.getDate())}/${p2(d.getMonth() + 1)} ${hms}`;
+}
+
+/** Nombre de groupes nommés dans l'enquête (le reste forme la couche « Reste »). */
+export const INVESTIGATION_LAYERS = 8;
+
+interface MetricsApi {
+  system: (r: TimeRange) => Promise<SystemSeries | null>;
+  top: (r: TimeRange, o?: TopOptions) => Promise<TopConsumer[]>;
+  events: (r: TimeRange) => Promise<HistoryEvent[]>;
+  groups: (r: TimeRange, keys?: string[]) => Promise<GroupsHistory | null>;
+}
+
+/**
+ * Données de l'onglet sur une plage explicite (mêmes buckets partout). Les couches de l'enquête sont les groupes
+ * au plus haut pic de la plage — un pic court mais énorme y figure — ; la liste « Top » reste classée par moyenne.
+ */
+export async function fetchMetrics(h: MetricsApi, r: TimeRange) {
+  const [system, top, peaks, events] = await Promise.all([h.system(r), h.top(r), h.top(r, { by: 'max', limit: INVESTIGATION_LAYERS }), h.events(r)]);
+  const groups = peaks.length ? await h.groups(r, peaks.map((t) => t.key)) : null;
+  return { system, top, events, groups };
 }

@@ -1,6 +1,7 @@
 import { ChevronRight, X } from 'lucide-react';
 import type { Culprit } from '../../../core/types';
 import { formatKB } from '../format';
+import { formatInstant } from '../metrics';
 import { GroupIcon } from './ui';
 
 interface Props {
@@ -11,14 +12,6 @@ interface Props {
   onClose: () => void;
 }
 
-const p2 = (n: number) => String(n).padStart(2, '0');
-
-/** « À 14:32:05 », précédé de la date si l'instant n'est pas aujourd'hui. */
-export function instantTitle(ts: number): string {
-  const d = new Date(ts);
-  const hms = `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
-  return d.toDateString() === new Date().toDateString() ? `À ${hms}` : `Le ${p2(d.getDate())}/${p2(d.getMonth() + 1)} à ${hms}`;
-}
 
 function delta(kb: number): string {
   if (kb > 0) return `+${formatKB(kb)}`;
@@ -32,7 +25,7 @@ export function CulpritsPanel({ ts, culprits, canOpen, onOpenGroup, onClose }: P
     <aside className="culprits" data-testid="culprits-panel">
       <div className="culprits-head">
         <div>
-          <h3>{instantTitle(ts)}</h3>
+          <h3>À {formatInstant(ts)}</h3>
           <div className="sub">Hausse sur les 5 min précédentes</div>
         </div>
         <button className="icon-btn sm" title="Fermer" aria-label="Fermer" onClick={onClose}>

@@ -4,7 +4,8 @@ import { Activity, CircleAlert, Cpu, Gauge, HardDrive, MemoryStick, Power, Rotat
 import type { Culprit, RangePreset, TimeRange } from '../../../core/types';
 import { formatKB } from '../format';
 import { useHistory } from '../history';
-import { eventMarkers, investigationSeries } from '../metrics';
+import { ipcErrorMessage } from '../viewModel';
+import { eventMarkers, fetchMetrics, formatInstant, INVESTIGATION_LAYERS, investigationSeries } from '../metrics';
 import { AlertsPanel } from './AlertsPanel';
 import { CulpritsPanel } from './CulpritsPanel';
 import type { ChartSeries } from './charts/chartData';
@@ -54,6 +55,7 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
   const [zoom, setZoom] = useState<TimeRange | null>(null);
   const [cursor, setCursor] = useState<number | null>(at ?? null);
   const [statusGen, setStatusGen] = useState(0);
+  const [enableError, setEnableError] = useState<string | null>(null);
 
   useEffect(() => {
     if (at === undefined) return;
@@ -66,14 +68,8 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
 
   // Une seule plage explicite pour toutes les requêtes : mêmes buckets, donc mêmes horodatages pour le système et les groupes.
   const data = useHistory(
-    async () => {
-      const r = zoom ?? { from: Date.now() - PRESET_MS[preset], to: Date.now() };
-      const h = window.procWatch.history;
-      const [system, top, events] = await Promise.all([h.system(r), h.top(r), h.events(r)]);
-      // Enquête : on ne charge que les plus gros groupes ; le reste est déduit de la mémoire totale du système.
-      const groups = top.length ? await h.groups(r, top.map((t) => t.key)) : null;
-      return { system, top, events, groups };
-    },
+    // Enquête : on ne charge que les groupes aux plus hauts pics ; le reste est déduit de la mémoire totale du système.
+    () => fetchMetrics(window.procWatch.history, zoom ?? { from: Date.now() - PRESET_MS[preset], to: Date.now() }),
     [preset, zoom],
     zoom ? null : REFRESH_MS,
   );
@@ -119,7 +115,7 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
     const g = data?.groups;
     if (!g || !system || g.ts.length < 2) return null;
     const totalAt = new Map(system.ts.map((t, i) => [t, system.memUsedKB[i] + system.swapUsedKB[i]]));
-    const r = investigationSeries(g, 8, g.ts.map((t) => totalAt.get(t) ?? null));
+    const r = investigationSeries(g, INVESTIGATION_LAYERS, g.ts.map((t) => totalAt.get(t) ?? null));
     const series: ChartSeries[] = r.layers.map((l, i) => ({
       label: l.label,
       values: l.values,
@@ -167,7 +163,14 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
       <StatusBanner
         status={status}
         noData={data !== undefined && (!system || system.ts.length < 2) && !zoom}
-        onEnable={() => void window.procWatch.recorder.setEnabled(true).finally(() => setStatusGen((n) => n + 1))}
+        error={enableError}
+        onEnable={() => {
+          setEnableError(null);
+          window.procWatch.recorder.setEnabled(true).then(
+            () => setStatusGen((n) => n + 1),
+            (e: unknown) => setEnableError(`Activation impossible : ${ipcErrorMessage(e)}`),
+          );
+        }}
       />
 
       <div className="sys-charts">
@@ -239,19 +242,13 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
   );
 }
 
-const p2 = (n: number) => String(n).padStart(2, '0');
-const hm = (ts: number) => {
-  const d = new Date(ts);
-  return `${p2(d.getHours())}:${p2(d.getMinutes())}`;
-};
-
-function StatusBanner({ status, noData, onEnable }: { status: Awaited<ReturnType<typeof window.procWatch.recorder.status>> | undefined; noData: boolean; onEnable: () => void }) {
+function StatusBanner({ status, noData, error, onEnable }: { status: Awaited<ReturnType<typeof window.procWatch.recorder.status>> | undefined; noData: boolean; error: string | null; onEnable: () => void }) {
   let content: ReactNode = null;
   if (status && !status.enabled) {
     content = (
       <>
         <Power size={15} strokeWidth={2} />
-        <span><b>Enregistrement désactivé.</b> Aucun nouvel historique n’est collecté.</span>
+        <span><b>Enregistrement désactivé.</b> {error ?? 'Aucun nouvel historique n’est collecté.'}</span>
         <span className="spacer" />
         <button onClick={onEnable} disabled={!status.available}>Activer</button>
       </>
@@ -270,7 +267,7 @@ function StatusBanner({ status, noData, onEnable }: { status: Awaited<ReturnType
         <CircleAlert size={15} strokeWidth={2} />
         <span>
           <b>Le service ne répond pas.</b>
-          {lastAt ? ` Dernier échantillon à ${hm(lastAt)}${new Date(lastAt).toDateString() === new Date().toDateString() ? '' : ` le ${p2(new Date(lastAt).getDate())}/${p2(new Date(lastAt).getMonth() + 1)}`}.` : ' Aucun échantillon reçu.'}
+          {lastAt ? ` Dernier échantillon : ${formatInstant(lastAt)}.` : ' Aucun échantillon reçu.'}
         </span>
       </>
     );

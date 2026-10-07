@@ -15,7 +15,7 @@ import { appEventsPath, clearRequestPath, dataDir } from '../core/paths';
 import type { ConfigState, KillResult, KillTarget, RecorderState, Snapshot } from '../core/types';
 import { installDesktopEntry } from './desktopEntry';
 import { createHistoryReader } from './history';
-import { isRange, recorderState as computeRecorderState } from './historyIpc';
+import { isRange, isTopOptions, recorderState as computeRecorderState } from './historyIpc';
 import { defaultSystemctl, ensureRecorderService, recorderExecArgs, systemctlAvailable, unitPath } from './recorderService';
 
 const POLL_MS = 2000;
@@ -141,7 +141,7 @@ ipcMain.handle('history:groups', (_e, r: unknown, keys: unknown) =>
 ipcMain.handle('history:group', (_e, key: unknown, r: unknown) => (typeof key === 'string' && isRange(r) ? history.group(key, r) : null));
 ipcMain.handle('history:procs', (_e, key: unknown, r: unknown) => (typeof key === 'string' && isRange(r) ? history.procs(key, r) : null));
 ipcMain.handle('history:culprits', (_e, ts: unknown) => (Number.isFinite(ts) ? history.culprits(ts as number) : []));
-ipcMain.handle('history:top', (_e, r: unknown) => (isRange(r) ? history.top(r) : []));
+ipcMain.handle('history:top', (_e, r: unknown, o: unknown) => (isRange(r) && isTopOptions(o) ? history.top(r, o) : []));
 ipcMain.handle('history:events', (_e, r: unknown) => (isRange(r) ? history.events(r) : []));
 ipcMain.handle('recorder:status', () => recorderState());
 ipcMain.handle('recorder:setEnabled', async (_e, enabled: unknown) => {

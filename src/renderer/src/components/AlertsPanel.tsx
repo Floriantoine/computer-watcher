@@ -1,11 +1,9 @@
 import { useMemo } from 'react';
 import { BellRing, Gauge, Skull, TrendingUp, Unplug, type LucideIcon } from 'lucide-react';
 import type { HistoryEvent } from '../../../core/types';
-import { alertsFrom, eventMarkers } from '../metrics';
-import { formatAxisTime } from './charts/uplotTheme';
+import { alertsFrom, eventMarkers, formatInstant } from '../metrics';
 
 const ICONS: Record<string, LucideIcon> = { leak: TrendingUp, earlyoom_kill: Skull, pressure: Gauge, gap: Unplug };
-const DAY_MS = 86_400_000;
 
 interface Props {
   events: HistoryEvent[] | undefined;
@@ -15,7 +13,6 @@ interface Props {
 /** Fuites, kills earlyoom, pics de pression et trous d'enregistrement ; un clic place le curseur de l'enquête. */
 export function AlertsPanel({ events, onPick }: Props) {
   const alerts = useMemo(() => eventMarkers(alertsFrom(events ?? [])), [events]);
-  const today = new Date().toDateString();
   return (
     <section className="chart-panel metrics-list" data-testid="alerts">
       <div className="chart-panel-head">
@@ -28,14 +25,13 @@ export function AlertsPanel({ events, onPick }: Props) {
         <ul>
           {alerts.map((a, i) => {
             const Icon = ICONS[a.type] ?? BellRing;
-            const sameDay = new Date(a.ts).toDateString() === today;
             return (
               <li key={`${a.ts}-${i}`} className="clickable" title="Voir les coupables à cet instant" onClick={() => onPick(a.ts)}>
                 <span className="alert-ico" style={{ color: a.color, background: `${a.color}1f` }}>
                   <Icon size={13} strokeWidth={2.2} />
                 </span>
                 <span className="name">{a.label}</span>
-                <span className="mono">{formatAxisTime(a.ts, sameDay ? 0 : DAY_MS + 1)}</span>
+                <span className="mono">{formatInstant(a.ts)}</span>
               </li>
             );
           })}

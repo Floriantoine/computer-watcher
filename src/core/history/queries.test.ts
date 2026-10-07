@@ -94,6 +94,29 @@ test('queryTop et queryEvents', () => {
   ]);
 });
 
+test('queryTop by max : un pic court et une moyenne basse remontent par le max, pas par la moyenne', () => {
+  const { db } = seeded();
+  // Groupe 3 : 100 Mo, sauf un pic de 2 Go pendant 30 s (6 ticks) : moyenne ≈ 197 Mo, sous les 500 Mo de « a ».
+  db.exec(`INSERT INTO groups(id,key,label,kind) VALUES (3,'command:vitest','vitest','command')`);
+  for (let ts = 0; ts < 10 * M; ts += 5000) {
+    const v = ts >= 4 * M && ts < 4 * M + 30_000 ? 2 * 1024 * 1024 : 100 * 1024;
+    db.prepare('INSERT INTO group_samples VALUES (?,?,?,?,?,?)').run(ts, 3, v, 0, 1, 1);
+  }
+  for (let m = 0; m < 10; m++) {
+    db.exec(`DELETE FROM group_minute WHERE ts = ${m * M}`);
+    aggregateMinute(db, m * M);
+  }
+  const r = { from: 0, to: 10 * M };
+  const byAvg = queryTop(db, r, opts(10 * M), { limit: 2 });
+  const byMax = queryTop(db, r, opts(10 * M), { by: 'max', limit: 2 });
+  expect(byAvg.map((t) => t.key)).toEqual(['app:chrome', 'project:/a']);
+  expect(byMax.map((t) => t.key)).toEqual(['command:vitest', 'app:chrome']);
+  expect(byMax[0].maxKB).toBe(2 * 1024 * 1024);
+  // Sur une plage ancienne (agrégats minute), le pic survit grâce à mem_kb_max.
+  const old = queryTop(db, r, opts(48 * H), { by: 'max', limit: 1 });
+  expect(old.map((t) => [t.key, t.maxKB])).toEqual([['command:vitest', 2 * 1024 * 1024]]);
+});
+
 test('lecture seule pendant qu\'un écrivain tient une transaction : pas d\'erreur', () => {
   const { db, path } = seeded();
   const reader = openHistoryDb(path, { readOnly: true }).db;

@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { alertsFrom, eventMarkers, investigationSeries } from './metrics';
+import { alertsFrom, eventMarkers, fetchMetrics, formatInstant, investigationSeries } from './metrics';
 
 test('investigationSeries : top n + Reste, cumulé', () => {
   const h = {
@@ -43,4 +43,41 @@ test('eventMarkers : couleurs et libellés', () => {
 test('alertsFrom : récents d\'abord, sans app_kill', () => {
   const ev = (ts: number, type: string) => ({ ts, type, groupKey: null, groupLabel: null, detail: {} });
   expect(alertsFrom([ev(1, 'leak'), ev(2, 'app_kill'), ev(3, 'gap')]).map((e) => e.ts)).toEqual([3, 1]);
+});
+
+test('eventMarkers : gap sans from/to, et base recréée', () => {
+  const m = eventMarkers([
+    { ts: 1, type: 'gap', groupKey: null, groupLabel: null, detail: { reason: 'base illisible, recréée', backup: '/x.bak' } },
+    { ts: 2, type: 'gap', groupKey: null, groupLabel: null, detail: {} },
+  ]);
+  expect(m.map((x) => x.label)).toEqual(['Base recréée', "Trou d'enregistrement"]);
+});
+
+test('formatInstant : HH:mm:ss aujourd\'hui, dd/MM HH:mm:ss sinon', () => {
+  const now = new Date(2026, 9, 7, 15, 0, 0).getTime();
+  expect(formatInstant(new Date(2026, 9, 7, 9, 5, 7).getTime(), now)).toBe('09:05:07');
+  expect(formatInstant(new Date(2026, 9, 5, 23, 59, 1).getTime(), now)).toBe('05/10 23:59:01');
+});
+
+test('fetchMetrics : couches de l\'enquête = top par max, liste Top = top par moyenne', async () => {
+  const calls: unknown[] = [];
+  const r = { from: 0, to: 10 };
+  const api = {
+    system: async () => ({ ts: [0, 5], memUsedKB: [100, 100], swapUsedKB: [0, 0], memTotalKB: 1, swapTotalKB: 0, psi: [0, 0], cpu: [0, 0], load: [0, 0] }),
+    events: async () => [],
+    top: async (_r: unknown, o?: { by?: 'avg' | 'max'; limit?: number }) => {
+      calls.push(o);
+      return o?.by === 'max'
+        ? [{ key: 'spike', label: 'S', kind: 'command' as const, avgKB: 1, maxKB: 90, spark: [] }]
+        : [{ key: 'steady', label: 'T', kind: 'app' as const, avgKB: 50, maxKB: 50, spark: [] }];
+    },
+    groups: async (_r: unknown, keys?: string[]) => {
+      calls.push(keys);
+      return { ts: [0, 5], series: [] };
+    },
+  };
+  const d = await fetchMetrics(api, r);
+  expect(d.top.map((t) => t.key)).toEqual(['steady']);
+  expect(calls).toContainEqual({ by: 'max', limit: 8 });
+  expect(calls).toContainEqual(['spike']);
 });
