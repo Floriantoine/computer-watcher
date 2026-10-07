@@ -70,6 +70,25 @@ test('ensure : installe, puis inchangé, puis mis à jour, puis retiré', async 
   expect(f.calls).toEqual([]);
 });
 
+test('ensure sans création (dev) : rien si l\'unité n\'existe pas ; mise à jour ou retrait si elle existe', async () => {
+  const path = join(mkdtempSync(join(tmpdir(), 'pw-s-')), 'systemd/user/proc-watch-recorder.service');
+  const f = fake();
+  expect(await ensureRecorderService({ enabled: true, args: ['/a'], path, run: f.run, allowCreate: false })).toBe('absent');
+  expect(existsSync(path)).toBe(false);
+  expect(f.calls).toEqual([]);
+
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, recorderUnit(['/old']));
+  expect(await ensureRecorderService({ enabled: true, args: ['/new'], path, run: f.run, allowCreate: false })).toBe('updated');
+  expect(readFileSync(path, 'utf8')).toBe(recorderUnit(['/new']));
+  expect(f.calls).toEqual([['daemon-reload'], ['enable', 'proc-watch-recorder.service'], ['restart', 'proc-watch-recorder.service']]);
+
+  f.calls.length = 0;
+  expect(await ensureRecorderService({ enabled: false, args: ['/new'], path, run: f.run, allowCreate: false })).toBe('removed');
+  expect(existsSync(path)).toBe(false);
+  expect(f.calls).toEqual([['disable', '--now', 'proc-watch-recorder.service'], ['daemon-reload']]);
+});
+
 test('recorderUnit : redémarrages limités (pas de boucle infinie si le binaire disparaît)', () => {
   const unit = recorderUnit(['/a', '/b']);
   const unitSection = unit.slice(unit.indexOf('[Unit]'), unit.indexOf('[Service]'));

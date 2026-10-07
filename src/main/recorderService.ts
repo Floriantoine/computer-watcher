@@ -64,6 +64,8 @@ export async function ensureRecorderService(o: {
   args: string[];
   path: string;
   run: Systemctl;
+  /** Faux : ne crée jamais l'unité (mode dev) ; une unité existante est mise à jour ou retirée. */
+  allowCreate?: boolean;
 }): Promise<'installed' | 'updated' | 'unchanged' | 'removed' | 'absent'> {
   const exists = existsSync(o.path);
   if (!o.enabled) {
@@ -73,6 +75,7 @@ export async function ensureRecorderService(o: {
     await o.run(['daemon-reload']);
     return 'removed';
   }
+  if (!exists && o.allowCreate === false) return 'absent';
   const content = recorderUnit(o.args);
   if (exists && readFileSync(o.path, 'utf8') === content) {
     await o.run(['enable', '--now', UNIT_NAME]);

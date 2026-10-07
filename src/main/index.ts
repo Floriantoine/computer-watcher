@@ -35,12 +35,15 @@ let systemdOk = false;
 
 const execArgs = () => recorderExecArgs({ appImage: process.env.APPIMAGE, execPath: process.execPath, appPath: app.getAppPath() });
 
-/** `explicit` : action de l'utilisateur (réglage) ; sinon synchronisation au démarrage, réservée à autoManageService. */
+/** `explicit` : action de l'utilisateur (réglage) ; sinon synchronisation au démarrage (création réservée à autoManageService). */
 async function doSync(explicit: boolean): Promise<void> {
   systemdOk = await systemctlAvailable(defaultSystemctl);
-  if (!systemdOk || (!explicit && !autoManageService(app.isPackaged))) return;
+  if (!systemdOk) return;
+  // Au démarrage en dev (non empaqueté, sans PROC_WATCH_RECORDER_DEV) : jamais de création d'unité, mais une unité
+  // existante est tenue à jour (ou retirée si l'historique est désactivé), comme en mode empaqueté.
+  const allowCreate = explicit || autoManageService(app.isPackaged);
   try {
-    await ensureRecorderService({ enabled: config.recorder.enabled, args: execArgs(), path: unitPath(), run: defaultSystemctl });
+    await ensureRecorderService({ enabled: config.recorder.enabled, args: execArgs(), path: unitPath(), run: defaultSystemctl, allowCreate });
   } catch (e) {
     console.error('recorder service:', e);
   }
@@ -152,7 +155,7 @@ ipcMain.handle('recorder:setEnabled', async (_e, enabled: unknown) => {
   await syncRecorder(true);
   return recorderState();
 });
-ipcMain.handle('recorder:clearHistory', () => clearHistory(data, { running: recorderState().running, beforeDelete: history.close }));
+ipcMain.handle('recorder:clearHistory', () => clearHistory(data, { running: recorderState().running, pid: history.status()?.pid, beforeDelete: history.close }));
 
 ipcMain.handle('desktop:install', () => {
   if (!app.isPackaged) throw new Error('Disponible uniquement dans la version installée (AppImage ou .deb)');
