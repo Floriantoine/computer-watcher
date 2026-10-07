@@ -1,4 +1,4 @@
-// Mesure mémoire (PSS) et CPU de l'app buildée : `npm run build && node scripts/measure-app.mjs`.
+// Mesure mémoire (PSS) et CPU de l'app buildée : `npm run build && node scripts/measure-app.mjs [dossier…]`.
 // Lance l'app via Playwright avec un XDG_CONFIG_HOME temporaire, attend la stabilisation, échantillonne
 // chaque processus de l'arbre Electron, fenêtre visible puis réduite, affiche un tableau par type et ferme l'app.
 // Variables : MEASURE_SETTLE_S (20), MEASURE_SAMPLE_S (60), MEASURE_SCENARIOS (« visible,minimized »).
@@ -57,43 +57,49 @@ function pssKB(pid) {
   return m ? Number(m[1]) : 0;
 }
 
-async function sample(root, seconds) {
+/** Échantillonne en parallèle plusieurs arbres Electron : mêmes conditions système pour chacun. */
+async function sample(roots, seconds) {
   const kinds = new Map();
+  const kindOfCached = (pid) => {
+    if (!kinds.has(pid)) kinds.set(pid, kindOf(pid));
+    return kinds.get(pid);
+  };
   const t0 = new Map();
-  for (const pid of tree(root)) {
-    const st = statOf(pid);
-    if (st) t0.set(pid, st.ticks);
-  }
-  const pss = new Map(); // kind -> somme des PSS échantillonnés
+  for (const root of roots)
+    for (const pid of tree(root)) {
+      const st = statOf(pid);
+      if (st) t0.set(pid, st.ticks);
+    }
+  const pss = roots.map(() => new Map()); // kind -> somme des PSS échantillonnés
   let rounds = 0;
   const start = Date.now();
   while (Date.now() - start < seconds * 1000) {
     rounds++;
-    const byKind = new Map();
-    for (const pid of tree(root)) {
-      if (!kinds.has(pid)) kinds.set(pid, kindOf(pid));
-      const k = kinds.get(pid);
-      byKind.set(k, (byKind.get(k) ?? 0) + pssKB(pid));
-    }
-    for (const [k, v] of byKind) pss.set(k, (pss.get(k) ?? 0) + v);
+    roots.forEach((root, i) => {
+      for (const pid of tree(root)) {
+        const k = kindOfCached(pid);
+        pss[i].set(k, (pss[i].get(k) ?? 0) + pssKB(pid));
+      }
+    });
     await sleep(Math.min(PSS_EVERY_MS, seconds * 1000 - (Date.now() - start)));
   }
   const elapsed = (Date.now() - start) / 1000;
-  const cpu = new Map();
-  for (const pid of tree(root)) {
-    const st = statOf(pid);
-    if (!st) continue;
-    if (!kinds.has(pid)) kinds.set(pid, kindOf(pid));
-    const k = kinds.get(pid);
-    cpu.set(k, (cpu.get(k) ?? 0) + (st.ticks - (t0.get(pid) ?? 0)));
-  }
-  const rows = [...new Set([...pss.keys(), ...cpu.keys()])].map((k) => ({
-    kind: k,
-    pssMB: (pss.get(k) ?? 0) / rounds / 1024,
-    cpu: ((cpu.get(k) ?? 0) / CLK_TCK / elapsed) * 100,
-  }));
-  rows.sort((a, b) => b.pssMB - a.pssMB);
-  return rows;
+  return roots.map((root, i) => {
+    const cpu = new Map();
+    for (const pid of tree(root)) {
+      const st = statOf(pid);
+      if (!st) continue;
+      const k = kindOfCached(pid);
+      cpu.set(k, (cpu.get(k) ?? 0) + (st.ticks - (t0.get(pid) ?? 0)));
+    }
+    const rows = [...new Set([...pss[i].keys(), ...cpu.keys()])].map((k) => ({
+      kind: k,
+      pssMB: (pss[i].get(k) ?? 0) / rounds / 1024,
+      cpu: ((cpu.get(k) ?? 0) / CLK_TCK / elapsed) * 100,
+    }));
+    rows.sort((a, b) => b.pssMB - a.pssMB);
+    return rows;
+  });
 }
 
 function print(title, rows) {
@@ -105,25 +111,33 @@ function print(title, rows) {
   console.log(`| **total** | **${total.pssMB.toFixed(0)} Mo** | **${total.cpu.toFixed(2)} %** |`);
 }
 
-const cfg = mkdtempSync(join(tmpdir(), 'pw-measure-'));
-const app = await electron.launch({ args: ['.'], env: { ...process.env, XDG_CONFIG_HOME: cfg } });
+// Dossiers d'app à mesurer (défaut : celui-ci). Plusieurs dossiers : lancés et mesurés en même temps (comparaison A/B).
+const dirs = process.argv.slice(2).length ? process.argv.slice(2) : ['.'];
+const apps = [];
 try {
-  const root = app.process().pid;
-  const win = await app.firstWindow();
-  await win.waitForSelector('[data-testid="snapshot-ready"]', { timeout: 20000 });
-  console.log(`app PID ${root}, ${tree(root).length} processus ; stabilisation ${SETTLE_S} s, échantillonnage ${SAMPLE_S} s`);
+  for (const dir of dirs) {
+    const cfg = mkdtempSync(join(tmpdir(), 'pw-measure-'));
+    const app = await electron.launch({ args: [dir], env: { ...process.env, XDG_CONFIG_HOME: cfg } });
+    apps.push({ dir, cfg, app });
+    const win = await app.firstWindow();
+    await win.waitForSelector('[data-testid="snapshot-ready"]', { timeout: 20000 });
+  }
+  const roots = apps.map((a) => a.app.process().pid);
+  console.log(`apps ${apps.map((a, i) => `${a.dir} (PID ${roots[i]}, ${tree(roots[i]).length} processus)`).join(', ')} ; stabilisation ${SETTLE_S} s, échantillonnage ${SAMPLE_S} s`);
   await sleep(SETTLE_S * 1000);
   for (const sc of SCENARIOS) {
-    if (sc === 'minimized') {
-      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].minimize());
-      await sleep(3000);
-    } else if (sc === 'hidden') {
-      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].hide());
+    const action = sc === 'minimized' ? 'minimize' : sc === 'hidden' ? 'hide' : null;
+    if (action) {
+      for (const { app } of apps) await app.evaluate(({ BrowserWindow }, a) => BrowserWindow.getAllWindows()[0][a](), action);
       await sleep(3000);
     }
-    print(`Fenêtre ${sc === 'visible' ? 'visible' : sc === 'minimized' ? 'réduite' : 'cachée'} (page Processus)`, await sample(root, SAMPLE_S));
+    const label = sc === 'visible' ? 'visible' : sc === 'minimized' ? 'réduite' : 'cachée';
+    const results = await sample(roots, SAMPLE_S);
+    results.forEach((rows, i) => print(`Fenêtre ${label} (page Processus)${apps.length > 1 ? ` — ${apps[i].dir}` : ''}`, rows));
   }
 } finally {
-  await app.close().catch(() => {});
-  rmSync(cfg, { recursive: true, force: true });
+  for (const { app, cfg } of apps) {
+    await app.close().catch(() => {});
+    rmSync(cfg, { recursive: true, force: true });
+  }
 }
