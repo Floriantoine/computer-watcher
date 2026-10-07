@@ -108,3 +108,16 @@ export interface KillResult {
   /** Code errno (EPERM, ESRCH…) ou SELF quand le garde-fou refuse */
   error?: string;
 }
+
+export type RangePreset = '1h' | '6h' | '24h' | '7d' | '30d';
+export interface TimeRange { from: number; to: number }
+export interface SystemSeries { ts: number[]; memUsedKB: number[]; swapUsedKB: number[]; memTotalKB: number; swapTotalKB: number; psi: (number | null)[]; cpu: number[]; load: number[] }
+export interface GroupSeries { key: string; label: string; kind: GroupKind; memKB: (number | null)[] }
+export interface GroupsHistory { ts: number[]; series: GroupSeries[] }
+export interface GroupHistory { ts: number[]; rssKB: (number | null)[]; swapKB: (number | null)[]; cpu: (number | null)[] }
+export interface ProcSeries { pid: number; startTicks: number; memKB: (number | null)[] }
+export interface ProcsHistory { ts: number[]; series: ProcSeries[] }
+export interface Culprit { key: string; label: string; kind: GroupKind; deltaKB: number; memKB: number }
+export interface TopConsumer { key: string; label: string; kind: GroupKind; avgKB: number; maxKB: number; spark: number[] }
+export interface HistoryEvent { ts: number; type: string; groupKey: string | null; groupLabel: string | null; detail: Record<string, unknown> }
+export interface RecorderStatus { pid: number; startedAt: number; lastSampleAt: number | null; lastError: string | null; earlyoomSource: 'ok' | 'unavailable'; dbSizeBytes: number }
