@@ -85,6 +85,8 @@ export interface Snapshot {
   query: string;
   /** Ids des groupes de premier niveau dont le libellé, une commande ou un dossier contient `query` ; null sans recherche */
   matches: string[] | null;
+  /** `Watch.groupId` pour lequel ce snapshot a été construit (le détail attend ce snapshot avant de conclure) */
+  watched: string | null;
   /** Arbre du groupe suivi (`Watch.groupId`), null si aucun ou s'il n'existe plus */
   detail: { groupId: string; roots: ProcNode[] } | null;
 }

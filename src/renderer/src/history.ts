@@ -32,9 +32,19 @@ export class LiveBuffer {
 }
 
 let live = true;
+const liveListeners = new Set<() => void>();
 /** Collecte en direct active (false : fenêtre réduite ou cachée, les rafraîchissements périodiques sont suspendus). */
 export function setLive(v: boolean): void {
+  const resumed = v && !live;
   live = v;
+  if (resumed) for (const f of liveListeners) f();
+}
+/** `cb` à chaque reprise de la collecte en direct ; renvoie la désinscription. */
+export function onLiveResume(cb: () => void): () => void {
+  liveListeners.add(cb);
+  return () => {
+    liveListeners.delete(cb);
+  };
 }
 
 /**
@@ -58,7 +68,12 @@ export function useHistory<T>(fetch: () => Promise<T>, deps: unknown[], refreshM
     const t = setInterval(() => {
       if (live) void load();
     }, refreshMs);
-    return () => clearInterval(t);
+    // Reprise (fenêtre restaurée) : données fraîches tout de suite, sans attendre le prochain intervalle.
+    const off = onLiveResume(() => void load());
+    return () => {
+      clearInterval(t);
+      off();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
   return data;

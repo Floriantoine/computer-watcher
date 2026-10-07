@@ -51,6 +51,7 @@ export function procRowDisplayEqual(a: ProcInfo, b: ProcInfo): boolean {
     a.pid === b.pid &&
     a.startTicks === b.startTicks &&
     a.uid === b.uid &&
+    a.name === b.name &&
     a.cmdline === b.cmdline &&
     a.cwd === b.cwd &&
     a.cwdDeleted === b.cwdDeleted &&

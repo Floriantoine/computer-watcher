@@ -64,6 +64,7 @@ export function buildSnapshot(full: FullSnapshot, watch: Watch): Snapshot {
     groupIds: full.groups.flatMap((g) => [g.id, ...g.subgroups.map((s) => s.id)]),
     query,
     matches: query ? full.groups.filter((g) => groupMatches(g, query)).map((g) => g.id) : null,
+    watched: watch.groupId,
     detail: followed ? { groupId: followed.id, roots: followed.roots } : null,
   };
 }

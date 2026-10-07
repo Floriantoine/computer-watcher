@@ -58,7 +58,12 @@ export function App() {
   useEffect(() => {
     window.procWatch.watch({ groupId: detailId, query: filter.query }).catch(() => {});
   }, [detailId, filter.query]);
-  const matches = useMemo(() => (snapshot?.matches ? new Set(snapshot.matches) : null), [snapshot]);
+  // Résultat de recherche valable seulement pour la requête en cours ; en attente de la réponse du main : pas de filtre.
+  const query = filter.query.trim();
+  const matches = useMemo(
+    () => (snapshot?.matches && snapshot.query === query ? new Set(snapshot.matches) : null),
+    [snapshot, query],
+  );
 
   // Clés des cartes affichées (hors « Autres »), triées pour ne relancer la requête que si l'ensemble change.
   const visibleKeys = useMemo(
@@ -139,7 +144,10 @@ export function App() {
   const currentUid = snapshot.currentUid;
   const killGroup = (g: GroupSummary) => {
     window.procWatch.groupProcs(g.id).then(
-      (procs) => requestKill(killRequestForGroup(g, procs, isProtected, currentUid)),
+      (procs) => {
+        if (procs.length === 0) pushToast("Ce groupe n'existe plus");
+        else requestKill(killRequestForGroup(g, procs, isProtected, currentUid));
+      },
       (e: unknown) => pushToast(ipcErrorMessage(e)),
     );
   };
@@ -195,6 +203,7 @@ export function App() {
               <DetailView
                 group={findGroup(snapshot.groups, route.groupId)}
                 roots={snapshot.detail?.groupId === route.groupId ? snapshot.detail.roots : null}
+                pending={snapshot.watched !== route.groupId}
                 stuckPids={stuckPids}
                 pendingPids={pendingPids}
                 currentUid={snapshot.currentUid}

@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { LiveBuffer } from './history';
+import { LiveBuffer, onLiveResume, setLive } from './history';
 
 const sys = (mem: number) => ({ memTotalKB: 100, memAvailableKB: 100 - mem, swapTotalKB: 10, swapFreeKB: 10, load1: 1, psiSome10: 0 });
 
@@ -19,4 +19,19 @@ test('procSparkMap : séries indexées par pid:startTicks', async () => {
   const m = procSparkMap({ ts: [1, 2], series: [{ pid: 4, startTicks: 99, memKB: [1, 2] }] });
   expect(m.get('4:99')).toEqual([1, 2]);
   expect(procSparkMap(null).size).toBe(0);
+});
+
+test('reprise de la collecte en direct : les abonnés sont prévenus une fois par reprise', () => {
+  let n = 0;
+  const off = onLiveResume(() => n++);
+  setLive(true);
+  expect(n).toBe(0); // déjà en direct : pas une reprise
+  setLive(false);
+  setLive(true);
+  setLive(true);
+  expect(n).toBe(1);
+  off();
+  setLive(false);
+  setLive(true);
+  expect(n).toBe(1);
 });

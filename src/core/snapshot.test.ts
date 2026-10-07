@@ -65,7 +65,8 @@ describe('buildSnapshot', () => {
   test('groupe suivi : son arbre seulement, y compris un sous-groupe d\'« Autres »', () => {
     expect(buildSnapshot(base, { groupId: 'a', query: '' }).detail).toEqual({ groupId: 'a', roots: groups[0]!.roots });
     expect(buildSnapshot(base, { groupId: 'c', query: '' }).detail).toEqual({ groupId: 'c', roots: inner.roots });
-    expect(buildSnapshot(base, { groupId: 'disparu', query: '' }).detail).toBeNull();
+    expect(buildSnapshot(base, { groupId: 'disparu', query: '' })).toMatchObject({ detail: null, watched: 'disparu' });
+    expect(buildSnapshot(base, { groupId: null, query: '' }).watched).toBeNull();
   });
 
   test('recherche : ids des groupes de premier niveau qui correspondent', () => {

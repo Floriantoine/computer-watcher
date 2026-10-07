@@ -15,6 +15,8 @@ interface Props {
   group: Group | undefined;
   /** Arbre du groupe (envoyé par le main pour le seul groupe ouvert) ; null tant qu'il n'est pas arrivé. */
   roots: ProcNode[] | null;
+  /** Le main n'a pas encore répondu au `watch` de ce groupe : ne pas conclure qu'il a disparu. */
+  pending: boolean;
   stuckPids: Set<number>;
   pendingPids: Set<number>;
   currentUid: number;
@@ -76,6 +78,7 @@ export function DetailView(props: Props) {
   );
   const sparks = useMemo(() => procSparkMap(procs), [procs]);
   const sparkOf = useCallback((pid: number, startTicks: number) => sparks.get(`${pid}:${startTicks}`), [sparks]);
+  if (!group && props.pending) return <p className="empty">Chargement…</p>;
   if (!group) {
     return (
       <div className="empty">

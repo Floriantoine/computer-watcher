@@ -47,6 +47,7 @@ describe('procRowDisplayEqual (arbre du détail)', () => {
     expect(procRowDisplayEqual(p(), p({ cpuPercent: 7 }))).toBe(false);
     expect(procRowDisplayEqual(p(), p({ cwd: '/q' }))).toBe(false);
     expect(procRowDisplayEqual(p(), p({ uid: 0 }))).toBe(false);
+    expect(procRowDisplayEqual(p(), p({ name: 'zsh' }))).toBe(false); // la protection se décide sur le nom
   });
 });
 
