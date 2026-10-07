@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { compileProtection } from '../../core/protection';
-import type { Config, ConfigState, Group, KillSignal, ProcNode, Snapshot } from '../../core/types';
+import type { Config, ConfigState, Group, KillSignal, KillTarget, ProcNode, Snapshot } from '../../core/types';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { DetailView } from './components/DetailView';
 import { SettingsView } from './components/SettingsView';
 import { Toasts } from './components/Toasts';
 import { MainView } from './components/MainView';
 import { SystemBar } from './components/SystemBar';
-import { findGroup, flattenProcs, ipcErrorMessage, killErrorMessage, killRequestForGroup, killRequestForProc, trackKills, type KillRequest, type ViewFilter } from './viewModel';
+import { findGroup, flattenProcs, ipcErrorMessage, killResultMessages, killRequestForGroup, killRequestForProc, trackKills, type KillRequest, type ViewFilter } from './viewModel';
 
 export type Route = { view: 'main' } | { view: 'detail'; groupId: string } | { view: 'settings' };
 
@@ -19,15 +19,19 @@ export function App() {
   const [stuckPids, setStuckPids] = useState<Set<number>>(new Set());
   const [toasts, setToasts] = useState<string[]>([]);
   const [confirm, setConfirm] = useState<KillRequest | null>(null);
+  const [configError, setConfigError] = useState<string | null>(null);
   const pending = useRef(new Map<number, number>());
+  // startTicks relevé à l'envoi du SIGTERM : le SIGKILL « Forcer » le réutilise pour ne pas viser un PID réutilisé.
+  const sentTicks = useRef(new Map<number, number>());
 
   useEffect(() => {
-    window.procWatch.getConfig().then(setConfigState);
+    window.procWatch.getConfig().then(setConfigState, (e: unknown) => setConfigError(ipcErrorMessage(e)));
     return window.procWatch.onSnapshot((s) => {
       setSnapshot(s);
       const present = new Set(s.groups.flatMap((g) => flattenProcs(g).map((p) => p.pid)));
       const r = trackKills(pending.current, present, Date.now());
       pending.current = r.pending;
+      for (const pid of [...sentTicks.current.keys()]) if (!r.pending.has(pid)) sentTicks.current.delete(pid);
       setStuckPids(r.stuck);
     });
   }, []);
@@ -39,22 +43,41 @@ export function App() {
     setTimeout(() => setToasts((t) => t.slice(1)), 5000);
   };
 
-  async function sendKill(pids: number[], signal: KillSignal) {
-    const results = await window.procWatch.kill(pids, signal);
+  async function sendKill(targets: KillTarget[], signal: KillSignal) {
+    let results;
+    try {
+      results = await window.procWatch.kill(targets, signal);
+    } catch (e) {
+      pushToast(ipcErrorMessage(e));
+      return;
+    }
     const now = Date.now();
     for (const r of results) {
-      if (r.ok && signal === 'SIGTERM') pending.current.set(r.pid, now);
-      const msg = killErrorMessage(r);
-      if (msg) pushToast(msg);
+      if (r.ok && signal === 'SIGTERM') {
+        pending.current.set(r.pid, now);
+        const t = targets.find((x) => x.pid === r.pid);
+        if (t) sentTicks.current.set(r.pid, t.startTicks);
+      }
     }
+    for (const msg of killResultMessages(results)) pushToast(msg);
+  }
+
+  // « Forcer » : on réutilise le startTicks du SIGTERM ; sans lui, on ne vise rien.
+  function forceKill(pids: number[]) {
+    const targets = pids.flatMap((pid) => {
+      const startTicks = sentTicks.current.get(pid);
+      return startTicks === undefined ? [] : [{ pid, startTicks }];
+    });
+    if (targets.length) void sendKill(targets, 'SIGKILL');
   }
 
   function requestKill(req: KillRequest) {
-    if (req.pids.length === 0) return;
+    if (req.targets.length === 0) return;
     if (req.needsConfirm) setConfirm(req);
-    else void sendKill(req.pids, 'SIGTERM');
+    else void sendKill(req.targets, 'SIGTERM');
   }
 
+  if (configError) return <p className="empty">Impossible de charger la configuration : {configError}</p>;
   if (!snapshot || !configState) return <p className="empty">Chargement…</p>;
 
   const killGroup = (g: Group) => requestKill(killRequestForGroup(g, isProtected, snapshot.currentUid));
@@ -86,7 +109,7 @@ export function App() {
           stuckPids={stuckPids}
           onOpen={(g) => setRoute({ view: 'detail', groupId: g.id })}
           onKillGroup={killGroup}
-          onForce={(pids) => void sendKill(pids, 'SIGKILL')}
+          onForce={forceKill}
           onSettings={() => setRoute({ view: 'settings' })}
         />
       )}
@@ -103,7 +126,7 @@ export function App() {
           onOpenGroup={(id) => setRoute({ view: 'detail', groupId: id })}
           onKillGroup={killGroup}
           onKillProc={killProc}
-          onForce={(pids) => void sendKill(pids, 'SIGKILL')}
+          onForce={forceKill}
           onToggleProtect={toggleProtect}
         />
       )}
@@ -124,7 +147,7 @@ export function App() {
         <ConfirmDialog
           request={confirm}
           onConfirm={() => {
-            void sendKill(confirm.pids, 'SIGTERM');
+            void sendKill(confirm.targets, 'SIGTERM');
             setConfirm(null);
           }}
           onCancel={() => setConfirm(null)}

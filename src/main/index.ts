@@ -9,7 +9,7 @@ import { buildGroups } from '../core/grouping/buildGroups';
 import { findProjectRoot } from '../core/grouping/projectRoot';
 import { planKill, sendSignals } from '../core/kill';
 import { compileProtection } from '../core/protection';
-import type { ConfigState, KillResult, Snapshot } from '../core/types';
+import type { ConfigState, KillResult, KillTarget, Snapshot } from '../core/types';
 import { installDesktopEntry } from './desktopEntry';
 
 const POLL_MS = 2000;
@@ -56,6 +56,8 @@ function createWindow(): void {
     },
   });
   win.removeMenu();
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  win.webContents.on('will-navigate', (e) => e.preventDefault());
   const push = () => {
     if (win.isDestroyed()) return;
     try {
@@ -71,10 +73,13 @@ function createWindow(): void {
   else win.loadFile(join(__dirname, '../renderer/index.html'));
 }
 
-ipcMain.handle('kill', (_e, pids: unknown, signal: unknown): KillResult[] => {
-  if (!Array.isArray(pids) || !pids.every(Number.isInteger)) return [];
+const isKillTarget = (t: unknown): t is KillTarget =>
+  typeof t === 'object' && t !== null && Number.isInteger((t as KillTarget).pid) && Number.isInteger((t as KillTarget).startTicks);
+
+ipcMain.handle('kill', (_e, targets: unknown, signal: unknown): KillResult[] => {
+  if (!Array.isArray(targets) || !targets.every(isKillTarget)) return [];
   if (signal !== 'SIGTERM' && signal !== 'SIGKILL') return [];
-  const { ordered, refused } = planKill(pids, readProcesses(), { selfPid: process.pid, currentUid: uid });
+  const { ordered, refused } = planKill(targets.map(({ pid, startTicks }) => ({ pid, startTicks })), readProcesses(), { selfPid: process.pid, currentUid: uid });
   return [...refused, ...sendSignals(ordered, signal)];
 });
 

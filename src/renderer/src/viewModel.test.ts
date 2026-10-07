@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import type { Group, ProcInfo, SystemInfo } from '../../core/types';
 import {
-  findGroup, ipcErrorMessage, killErrorMessage, killRequestForGroup, killRequestForProc, pressureLevel, trackKills, visibleGroups,
+  findGroup, ipcErrorMessage, killErrorMessage, killResultMessages, killRequestForGroup, killRequestForProc, pressureLevel, trackKills, visibleGroups,
 } from './viewModel';
 
 const proc = (pid: number, name: string, extra: Partial<ProcInfo> = {}): ProcInfo => ({
@@ -32,7 +32,7 @@ describe('visibleGroups', () => {
   });
 
   test('recherche dans libellé, commande, dossier et sous-groupes', () => {
-    expect(visibleGroups(groups, { query: 'GTIX3', sort: 'mem', minAgeSec: 0 }).map((g) => g.id)).toEqual(['a']);
+    expect(visibleGroups(groups, { query: 'ACME', sort: 'mem', minAgeSec: 0 }).map((g) => g.id)).toEqual(['a']);
     expect(visibleGroups(groups, { query: 'cron', sort: 'mem', minAgeSec: 0 }).map((g) => g.id)).toEqual(['others']);
   });
 
@@ -67,13 +67,17 @@ describe('requêtes de kill', () => {
   test('groupe : toujours une confirmation, processus protégés listés', () => {
     const g = group('w', [proc(1, 'warp'), proc(2, 'zsh')], { label: 'Warp' });
     const r = killRequestForGroup(g, isProtected, 1000);
-    expect(r).toMatchObject({ pids: [1, 2], needsConfirm: true, title: 'Tuer 2 processus « Warp » ?' });
+    expect(r).toMatchObject({ targets: [{ pid: 1, startTicks: 0 }, { pid: 2, startTicks: 0 }], needsConfirm: true, title: 'Tuer 2 processus « Warp » ?' });
     expect(r.protectedProcs.map((p) => p.pid)).toEqual([2]);
   });
 
   test('groupe : ne cible que les processus de l\'utilisateur', () => {
     const g = group('a', [proc(1, 'apache2', { uid: 33 }), proc(2, 'apache2')]);
-    expect(killRequestForGroup(g, isProtected, 1000).pids).toEqual([2]);
+    expect(killRequestForGroup(g, isProtected, 1000).targets).toEqual([{ pid: 2, startTicks: 0 }]);
+  });
+
+  test('processus seul : cible = pid + startTicks', () => {
+    expect(killRequestForProc(proc(5, 'node', { startTicks: 4242 }), isProtected, 1000).targets).toEqual([{ pid: 5, startTicks: 4242 }]);
   });
 
   test('processus seul : confirmation seulement s\'il est protégé', () => {
@@ -105,4 +109,21 @@ describe('ipcErrorMessage', () => {
   });
   test('Error simple', () => expect(ipcErrorMessage(new Error('x'))).toBe('x'));
   test('valeur non Error', () => expect(ipcErrorMessage('boom')).toBe('boom'));
+});
+
+describe('killResultMessages', () => {
+  test('aucun message pour les succès et ESRCH', () => {
+    expect(killResultMessages([{ pid: 1, ok: true }, { pid: 2, ok: false, error: 'ESRCH' }])).toEqual([]);
+  });
+  test('une seule erreur → message détaillé', () => {
+    expect(killResultMessages([{ pid: 3, ok: false, error: 'EPERM' }])).toEqual(['PID 3 : permission refusée']);
+  });
+  test('plusieurs SELF → un seul toast', () => {
+    const rs = [1, 2, 3].map((pid) => ({ pid, ok: false, error: 'SELF' }));
+    expect(killResultMessages(rs)).toEqual(['3 processus refusés : c\'est proc-watch ou l\'un de ses parents']);
+  });
+  test('plusieurs EPERM + un autre code → un toast par type d\'erreur', () => {
+    const rs = [{ pid: 1, ok: false, error: 'EPERM' }, { pid: 2, ok: false, error: 'EPERM' }, { pid: 3, ok: false, error: 'EIO' }];
+    expect(killResultMessages(rs)).toEqual(['2 processus : permission refusée', 'PID 3 : EIO']);
+  });
 });

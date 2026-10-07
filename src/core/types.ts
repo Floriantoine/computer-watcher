@@ -82,6 +82,12 @@ export interface ConfigState {
   invalid: string[];
 }
 
+/** PID + startTicks : startTicks identifie le processus et détecte un PID réutilisé. */
+export interface KillTarget {
+  pid: number;
+  startTicks: number;
+}
+
 export type KillSignal = 'SIGTERM' | 'SIGKILL';
 
 export interface KillResult {

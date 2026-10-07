@@ -1,9 +1,9 @@
-import type { KillResult, KillSignal, ProcSample } from './types';
+import type { KillResult, KillSignal, KillTarget, ProcSample } from './types';
 
 export type KillFn = (pid: number, signal: KillSignal) => void;
 
 export function planKill(
-  pids: number[],
+  targets: KillTarget[],
   procs: ProcSample[],
   guards: { selfPid: number; currentUid: number },
 ): { ordered: number[]; refused: KillResult[] } {
@@ -17,7 +17,11 @@ export function planKill(
   if (chainKnown) {
     const seen = new Set<number>([guards.selfPid]);
     let cur = byPid.get(guards.selfPid)!;
-    while (cur.ppid > 1) {
+    while (cur.ppid !== 1 && cur.ppid !== 0) {
+      if (!Number.isInteger(cur.ppid) || cur.ppid < 0) {
+        chainKnown = false;
+        break;
+      }
       const parent = byPid.get(cur.ppid);
       if (!parent || seen.has(parent.pid)) {
         chainKnown = false;
@@ -29,7 +33,7 @@ export function planKill(
     }
   }
   if (!chainKnown) {
-    return { ordered: [], refused: [...new Set(pids)].map((pid) => ({ pid, ok: false, error: 'SELF' })) };
+    return { ordered: [], refused: [...new Set(targets.map((t) => t.pid))].map((pid) => ({ pid, ok: false, error: 'SELF' })) };
   }
   const stack = [...(children.get(guards.selfPid) ?? [])];
   while (stack.length) {
@@ -41,9 +45,13 @@ export function planKill(
 
   const refused: KillResult[] = [];
   const allowed: number[] = [];
-  for (const pid of new Set(pids)) {
+  const seenPids = new Set<number>();
+  for (const { pid, startTicks } of targets) {
+    if (seenPids.has(pid)) continue;
+    seenPids.add(pid);
     const p = byPid.get(pid);
-    if (!p) refused.push({ pid, ok: false, error: 'ESRCH' });
+    // PID absent ou réutilisé par un autre processus (startTicks différent) : « déjà parti ».
+    if (!p || p.startTicks !== startTicks) refused.push({ pid, ok: false, error: 'ESRCH' });
     else if (forbidden.has(pid)) refused.push({ pid, ok: false, error: 'SELF' });
     else if (p.uid !== guards.currentUid) refused.push({ pid, ok: false, error: 'EPERM' });
     else allowed.push(pid);

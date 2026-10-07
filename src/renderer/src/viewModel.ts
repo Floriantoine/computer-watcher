@@ -1,4 +1,4 @@
-import type { Group, KillResult, ProcInfo, ProcNode, SystemInfo } from '../../core/types';
+import type { Group, KillResult, KillTarget, ProcInfo, ProcNode, SystemInfo } from '../../core/types';
 
 export type SortKey = 'mem' | 'cpu' | 'age' | 'name';
 
@@ -65,8 +65,10 @@ export function pressureLevel(s: SystemInfo): Level {
   return 'ok';
 }
 
+const targetOf = (p: ProcInfo): KillTarget => ({ pid: p.pid, startTicks: p.startTicks });
+
 export interface KillRequest {
-  pids: number[];
+  targets: KillTarget[];
   title: string;
   needsConfirm: boolean;
   protectedProcs: ProcInfo[];
@@ -75,7 +77,7 @@ export interface KillRequest {
 export function killRequestForGroup(g: Group, isProtected: (n: string) => boolean, currentUid: number): KillRequest {
   const procs = flattenProcs(g).filter((p) => p.uid === currentUid);
   return {
-    pids: procs.map((p) => p.pid),
+    targets: procs.map(targetOf),
     title: `Tuer ${procs.length} processus « ${g.label} » ?`,
     needsConfirm: true,
     protectedProcs: procs.filter((p) => isProtected(p.name)),
@@ -84,7 +86,7 @@ export function killRequestForGroup(g: Group, isProtected: (n: string) => boolea
 
 export function killRequestForProc(p: ProcInfo, isProtected: (n: string) => boolean, _currentUid: number): KillRequest {
   const prot = isProtected(p.name);
-  return { pids: [p.pid], title: `Tuer « ${p.name} » (PID ${p.pid}) ?`, needsConfirm: prot, protectedProcs: prot ? [p] : [] };
+  return { targets: [targetOf(p)], title: `Tuer « ${p.name} » (PID ${p.pid}) ?`, needsConfirm: prot, protectedProcs: prot ? [p] : [] };
 }
 
 export const FORCE_AFTER_MS = 3000;
@@ -105,6 +107,24 @@ export function killErrorMessage(r: KillResult): string | null {
   if (r.error === 'EPERM') return `PID ${r.pid} : permission refusée`;
   if (r.error === 'SELF') return `PID ${r.pid} : refusé, c'est proc-watch ou l'un de ses parents`;
   return `PID ${r.pid} : ${r.error}`;
+}
+
+/** Messages d'erreur d'un lot de résultats ; les erreurs identiques sont regroupées en un seul toast. */
+export function killResultMessages(results: KillResult[]): string[] {
+  const byError = new Map<string, KillResult[]>();
+  for (const r of results) {
+    if (r.ok || r.error === 'ESRCH') continue;
+    const key = r.error ?? 'inconnue';
+    byError.set(key, [...(byError.get(key) ?? []), r]);
+  }
+  const out: string[] = [];
+  for (const [error, rs] of byError) {
+    if (rs.length === 1) out.push(killErrorMessage(rs[0]!)!);
+    else if (error === 'SELF') out.push(`${rs.length} processus refusés : c'est proc-watch ou l'un de ses parents`);
+    else if (error === 'EPERM') out.push(`${rs.length} processus : permission refusée`);
+    else out.push(`${rs.length} processus : ${error}`);
+  }
+  return out;
 }
 
 export function ipcErrorMessage(e: unknown): string {

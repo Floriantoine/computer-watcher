@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
-import type { Config, ConfigState, KillResult, KillSignal, Snapshot } from '../core/types';
+import type { Config, ConfigState, KillResult, KillTarget, KillSignal, Snapshot } from '../core/types';
 
 const api = {
   onSnapshot(cb: (s: Snapshot) => void): () => void {
@@ -9,7 +9,7 @@ const api = {
       ipcRenderer.removeListener('snapshot', handler);
     };
   },
-  kill: (pids: number[], signal: KillSignal): Promise<KillResult[]> => ipcRenderer.invoke('kill', pids, signal),
+  kill: (targets: KillTarget[], signal: KillSignal): Promise<KillResult[]> => ipcRenderer.invoke('kill', targets, signal),
   getConfig: (): Promise<ConfigState> => ipcRenderer.invoke('config:get'),
   setConfig: (c: Config): Promise<ConfigState> => ipcRenderer.invoke('config:set', c),
   installDesktopEntry: (): Promise<string> => ipcRenderer.invoke('desktop:install'),
