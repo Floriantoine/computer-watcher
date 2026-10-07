@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { ICON_PALETTE, cardLevel, gaugeTone, groupIconColor } from './theme';
+import type { SystemInfo } from '../../core/types';
+import { ICON_PALETTE, cardLevel, cardTone, gaugeTone, groupIconColor, metricLevels } from './theme';
 
 describe('groupIconColor', () => {
   it('renvoie toujours une teinte de la palette', () => {
@@ -54,5 +55,39 @@ describe('gaugeTone', () => {
     expect(gaugeTone('psi', 'warn')).toBe('warn');
     expect(gaugeTone('mem', 'bad')).toBe('bad');
     expect(gaugeTone('swap', 'bad')).toBe('bad');
+  });
+});
+
+describe('cardTone', () => {
+  it('violet si faible, ambre si notable, rose-orange si lourde', () => {
+    expect(cardTone(3)).toBe('mem');
+    expect(cardTone(10)).toBe('warn');
+    expect(cardTone(34)).toBe('swap');
+  });
+});
+
+describe('metricLevels', () => {
+  const sys = (over: Partial<SystemInfo>): SystemInfo => ({
+    memTotalKB: 32_000_000,
+    memAvailableKB: 12_000_000,
+    swapTotalKB: 20_000_000,
+    swapFreeKB: 20_000_000,
+    load1: 1,
+    psiSome10: 0,
+    ...over,
+  });
+
+  it('attribue l’alerte de pressureLevel au swap quand il en est la cause', () => {
+    expect(metricLevels(sys({ swapFreeKB: 3_400_000, psiSome10: 1 }))).toEqual({ swap: 'bad', psi: 'ok' });
+    expect(metricLevels(sys({ swapFreeKB: 9_000_000 }))).toEqual({ swap: 'warn', psi: 'ok' });
+  });
+
+  it('attribue l’alerte à la pression mémoire quand elle en est la cause', () => {
+    expect(metricLevels(sys({ psiSome10: 30 }))).toEqual({ swap: 'ok', psi: 'bad' });
+    expect(metricLevels(sys({ psiSome10: 12 }))).toEqual({ swap: 'ok', psi: 'warn' });
+  });
+
+  it('reste ok sans swap ni PSI', () => {
+    expect(metricLevels(sys({ swapTotalKB: 0, swapFreeKB: 0, psiSome10: null }))).toEqual({ swap: 'ok', psi: 'ok' });
   });
 });
