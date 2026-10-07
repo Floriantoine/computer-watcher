@@ -1,8 +1,12 @@
 export interface StatFields {
+  /** Nom (comm) entre parenthèses */
+  comm: string;
   ppid: number;
   utime: number;
   stime: number;
   starttime: number;
+  /** Pages résidentes (champ 24) */
+  rssPages: number;
 }
 
 /** Les champs après le nom commencent après la DERNIÈRE ')' : le nom peut contenir espaces et parenthèses. */
@@ -11,7 +15,14 @@ export function parseStat(content: string): StatFields {
   if (close < 0) throw new Error('stat malformé');
   const f = content.slice(close + 1).trim().split(/\s+/);
   // f[0] = état (champ 3 de proc(5)), donc champ N = f[N - 3]
-  return { ppid: Number(f[1]), utime: Number(f[11]), stime: Number(f[12]), starttime: Number(f[19]) };
+  return {
+    comm: content.slice(content.indexOf('(') + 1, close),
+    ppid: Number(f[1]),
+    utime: Number(f[11]),
+    stime: Number(f[12]),
+    starttime: Number(f[19]),
+    rssPages: Number(f[21] ?? 0),
+  };
 }
 
 export interface StatusFields {

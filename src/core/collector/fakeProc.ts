@@ -10,6 +10,8 @@ export interface FakeProc {
   utime?: number;
   stime?: number;
   starttime?: number;
+  /** Champ rss de stat (pages) */
+  rssPages?: number;
   /** undefined → pas de ligne VmRSS (thread noyau) */
   rssKB?: number;
   swapKB?: number;
@@ -32,7 +34,7 @@ export function addProc(root: string, p: FakeProc): void {
   mkdirSync(dir);
   // Champs 3 à 22 de proc(5) : état, ppid, pgrp, session, tty, tpgid, flags,
   // minflt, cminflt, majflt, cmajflt, utime, stime, cutime, cstime, priority, nice, threads, itreal, starttime
-  const fields = ['S', p.ppid ?? 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, p.utime ?? 0, p.stime ?? 0, 0, 0, 20, 0, 1, 0, p.starttime ?? 0, 0, 0];
+  const fields = ['S', p.ppid ?? 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, p.utime ?? 0, p.stime ?? 0, 0, 0, 20, 0, 1, 0, p.starttime ?? 0, 0, p.rssPages ?? 0];
   writeFileSync(join(dir, 'stat'), `${p.pid} (${p.comm}) ${fields.join(' ')}\n`);
   if (p.partial) return;
   const uid = p.uid ?? 1000;

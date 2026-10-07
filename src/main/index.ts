@@ -3,7 +3,7 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { CpuTracker } from '../core/collector/cpuTracker';
-import { readProcesses, type CwdEntry } from '../core/collector/readProcesses';
+import { readProcesses, type CwdEntry, type StatusEntry } from '../core/collector/readProcesses';
 import { readSystem } from '../core/collector/readSystem';
 import { configDir, loadConfig, saveConfig, validateConfig } from '../core/config';
 import { buildGroups } from '../core/grouping/buildGroups';
@@ -62,17 +62,25 @@ function syncRecorder(explicit: boolean): Promise<void> {
 const recorderState = (): RecorderState =>
   computeRecorderState({ available: systemdOk, enabled: config.recorder.enabled, intervalSec: config.recorder.intervalSec, status: history.status(), now: Date.now() });
 
-// Caches de collecte : cmdline lue une fois par processus, lien cwd relu au plus toutes les 30 s par processus.
+// Caches de collecte : cmdline lue une fois par processus, lien cwd relu au plus toutes les 30 s par processus,
+// status relu si le RSS change ou toutes les 10 s (swap et uid au plus 10 s en retard pour un processus endormi).
 const cmdlineCache = new Map<string, string>();
 const cwdEntries = new Map<string, CwdEntry>();
+const statusEntries = new Map<string, StatusEntry>();
 const CWD_MAX_AGE_MS = 30_000;
+const STATUS_MAX_AGE_MS = 10_000;
 /** Une carte affichée reste affichée 30 s après être repassée sous les seuils de « Autres » (pas de clignotement). */
 const separateSeen = new Map<string, number>();
 const CARD_HOLD_MS = 30_000;
 
 function takeSnapshot(): FullSnapshot {
   const now = Date.now();
-  const procs = tracker.update(readProcesses('/proc', { cmdlineCache, cwdCache: { entries: cwdEntries, now, maxAgeMs: CWD_MAX_AGE_MS } }), now);
+  const samples = readProcesses('/proc', {
+    cmdlineCache,
+    cwdCache: { entries: cwdEntries, now, maxAgeMs: CWD_MAX_AGE_MS },
+    statusCache: { entries: statusEntries, now, maxAgeMs: STATUS_MAX_AGE_MS },
+  });
+  const procs = tracker.update(samples, now);
   const sticky = stickyIds(separateSeen, now, CARD_HOLD_MS);
   const groups = buildGroups(procs, {
     home: homedir(),

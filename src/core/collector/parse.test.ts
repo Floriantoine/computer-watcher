@@ -5,12 +5,12 @@ const statLine = (comm: string) =>
   `4242 (${comm}) S 1000 4242 4242 0 -1 4194304 100 0 0 0 250 50 0 0 20 0 1 0 123456 1000000 2000 18446744073709551615\n`;
 
 describe('parseStat', () => {
-  test('lit ppid, utime, stime et starttime', () => {
-    expect(parseStat(statLine('node'))).toEqual({ ppid: 1000, utime: 250, stime: 50, starttime: 123456 });
+  test('lit comm, ppid, utime, stime, starttime et rss', () => {
+    expect(parseStat(statLine('node'))).toEqual({ comm: 'node', ppid: 1000, utime: 250, stime: 50, starttime: 123456, rssPages: 2000 });
   });
 
   test.each(['tmux: server', '(sd-pam)', 'node (vitest)', 'a) b'])('nom avec espaces ou parenthèses : %s', (comm) => {
-    expect(parseStat(statLine(comm))).toEqual({ ppid: 1000, utime: 250, stime: 50, starttime: 123456 });
+    expect(parseStat(statLine(comm))).toEqual({ comm, ppid: 1000, utime: 250, stime: 50, starttime: 123456, rssPages: 2000 });
   });
 
   test('lève une erreur sur un contenu sans parenthèse fermante', () => {

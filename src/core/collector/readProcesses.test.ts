@@ -2,7 +2,7 @@ import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test } from 'vitest';
 import { addProc, makeProcRoot } from './fakeProc';
-import { readProcesses, type CwdEntry } from './readProcesses';
+import { readProcesses, type CwdEntry, type StatusEntry } from './readProcesses';
 
 test('lit un processus complet', () => {
   const root = makeProcRoot(1000);
@@ -97,4 +97,25 @@ test('cwdCache : relu au plus toutes les maxAgeMs par processus, purge les absen
   rmSync(join(root, '31'), { recursive: true });
   pass(31_000);
   expect([...entries.keys()]).toEqual(['30:7:node']);
+});
+
+test('statusCache : status relu seulement si le RSS de stat change, ou après maxAgeMs ; purge les absents', () => {
+  const root = makeProcRoot();
+  addProc(root, { pid: 50, comm: 'node', rssKB: 400, swapKB: 10, rssPages: 100, starttime: 3 });
+  addProc(root, { pid: 51, comm: 'idle', rssKB: 40, rssPages: 10, starttime: 4 });
+  const entries = new Map<string, StatusEntry>();
+  const pass = (now: number) => readProcesses(root, { statusCache: { entries, now, maxAgeMs: 10_000 } });
+  expect(pass(0).map((p) => [p.pid, p.rssKB, p.swapKB])).toEqual([[50, 400, 10], [51, 40, 0]]);
+  // status modifié sans changement du RSS de stat : valeur en cache
+  rmSync(join(root, '50'), { recursive: true });
+  addProc(root, { pid: 50, comm: 'node', rssKB: 400, swapKB: 99, rssPages: 100, starttime: 3 });
+  expect(pass(5_000).find((p) => p.pid === 50)!.swapKB).toBe(10);
+  expect(pass(10_000).find((p) => p.pid === 50)!.swapKB).toBe(99); // trop ancien : relu
+  // RSS de stat changé : relu tout de suite
+  rmSync(join(root, '50'), { recursive: true });
+  addProc(root, { pid: 50, comm: 'node', rssKB: 800, swapKB: 99, rssPages: 200, starttime: 3 });
+  expect(pass(11_000).find((p) => p.pid === 50)!.rssKB).toBe(800);
+  rmSync(join(root, '51'), { recursive: true });
+  pass(12_000);
+  expect([...entries.keys()]).toEqual(['50:3:node']);
 });
