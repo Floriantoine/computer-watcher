@@ -1,3 +1,9 @@
+import { useEffect, useState } from 'react';
+import type { Snapshot } from '../../core/types';
+
 export function App() {
-  return <h1>proc-watch</h1>;
+  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
+  useEffect(() => window.procWatch.onSnapshot(setSnapshot), []);
+  if (!snapshot) return <p>Chargement…</p>;
+  return <p data-testid="snapshot-ready">{snapshot.groups.length} groupes</p>;
 }
