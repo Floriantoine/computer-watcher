@@ -109,10 +109,11 @@ export function formatGo(kb: number): string {
 }
 
 /** Titre et corps de l'alerte : « Mémoire épuisée dans ~8 min », « Claude +3,1 Go en 5 min · swap 82 % ». */
-export function alertText(f: Forecast, top: readonly { label: string; deltaKB: number }[], swapPct: number): { title: string; body: string } {
+/** `swapPct` : % de swap utilisé, null sans swap (non mentionné). */
+export function alertText(f: Forecast, top: readonly { label: string; deltaKB: number }[], swapPct: number | null): { title: string; body: string } {
   const eta = f.etaMin ?? Infinity;
   const title = eta < 1 ? "Mémoire épuisée dans moins d'une minute" : `Mémoire épuisée dans ~${Math.round(eta)} min`;
   const parts = top.filter((g) => g.deltaKB > 0).slice(0, 2).map((g) => `${g.label} +${formatGo(g.deltaKB)} en 5 min`);
-  parts.push(`swap ${Math.round(swapPct)} %`);
+  if (swapPct !== null) parts.push(`swap ${Math.round(swapPct)} %`);
   return { title, body: parts.join(' · ') };
 }

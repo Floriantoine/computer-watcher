@@ -142,6 +142,9 @@ describe('textes', () => {
     expect(alertText(f(7.6), top, 82).body).toBe('Claude +3,1 Go en 5 min · vitest +1,2 Go en 5 min · swap 82 %');
     expect(alertText(f(7.6), [{ label: 'x', deltaKB: -5 }, { label: 'y', deltaKB: 0 }], 82.4).body).toBe('swap 82 %');
   });
+  test('sans swap : pas de mention du swap', () => {
+    expect(alertText(f(3), [{ label: 'Claude', deltaKB: 3_250_000 }], null).body).toBe('Claude +3,1 Go en 5 min');
+  });
   test('formatGo', () => {
     expect(formatGo(3_250_000)).toBe('3,1 Go');
     expect(formatGo(819_200)).toBe('800 Mo');
