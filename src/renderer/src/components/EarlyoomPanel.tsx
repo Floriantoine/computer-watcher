@@ -1,11 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import { AnimatePresence } from 'motion/react';
 import { Copy, KeyRound, TriangleAlert, Wrench } from 'lucide-react';
 import { ignoreConversions, ignoreList } from '../../../core/earlyoom';
 import type { EarlyoomStatus } from '../../../core/types';
 import { formFromStatus, lastEarlyoomKills, validateEarlyoomForm, type EarlyoomForm } from '../earlyoomForm';
 import { formatInstant } from '../metrics';
-import { SettingsConfirm } from './SettingsConfirm';
 
 interface Props {
   protectedList: string[];
@@ -31,7 +29,6 @@ export function EarlyoomPanel({ protectedList, onToast }: Props) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [form, setForm] = useState<EarlyoomForm | null>(null);
   const [kills, setKills] = useState<{ ts: number; name: string; signal: string }[]>([]);
-  const [confirm, setConfirm] = useState(false);
   const [applying, setApplying] = useState(false);
 
   const load = useCallback(async () => {
@@ -52,7 +49,6 @@ export function EarlyoomPanel({ protectedList, onToast }: Props) {
   }, [load]);
 
   const apply = async (settings: NonNullable<ReturnType<typeof validateEarlyoomForm>['settings']>, expectedLine: string) => {
-    setConfirm(false);
     setApplying(true);
     try {
       const r = await window.procWatch.earlyoom.apply(settings, expectedLine);
@@ -153,13 +149,24 @@ export function EarlyoomPanel({ protectedList, onToast }: Props) {
           <span key={p} className="pill eo-pill">{p}</span>
         ))}
       </div>
-      {conversions.length > 0 && (
+      {conversions.some((c) => c.re) && (
         <p className="hint eo-conv" data-testid="earlyoom-ignore-converted">
           Noms adaptés (tronqués à 15 caractères, caractères hors <code>A-Z a-z 0-9 _ -</code> remplacés par « . ») :{' '}
-          {conversions.map((c, i) => (
+          {conversions.filter((c) => c.re).map((c, i) => (
             <span key={c.name}>
               {i > 0 && ', '}
               <code>{c.name}</code> → <code>{c.re}</code>
+            </span>
+          ))}
+        </p>
+      )}
+      {conversions.some((c) => !c.re) && (
+        <p className="hint eo-conv" data-testid="earlyoom-ignore-dropped">
+          Écartés (sans lettre, chiffre, _ ni -, le motif correspondrait à tout) :{' '}
+          {conversions.filter((c) => !c.re).map((c, i) => (
+            <span key={c.name}>
+              {i > 0 && ', '}
+              <code>{c.name}</code>
             </span>
           ))}
         </p>
@@ -201,29 +208,17 @@ export function EarlyoomPanel({ protectedList, onToast }: Props) {
       </div>
 
       <div className="row" style={{ marginTop: 12 }}>
-        <button data-testid="earlyoom-apply" disabled={!v.settings || unchanged || applying} onClick={() => setConfirm(true)}>
+        <button data-testid="earlyoom-apply" disabled={!v.settings || unchanged || applying} onClick={() => v.settings && v.preview && void apply(v.settings, v.preview)}>
           <KeyRound size={14} strokeWidth={2} />
           {applying ? 'Application…' : 'Appliquer (mot de passe)'}
         </button>
-        {unchanged && <span className="hint" style={{ margin: 0 }}>Identique à la configuration actuelle</span>}
+        {unchanged ? (
+          <span className="hint" style={{ margin: 0 }}>Identique à la configuration actuelle</span>
+        ) : (
+          <span className="hint" style={{ margin: 0 }}>proc-watch demande confirmation avec la ligne « Nouveau », puis le mot de passe administrateur. L'ancien fichier est copié en .bak ; il est restauré si earlyoom ne reste pas actif.</span>
+        )}
       </div>
 
-      <AnimatePresence>
-        {confirm && v.settings && v.preview && (
-          <SettingsConfirm
-            key="earlyoom"
-            id="earlyoom-title"
-            title="Appliquer cette configuration d'earlyoom ?"
-            text="L'ancien fichier est copié en /etc/default/earlyoom.bak-<date>, puis earlyoom est redémarré et vérifié (restauré s'il ne reste pas actif). proc-watch redemande confirmation avec cette même ligne, puis le mot de passe administrateur est demandé."
-            confirmLabel="Confirmer"
-            icon={<KeyRound size={17} strokeWidth={2} />}
-            onCancel={() => setConfirm(false)}
-            onConfirm={() => void apply(v.settings!, v.preview!)}
-          >
-            <pre className="eo-confirm-line" data-testid="earlyoom-confirm-line">{v.preview}</pre>
-          </SettingsConfirm>
-        )}
-      </AnimatePresence>
     </section>
   );
 }

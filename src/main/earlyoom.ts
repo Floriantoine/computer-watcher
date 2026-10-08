@@ -73,15 +73,17 @@ if (EARLYOOM_LINE_PATTERN.includes("'")) throw new Error('motif earlyoom : apost
  * Il applique la POLITIQUE, pas seulement la forme : bornes de -m (1–50) et -s (1–100), SIGKILL ≤ SIGTERM, -r 0,
  * exclusions de base en tête et dans l'ordre, motifs limités à des jetons [A-Za-z0-9_.-]+ suivis ou non de « .* ».
  * Puis : copie de l'ancien fichier en .bak-<date à la ms>[.n] (jamais écrasée), écriture atomique, redémarrage,
- * attente de 2 s et vérification que le service est actif ; sinon restauration et redémarrage.
+ * attente de 2 s et vérification (actif, NRestarts inchangé) ; sinon restauration, redémarrage et même vérification.
  * Codes : 10 argument absent, 11 ligne refusée, 12 écriture impossible, 13 earlyoom inactif avec la nouvelle
- * configuration (ancien fichier restauré), 14 restauration impossible (chemin du .bak sur la sortie standard).
+ * configuration (ancien fichier restauré), 14 restauration impossible (chemin du .bak sur la sortie standard),
+ * 15 ancien fichier restauré mais earlyoom ne redémarre pas.
  */
 export const EARLYOOM_APPLY_SCRIPT = `set -u
 export PATH=/usr/bin:/bin LC_ALL=C
 line="\${1:-}"
 target=${EARLYOOM_TARGET}
 systemctl=${EARLYOOM_SYSTEMCTL}
+pause=2
 re='${EARLYOOM_LINE_PATTERN}'
 [[ -n "$line" ]] || exit 10
 (( \${#line} <= ${EARLYOOM_MAX_LINE} )) || exit 11
@@ -96,18 +98,28 @@ if [[ -e "$target" ]]; then
   cp -p -- "$target" "$bak" || exit 12
 fi
 { printf '%s\\n' "$line" > "$target.proc-watch.tmp" && chmod 644 "$target.proc-watch.tmp" && mv -f -- "$target.proc-watch.tmp" "$target"; } || { rm -f -- "$target.proc-watch.tmp"; exit 12; }
+# Redémarre puis vérifie au bout de $pause s : service actif et aucun redémarrage automatique entre-temps.
+# NRestarts est lu juste après le restart manuel (qui remet le compteur à zéro) puis après l'attente :
+# une hausse signale une boucle de plantages (Restart=always) même si le service est vu actif.
+start_and_check() {
+  "$systemctl" restart earlyoom || return 1
+  local n1 n2
+  n1=$("$systemctl" show -p NRestarts --value earlyoom)
+  sleep "$pause"
+  n2=$("$systemctl" show -p NRestarts --value earlyoom)
+  [[ "$n1" == "$n2" ]] || return 1
+  "$systemctl" is-active --quiet earlyoom
+}
 restore() {
   if [[ -n "$bak" ]]; then
     cp -p -- "$bak" "$target" || { printf '%s\\n' "$bak"; exit 14; }
   else
     rm -f -- "$target" || exit 14
   fi
-  "$systemctl" restart earlyoom
+  start_and_check || exit 15
   exit 13
 }
-"$systemctl" restart earlyoom || restore
-sleep 2
-"$systemctl" is-active --quiet earlyoom || restore
+start_and_check || restore
 exit 0
 `;
 
@@ -126,6 +138,7 @@ export function applyExitMessage(code: number, line: string, stdout = ''): Apply
       const bak = stdout.trim();
       return { ok: false, reason: 'failed', message: `Restauration impossible : voir ${BAK_PATH_RE.test(bak) ? bak : `${EARLYOOM_TARGET}.bak-…`}` };
     }
+    case 15: return { ok: false, reason: 'failed', message: 'earlyoom arrêté : ancienne config restaurée mais le service ne redémarre pas.' };
     default: return { ok: false, reason: 'failed', message: `Échec de l'application (code ${code}) : vérifier /etc/default/earlyoom et « systemctl status earlyoom ».` };
   }
 }

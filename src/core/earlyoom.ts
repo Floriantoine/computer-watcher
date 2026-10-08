@@ -19,12 +19,15 @@ const COMM_MAX_BYTES = 15;
 
 /**
  * Grammaire UNIQUE des motifs de --ignore et --prefer, partagée par le TS et le script root (bash) :
- * une alternance de jetons `[A-Za-z0-9_.-]+`, chacun éventuellement suivi de `.*`. Aucune parenthèse,
+ * une alternance de jetons `[A-Za-z0-9_.-]+` contenant au moins un caractère de `[A-Za-z0-9_-]` (un jeton fait
+ * seulement de points, comme `.*` ou `...*`, correspondrait à tout), chacun éventuellement suivi de `.*`. Aucune parenthèse,
  * aucun autre métacaractère : les ancres `^(` … `)$` ne peuvent pas être quittées, et chaque motif compile.
  * Lettres et chiffres sont énumérés (en bash, le sens d'une plage [A-Z] dépend de la locale) ; « - » en dernier.
  */
 export const EARLYOOM_TOKEN_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-';
-const TOKEN = `[${EARLYOOM_TOKEN_CHARS}]+(\\.\\*)?`;
+/** Caractères « réels » : au moins un par jeton. */
+export const EARLYOOM_WORD_CHARS = EARLYOOM_TOKEN_CHARS.replace('.', '');
+const TOKEN = `[${EARLYOOM_TOKEN_CHARS}]*[${EARLYOOM_WORD_CHARS}][${EARLYOOM_TOKEN_CHARS}]*(\\.\\*)?`;
 const MORE_TOKENS = `(\\|${TOKEN})*`;
 /** Base en littéral (« . », « * », « | » échappés), dans l'ordre fixe. */
 const BASE_LITERAL = EARLYOOM_BASE_IGNORE.map((b) => b.replace(/[.*|()^$]/g, (c) => `\\${c}`)).join('\\|');
@@ -67,9 +70,17 @@ export function nameToRegex(name: string): string {
   return out;
 }
 
-/** Noms protégés dont le motif diffère du nom (tronqués ou caractères remplacés par « . »), pour l'aperçu. */
+const hasWordChar = (re: string): boolean => Array.from(re).some((c) => EARLYOOM_WORD_CHARS.includes(c));
+
+/** Noms protégés dont le motif diffère du nom (tronqués, caractères remplacés par « . »), pour l'aperçu ; `re` vide : nom écarté (rien que des points). */
 export function ignoreConversions(protectedList: readonly string[]): { name: string; re: string }[] {
-  return protectedList.filter((n) => !/^\/.+\/$/.test(n) && n !== '').map((name) => ({ name, re: nameToRegex(name) })).filter((c) => c.re !== c.name);
+  return protectedList
+    .filter((n) => !/^\/.+\/$/.test(n) && n !== '')
+    .map((name) => {
+      const re = nameToRegex(name);
+      return { name, re: hasWordChar(re) ? re : '' };
+    })
+    .filter((c) => c.re !== c.name);
 }
 
 /** Base puis noms exacts de la liste protégée (entrées /regex/ ignorées), sans doublon. */
@@ -79,7 +90,7 @@ export function ignoreList(protectedList: readonly string[]): string[] {
   for (const entry of protectedList) {
     if (/^\/.+\/$/.test(entry)) continue;
     const re = nameToRegex(entry);
-    if (!re || seen.has(re)) continue;
+    if (!hasWordChar(re) || seen.has(re)) continue; // un motif fait seulement de points correspondrait à tout
     seen.add(re);
     out.push(re);
   }
@@ -94,6 +105,7 @@ export function checkRegexPart(part: string): string | null {
   if (part.length > MAX_PART) return `« ${part.slice(0, 20)}… » : plus de ${MAX_PART} caractères`;
   const bad = Array.from(part).find((c) => !EARLYOOM_TOKEN_CHARS.includes(c) && c !== '*');
   if (bad !== undefined) return `« ${part} » : caractère interdit « ${bad} » (un motif par ligne, lettres, chiffres, _ . -)`;
+  if (!hasWordChar(part)) return `« ${part} » : il faut au moins une lettre, un chiffre, _ ou - (un motif fait seulement de points correspond à tout)`;
   if (!TOKEN_RE.test(part)) return `« ${part} » : « * » n'est permis qu'à la fin, sous la forme « .* » après au moins un caractère`;
   return null;
 }

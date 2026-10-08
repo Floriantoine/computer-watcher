@@ -29,15 +29,23 @@ const newDir = () => {
 };
 beforeEach(newDir);
 
-/** Faux systemctl : journalise ; 1er restart → FAKE_RESTART_RC (et verrouille la cible si FAKE_LOCK=1) ; 1er is-active → FAKE_ACTIVE_RC. */
+/**
+ * Faux systemctl : journalise ses arguments. Valeurs par appel (n-ième appel du même verbe), séparées par des espaces :
+ * FAKE_RESTART (codes de restart), FAKE_ACTIVE (codes de is-active), FAKE_NRESTARTS (sorties de show). Défaut 0.
+ * FAKE_LOCK=1 : le 1er restart rend la cible non inscriptible (restauration impossible).
+ */
 const fakeSystemctl = (): string => {
   const p = join(dir, 'systemctl');
   writeFileSync(p, [
     '#!/usr/bin/bash',
     'echo "$*" >> "$FAKE_LOG"',
-    'c=$(grep -c -- "^$1" "$FAKE_LOG")',
-    'if [[ $1 == restart && $c -eq 1 ]]; then [[ ${FAKE_LOCK:-0} == 1 ]] && chmod 444 "$FAKE_TARGET"; exit "${FAKE_RESTART_RC:-0}"; fi',
-    'if [[ $1 == is-active && $c -eq 1 ]]; then exit "${FAKE_ACTIVE_RC:-0}"; fi',
+    'pick() { local -a l=($1); if (( $2 < ${#l[@]} )); then echo "${l[$2]}"; else echo 0; fi; }',
+    'c=$(( $(grep -c -- "^$1 " "$FAKE_LOG") - 1 ))',
+    'case $1 in',
+    '  restart) [[ $c -eq 0 && ${FAKE_LOCK:-0} == 1 ]] && chmod 444 "$FAKE_TARGET"; exit "$(pick "${FAKE_RESTART:-}" $c)";;',
+    '  is-active) exit "$(pick "${FAKE_ACTIVE:-}" $c)";;',
+    '  show) pick "${FAKE_NRESTARTS:-}" $c; exit 0;;',
+    'esac',
     'exit 0',
     '',
   ].join('\n'));
@@ -50,7 +58,7 @@ function testScript(target: string, systemctl: string): string {
   const swaps: [string, string][] = [
     ['\ntarget=/etc/default/earlyoom\n', `\ntarget='${target}'\n`],
     ['\nsystemctl=/usr/bin/systemctl\n', `\nsystemctl='${systemctl}'\n`],
-    ['\nsleep 2\n', '\nsleep 0\n'],
+    ['\npause=2\n', '\npause=0\n'],
   ];
   let s = EARLYOOM_APPLY_SCRIPT;
   for (const [a, b] of swaps) {
@@ -60,7 +68,7 @@ function testScript(target: string, systemctl: string): string {
   return s;
 }
 
-interface RunOpts { arg?: string | null; existing?: string | null; restartRc?: number; activeRc?: number; lock?: boolean }
+interface RunOpts { arg?: string | null; existing?: string | null; restart?: string; active?: string; nrestarts?: string; lock?: boolean }
 function runScript(o: RunOpts) {
   const target = join(dir, 'earlyoom');
   if (o.existing) writeFileSync(target, o.existing);
@@ -69,7 +77,7 @@ function runScript(o: RunOpts) {
   const r = spawnSync('/usr/bin/bash', args, {
     env: {
       PATH: '/usr/bin:/bin', FAKE_LOG: log, FAKE_TARGET: target, FAKE_LOCK: o.lock ? '1' : '0',
-      FAKE_RESTART_RC: String(o.restartRc ?? 0), FAKE_ACTIVE_RC: String(o.activeRc ?? 0),
+      FAKE_RESTART: o.restart ?? '', FAKE_ACTIVE: o.active ?? '', FAKE_NRESTARTS: o.nrestarts ?? '',
     },
     encoding: 'utf8',
     timeout: 10_000,
@@ -87,7 +95,7 @@ describe('script livré (constante)', () => {
     expect(EARLYOOM_APPLY_SCRIPT).toContain('\ntarget=/etc/default/earlyoom\n');
     expect(EARLYOOM_APPLY_SCRIPT).toContain('\nsystemctl=/usr/bin/systemctl\n');
     expect(EARLYOOM_APPLY_SCRIPT).toContain('export PATH=/usr/bin:/bin LC_ALL=C\n');
-    expect(EARLYOOM_APPLY_SCRIPT).toContain('\nsleep 2\n');
+    expect(EARLYOOM_APPLY_SCRIPT).toContain('\npause=2\n');
   });
   test('motif bash = EARLYOOM_LINE_PATTERN (même source que EARLYOOM_LINE_RE)', () => {
     expect(EARLYOOM_APPLY_SCRIPT).toContain(`\nre='${EARLYOOM_LINE_PATTERN}'\n`);
@@ -116,7 +124,7 @@ describe('script root (exécuté directement, sans pkexec)', () => {
     expect(r.baks).toHaveLength(1);
     expect(r.baks[0]).toMatch(/^earlyoom\.bak-\d{8}T\d{6}\.\d{3}$/);
     expect(readFileSync(join(dir, r.baks[0]), 'utf8')).toBe(OLD);
-    expect(r.calls).toEqual(['restart earlyoom', 'is-active --quiet earlyoom']);
+    expect(r.calls).toEqual(['restart earlyoom', 'show -p NRestarts --value earlyoom', 'show -p NRestarts --value earlyoom', 'is-active --quiet earlyoom']);
     expect(statSync(r.target).mode & 0o777).toBe(0o644);
     expect(existsSync(`${r.target}.proc-watch.tmp`)).toBe(false);
   });
@@ -179,29 +187,49 @@ describe('script root (exécuté directement, sans pkexec)', () => {
     expect(r.read()).toBe(OLD);
     expect(r.calls).toEqual([]);
   });
-  test('redémarrage en échec → 13, ancien contenu restauré, redémarré', () => {
-    const r = runScript({ arg: VALID, existing: OLD, restartRc: 1 });
+  test('redémarrage en échec → 13, ancien contenu restauré, redémarré et vérifié', () => {
+    const r = runScript({ arg: VALID, existing: OLD, restart: '1' });
     expect(r.code).toBe(13);
     expect(r.read()).toBe(OLD);
-    expect(r.calls).toEqual(['restart earlyoom', 'restart earlyoom']);
+    expect(r.calls).toEqual(['restart earlyoom', 'restart earlyoom', 'show -p NRestarts --value earlyoom', 'show -p NRestarts --value earlyoom', 'is-active --quiet earlyoom']);
   });
   test('redémarrage « réussi » mais earlyoom inactif ensuite → 13, ancien contenu restauré', () => {
-    const r = runScript({ arg: VALID, existing: OLD, activeRc: 3 });
+    const r = runScript({ arg: VALID, existing: OLD, active: '3' });
     expect(r.code).toBe(13);
     expect(r.read()).toBe(OLD);
-    expect(r.calls).toEqual(['restart earlyoom', 'is-active --quiet earlyoom', 'restart earlyoom']);
+    expect(r.calls).toEqual(['restart earlyoom', 'show -p NRestarts --value earlyoom', 'show -p NRestarts --value earlyoom', 'is-active --quiet earlyoom', 'restart earlyoom', 'show -p NRestarts --value earlyoom', 'show -p NRestarts --value earlyoom', 'is-active --quiet earlyoom']);
+  });
+  test('boucle de plantages (NRestarts augmente, service vu actif) → 13, ancien contenu restauré', () => {
+    const r = runScript({ arg: VALID, existing: OLD, nrestarts: '0 2 0 0' });
+    expect(r.code).toBe(13);
+    expect(r.read()).toBe(OLD);
+    expect(r.calls).toEqual(['restart earlyoom', 'show -p NRestarts --value earlyoom', 'show -p NRestarts --value earlyoom', 'restart earlyoom', 'show -p NRestarts --value earlyoom', 'show -p NRestarts --value earlyoom', 'is-active --quiet earlyoom']);
+  });
+  test('NRestarts identique et actif → 0', () => {
+    expect(runScript({ arg: VALID, existing: OLD, nrestarts: '4 4' }).code).toBe(0);
   });
   test('inactif sans fichier précédent → 13, fichier retiré', () => {
-    const r = runScript({ arg: VALID, existing: null, activeRc: 3 });
+    const r = runScript({ arg: VALID, existing: null, active: '3' });
     expect(r.code).toBe(13);
     expect(r.read()).toBeNull();
   });
   test('restauration impossible → 14, chemin du .bak sur la sortie', () => {
-    const r = runScript({ arg: VALID, existing: OLD, restartRc: 1, lock: true });
+    const r = runScript({ arg: VALID, existing: OLD, restart: '1', lock: true });
     expect(r.code).toBe(14);
     expect(r.baks).toHaveLength(1);
     expect(r.stdout.trim()).toBe(join(dir, r.baks[0]));
     expect(readFileSync(join(dir, r.baks[0]), 'utf8')).toBe(OLD);
+  });
+  test('ancienne config restaurée mais earlyoom ne redémarre pas → 15', () => {
+    const r = runScript({ arg: VALID, existing: OLD, active: '3', restart: '0 1' });
+    expect(r.code).toBe(15);
+    expect(r.read()).toBe(OLD);
+    expect(r.calls).toEqual(['restart earlyoom', 'show -p NRestarts --value earlyoom', 'show -p NRestarts --value earlyoom', 'is-active --quiet earlyoom', 'restart earlyoom']);
+  });
+  test('ancienne config restaurée mais toujours inactive → 15', () => {
+    const r = runScript({ arg: VALID, existing: OLD, active: '3 3' });
+    expect(r.code).toBe(15);
+    expect(r.read()).toBe(OLD);
   });
 });
 
@@ -244,6 +272,13 @@ describe('même politique en TS et en bash (vrai bash)', () => {
     VALID.replace('-m 8,5', '-m ٨,5'), // chiffre arabe-indien
     withBase(` --prefer ^(${'a'.repeat(4095 - withBase(' --prefer ^()$').length)})$`),
     withBase(` --prefer ^(${'a'.repeat(4096 - withBase(' --prefer ^()$').length)})$`),
+    withBase('').replace(')$"', '|.*)$"'),
+    withBase('').replace(')$"', '|...*)$"'),
+    withBase('').replace(')$"', '|..)$"'),
+    withBase(' --prefer ^(a|.)$'),
+    withBase(' --prefer ^(..*)$'),
+    withBase('').replace(')$"', '|.a|-|_.*)$"'),
+    withBase(' --prefer ^(a..|..a.*)$'),
   ];
   test('[[ =~ ]] et EARLYOOM_LINE_RE : mêmes verdicts, sous 4 locales', () => {
     for (const line of corpus) {
@@ -262,7 +297,7 @@ describe('même politique en TS et en bash (vrai bash)', () => {
       expect({ line, script: r.code !== 11 }).toEqual({ line, script: ts });
       if (ts) accepted.push(line);
     }
-    expect(accepted).toEqual([corpus[0], corpus[1], corpus[2], corpus[3], corpus[4], corpus[35]]);
+    expect(accepted).toEqual([corpus[0], corpus[1], corpus[2], corpus[3], corpus[4], corpus[35], corpus[42], corpus[43]]);
   });
   test('lignes générées acceptées par le script', () => {
     const gen = buildEarlyoomArgs({ memTerm: 10, memKill: 4, swapTerm: 100, swapKill: 1, prefer: ['node.*'] }, DEFAULT_CONFIG.protected);
@@ -273,7 +308,7 @@ describe('même politique en TS et en bash (vrai bash)', () => {
 
 describe('applyExitMessage', () => {
   test.each<[number, string]>([
-    [126, 'cancelled'], [127, 'unavailable'], [10, 'invalid'], [11, 'invalid'], [12, 'failed'], [13, 'failed'], [14, 'failed'], [99, 'failed'],
+    [126, 'cancelled'], [127, 'unavailable'], [10, 'invalid'], [11, 'invalid'], [12, 'failed'], [13, 'failed'], [14, 'failed'], [15, 'failed'], [99, 'failed'],
   ])('%i → %s', (code, reason) => {
     const r = applyExitMessage(code, VALID);
     expect(r.ok).toBe(false);
@@ -296,6 +331,10 @@ describe('applyExitMessage', () => {
     expect(!r.ok && r.message).toBe('Restauration impossible : voir /etc/default/earlyoom.bak-20261008T120000.123');
     const r2 = applyExitMessage(14, VALID, 'n’importe quoi');
     expect(!r2.ok && r2.message).toBe('Restauration impossible : voir /etc/default/earlyoom.bak-…');
+  });
+  test('15 → earlyoom arrêté', () => {
+    const r = applyExitMessage(15, VALID);
+    expect(!r.ok && r.message).toBe('earlyoom arrêté : ancienne config restaurée mais le service ne redémarre pas.');
   });
   test('code inconnu cité', () => {
     const r = applyExitMessage(99, VALID);
