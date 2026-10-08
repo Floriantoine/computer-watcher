@@ -1,9 +1,10 @@
 import { memo, type MouseEvent, type Ref } from 'react';
 import { motion, useIsPresent } from 'motion/react';
 import { ChevronDown, ChevronUp, Lock } from 'lucide-react';
-import type { GroupSummary as Group } from '../../../core/types';
+import type { GroupSummary as Group, MemoryMetric } from '../../../core/types';
 import { hasDuplicate, instancesLine, primaryTag } from '../categoryFilter';
 import { formatAge, formatCpu, formatKB } from '../format';
+import { memLabel } from '../memMetric';
 import { othersPreview, othersPreviewEqual } from '../othersFold';
 import { CategoryTag, DuplicateBadge } from './CategoryTag';
 import { barWidth } from '../motionBudget';
@@ -36,6 +37,8 @@ interface Props {
   actions: GroupActions;
   /** Carte « Autres » seulement : dépliée (aperçu de ses 10 plus gros sous-groupes). */
   othersOpen?: boolean;
+  /** Mémoire affichée (libellé de l'infobulle du total). */
+  memMetric?: MemoryMetric;
   ref?: Ref<HTMLDivElement>;
 }
 
@@ -75,7 +78,7 @@ function OthersPreview({ group, onOpen }: { group: Group; onOpen: (id: string) =
   );
 }
 
-function GroupCardImpl({ group, memTotalKB, spark, stuck, pending, leak, layoutKey, actions, othersOpen = false, ref }: Props) {
+function GroupCardImpl({ group, memTotalKB, spark, stuck, pending, leak, layoutKey, actions, othersOpen = false, memMetric = 'rss', ref }: Props) {
   const isPresent = useIsPresent();
   const total = group.rssKB + group.swapKB;
   const pct = Math.min(100, (total / memTotalKB) * 100);
@@ -122,7 +125,7 @@ function GroupCardImpl({ group, memTotalKB, spark, stuck, pending, leak, layoutK
           <div className="sub" title={sub}>{sub}</div>
         </div>
       </div>
-      <AnimatedNumber className="big" value={total} />
+      <AnimatedNumber className="big" value={total} title={`${memLabel(memMetric)} + swap`} />
       {line && (
         <div className="instances-row">
           <span className="instances-line mono" data-testid="instances-line" title={line}>{line}</span>
@@ -159,6 +162,7 @@ export const GroupCard = memo(
     a.pending === b.pending &&
     a.leak === b.leak &&
     a.othersOpen === b.othersOpen &&
+    a.memMetric === b.memMetric &&
     sameSeries(a.spark, b.spark) &&
     cardDisplayEqual(a.group, b.group, a.memTotalKB, b.memTotalKB) &&
     (!a.othersOpen || othersPreviewEqual(a.group, b.group)),

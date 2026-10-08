@@ -14,6 +14,7 @@ import { SystemBar, type SystemSparks } from './components/SystemBar';
 import { TopNav } from './components/TopNav';
 import { LiveBuffer, setLive, useHistory } from './history';
 import { instanceKillPlan, projectName, reclassifyMessage, reclassifyScope, skipInstanceKill } from './instances';
+import { leakMemOf } from './memMetric';
 import { readOthersOpen, writeOthersOpen } from './othersFold';
 import { leakTimes } from './recorderForm';
 import { findGroup, visibleGroups, ipcErrorMessage, killResultMessages, killRequestForGroup, killRequestForProc, trackKills, type KillRequest, type ViewFilter } from './viewModel';
@@ -97,7 +98,8 @@ export function App() {
   const events24h = useHistory(() => window.procWatch.history.events('24h'), [], 60_000);
   const leakAt = useMemo(() => {
     const mem = new Map((snapshot?.groups ?? []).map((g) => [g.id, g.rssKB + g.swapKB]));
-    return leakTimes(events24h, snapshot?.takenAt ?? Date.now(), (k) => mem.get(k));
+    // En PSS, la mémoire affichée n'est pas comparable à celle enregistrée (RSS) : pas de filtre sur la baisse.
+    return leakTimes(events24h, snapshot?.takenAt ?? Date.now(), leakMemOf(snapshot?.memMetric ?? 'rss', mem));
   }, [events24h, snapshot]);
 
   const groupIds = useMemo(() => new Set(snapshot?.groupIds ?? []), [snapshot]);
@@ -294,6 +296,7 @@ export function App() {
                 onLeak={(ts) => setRoute({ view: 'metrics', at: ts })}
                 onKillInstances={killInstances}
                 othersOpen={othersOpen}
+                memMetric={snapshot.memMetric}
                 onToggleOthers={(open) => {
                   writeOthersOpen(open);
                   setOthersOpen(open);
@@ -321,6 +324,7 @@ export function App() {
                 onReclassify={reclassify}
                 onKillInstance={killInstance}
                 onKillInstances={killInstances}
+                memMetric={snapshot.memMetric}
               />
             )}
             {route.view === 'metrics' && (

@@ -825,3 +825,8 @@ table.group-list tr.others-loading-row td { padding-left: 34px; color: var(--mut
 .head-reclass { display: inline-flex; align-items: center; gap: 8px; }
 .head-reclass .cat-tag { font-size: 11.5px; }
 .page-head .reclass-btn { padding: 7px 12px; font-size: inherit; border-radius: var(--r-md); }
+
+/* Réglages → Affichage : « Mémoire : RSS | PSS » */
+.mem-metric-row { display: flex; align-items: center; gap: 10px; color: var(--text-2); margin-bottom: 8px; }
+.mem-metric button { padding: 4px 12px; font-size: 12px; }
+table.tree .pss-denied { text-decoration: underline dotted var(--muted); text-underline-offset: 3px; cursor: help; }

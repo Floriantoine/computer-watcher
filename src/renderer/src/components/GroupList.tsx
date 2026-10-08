@@ -1,9 +1,10 @@
 import { memo, useLayoutEffect, useRef, useState, type MouseEvent, type Ref } from 'react';
 import { AnimatePresence, motion, useIsPresent } from 'motion/react';
 import { ChevronDown, ChevronUp, Lock } from 'lucide-react';
-import type { GroupSummary as Group } from '../../../core/types';
+import type { GroupSummary as Group, MemoryMetric } from '../../../core/types';
 import { hasDuplicate, primaryTag } from '../categoryFilter';
 import { formatAge, formatCpu, formatKB } from '../format';
+import { memLabel } from '../memMetric';
 import { othersPreview, othersPreviewEqual } from '../othersFold';
 import { CategoryTag, DuplicateBadge } from './CategoryTag';
 import { sortForList, type ListColumn } from '../listSort';
@@ -23,6 +24,8 @@ interface Props {
   leakAt?: Map<string, number>;
   /** Ligne « Autres » dépliée : ses 10 plus gros sous-groupes en lignes, puis « Voir tout ». */
   othersOpen: boolean;
+  /** Mémoire affichée : en-tête « RAM » ou « PSS ». */
+  memMetric?: MemoryMetric;
 }
 
 const COLUMNS: { col: ListColumn; label: string; num: boolean }[] = [
@@ -157,7 +160,7 @@ function OthersRowsImpl({ group, actions }: { group: Group; actions: GroupAction
 
 const OthersRows = memo(OthersRowsImpl, (a, b) => a.actions === b.actions && a.group.procCount === b.group.procCount && othersPreviewEqual(a.group, b.group));
 
-export function GroupList({ groups, sparkOf, stuckPids, pendingPids, actions, leakAt, othersOpen }: Props) {
+export function GroupList({ groups, sparkOf, stuckPids, pendingPids, actions, leakAt, othersOpen, memMetric = 'rss' }: Props) {
   const [sort, setSort] = useState<{ col: ListColumn; dir: 'asc' | 'desc' }>({ col: 'mem', dir: 'desc' });
   const order = useRef<{ key: string; ids: string[] }>({ key: '', ids: [] });
   const sortKey = `${sort.col}:${sort.dir}`;
@@ -184,8 +187,14 @@ export function GroupList({ groups, sparkOf, stuckPids, pendingPids, actions, le
                   className={num ? 'num' : ''}
                   aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
                 >
-                  <button type="button" className="th-btn" data-testid={`sort-${col}`} onClick={() => toggle(col)}>
-                    {label}
+                  <button
+                    type="button"
+                    className="th-btn"
+                    data-testid={`sort-${col}`}
+                    title={col === 'mem' ? `${memLabel(memMetric)} + swap` : undefined}
+                    onClick={() => toggle(col)}
+                  >
+                    {col === 'mem' ? memLabel(memMetric) : label}
                     {active && <Chevron size={12} strokeWidth={2.4} />}
                   </button>
                 </th>

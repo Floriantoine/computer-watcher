@@ -152,13 +152,14 @@ async function startKwin(n) {
   };
 }
 
-/** Lance une app (`dossier` ou `dossier:reduced` pour « Effets visuels réduits ») et se connecte à l'inspecteur de son main. */
+/** Lance une app (`dossier`, `dossier:reduced` pour « Effets visuels réduits », `dossier:pss` pour « Mémoire : PSS ») et se connecte à l'inspecteur de son main. */
 async function launch(spec, kwin) {
   const [dir, variant] = spec.split(':');
   const cfg = mkdtempSync(join(tmpdir(), 'pw-measure-'));
-  if (variant === 'reduced') {
+  if (variant === 'reduced' || variant === 'pss') {
     mkdirSync(join(cfg, 'proc-watch'));
-    const config = { version: 1, protected: [], othersThreshold: { memMB: 100, cpuPercent: 1 }, ui: { reducedEffects: true } };
+    const ui = variant === 'pss' ? { reducedEffects: false, memoryMetric: 'pss' } : { reducedEffects: true };
+    const config = { version: 1, protected: [], othersThreshold: { memMB: 100, cpuPercent: 1 }, ui };
     writeFileSync(join(cfg, 'proc-watch', 'config.json'), JSON.stringify(config));
   }
   // PROC_WATCH_NO_RECORDER_SYNC : l'app mesurée ne touche pas au service systemd réel de l'utilisateur.
@@ -207,7 +208,7 @@ async function launch(spec, kwin) {
   return { dir: spec, cfg, child, ws, evaluate };
 }
 
-// Dossiers d'app à mesurer (défaut : celui-ci ; suffixe :reduced = effets réduits). Plusieurs : mesurés en même temps (A/B).
+// Dossiers d'app à mesurer (défaut : celui-ci ; suffixe :reduced = effets réduits, :pss = mémoire en PSS). Plusieurs : mesurés en même temps (A/B).
 const dirs = process.argv.slice(2).length ? process.argv.slice(2) : ['.'];
 const apps = [];
 // Un KWin par app : chaque fenêtre est entièrement visible (des fenêtres superposées ne seraient pas toutes redessinées).

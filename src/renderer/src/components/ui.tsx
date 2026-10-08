@@ -31,7 +31,7 @@ export function GroupIcon({ id, kind, size = 'md' }: { id: string; kind: GroupKi
  * Le texte est écrit directement dans le DOM, 20 fois par seconde au plus (pas une image par rafraîchissement d'écran),
  * et seulement si le glissement afficherait une valeur intermédiaire ; sinon, ou animations réduites (système ou réglage), saut direct.
  */
-export function AnimatedNumber({ value, format = formatKB, className }: { value: number; format?: (n: number) => string; className?: string }) {
+export function AnimatedNumber({ value, format = formatKB, className, title }: { value: number; format?: (n: number) => string; className?: string; title?: string }) {
   const ref = useRef<HTMLSpanElement>(null);
   const shown = useRef<number | null>(null);
   // Préférence système ou réglage « Effets visuels réduits » (MotionConfig).
@@ -60,7 +60,7 @@ export function AnimatedNumber({ value, format = formatKB, className }: { value:
     }, TWEEN_TICK_MS);
     return () => clearInterval(timer);
   }, [value, reduce, format]);
-  return <span ref={ref} className={className} />;
+  return <span ref={ref} className={className} title={title} />;
 }
 
 interface KillProps {

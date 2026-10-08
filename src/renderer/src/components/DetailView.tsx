@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { ArrowLeft, ChartLine, ChevronRight, Lock, PenLine, Shield, ShieldOff, X } from 'lucide-react';
-import type { Category, GroupSummary as Group, InstanceSummary, ProcNode, RangePreset } from '../../../core/types';
+import type { Category, GroupSummary as Group, InstanceSummary, MemoryMetric, ProcNode, RangePreset } from '../../../core/types';
 import { formatAge, formatKB } from '../format';
 import { procSparkMap, useHistory } from '../history';
 import { showRevertToAuto, ticksIndex } from '../instances';
+import { memLabel } from '../memMetric';
 import { headerReclassTarget } from '../reclassHeader';
 import { useChartZoom, ZoomChip } from '../chartZoom';
 import { PRESET_MS, refreshMsFor } from '../metrics';
@@ -38,6 +39,8 @@ interface Props {
   onKillInstance: (inst: InstanceSummary) => void;
   /** Dialogue de confirmation groupée (BulkKillDialog) pré-filtré ; absent : boutons d'en-tête de « Instances » désactivés. */
   onKillInstances?: (instances: InstanceSummary[], launchersOf?: string) => void;
+  /** Mémoire affichée en direct (RSS ou PSS) ; l'historique reste en RSS (« RAM »). */
+  memMetric?: MemoryMetric;
 }
 
 function BackButton({ onBack }: { onBack: () => void }) {
@@ -101,7 +104,7 @@ function GroupHistoryPanel({ groupId }: { groupId: string }) {
 }
 
 export function DetailView(props: Props) {
-  const { group, onBack } = props;
+  const { group, onBack, memMetric = 'rss' } = props;
   const groupId = group?.id;
   const others = group?.kind === 'others';
   const procs = useHistory(
@@ -184,7 +187,7 @@ export function DetailView(props: Props) {
       </div>
       <div className="summary">
         <div className="tile"><small>Processus</small><b>{group.procCount}</b></div>
-        <div className="tile"><small>RAM</small><b><AnimatedNumber value={group.rssKB} /></b></div>
+        <div className="tile"><small>{memLabel(memMetric)}</small><b><AnimatedNumber value={group.rssKB} /></b></div>
         <div className="tile"><small>Swap</small><b><AnimatedNumber value={group.swapKB} /></b></div>
         <div className="tile"><small>Plus ancien</small><b className={group.oldestAgeSec > 86400 ? 'old' : ''}>{formatAge(group.oldestAgeSec)}</b></div>
       </div>
@@ -199,6 +202,7 @@ export function DetailView(props: Props) {
           onKillInstance={props.onKillInstance}
           onForce={props.onForce}
           onKillInstances={props.onKillInstances}
+          memMetric={memMetric}
         />
       )}
       {!others && <GroupHistoryPanel key={group.id} groupId={group.id} />}
@@ -224,6 +228,7 @@ export function DetailView(props: Props) {
           sparkOf={sparkOf}
           onKill={props.onKillProc}
           onForce={(pid) => props.onForce([pid])}
+          memMetric={memMetric}
         />
       )}
     </>

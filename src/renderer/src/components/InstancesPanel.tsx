@@ -1,8 +1,9 @@
 import { memo, useCallback, useRef, useState, type CSSProperties } from 'react';
 import { Boxes, PenLine, Zap } from 'lucide-react';
-import type { Category, GroupSummary, InstanceSummary } from '../../../core/types';
+import type { Category, GroupSummary, InstanceSummary, MemoryMetric } from '../../../core/types';
 import { CATEGORY_META } from '../categories';
 import { formatAge, formatCpu, formatKB } from '../format';
+import { memLabel } from '../memMetric';
 import { headerKillActions, instanceRowEqual, instanceSpark, showRevertToAuto, sortInstances } from '../instances';
 import { DuplicateBadge } from './CategoryTag';
 import { ReclassMenu } from './ReclassMenu';
@@ -27,6 +28,7 @@ interface Props {
    * « Tout arrêter », l'id du groupe dont les lanceurs s'ajoutent. Absent : boutons désactivés.
    */
   onKillInstances?: (instances: InstanceSummary[], launchersOf?: string) => void;
+  memMetric?: MemoryMetric;
 }
 
 /** Callbacks stables passés aux lignes (elles sont mémoïsées) : ils lisent les props du dernier rendu. */
@@ -39,7 +41,8 @@ interface RowActions {
 
 /** Section « Instances » du détail d'un groupe projet : une ligne par instance, « Reclasser », kill par instance. */
 export function InstancesPanel(props: Props) {
-  const { group, sparks, ticksOf, stuckPids, pendingPids, onKillInstances } = props;
+  const { group, sparks, ticksOf, stuckPids, pendingPids, onKillInstances, memMetric = 'rss' } = props;
+  const mem = memLabel(memMetric);
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const latest = useRef(props);
   latest.current = props;
@@ -83,7 +86,7 @@ export function InstancesPanel(props: Props) {
           <span role="columnheader">Ports</span>
           <span role="columnheader">1 h</span>
           <span role="columnheader" className="num">Depuis</span>
-          <span role="columnheader" className="num" title="Mémoire vive et swap de l'instance">RAM + swap</span>
+          <span role="columnheader" className="num" title={memMetric === 'pss' ? "PSS (mémoire partagée répartie) et swap de l'instance" : "Mémoire vive et swap de l'instance"}>{mem} + swap</span>
           <span role="columnheader" className="num">CPU</span>
           <span role="columnheader" className="sr-only">Actions</span>
         </div>
@@ -96,6 +99,7 @@ export function InstancesPanel(props: Props) {
             pending={i.pids.some((p) => pendingPids.has(p))}
             canKill={group.killable}
             menuOpen={menuFor === i.key}
+            memLabel={mem}
             actions={rowActions}
           />
         ))}
@@ -111,10 +115,11 @@ interface RowProps {
   pending: boolean;
   canKill: boolean;
   menuOpen: boolean;
+  memLabel: string;
   actions: RowActions;
 }
 
-function InstanceRowImpl({ inst: i, spark, stuck, pending, canKill, menuOpen, actions }: RowProps) {
+function InstanceRowImpl({ inst: i, spark, stuck, pending, canKill, menuOpen, memLabel: memName, actions }: RowProps) {
   const m = CATEGORY_META[i.category];
   const Icon = m.icon;
   const manual = i.source === 'manual';
@@ -139,7 +144,7 @@ function InstanceRowImpl({ inst: i, spark, stuck, pending, canKill, menuOpen, ac
         {spark && spark.filter((v) => v !== null).length >= 2 ? <Sparkline values={spark} tone="mem" height={18} /> : <span className="mono muted">—</span>}
       </span>
       <span className={`num mono ${i.ageSec > DAY ? 'old' : ''}`} role="cell">{formatAge(i.ageSec)}</span>
-      <span className="num mono" role="cell" title={`RAM ${formatKB(i.rssKB)} + swap ${formatKB(i.swapKB)}`}>{formatKB(i.rssKB + i.swapKB)}</span>
+      <span className="num mono" role="cell" title={`${memName} ${formatKB(i.rssKB)} + swap ${formatKB(i.swapKB)}`}>{formatKB(i.rssKB + i.swapKB)}</span>
       <span className="num mono" role="cell">{formatCpu(i.cpuPercent)}</span>
       <span className="inst-act" role="cell">
         <ReclassMenu
@@ -160,4 +165,4 @@ function InstanceRowImpl({ inst: i, spark, stuck, pending, canKill, menuOpen, ac
 }
 
 /** Ne se re-rend que si ce que la ligne affiche a changé (les actions sont stables). */
-const InstanceRow = memo(InstanceRowImpl, (a, b) => a.actions === b.actions && instanceRowEqual(a, b));
+const InstanceRow = memo(InstanceRowImpl, (a, b) => a.actions === b.actions && a.memLabel === b.memLabel && instanceRowEqual(a, b));

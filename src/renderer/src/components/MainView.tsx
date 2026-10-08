@@ -1,7 +1,7 @@
 import { AnimatePresence } from 'motion/react';
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, Search } from 'lucide-react';
-import type { Category, GroupSummary as Group, InstanceSummary } from '../../../core/types';
+import type { Category, GroupSummary as Group, InstanceSummary, MemoryMetric } from '../../../core/types';
 import { countByCategory, filterGroups, killCount, parseSelection, selectionCandidates, showProjectsOnlyHint } from '../categoryFilter';
 import { CategoryFilter } from './CategoryFilter';
 import type { SortKey, ViewFilter } from '../viewModel';
@@ -34,6 +34,8 @@ interface Props {
   /** Carte / ligne « Autres » dépliée (aperçu de ses plus gros sous-groupes). */
   othersOpen: boolean;
   onToggleOthers: (open: boolean) => void;
+  /** Mémoire affichée (RSS ou PSS) : libellés. */
+  memMetric?: MemoryMetric;
 }
 
 const CATEGORIES_KEY = 'pw.categories';
@@ -57,7 +59,7 @@ function saveCategories(sel: Set<Category>): void {
 const AGES: [string, number][] = [['Tous', 0], ['> 1 h', 3600], ['> 1 j', 86400], ['> 7 j', 7 * 86400]];
 
 export function MainView(props: Props) {
-  const { groups, matches, memTotalKB, filter, onFilter, stuckPids, pendingPids, sparkOf, leakAt, othersOpen } = props;
+  const { groups, matches, memTotalKB, filter, onFilter, stuckPids, pendingPids, sparkOf, leakAt, othersOpen, memMetric = 'rss' } = props;
   const [view, setView] = useState<ViewMode>(loadView);
   const [categories, setCategories] = useState<Set<Category>>(loadCategories);
   const pickCategories = useCallback((next: Set<Category>) => {
@@ -139,7 +141,7 @@ export function MainView(props: Props) {
       {shown.length === 0 ? (
         <p className="empty">Aucun groupe ne correspond.</p>
       ) : view === 'list' ? (
-        <GroupList groups={shown} sparkOf={sparkOf} stuckPids={stuckPids} pendingPids={pendingPids} actions={actions} leakAt={leakAt} othersOpen={othersOpen} />
+        <GroupList groups={shown} sparkOf={sparkOf} stuckPids={stuckPids} pendingPids={pendingPids} actions={actions} leakAt={leakAt} othersOpen={othersOpen} memMetric={memMetric} />
       ) : (
         <div className="cards">
           <AnimatePresence mode="popLayout" initial={false}>
@@ -155,6 +157,7 @@ export function MainView(props: Props) {
                 layoutKey={layoutKey}
                 actions={actions}
                 othersOpen={g.kind === 'others' && othersOpen}
+                memMetric={memMetric}
               />
             ))}
           </AnimatePresence>
