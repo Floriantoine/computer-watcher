@@ -19,6 +19,7 @@ import { compileProtection } from '../core/protection';
 import { formatAppEvent } from '../core/history/events';
 import { appEventsPath, dataDir, focusStatePath, forecastSnoozePath } from '../core/paths';
 import { alertIdFromArgv } from '../core/alerts';
+import { swapTargets, swapView, SWAP_IDLE_MS, type SwapView } from '../core/swap';
 import { buildSnapshot, flattenGroup, groupProcs, instanceTargets, isWatch, othersFollowed, type Classification, type FullSnapshot } from '../core/snapshot';
 import type { ConfigState, Group, KillResult, ProcInfo, RecorderState, Watch } from '../core/types';
 import { createFreeOpener, wantsFree } from './launchArgs';
@@ -499,6 +500,18 @@ ipcMain.handle('classify:inactive', (_e, keys: unknown, since: unknown): string[
   const active = history.active(entries.flatMap((e) => e.targets), since);
   if (!active) return null;
   return entries.filter((e) => !e.targets.some((t) => active.has(`${t.pid}:${t.startTicks}`))).map((e) => e.key);
+});
+
+/**
+ * Vue swap (onglet Métriques) d'après le dernier snapshot : swap déjà lu par la collecte (VmSwap), dernière activité CPU lue
+ * dans l'historique seulement pour les processus des groupes au-dessus du seuil (fenêtre : rétention résumée).
+ */
+ipcMain.handle('swap:view', (): SwapView | null => {
+  if (!last) return null;
+  const minSwapKB = config.ui.swapSleepMinMB * 1024;
+  const now = Date.now();
+  const lastActive = history.lastActive(swapTargets(last, minSwapKB), config.recorder.summaryDays * 86_400_000);
+  return swapView({ full: last, lastActive, historyFrom: lastActive ? history.from() : null, now, minSwapKB, idleMs: SWAP_IDLE_MS });
 });
 
 /** Cibles de kill des instances (ou lanceurs d'un groupe) d'après le dernier snapshot ; instances disparues absentes. */

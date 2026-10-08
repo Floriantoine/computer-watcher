@@ -450,3 +450,75 @@ export function queryInactive(db: DatabaseSync, targets: { pid: number; startTic
   }
   return active;
 }
+
+/**
+ * Cache de queryLastActive (par `pid:startTicks`) : résultat de la partie « minute » déjà lue, jusqu'à `upTo` (exclu). Les
+ * minutes antérieures ne changent plus : un appel suivant ne lit que les minutes nouvelles (≈ 1 ms au lieu de ~200 ms pour
+ * 100 processus endormis sur 30 jours). À vider quand la base change (recréée, vidée).
+ */
+export type LastActiveCache = Map<string, { upTo: number; ts: number | null }>;
+
+/**
+ * Vue swap : dernier échantillon CPU ≥ 1 % de chaque cible (`pid:startTicks`) dans les `lookbackMs`, null si aucun (ou cible
+ * jamais enregistrée). Même découpage que queryInactive : les 30 dernières minutes dans `proc_samples` (instant exact), le
+ * reste dans `proc_minute` (moyenne ≥ 1 %) ; la minute trouvée est précisée dans `proc_samples` tant que le détail existe
+ * (sinon : début de la minute). Parcours de la clé primaire (proc_id, ts) du plus récent au plus ancien, arrêté au premier
+ * échantillon actif.
+ */
+export function queryLastActive(
+  db: DatabaseSync,
+  targets: { pid: number; startTicks: number }[],
+  lookbackMs: number,
+  o: QueryOpts,
+  cache?: LastActiveCache,
+): Map<string, number | null> {
+  const out = new Map<string, number | null>();
+  if (targets.length === 0) {
+    cache?.clear();
+    return out;
+  }
+  const since = o.now - lookbackMs;
+  const split = o.now - Math.min(INACTIVE_DETAIL_MS, o.detailHours * H);
+  const findProc = db.prepare('SELECT id FROM procs WHERE pid = ? AND start_ticks = ?');
+  const detail = db.prepare('SELECT ts FROM proc_samples WHERE proc_id = ? AND ts >= ? AND ts <= ? AND cpu_percent >= ? ORDER BY ts DESC LIMIT 1');
+  const minute = db.prepare('SELECT ts FROM proc_minute WHERE proc_id = ? AND ts >= ? AND ts < ? AND cpu_avg >= ? ORDER BY ts DESC LIMIT 1');
+  const minuteFrom = Math.floor(since / M) * M;
+  /** Dernière minute active dans [from, split), précisée dans le détail s'il existe encore. */
+  const lastMinute = (id: number, from: number): number | null => {
+    if (from >= split) return null;
+    const m = minute.get(id, from, split, ACTIVE_CPU_PERCENT) as { ts: number } | undefined;
+    if (!m) return null;
+    const exact = detail.get(id, m.ts, m.ts + M - 1, ACTIVE_CPU_PERCENT) as { ts: number } | undefined;
+    return exact?.ts ?? m.ts;
+  };
+  for (const t of targets) {
+    const key = `${t.pid}:${t.startTicks}`;
+    if (out.has(key)) continue;
+    const row = findProc.get(t.pid, t.startTicks) as { id: number } | undefined;
+    if (!row) {
+      out.set(key, null);
+      continue;
+    }
+    const d = detail.get(row.id, Math.max(since, split), o.now, ACTIVE_CPU_PERCENT) as { ts: number } | undefined;
+    if (d) {
+      out.set(key, d.ts);
+      continue;
+    }
+    const c = cache?.get(key);
+    const usable = c !== undefined && c.upTo <= split;
+    const fresh = lastMinute(row.id, usable ? Math.max(minuteFrom, Math.floor(c.upTo / M) * M) : minuteFrom);
+    const ts = fresh ?? (usable && c.ts !== null && c.ts >= since ? c.ts : null);
+    cache?.set(key, { upTo: split, ts });
+    out.set(key, ts);
+  }
+  if (cache) for (const k of [...cache.keys()]) if (!out.has(k)) cache.delete(k);
+  return out;
+}
+
+/** Premier instant couvert par l'historique : le plus ancien des tables système détaillée et par minute ; null si vide. */
+export function historyFrom(db: DatabaseSync): number | null {
+  const a = (db.prepare('SELECT MIN(ts) AS t FROM system_samples').get() as { t: number | null }).t;
+  const b = (db.prepare('SELECT MIN(ts) AS t FROM system_minute').get() as { t: number | null }).t;
+  if (a === null) return b;
+  return b === null ? a : Math.min(a, b);
+}

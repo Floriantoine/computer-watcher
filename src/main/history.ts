@@ -3,7 +3,8 @@ import { existsSync, readFileSync, rmSync, statSync, writeFileSync, mkdirSync } 
 import type { DatabaseSync } from 'node:sqlite';
 import { historyBackups, openHistoryDb, SCHEMA_VERSION } from '../core/history/db';
 import {
-  queryCulprits, queryEvents, queryGroup, queryGroups, queryInactive, queryProcs, queryProcTree, querySystem, queryTop, rangeFromPreset, type QueryOpts,
+  historyFrom, queryCulprits, queryEvents, queryGroup, queryGroups, queryInactive, queryLastActive, queryProcs, queryProcTree, querySystem, queryTop, rangeFromPreset,
+  type LastActiveCache, type QueryOpts,
 } from '../core/history/queries';
 import { countUnseenAlerts, newestAlertTs, queryAlert, queryAlertTimes, queryUnseenAlerts, type UnseenFilter } from '../core/history/alertsQuery';
 import { clearRequestPath, dbPath, statusPath } from '../core/paths';
@@ -13,7 +14,10 @@ import { clampToDetail } from './historyIpc';
 export function createHistoryReader(dataDir: string, getConfig: () => RecorderConfig) {
   let db: DatabaseSync | null = null;
   let identity = '';
+  /** Vue swap : minutes déjà lues par processus (vidé avec la connexion : base recréée ou vidée). */
+  const lastActiveCache: LastActiveCache = new Map();
   const closeDb = (): void => {
+    lastActiveCache.clear();
     try {
       db?.close();
     } catch {
@@ -77,6 +81,11 @@ export function createHistoryReader(dataDir: string, getConfig: () => RecorderCo
     /** Clés `pid:startTicks` actives (CPU ≥ 1 %) depuis `since` ; null sans base (ou en cas d'erreur). */
     active: (targets: { pid: number; startTicks: number }[], since: number): Set<string> | null =>
       run<Set<string> | null>((d) => queryInactive(d, targets, since, opts()), null),
+    /** Vue swap : dernière activité CPU ≥ 1 % par `pid:startTicks` dans les `lookbackMs` ; null sans base (ou en cas d'erreur). */
+    lastActive: (targets: { pid: number; startTicks: number }[], lookbackMs: number): Map<string, number | null> | null =>
+      run<Map<string, number | null> | null>((d) => queryLastActive(d, targets, lookbackMs, opts(), lastActiveCache), null),
+    /** Premier instant couvert par l'historique ; null sans base ou base vide. */
+    from: (): number | null => run((d) => historyFrom(d), null),
     /** Ferme la connexion (avant suppression de la base). */
     close: closeDb,
     status: (): RecorderStatus | null => {

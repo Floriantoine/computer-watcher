@@ -7,7 +7,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { openHistoryDb } from './db';
 import { createV3Db } from './testDb';
 import { aggregateMinute } from './maintenance';
-import { bucketMs, pickSource, queryInactive, queryCulprits, queryEvents, queryGroup, queryGroups, PROC_TREE_MAX, queryProcs, queryProcsAt, queryProcTree, querySystem, queryTop, rangeFromPreset } from './queries';
+import { bucketMs, historyFrom, pickSource, queryInactive, queryLastActive, queryCulprits, queryEvents, queryGroup, queryGroups, PROC_TREE_MAX, queryProcs, queryProcsAt, queryProcTree, querySystem, queryTop, rangeFromPreset } from './queries';
 
 const H = 3600_000;
 const M = 60_000;
@@ -590,5 +590,93 @@ describe('querySystem : Shmem et somme des groupes (découpage du Reste)', () =>
       const s = querySystem(db, r, opts(r.to));
       expect(s.shmemKB.every((v) => v === null)).toBe(true);
     }
+  });
+});
+
+describe('queryLastActive / historyFrom (vue swap)', () => {
+  const D = 24 * H;
+  /** p 30 : 5 % il y a 3 h (détail, minute agrégée) ; p 31 : 4 % il y a 3 j (minute seulement) ; p 32 : toujours 0,2 % ; p 33 : jamais enregistré. */
+  function lastActiveDb() {
+    const path = join(mkdtempSync(join(tmpdir(), 'pw-q-')), 'm.db');
+    const { db } = openHistoryDb(path);
+    const now = 10 * D;
+    db.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'project:/a','a','project');
+             INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id) VALUES (1,30,300,'vite','vite',1), (2,31,310,'node','node',1), (3,32,320,'pg','pg',1);`);
+    const ins = db.prepare('INSERT INTO proc_samples VALUES (?,?,?,?,?)');
+    for (let ts = now - 4 * H; ts < now; ts += 5000) {
+      // p 30 : 5 % pendant la minute qui précède « il y a 3 h » (dernier échantillon actif : now − 3 h − 5 s)
+      ins.run(ts, 1, 1000, 0, ts >= now - 3 * H - M && ts < now - 3 * H ? 5 : 0);
+      ins.run(ts, 3, 1000, 0, 0.2);
+    }
+    for (let m = now - 4 * H; m < now; m += M) aggregateMinute(db, m);
+    const min = db.prepare('INSERT INTO proc_minute VALUES (?,?,?,?,?)');
+    for (let ts = now - 5 * D; ts < now - 4 * H; ts += M) {
+      min.run(ts, 2, 1000, 1000, ts === now - 3 * D ? 4 : 0);
+      min.run(ts, 3, 1000, 1000, 0.2);
+    }
+    return { db, now };
+  }
+  const targets = [{ pid: 30, startTicks: 300 }, { pid: 31, startTicks: 310 }, { pid: 32, startTicks: 320 }, { pid: 33, startTicks: 330 }];
+
+  test('dernier CPU ≥ 1 % : détail (ts exact), sinon minute (ts de la minute) ; jamais actif ou jamais enregistré → null', () => {
+    const { db, now } = lastActiveDb();
+    const r = queryLastActive(db, targets, 30 * D, { now, detailHours: 24, intervalSec: 5 });
+    expect(r.get('30:300')).toBe(now - 3 * H - 5000);
+    expect(r.get('31:310')).toBe(now - 3 * D);
+    expect(r.get('32:320')).toBeNull();
+    expect(r.get('33:330')).toBeNull();
+    expect(r.size).toBe(4);
+  });
+
+  test('hors de la fenêtre lookback : null', () => {
+    const { db, now } = lastActiveDb();
+    const r = queryLastActive(db, targets, 2 * D, { now, detailHours: 24, intervalSec: 5 });
+    expect(r.get('31:310')).toBeNull();
+    expect(r.get('30:300')).toBe(now - 3 * H - 5000);
+  });
+
+  test('dans les 30 dernières minutes : détail directement ; détail purgé : début de la minute', () => {
+    const { db, now } = lastActiveDb();
+    db.prepare('UPDATE proc_samples SET cpu_percent = 2 WHERE proc_id = 3 AND ts = ?').run(now - 10 * M);
+    const o = { now, detailHours: 24, intervalSec: 5 };
+    expect(queryLastActive(db, targets, D, o).get('32:320')).toBe(now - 10 * M);
+    db.exec('DELETE FROM proc_samples WHERE proc_id = 1');
+    expect(queryLastActive(db, targets, D, o).get('30:300')).toBe(now - 3 * H - M);
+  });
+
+  test('cache : seules les minutes nouvelles sont relues ; activité nouvelle vue ; sortie de la fenêtre → null ; cibles disparues élaguées', () => {
+    const { db, now } = lastActiveDb();
+    const cache = new Map();
+    const o = (t: number) => ({ now: t, detailHours: 24, intervalSec: 5 });
+    const first = queryLastActive(db, targets, 30 * D, o(now), cache);
+    expect(first.get('31:310')).toBe(now - 3 * D);
+    expect(cache.get('31:310')).toEqual({ upTo: now - 30 * M, ts: now - 3 * D });
+    // une ligne ajoutée avant `upTo` n'est pas relue (les minutes passées ne changent plus) : preuve que le cache sert
+    db.prepare('UPDATE proc_minute SET cpu_avg = 9 WHERE proc_id = 2 AND ts = ?').run(now - 2 * D);
+    expect(queryLastActive(db, targets, 30 * D, o(now + M), cache).get('31:310')).toBe(now - 3 * D);
+    // activité nouvelle, dans une minute après `upTo` : vue
+    db.prepare('INSERT INTO proc_minute VALUES (?,?,?,?,?)').run(now - 20 * M, 2, 1000, 1000, 3);
+    expect(queryLastActive(db, targets, 30 * D, o(now + 15 * M), cache).get('31:310')).toBe(now - 20 * M);
+    // fenêtre plus courte que l'âge de l'activité en cache : null
+    const c2 = new Map();
+    queryLastActive(db, [{ pid: 30, startTicks: 300 }], 30 * D, o(now), c2);
+    expect(queryLastActive(db, [{ pid: 30, startTicks: 300 }], H, o(now), c2).get('30:300')).toBeNull();
+    // cibles disparues : retirées du cache
+    queryLastActive(db, [{ pid: 30, startTicks: 300 }], 30 * D, o(now + 20 * M), cache);
+    expect([...cache.keys()]).toEqual(['30:300']);
+  });
+
+  test('aucune cible : carte vide', () => {
+    const { db, now } = lastActiveDb();
+    expect(queryLastActive(db, [], D, { now, detailHours: 24, intervalSec: 5 }).size).toBe(0);
+  });
+
+  test('historyFrom : base vide → null ; sinon le plus ancien instant des tables système détail / minute', () => {
+    const { db } = openHistoryDb(join(mkdtempSync(join(tmpdir(), 'pw-q-')), 'm.db'));
+    expect(historyFrom(db)).toBeNull();
+    db.prepare('INSERT INTO system_samples(ts, mem_used_kb, mem_total_kb, swap_used_kb, swap_total_kb, psi_some10, load1, cpu_percent) VALUES (?,?,?,?,?,?,?,?)').run(5 * H, 1, 1, 0, 0, null, 0, 0);
+    expect(historyFrom(db)).toBe(5 * H);
+    db.prepare('INSERT INTO system_minute VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(2 * H, 1, 1, 8, 0, 0, 1, null, null, 0, 0, null, null);
+    expect(historyFrom(db)).toBe(2 * H);
   });
 });

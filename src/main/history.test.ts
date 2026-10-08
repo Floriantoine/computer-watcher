@@ -86,6 +86,21 @@ test('history.active : null sans base, ensemble avec base, null (et erreur journ
   }
 });
 
+test('history.lastActive / from (vue swap) : null sans base, valeurs avec base, cache vidé à la fermeture', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pw-hist-'));
+  const reader = createHistoryReader(dir, () => DEFAULT_RECORDER);
+  const targets = [{ pid: 10, startTicks: 100 }];
+  expect(reader.lastActive(targets, 86_400_000)).toBeNull();
+  expect(reader.from()).toBeNull();
+  const now = Date.now();
+  makeDb(dir, now);
+  // enregistré mais CPU 0 : jamais actif → null (≠ base absente)
+  expect(reader.lastActive(targets, 86_400_000)).toEqual(new Map([['10:100', null]]));
+  expect(reader.from()).not.toBeNull();
+  reader.close();
+  expect(reader.lastActive(targets, 86_400_000)).toEqual(new Map([['10:100', null]]));
+});
+
 const backups = ['metrics.db.pre-v2-20261007T094000', 'metrics.db.bak-20261001T000000', 'metrics.db.bak-20261001T000000-wal'];
 
 test('clearHistory, service arrêté : l\'app supprime la base (+wal/shm) et les copies de sécurité', () => {
