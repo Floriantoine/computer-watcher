@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { memo, useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { Boxes, Check, ChevronDown, PenLine, RotateCcw, Zap } from 'lucide-react';
 import type { Category, GroupSummary, InstanceSummary } from '../../../core/types';
 import { CATEGORIES, CATEGORY_META } from '../categories';
 import { formatAge, formatCpu, formatKB } from '../format';
-import { headerKillActions, instanceSpark, sortInstances } from '../instances';
+import { headerKillActions, instanceRowEqual, instanceSpark, menuIndex, showRevertToAuto, sortInstances } from '../instances';
 import { DuplicateBadge } from './CategoryTag';
 import { Sparkline } from './charts/Sparkline';
 import { ForceButton, KillButton } from './ui';
@@ -28,17 +28,39 @@ interface Props {
   onKillInstances?: (instances: InstanceSummary[], launchersOf?: string) => void;
 }
 
+/** Callbacks stables passés aux lignes (elles sont mémoïsées) : ils lisent les props du dernier rendu. */
+interface RowActions {
+  menu: (key: string | null) => void;
+  reclassify: (inst: InstanceSummary, c: Category | null) => void;
+  kill: (inst: InstanceSummary) => void;
+  force: (pids: number[]) => void;
+}
+
 /** Section « Instances » du détail d'un groupe projet : une ligne par instance, « Reclasser », kill par instance. */
-export function InstancesPanel({ group, sparks, ticksOf, stuckPids, pendingPids, onReclassify, onKillInstance, onForce, onKillInstances }: Props) {
+export function InstancesPanel(props: Props) {
+  const { group, sparks, ticksOf, stuckPids, pendingPids, onKillInstances } = props;
   const [menuFor, setMenuFor] = useState<string | null>(null);
-  const actions = headerKillActions(group);
+  const latest = useRef(props);
+  latest.current = props;
+  const actionsRef = useRef<RowActions | null>(null);
+  actionsRef.current ??= {
+    menu: setMenuFor,
+    reclassify: (inst, c) => {
+      setMenuFor(null);
+      latest.current.onReclassify(inst, c);
+    },
+    kill: (inst) => latest.current.onKillInstance(inst),
+    force: (pids) => latest.current.onForce(pids),
+  };
+  const rowActions = actionsRef.current;
+  const bulk = headerKillActions(group);
   const list = sortInstances(group.instances);
   return (
     <section className="instances-panel" data-testid="instances-panel">
       <div className="chart-panel-head">
         <h3><Boxes size={14} strokeWidth={2} /> Instances <span className="inst-count">{list.length}</span></h3>
         <span className="spacer" />
-        {actions.map((a) => (
+        {bulk.map((a) => (
           <button
             key={a.id}
             type="button"
@@ -54,6 +76,16 @@ export function InstancesPanel({ group, sparks, ticksOf, stuckPids, pendingPids,
         ))}
       </div>
       <div className="inst-rows" role="table" aria-label="Instances">
+        <div className="inst-row inst-head" role="row">
+          <span role="columnheader">Catégorie</span>
+          <span role="columnheader">Commande</span>
+          <span role="columnheader">Ports</span>
+          <span role="columnheader">1 h</span>
+          <span role="columnheader" className="num">Depuis</span>
+          <span role="columnheader" className="num" title="Mémoire vive et swap de l'instance">RAM + swap</span>
+          <span role="columnheader" className="num">CPU</span>
+          <span role="columnheader" className="sr-only">Actions</span>
+        </div>
         {list.map((i) => (
           <InstanceRow
             key={i.key}
@@ -63,13 +95,7 @@ export function InstancesPanel({ group, sparks, ticksOf, stuckPids, pendingPids,
             pending={i.pids.some((p) => pendingPids.has(p))}
             canKill={group.killable}
             menuOpen={menuFor === i.key}
-            onMenu={(open) => setMenuFor(open ? i.key : null)}
-            onReclassify={(c) => {
-              setMenuFor(null);
-              onReclassify(i, c);
-            }}
-            onKill={() => onKillInstance(i)}
-            onForce={onForce}
+            actions={rowActions}
           />
         ))}
       </div>
@@ -84,16 +110,14 @@ interface RowProps {
   pending: boolean;
   canKill: boolean;
   menuOpen: boolean;
-  onMenu: (open: boolean) => void;
-  onReclassify: (c: Category | null) => void;
-  onKill: () => void;
-  onForce: (pids: number[]) => void;
+  actions: RowActions;
 }
 
-function InstanceRow({ inst: i, spark, stuck, pending, canKill, menuOpen, onMenu, onReclassify, onKill, onForce }: RowProps) {
+function InstanceRowImpl({ inst: i, spark, stuck, pending, canKill, menuOpen, actions }: RowProps) {
   const m = CATEGORY_META[i.category];
   const Icon = m.icon;
   const manual = i.source === 'manual';
+  const onOpen = useCallback((open: boolean) => actions.menu(open ? i.key : null), [actions, i.key]);
   return (
     <div className="inst-row" role="row" data-testid="instance-row" style={{ '--cat': m.color } as CSSProperties}>
       <span className="inst-cat" role="cell">
@@ -113,30 +137,58 @@ function InstanceRow({ inst: i, spark, stuck, pending, canKill, menuOpen, onMenu
       <span className="inst-spark" role="cell" title="RAM sur 1 h">
         {spark && spark.filter((v) => v !== null).length >= 2 ? <Sparkline values={spark} tone="mem" height={18} /> : <span className="mono muted">—</span>}
       </span>
-      <span className={`num mono ${i.ageSec > DAY ? 'old' : ''}`} role="cell" title="Ancienneté">{formatAge(i.ageSec)}</span>
-      <span className="num mono" role="cell" title="RAM + swap">{formatKB(i.rssKB + i.swapKB)}</span>
-      <span className="num mono" role="cell" title="CPU">{formatCpu(i.cpuPercent)}</span>
+      <span className={`num mono ${i.ageSec > DAY ? 'old' : ''}`} role="cell">{formatAge(i.ageSec)}</span>
+      <span className="num mono" role="cell" title={`RAM ${formatKB(i.rssKB)} + swap ${formatKB(i.swapKB)}`}>{formatKB(i.rssKB + i.swapKB)}</span>
+      <span className="num mono" role="cell">{formatCpu(i.cpuPercent)}</span>
       <span className="inst-act" role="cell">
-        <ReclassMenu current={i.category} manual={manual} open={menuOpen} onOpen={onMenu} onPick={onReclassify} />
+        <ReclassMenu
+          current={i.category}
+          revert={showRevertToAuto(i)}
+          open={menuOpen}
+          onOpen={onOpen}
+          onPick={(c) => actions.reclassify(i, c)}
+        />
         {stuck.length ? (
-          <ForceButton onClick={() => onForce(stuck)} />
+          <ForceButton onClick={() => actions.force(stuck)} />
         ) : (
-          <KillButton size="sm" pending={pending} disabled={!canKill} onClick={onKill} />
+          <KillButton size="sm" pending={pending} disabled={!canKill} onClick={() => actions.kill(i)} />
         )}
       </span>
     </div>
   );
 }
 
-function ReclassMenu({ current, manual, open, onOpen, onPick }: { current: Category; manual: boolean; open: boolean; onOpen: (open: boolean) => void; onPick: (c: Category | null) => void }) {
+/** Ne se re-rend que si ce que la ligne affiche a changé (les actions sont stables). */
+const InstanceRow = memo(InstanceRowImpl, (a, b) => a.actions === b.actions && instanceRowEqual(a, b));
+
+interface MenuProps {
+  current: Category;
+  revert: boolean;
+  open: boolean;
+  onOpen: (open: boolean) => void;
+  onPick: (c: Category | null) => void;
+}
+
+function ReclassMenu({ current, revert, open, onOpen, onPick }: MenuProps) {
   const ref = useRef<HTMLSpanElement>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  // Fermeture au clavier ou par un choix : le focus revient sur « Reclasser » (sinon il tombe sur <body>).
+  const close = useCallback(
+    (refocus: boolean) => {
+      onOpen(false);
+      if (refocus) btn.current?.focus();
+    },
+    [onOpen],
+  );
   useEffect(() => {
     if (!open) return;
+    (menu.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]') ?? menu.current?.querySelector<HTMLButtonElement>('button'))?.focus();
     const away = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) onOpen(false);
+      if (!ref.current?.contains(e.target as Node)) close(false);
     };
     const esc = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onOpen(false);
+      if (e.key === 'Escape') close(true);
     };
     document.addEventListener('mousedown', away);
     document.addEventListener('keydown', esc);
@@ -144,27 +196,38 @@ function ReclassMenu({ current, manual, open, onOpen, onPick }: { current: Categ
       document.removeEventListener('mousedown', away);
       document.removeEventListener('keydown', esc);
     };
-  }, [open, onOpen]);
+  }, [open, close]);
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    const items = [...(menu.current?.querySelectorAll<HTMLButtonElement>('button') ?? [])];
+    const next = menuIndex(items.indexOf(document.activeElement as HTMLButtonElement), e.key, items.length);
+    if (next === null) return;
+    e.preventDefault();
+    items[next]?.focus();
+  };
+  const pick = (c: Category | null) => {
+    onPick(c);
+    btn.current?.focus();
+  };
   return (
     <span className="reclass" ref={ref}>
-      <button type="button" className="reclass-btn" data-testid="reclass-button" aria-haspopup="menu" aria-expanded={open} onClick={() => onOpen(!open)}>
+      <button ref={btn} type="button" className="reclass-btn" data-testid="reclass-button" aria-haspopup="menu" aria-expanded={open} onClick={() => onOpen(!open)}>
         Reclasser <ChevronDown size={12} strokeWidth={2.2} />
       </button>
       {open && (
-        <div className="reclass-menu" role="menu" data-testid="reclass-menu">
+        <div className="reclass-menu" role="menu" aria-label="Reclasser l'instance" data-testid="reclass-menu" ref={menu} onKeyDown={onKeyDown}>
           {CATEGORIES.map((c) => {
             const m = CATEGORY_META[c];
             const Icon = m.icon;
             return (
-              <button key={c} type="button" role="menuitemradio" aria-checked={c === current} style={{ '--cat': m.color } as CSSProperties} onClick={() => onPick(c)}>
+              <button key={c} type="button" role="menuitemradio" aria-checked={c === current} tabIndex={-1} style={{ '--cat': m.color } as CSSProperties} onClick={() => pick(c)}>
                 <Icon size={13} strokeWidth={2.2} />
                 <span>{m.label}</span>
                 {c === current && <Check size={13} strokeWidth={2.4} className="reclass-check" />}
               </button>
             );
           })}
-          {manual && (
-            <button type="button" role="menuitem" className="reclass-auto" data-testid="reclass-auto" onClick={() => onPick(null)}>
+          {revert && (
+            <button type="button" role="menuitem" tabIndex={-1} className="reclass-auto" data-testid="reclass-auto" onClick={() => pick(null)}>
               <RotateCcw size={13} strokeWidth={2.2} />
               <span>Revenir à l'automatique</span>
             </button>

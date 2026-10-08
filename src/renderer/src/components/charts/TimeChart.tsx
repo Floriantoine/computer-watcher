@@ -100,7 +100,7 @@ export function TimeChart({ ts, series, height, format, markers, onCursor, onSel
           space: 64,
           size: 26,
           grid: { show: false },
-          values: (u, splits) => splits.map((v) => formatAxisTime(v, span(u))),
+          values: (u, splits, _axis, _space, incr) => splits.map((v) => formatAxisTime(v, span(u), incr)),
         }),
         themedAxis({
           scale: 'left',

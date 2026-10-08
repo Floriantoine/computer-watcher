@@ -667,18 +667,26 @@ table.tree small.branch-total { display: block; white-space: nowrap; color: var(
 .instances-panel .chart-panel-head { gap: 8px; }
 .inst-count { min-width: 18px; padding: 0 6px; border-radius: 99px; font-size: 10.5px; font-weight: 500; text-align: center; background: rgba(255, 255, 255, 0.07); color: var(--label); font-variant-numeric: tabular-nums; }
 .inst-bulk { display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px; font-size: 12px; border-radius: 99px; }
-.inst-rows { display: flex; flex-direction: column; }
-.inst-row {
+/* Une seule grille pour toutes les lignes (subgrid) : la commande prend sa largeur, l'espace libre va après les ports. */
+.inst-rows {
   display: grid;
-  grid-template-columns: minmax(96px, 120px) minmax(0, 1fr) minmax(56px, 120px) 84px 64px 72px 52px auto;
+  grid-template-columns: minmax(96px, max-content) minmax(0, max-content) minmax(48px, max-content) minmax(84px, 1fr) 64px 84px 52px auto;
+  column-gap: 14px;
+}
+.inst-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
   align-items: center;
-  gap: 10px;
   padding: 6px 2px;
   border-top: 1px solid rgba(255, 255, 255, 0.045);
   font-size: 12.5px;
   min-width: 0;
 }
-.inst-row:first-child { border-top: 0; }
+.inst-head { padding: 2px 2px 5px; border-top: 0; font-size: 11px; font-weight: 500; color: var(--label); }
+.inst-head + .inst-row { border-top: 1px solid var(--border); }
+.inst-spark { max-width: 120px; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .inst-row .num { text-align: right; font-variant-numeric: tabular-nums; }
 .inst-cat { display: inline-flex; align-items: center; gap: 7px; min-width: 0; color: var(--text); font-weight: 500; }
 .inst-ico { flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 7px; color: var(--cat); background: color-mix(in srgb, var(--cat) 14%, transparent); border: 1px solid color-mix(in srgb, var(--cat) 30%, transparent); }
@@ -687,7 +695,6 @@ table.tree small.branch-total { display: block; white-space: nowrap; color: var(
 .inst-label { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--text); }
 .inst-label-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .inst-ports { color: var(--label); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.inst-spark { min-width: 0; }
 .inst-row .muted { color: var(--muted); }
 .inst-act { display: inline-flex; align-items: center; justify-content: flex-end; gap: 6px; }
 .reclass { position: relative; display: inline-flex; }

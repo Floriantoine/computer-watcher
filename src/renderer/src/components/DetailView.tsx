@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { ArrowLeft, ChartLine, ChevronRight, Lock, Shield, ShieldOff, X } from 'lucide-react';
 import type { Category, GroupSummary as Group, InstanceSummary, ProcNode, RangePreset } from '../../../core/types';
 import { formatAge, formatKB } from '../format';
 import { procSparkMap, useHistory } from '../history';
+import { ticksIndex } from '../instances';
 import { useChartZoom, ZoomChip } from '../chartZoom';
 import { PRESET_MS, refreshMsFor } from '../metrics';
 import { groupChartSeries } from './charts/chartData';
@@ -36,18 +37,6 @@ interface Props {
   onKillInstances?: (instances: InstanceSummary[], launchersOf?: string) => void;
 }
 
-/** pid → startTicks des processus de l'arbre (mini-courbes des instances). */
-function ticksMap(roots: ProcNode[] | null): Map<number, number> {
-  const out = new Map<number, number>();
-  const walk = (ns: ProcNode[]) => {
-    for (const n of ns) {
-      out.set(n.proc.pid, n.proc.startTicks);
-      walk(n.children);
-    }
-  };
-  if (roots) walk(roots);
-  return out;
-}
 
 function BackButton({ onBack }: { onBack: () => void }) {
   return (
@@ -119,7 +108,9 @@ export function DetailView(props: Props) {
   );
   const sparks = useMemo(() => procSparkMap(procs), [procs]);
   const sparkOf = useCallback((pid: number, startTicks: number) => sparks.get(`${pid}:${startTicks}`), [sparks]);
-  const ticksOf = useMemo(() => ticksMap(props.roots), [props.roots]);
+  // Index pid → startTicks : même objet tant que l'arbre a les mêmes processus (lignes d'instances mémoïsées).
+  const ticksRef = useRef<Map<number, number> | undefined>(undefined);
+  const ticksOf = useMemo(() => (ticksRef.current = ticksIndex(props.roots, ticksRef.current)), [props.roots]);
   if (!group && props.pending) return <p className="empty">Chargement…</p>;
   if (!group) {
     return (

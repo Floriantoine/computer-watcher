@@ -32,10 +32,13 @@ export function rgba(hex: string, a: number): string {
 const p2 = (n: number) => String(n).padStart(2, '0');
 const DAY_MS = 86_400_000;
 
-/** Graduation de l'axe du temps : `HH:mm` si la plage tient en 24 h, sinon `dd/MM HH:mm`. */
-export function formatAxisTime(ts: number, spanMs: number): string {
+/**
+ * Graduation de l'axe du temps : `HH:mm` si la plage tient en 24 h, sinon `dd/MM HH:mm`. Avec un pas de graduation
+ * (`incrMs`, fourni par uPlot) sous la minute, on ajoute les secondes : sinon plusieurs graduations auraient le même libellé.
+ */
+export function formatAxisTime(ts: number, spanMs: number, incrMs = Infinity): string {
   const d = new Date(ts);
-  const hm = `${p2(d.getHours())}:${p2(d.getMinutes())}`;
+  const hm = `${p2(d.getHours())}:${p2(d.getMinutes())}${incrMs < 60_000 ? `:${p2(d.getSeconds())}` : ''}`;
   return spanMs <= DAY_MS ? hm : `${p2(d.getDate())}/${p2(d.getMonth() + 1)} ${hm}`;
 }
 

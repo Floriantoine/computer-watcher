@@ -11,9 +11,9 @@ import { MetricsView } from './components/MetricsView';
 import { SystemBar, type SystemSparks } from './components/SystemBar';
 import { TopNav } from './components/TopNav';
 import { LiveBuffer, setLive, useHistory } from './history';
-import { projectName, reclassifyMessage, reclassifyScope } from './instances';
+import { instanceKillPlan, projectName, reclassifyMessage, reclassifyScope, skipInstanceKill } from './instances';
 import { leakTimes } from './recorderForm';
-import { findGroup, visibleGroups, ipcErrorMessage, killResultMessages, killRequestForGroup, killRequestForInstance, killRequestForProc, trackKills, type KillRequest, type ViewFilter } from './viewModel';
+import { findGroup, visibleGroups, ipcErrorMessage, killResultMessages, killRequestForGroup, killRequestForProc, trackKills, type KillRequest, type ViewFilter } from './viewModel';
 
 export type Route = { view: 'main' } | { view: 'detail'; groupId: string } | { view: 'settings' } | { view: 'metrics'; at?: number };
 
@@ -32,6 +32,8 @@ export function App() {
   const pending = useRef(new Map<number, number>());
   // startTicks relevé à l'envoi du SIGTERM : le SIGKILL « Forcer » le réutilise pour ne pas viser un PID réutilisé.
   const sentTicks = useRef(new Map<number, number>());
+  // Kills d'instance en cours de préparation (garde contre le double clic).
+  const instKillsInFlight = useRef(new Set<string>());
 
   const live = useRef(new LiveBuffer());
 
@@ -157,16 +159,20 @@ export function App() {
   };
   const killProc = (n: ProcNode) => requestKill(killRequestForProc(n.proc, isProtected, snapshot.currentUid));
   // Kill d'une instance : cibles {pid, startTicks} du dernier snapshot côté main, puis le chemin habituel (confirmation si protégée).
+  // Un second clic pendant la demande, ou après un SIGTERM déjà envoyé à tous ses processus, est ignoré.
   const killInstance = (inst: InstanceSummary) => {
-    Promise.all([window.procWatch.instances.targets([inst.key]), window.procWatch.groupProcs(inst.groupId)]).then(
-      ([entries, procs]) => {
-        const targets = entries.find((e) => e.key === inst.key)?.targets ?? [];
-        const req = killRequestForInstance(inst, targets, procs, isProtected, currentUid);
-        if (req.targets.length === 0) pushToast("Cette instance n'existe plus");
-        else requestKill(req);
-      },
-      (e: unknown) => pushToast(ipcErrorMessage(e)),
-    );
+    if (skipInstanceKill(inst, instKillsInFlight.current, pending.current)) return;
+    instKillsInFlight.current.add(inst.key);
+    Promise.all([window.procWatch.instances.targets([inst.key]), window.procWatch.groupProcs(inst.groupId)])
+      .then(
+        ([entries, procs]) => {
+          const plan = instanceKillPlan(inst, entries, procs, isProtected, currentUid);
+          if ('error' in plan) pushToast(plan.error);
+          else requestKill(plan.request);
+        },
+        (e: unknown) => pushToast(ipcErrorMessage(e)),
+      )
+      .finally(() => instKillsInFlight.current.delete(inst.key));
   };
   const reclassify = (inst: InstanceSummary, category: Category | null) => {
     const name = projectName(inst, findGroup(snapshot.groups, inst.groupId)?.label ?? inst.groupId);
