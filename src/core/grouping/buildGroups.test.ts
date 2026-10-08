@@ -144,6 +144,16 @@ describe('carte « Autres »', () => {
     expect(byId(groups, 'others').subgroups.map((g) => g.id)).toEqual(['command:tiny2', 'command:tiny1']);
   });
 
+  test('exemption réservée aux vraies racines de projet : dossier personnel et / suivent le seuil', () => {
+    const groups = buildGroups([
+      proc({ pid: 1, name: 'node', rssKB: 5 * 1024, cwd: '/home/u' }),
+      proc({ pid: 2, name: 'node', rssKB: 4 * 1024, cwd: '/' }),
+      proc({ pid: 3, name: 'node', rssKB: 3 * 1024, cwd: '/home/u/proj' }),
+    ], opts({ projectRootOf: (cwd) => (cwd.startsWith('/home/u/proj') ? '/home/u/proj' : cwd === '/' ? '/' : null) }));
+    expect(groups.map((g) => g.id)).toEqual(['project:/home/u/proj', 'others']);
+    expect(byId(groups, 'others').subgroups.map((g) => g.id)).toEqual(['project:/home/u', 'project:/']);
+  });
+
   test('un seul petit groupe → pas de carte Autres', () => {
     const groups = buildGroups([proc({ pid: 1, name: 'big', rssKB: 500 * 1024 }), proc({ pid: 2, name: 'tiny', rssKB: 1 })], opts());
     expect(groups.find((g) => g.id === 'others')).toBeUndefined();

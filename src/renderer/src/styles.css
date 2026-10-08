@@ -645,6 +645,7 @@ table.tree small.branch-total { display: block; white-space: nowrap; color: var(
 .cat-pill:hover:not(:disabled) { border-color: color-mix(in srgb, var(--cat) 40%, var(--border-hover)); }
 .cat-count { min-width: 18px; padding: 0 5px; border-radius: 99px; font-size: 10.5px; text-align: center; background: rgba(255, 255, 255, 0.07); color: var(--label); font-variant-numeric: tabular-nums; }
 .cat-pill.active .cat-count { color: var(--text); background: color-mix(in srgb, var(--cat) 25%, transparent); }
+.cat-hint { margin-left: auto; font-size: 11.5px; color: var(--muted); }
 .cat-kill { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; font-size: 12px; border-radius: 99px; }
 .cat-tag {
   flex: none; display: inline-flex; align-items: center; gap: 3px;

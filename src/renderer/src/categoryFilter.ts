@@ -43,6 +43,10 @@ export const killCount = (candidates: readonly InstanceSummary[]): number => can
 /** Le bouton « Tuer la sélection » n'apparaît qu'avec un filtre actif et au moins une cible. */
 export const showKillSelection = (selected: ReadonlySet<Category>, n: number): boolean => selected.size > 0 && n > 0;
 
+/** Filtre actif sans aucune instance de projet candidate : la barre rappelle que le kill groupé ne vise que les projets. */
+export const showProjectsOnlyHint = (selected: ReadonlySet<Category>, candidates: readonly InstanceSummary[]): boolean =>
+  selected.size > 0 && candidates.length === 0;
+
 /** Pastilles affichées : catégories présentes, plus les sélectionnées tombées à 0 (sinon impossible de les retirer). */
 export const pillCategories = (counts: ReadonlyMap<Category, number>, selected: ReadonlySet<Category>): Category[] =>
   CATEGORIES.filter((c) => counts.has(c) || selected.has(c));
@@ -71,10 +75,13 @@ export function primaryTag(g: GroupSummary): PrimaryTag | null {
   return best ? { category: best.category, port: mainPort(best) } : null;
 }
 
-/** Résumé d'une carte projet : « 1 front :5173 · 2 back :3000 :3001 » (au plus 2 ports par catégorie). */
+/**
+ * Résumé d'une carte projet : « 1 front :5173 · 2 back :3000 :3001 » (au plus 2 ports par catégorie). Les instances inconnues
+ * sans port (scripts, outils) n'y figurent pas ; une inconnue qui écoute reste (« 1 inconnu :7000 »). Chaîne vide si rien.
+ */
 export function instancesLine(g: GroupSummary): string {
   const by = new Map<Category, InstanceSummary[]>();
-  for (const i of g.instances) by.set(i.category, [...(by.get(i.category) ?? []), i]);
+  for (const i of g.instances) if (i.category !== 'unknown' || i.ports.length) by.set(i.category, [...(by.get(i.category) ?? []), i]);
   return CATEGORIES.filter((c) => by.has(c))
     .map((c) => {
       const list = by.get(c)!;

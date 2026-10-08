@@ -10,12 +10,14 @@ interface Props {
   onChange: (next: Set<Category>) => void;
   /** Instances que « Tuer la sélection » cocherait par défaut (hors protégées) */
   killCount: number;
+  /** Filtre actif sans instance de projet candidate : courte indication à la place du bouton */
+  projectsOnlyHint: boolean;
   /** Absent tant que le dialogue groupé n'existe pas : bouton désactivé */
   onKillSelection?: () => void;
 }
 
 /** Pastilles de catégories sous la barre d'outils : multi-sélection, « Toutes » remet à zéro. */
-function CategoryFilterImpl({ counts, selected, onChange, killCount, onKillSelection }: Props) {
+function CategoryFilterImpl({ counts, selected, onChange, killCount, projectsOnlyHint, onKillSelection }: Props) {
   const shown = pillCategories(counts, selected);
   if (shown.length === 0) return null;
   const toggle = (c: Category) => {
@@ -51,6 +53,7 @@ function CategoryFilterImpl({ counts, selected, onChange, killCount, onKillSelec
           </button>
         );
       })}
+      {projectsOnlyHint && <span className="cat-hint" data-testid="kill-projects-only">Le kill groupé ne vise que les projets</span>}
       {showKillSelection(selected, killCount) && (
         <button
           type="button"
@@ -73,5 +76,5 @@ const sameCounts = (a: Map<Category, number>, b: Map<Category, number>) => a.siz
 /** Ne se re-rend pas à chaque snapshot si les compteurs n'ont pas bougé. */
 export const CategoryFilter = memo(
   CategoryFilterImpl,
-  (a, b) => a.selected === b.selected && a.onChange === b.onChange && a.onKillSelection === b.onKillSelection && a.killCount === b.killCount && sameCounts(a.counts, b.counts),
+  (a, b) => a.selected === b.selected && a.onChange === b.onChange && a.onKillSelection === b.onKillSelection && a.killCount === b.killCount && a.projectsOnlyHint === b.projectsOnlyHint && sameCounts(a.counts, b.counts),
 );

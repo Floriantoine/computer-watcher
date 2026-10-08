@@ -107,7 +107,7 @@ export function buildGroups(procs: ProcInfo[], opts: GroupingOptions): Group[] {
   }
 
   const groups = [...members].map(([key, list]) => makeGroup(key, meta.get(key)!, list, opts));
-  return applyOthers(groups, opts.othersThreshold, opts.keepSeparate);
+  return applyOthers(groups, opts.othersThreshold, opts.keepSeparate, opts.home);
 }
 
 function makeGroup(id: string, { kind, label }: Meta, list: ProcInfo[], opts: GroupingOptions): Group {
@@ -156,10 +156,22 @@ export function isOverThreshold(g: { rssKB: number; swapKB: number; cpuPercent: 
   return mem(g) >= t.memMB * 1024 || g.cpuPercent >= t.cpuPercent;
 }
 
-function applyOthers(groups: Group[], t: { memMB: number; cpuPercent: number }, keepSeparate?: (id: string) => boolean): Group[] {
-  // Projets et dossiers supprimés gardent toujours leur carte : leurs instances (serveurs de dev oubliés, souvent petits et
-  // inactifs) doivent rester visibles pour le filtre par catégorie et « Tuer la sélection ».
-  const isSmall = (g: Group) => g.kind !== 'project' && g.kind !== 'deleted' && !isOverThreshold(g, t) && !keepSeparate?.(g.id);
+const trimSlash = (p: string) => (p.length > 1 ? p.replace(/\/+$/, '') : p);
+
+/**
+ * Projets et dossiers supprimés gardent toujours leur carte : leurs instances (serveurs de dev oubliés, souvent petits et
+ * inactifs) doivent rester visibles pour le filtre par catégorie et « Tuer la sélection ». Seulement pour une vraie racine
+ * de projet : un « projet » qui est le dossier personnel ou `/` (processus lancés depuis là) suit le seuil normal.
+ */
+function alwaysOwnCard(g: Group, home: string): boolean {
+  if (g.kind === 'deleted') return true;
+  if (g.kind !== 'project') return false;
+  const root = trimSlash(g.id.slice('project:'.length));
+  return root !== '/' && root !== trimSlash(home);
+}
+
+function applyOthers(groups: Group[], t: { memMB: number; cpuPercent: number }, keepSeparate: ((id: string) => boolean) | undefined, home: string): Group[] {
+  const isSmall = (g: Group) => !alwaysOwnCard(g, home) && !isOverThreshold(g, t) && !keepSeparate?.(g.id);
   const small = groups.filter(isSmall).sort(byMemDesc);
   if (small.length < 2) return groups.sort(byMemDesc);
   const big = groups.filter((g) => !isSmall(g)).sort(byMemDesc);

@@ -2,7 +2,7 @@ import { AnimatePresence } from 'motion/react';
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, Search } from 'lucide-react';
 import type { Category, GroupSummary as Group, InstanceSummary } from '../../../core/types';
-import { countByCategory, filterGroups, killCount, parseSelection, selectionCandidates } from '../categoryFilter';
+import { countByCategory, filterGroups, killCount, parseSelection, selectionCandidates, showProjectsOnlyHint } from '../categoryFilter';
 import { CategoryFilter } from './CategoryFilter';
 import type { SortKey, ViewFilter } from '../viewModel';
 import { visibleGroups } from '../viewModel';
@@ -128,6 +128,7 @@ export function MainView(props: Props) {
         selected={categories}
         onChange={pickCategories}
         killCount={killCount(candidates)}
+        projectsOnlyHint={showProjectsOnlyHint(categories, candidates)}
         onKillSelection={props.onKillInstances ? killSelection : undefined}
       />
       {shown.length === 0 ? (

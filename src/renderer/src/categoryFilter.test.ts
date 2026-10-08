@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { Category, GroupSummary, InstanceSummary } from '../../core/types';
-import { categoryDisplayKey, countByCategory, filterGroups, instancesLine, killCount, parseSelection, pillCategories, pillLabel, primaryTag, selectionCandidates, showKillSelection } from './categoryFilter';
+import { categoryDisplayKey, countByCategory, filterGroups, instancesLine, killCount, parseSelection, pillCategories, pillLabel, primaryTag, selectionCandidates, showKillSelection, showProjectsOnlyHint } from './categoryFilter';
 
 let n = 0;
 const inst = (category: Category, extra: Partial<InstanceSummary> = {}): InstanceSummary => {
@@ -82,6 +82,12 @@ describe('règles d\'affichage de la barre', () => {
     expect(pillCategories(counts, new Set<Category>(['test']))).toEqual(['front', 'db', 'test']);
     expect(pillCategories(new Map(), new Set())).toEqual([]);
   });
+  test('indication « ne vise que les projets » : filtre actif sans aucune instance de projet candidate', () => {
+    expect(showProjectsOnlyHint(new Set(), [])).toBe(false);
+    expect(showProjectsOnlyHint(new Set<Category>(['db']), [])).toBe(true);
+    expect(showProjectsOnlyHint(new Set<Category>(['db']), selectionCandidates(all, new Set<Category>(['db'])))).toBe(false);
+    expect(showProjectsOnlyHint(new Set<Category>(['browser']), selectionCandidates(all, new Set<Category>(['browser'])))).toBe(true);
+  });
   test('nom accessible d\'une pastille', () => {
     expect(pillLabel('front', 1)).toBe('Front, 1 instance');
     expect(pillLabel('db', 0)).toBe('BDD, 0 instance');
@@ -112,10 +118,15 @@ describe('instancesLine', () => {
     expect(instancesLine(shop)).toBe('1 front :5173 · 2 back :3000 :3001');
     expect(instancesLine(grp('w', [inst('front', { ports: [5173] }), inst('worker')]))).toBe('1 front :5173 · 1 worker');
   });
+  test('inconnues sans port masquées ; une inconnue qui écoute reste ; rien → ligne vide', () => {
+    expect(instancesLine(grp('x', [inst('front', { ports: [5173] }), inst('unknown')]))).toBe('1 front :5173');
+    expect(instancesLine(grp('x', [inst('unknown'), inst('unknown', { ports: [7000] })]))).toBe('1 inconnu :7000');
+    expect(instancesLine(grp('x', [inst('unknown')]))).toBe('');
+  });
   test('au plus 2 ports affichés par catégorie ; vide sans instance', () => {
     // port principal = le plus petit port de chaque instance
     expect(instancesLine(grp('x', [inst('front', { ports: [2, 1] }), inst('front', { ports: [3] }), inst('front', { ports: [4] })]))).toBe('3 front :1 :3 …');
-    expect(instancesLine(grp('x', [inst('db', { ports: [5432] }), inst('unknown')]))).toBe('1 BDD :5432 · 1 inconnu');
+    expect(instancesLine(grp('x', [inst('db', { ports: [5432] }), inst('unknown', { ports: [7000] })]))).toBe('1 BDD :5432 · 1 inconnu :7000');
     expect(instancesLine(grp('x', []))).toBe('');
   });
 });
