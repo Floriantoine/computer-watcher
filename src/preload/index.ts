@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import type {
-  Category, Config, ConfigState, Culprit, InstanceTargets, ProcInfo, Watch, GroupHistory, GroupsHistory, HistoryEvent, KillResult, KillTarget, KillSignal, ProcsHistory, RangePreset,
+  Category, Config, ConfigState, Culprit, InstanceTargets, ProcInfo, Watch, GroupHistory, GroupsHistory, HistoryEvent, KillResult, KillTarget, KillSignal, ProcsHistory, ProcTreeAt, RangePreset,
   RecorderState, Snapshot, SystemSeries, TimeRange, TopOptions, TopResult,
 } from '../core/types';
 
@@ -44,6 +44,8 @@ const api = {
     groups: (r: RangePreset | TimeRange, keys?: string[]): Promise<GroupsHistory | null> => ipcRenderer.invoke('history:groups', r, keys),
     group: (key: string, r: RangePreset | TimeRange): Promise<GroupHistory | null> => ipcRenderer.invoke('history:group', key, r),
     procs: (key: string, r: RangePreset | TimeRange): Promise<ProcsHistory | null> => ipcRenderer.invoke('history:procs', key, r),
+    /** Arbre enregistré du groupe à l'instant ts (rejeu) ; null sans base ou requête invalide. */
+    procTree: (key: string, ts: number): Promise<ProcTreeAt | null> => ipcRenderer.invoke('history:procTree', key, ts),
     culprits: (ts: number): Promise<Culprit[]> => ipcRenderer.invoke('history:culprits', ts),
     top: (r: RangePreset | TimeRange, o?: TopOptions): Promise<TopResult> => ipcRenderer.invoke('history:top', r, o),
     events: (r: RangePreset | TimeRange): Promise<HistoryEvent[]> => ipcRenderer.invoke('history:events', r),

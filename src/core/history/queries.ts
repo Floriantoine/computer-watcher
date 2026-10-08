@@ -1,7 +1,7 @@
 // src/core/history/queries.ts
 import type { DatabaseSync } from 'node:sqlite';
 import type {
-  Culprit, GroupHistory, GroupKind, GroupsHistory, HistoryEvent, ProcsHistory, RangePreset, SystemSeries, TimeRange, TopConsumer, TopOptions, TopResult,
+  Culprit, GroupHistory, GroupKind, GroupsHistory, HistoryEvent, ProcsHistory, ProcTreeAt, ProcTreeRow, RangePreset, SystemSeries, TimeRange, TopConsumer, TopOptions, TopResult,
 } from '../types';
 import { hasColumn } from './db';
 import { alignSeries } from './series';
@@ -278,6 +278,57 @@ export function queryProcsAt(db: DatabaseSync, groupKey: string, ts: number, o: 
   return rows
     .map((r) => ({ pid: r.pid, startTicks: r.st, ppid: r.ppid, name: r.name, cmdline: r.cmdline, rssKB: r.rss, swapKB: r.swap, cpu: r.cpu }))
     .sort((a, b) => b.rssKB + (b.swapKB ?? 0) - (a.rssKB + (a.swapKB ?? 0)));
+}
+
+/**
+ * Processus enregistrés du groupe à l'instant ts : par processus, l'échantillon le plus proche de ts dans [ts − intervalle, ts + intervalle]
+ * (proc_samples si ts est dans la rétention détaillée), sinon la ligne de proc_minute la plus proche dans [minute(ts) − 1 min, minute(ts) + 1 min]
+ * (swap inconnu). lastSeenTs = dernier échantillon connu du processus (MAX(ts) de proc_samples, sinon de proc_minute + 59 999).
+ * Tolère une base v1 (ppid NULL). Aucun processus → procs: [].
+ */
+export function queryProcTree(db: DatabaseSync, groupKey: string, ts: number, o: QueryOpts): ProcTreeAt {
+  const ppid = hasColumn(db, 'procs', 'ppid') ? 'p.ppid' : 'NULL';
+  const source: ProcTreeAt['source'] = ts >= o.now - o.detailHours * H ? 'detail' : 'minute';
+  const half = o.intervalSec * 1000;
+  const minute = Math.floor(ts / M) * M;
+  // Une ligne par échantillon de la fenêtre, triées par processus puis distance à ts : la première de chaque id est retenue.
+  const rows = (
+    source === 'detail'
+      ? db
+          .prepare(
+            `SELECT p.id, p.pid, p.start_ticks AS st, ${ppid} AS ppid, p.name, s.ts AS sts, s.rss_kb AS rss, s.swap_kb AS swap, s.cpu_percent AS cpu
+             FROM procs p JOIN proc_samples s ON s.proc_id = p.id AND s.ts >= ? AND s.ts <= ?
+             WHERE p.group_id = (SELECT id FROM groups WHERE key = ?)
+             ORDER BY p.id, ABS(s.ts - ?)`,
+          )
+          .all(ts - half, ts + half, groupKey, ts)
+      : db
+          .prepare(
+            `SELECT p.id, p.pid, p.start_ticks AS st, ${ppid} AS ppid, p.name, s.ts AS sts, s.mem_kb_avg AS rss, NULL AS swap, s.cpu_avg AS cpu
+             FROM procs p JOIN proc_minute s ON s.proc_id = p.id AND s.ts >= ? AND s.ts <= ?
+             WHERE p.group_id = (SELECT id FROM groups WHERE key = ?)
+             ORDER BY p.id, ABS(s.ts - ?)`,
+          )
+          .all(minute - M, minute + M, groupKey, minute)
+  ) as { id: number; pid: number; st: number; ppid: number | null; name: string; sts: number; rss: number; swap: number | null; cpu: number }[];
+  const lastDetail = db.prepare('SELECT MAX(ts) AS t FROM proc_samples WHERE proc_id = ?');
+  const lastMinute = db.prepare('SELECT MAX(ts) AS t FROM proc_minute WHERE proc_id = ?');
+  const lastSeen = (id: number, fallback: number): number => {
+    const d = (lastDetail.get(id) as { t: number | null }).t;
+    if (d !== null) return d;
+    const m = (lastMinute.get(id) as { t: number | null }).t;
+    return m !== null ? m + M - 1 : fallback;
+  };
+  const procs: ProcTreeRow[] = [];
+  let prev = -1;
+  for (const r of rows) {
+    if (r.id === prev) continue;
+    prev = r.id;
+    procs.push({
+      pid: r.pid, startTicks: r.st, ppid: r.ppid, name: r.name, rssKB: r.rss, swapKB: r.swap, cpu: r.cpu, sampleTs: r.sts, lastSeenTs: lastSeen(r.id, r.sts),
+    });
+  }
+  return { ts, source, procs };
 }
 
 /** Seuil d'activité : un échantillon à ≥ 1 % de CPU suffit à rendre un processus actif. */

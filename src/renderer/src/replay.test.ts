@@ -1,0 +1,53 @@
+import { describe, expect, test } from 'vitest';
+import type { ProcInfo, ProcNode, ProcTreeRow } from '../../core/types';
+import { liveKeySet, nextReplayTs, REPLAY_SPEED, replayTree, type ReplayNode } from './replay';
+
+const row = (pid: number, ppid: number | null, rssKB = 100, swapKB: number | null = 0, lastSeenTs = 1000): ProcTreeRow => ({
+  pid, startTicks: pid * 10, ppid, name: `p${pid}`, rssKB, swapKB, cpu: 0, sampleTs: 500, lastSeenTs,
+});
+const alive = () => true;
+const shape = (ns: ReplayNode[]): unknown[] => ns.map((n) => [n.row.pid, ...(n.children.length ? [shape(n.children)] : [])]);
+
+describe('replayTree', () => {
+  test('chaîne A → B → C : un seul arbre', () => {
+    const t = replayTree([row(3, 2), row(1, 0), row(2, 1)], alive);
+    expect(shape(t)).toEqual([[1, [[2, [[3]]]]]]);
+  });
+
+  test('parent absent des lignes : racine', () => {
+    expect(shape(replayTree([row(5, 999), row(6, null)], alive)).length).toBe(2);
+  });
+
+  test('cycle A ↔ B : une seule racine, pas de boucle infinie', () => {
+    const t = replayTree([row(1, 2), row(2, 1)], alive);
+    expect(t).toHaveLength(1);
+    expect(t[0].children).toHaveLength(1);
+    expect(t[0].children[0].children).toHaveLength(0);
+  });
+
+  test('tri par mémoire (rss + swap) décroissante, swap inconnu = 0', () => {
+    const t = replayTree([row(1, null, 100, null), row(2, null, 50, 100), row(3, null, 120, 0)], alive);
+    expect(t.map((n) => n.row.pid)).toEqual([2, 3, 1]);
+  });
+
+  test('processus mort depuis : dead, diedAt = lastSeenTs ; vivant : diedAt null', () => {
+    const t = replayTree([row(1, null, 100, 0, 7000), row(2, 1, 100, 0, 4000)], (pid, st) => !(pid === 2 && st === 20));
+    expect(t[0]).toMatchObject({ dead: false, diedAt: null });
+    expect(t[0].children[0]).toMatchObject({ dead: true, diedAt: 4000 });
+  });
+});
+
+test('liveKeySet : clés pid:startTicks de tout l\'arbre en direct', () => {
+  const node = (pid: number, children: ProcNode[] = []): ProcNode => ({ proc: { pid, startTicks: pid + 1 } as ProcInfo, children });
+  expect(liveKeySet([node(1, [node(2, [node(3)])]), node(4)])).toEqual(new Set(['1:2', '2:3', '3:4', '4:5']));
+  expect(liveKeySet(null)).toEqual(new Set());
+});
+
+test('nextReplayTs : ×60, borné à la fin de la plage', () => {
+  expect(REPLAY_SPEED).toBe(60);
+  const t = 1_000_000;
+  const range = { from: t - 10_000, to: t + 90_000 };
+  const a = nextReplayTs(t, range, 1000);
+  expect(a).toEqual({ ts: t + 60_000, done: false });
+  expect(nextReplayTs(a.ts, range, 1000)).toEqual({ ts: t + 90_000, done: true });
+});

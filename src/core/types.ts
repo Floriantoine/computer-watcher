@@ -180,6 +180,9 @@ export interface TopOptions { limit?: number; peakLimit?: number }
 export interface TopConsumer { key: string; label: string; kind: GroupKind; avgKB: number; maxKB: number; spark: number[] }
 /** Les deux classements, calculés en un seul parcours. */
 export interface TopResult { byAvg: TopConsumer[]; byMax: TopConsumer[] }
+/** Processus enregistré d'un groupe à un instant (rejeu) ; swapKB null pour les agrégats par minute. */
+export interface ProcTreeRow { pid: number; startTicks: number; ppid: number | null; name: string; rssKB: number; swapKB: number | null; cpu: number; sampleTs: number; lastSeenTs: number }
+export interface ProcTreeAt { ts: number; source: 'detail' | 'minute'; procs: ProcTreeRow[] }
 export interface HistoryEvent { ts: number; type: string; groupKey: string | null; groupLabel: string | null; detail: Record<string, unknown> }
 export interface RecorderState {
   available: boolean; // systemd utilisateur disponible

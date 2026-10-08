@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { openHistoryDb } from './db';
 import { aggregateMinute } from './maintenance';
-import { bucketMs, pickSource, queryInactive, queryCulprits, queryEvents, queryGroup, queryGroups, queryProcs, queryProcsAt, querySystem, queryTop, rangeFromPreset } from './queries';
+import { bucketMs, pickSource, queryInactive, queryCulprits, queryEvents, queryGroup, queryGroups, queryProcs, queryProcsAt, queryProcTree, querySystem, queryTop, rangeFromPreset } from './queries';
 
 const H = 3600_000;
 const M = 60_000;
@@ -371,5 +371,76 @@ describe('queryInactive (« inactives depuis »)', () => {
     // échantillon détaillé récent aussi pris en compte quand la période dépasse la rétention
     db.prepare('INSERT INTO proc_samples VALUES (?,?,?,?,?)').run(now - M, 2, 1000, 0, 2);
     expect(queryInactive(db, targets, now - 31 * H, opts(now))).toEqual(new Set(['20:200', '21:210']));
+  });
+});
+
+describe('queryProcTree (rejeu de l\'arbre)', () => {
+  const now = 10 * H;
+  const ts = 9 * H;
+  const o = opts(now);
+  /** A (10) → D (11) ; C (12, enfant de A) mort à ts − 30 s ; B (13) né à ts + 60 s ; h (groupe voisin) : E (20). */
+  function treeDb() {
+    const { db } = openHistoryDb(join(mkdtempSync(join(tmpdir(), 'pw-tree-')), 'm.db'));
+    db.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'g','g','app'), (2,'h','h','app');
+             INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id,ppid) VALUES
+               (1,10,1,'A','a',1,1), (2,11,1,'D','d',1,10), (3,12,1,'C','c',1,10), (4,13,1,'B','b',1,10), (5,20,1,'E','e',2,1);`);
+    const ins = db.prepare('INSERT INTO proc_samples VALUES (?,?,?,?,?)');
+    ins.run(ts - 3000, 1, 1000, 10, 1);
+    ins.run(ts + 2000, 1, 1200, 20, 3);
+    ins.run(ts, 2, 500, 0, 0);
+    ins.run(ts, 5, 9000, 0, 0);
+    for (let t = ts - 120_000; t <= ts - 30_000; t += 5000) ins.run(t, 3, 700, 0, 1);
+    for (let t = ts + 60_000; t <= ts + 120_000; t += 5000) ins.run(t, 4, 300, 0, 1);
+    return db;
+  }
+
+  test('détail : échantillon le plus proche à ± 1 intervalle, nés après et morts avant absents', () => {
+    const db = treeDb();
+    const r = queryProcTree(db, 'g', ts, o);
+    expect(r.ts).toBe(ts);
+    expect(r.source).toBe('detail');
+    expect(r.procs.map((p) => p.pid).sort()).toEqual([10, 11]);
+    const a = r.procs.find((p) => p.pid === 10)!;
+    expect(a).toEqual({ pid: 10, startTicks: 1, ppid: 1, name: 'A', rssKB: 1200, swapKB: 20, cpu: 3, sampleTs: ts + 2000, lastSeenTs: ts + 2000 });
+    expect(r.procs.find((p) => p.pid === 11)!.ppid).toBe(10);
+  });
+
+  test('détail : lastSeenTs = dernier échantillon connu (processus mort depuis)', () => {
+    const r = queryProcTree(treeDb(), 'g', ts - 40_000, o);
+    expect(r.procs.map((p) => [p.pid, p.sampleTs, p.lastSeenTs])).toEqual([[12, ts - 40_000, ts - 30_000]]);
+  });
+
+  test('instant dans un trou (aucun échantillon à ± 5 s) ou groupe inconnu : procs vide', () => {
+    const db = treeDb();
+    expect(queryProcTree(db, 'g', ts - 30 * M, o)).toEqual({ ts: ts - 30 * M, source: 'detail', procs: [] });
+    expect(queryProcTree(db, 'absent', ts, o).procs).toEqual([]);
+  });
+
+  test('hors rétention détaillée : ligne minute la plus proche, swap inconnu', () => {
+    const db = treeDb();
+    const pm = db.prepare('INSERT INTO proc_minute VALUES (?,?,?,?,?)');
+    pm.run(ts - M, 1, 800, 900, 2);
+    pm.run(ts, 1, 1100, 1300, 4);
+    pm.run(ts + 3 * M, 2, 400, 400, 0); // hors de [minute − 1 min, minute + 1 min]
+    db.exec('DELETE FROM proc_samples WHERE proc_id = 1');
+    const r = queryProcTree(db, 'g', ts + 20_000, opts(100 * H));
+    expect(r.source).toBe('minute');
+    expect(r.procs).toEqual([{ pid: 10, startTicks: 1, ppid: 1, name: 'A', rssKB: 1100, swapKB: null, cpu: 4, sampleTs: ts, lastSeenTs: ts + 59_999 }]);
+  });
+
+  test('base v1 (procs sans ppid), lecture seule : ppid null', () => {
+    const p = join(mkdtempSync(join(tmpdir(), 'pw-v1t-')), 'm.db');
+    const w = openHistoryDb(p).db;
+    w.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'g','g','app');
+            ALTER TABLE procs DROP COLUMN ppid;
+            INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id) VALUES (1,10,1,'a','a',1);
+            INSERT INTO proc_samples VALUES (1000,1,500,5,2);
+            INSERT INTO proc_minute VALUES (0,1,505,600,2);
+            PRAGMA user_version = 1;`);
+    w.close();
+    const { db } = openHistoryDb(p, { readOnly: true });
+    expect(queryProcTree(db, 'g', 1000, { now: 2000, detailHours: 24, intervalSec: 5 }).procs[0]).toMatchObject({ pid: 10, ppid: null, swapKB: 5 });
+    expect(queryProcTree(db, 'g', 1000, { now: 100 * H, detailHours: 24, intervalSec: 5 }).procs[0]).toMatchObject({ pid: 10, ppid: null, swapKB: null });
+    db.close();
   });
 });

@@ -3,7 +3,7 @@ import { existsSync, readFileSync, rmSync, statSync, writeFileSync, mkdirSync } 
 import type { DatabaseSync } from 'node:sqlite';
 import { historyBackups, openHistoryDb, SCHEMA_VERSION } from '../core/history/db';
 import {
-  queryCulprits, queryEvents, queryGroup, queryGroups, queryInactive, queryProcs, querySystem, queryTop, rangeFromPreset, type QueryOpts,
+  queryCulprits, queryEvents, queryGroup, queryGroups, queryInactive, queryProcs, queryProcTree, querySystem, queryTop, rangeFromPreset, type QueryOpts,
 } from '../core/history/queries';
 import { clearRequestPath, dbPath, statusPath } from '../core/paths';
 import type { RangePreset, RecorderConfig, RecorderStatus, TimeRange, TopOptions, TopResult } from '../core/types';
@@ -60,6 +60,8 @@ export function createHistoryReader(dataDir: string, getConfig: () => RecorderCo
     group: (key: string, r: RangePreset | TimeRange) => run((d) => queryGroup(d, key, toRange(r), opts()), null),
     procs: (key: string, r: RangePreset | TimeRange) =>
       run((d) => queryProcs(d, key, clampToDetail(toRange(r), Date.now(), getConfig().detailHours), opts()), null),
+    /** Arbre enregistré du groupe à l'instant ts (rejeu) ; null sans base. */
+    procTree: (key: string, ts: number) => run((d) => queryProcTree(d, key, ts, opts()), null),
     culprits: (ts: number) => run((d) => queryCulprits(d, ts, opts()), []),
     top: (r: RangePreset | TimeRange, o?: TopOptions): TopResult => run((d) => queryTop(d, toRange(r), opts(), o), { byAvg: [], byMax: [] }),
     events: (r: RangePreset | TimeRange) => run((d) => queryEvents(d, toRange(r)), []),
