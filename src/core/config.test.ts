@@ -144,3 +144,23 @@ describe('section ui', () => {
     expect(validateConfig({ ...DEFAULT_CONFIG, ui })).toBeNull();
   });
 });
+
+test('config sans classify : défauts', () => {
+  const { classify: _c, ...old } = DEFAULT_CONFIG;
+  expect(validateConfig(old)?.classify).toEqual({ detectPorts: true, overrides: {} });
+});
+
+test('classify : overrides valides conservés', () => {
+  const classify = { detectPorts: false, overrides: { '/a|node vite': 'front', 'g|x': 'db' } };
+  expect(validateConfig({ ...DEFAULT_CONFIG, classify })?.classify).toEqual(classify);
+});
+
+test.each<[string, unknown]>([
+  ['catégorie inconnue', { detectPorts: true, overrides: { a: 'nope' } }],
+  ['> 500 entrées', { detectPorts: true, overrides: Object.fromEntries(Array.from({ length: 501 }, (_, i) => [`k${i}`, 'front'])) }],
+  ['clé > 300 caractères', { detectPorts: true, overrides: { ['k'.repeat(301)]: 'front' } }],
+  ['detectPorts non booléen', { detectPorts: 'yes', overrides: {} }],
+  ['overrides absent', { detectPorts: true }],
+])('classify invalide (%s) → config invalide', (_n, classify) => {
+  expect(validateConfig({ ...DEFAULT_CONFIG, classify })).toBeNull();
+});

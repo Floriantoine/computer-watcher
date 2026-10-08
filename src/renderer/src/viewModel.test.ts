@@ -12,7 +12,7 @@ const proc = (pid: number, name: string, extra: Partial<ProcInfo> = {}): ProcInf
 const group = (id: string, procs: ProcInfo[], extra: Partial<GroupSummary> = {}): GroupSummary => ({
   id, kind: 'command', label: id, tags: [], rootName: procs[0]?.name ?? '',
   pids: procs.map((p) => p.pid), procCount: procs.length, cpuPercent: 0, rssKB: 0, swapKB: 0, oldestAgeSec: 10,
-  protected: false, killable: true, subgroups: [], ...extra,
+  protected: false, killable: true, subgroups: [], categories: [], instances: [], ...extra,
 });
 
 describe('visibleGroups', () => {

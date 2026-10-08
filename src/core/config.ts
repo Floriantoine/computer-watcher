@@ -1,9 +1,10 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_CONFIG, DEFAULT_RECORDER, DEFAULT_UI } from './defaults';
+import { DEFAULT_CLASSIFY, DEFAULT_CONFIG, DEFAULT_RECORDER, DEFAULT_UI } from './defaults';
 import { inBounds, RECORDER_BOUNDS, type RecorderNumField } from './recorderBounds';
-import type { Config, RecorderConfig, UiConfig } from './types';
+import { isCategory } from './classify/categories';
+import type { Category, ClassifyConfig, Config, RecorderConfig, UiConfig } from './types';
 
 export { DEFAULT_CONFIG };
 
@@ -41,6 +42,27 @@ function validateUi(raw: unknown): UiConfig | null {
   return { reducedEffects: r.reducedEffects };
 }
 
+export const MAX_OVERRIDES = 500;
+export const MAX_OVERRIDE_KEY = 300;
+
+function validateClassify(raw: unknown): ClassifyConfig | null {
+  if (raw === undefined) return { ...DEFAULT_CLASSIFY, overrides: {} };
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.detectPorts !== 'boolean') return null;
+  const o = r.overrides;
+  if (typeof o !== 'object' || o === null || Array.isArray(o)) return null;
+  const keys = Object.keys(o);
+  if (keys.length > MAX_OVERRIDES) return null;
+  const overrides: Record<string, Category> = {};
+  for (const k of keys) {
+    const v = (o as Record<string, unknown>)[k];
+    if (k.length > MAX_OVERRIDE_KEY || !isCategory(v)) return null;
+    overrides[k] = v;
+  }
+  return { detectPorts: r.detectPorts, overrides };
+}
+
 export function validateConfig(raw: unknown): Config | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const r = raw as Record<string, unknown>;
@@ -53,7 +75,9 @@ export function validateConfig(raw: unknown): Config | null {
   if (!recorder) return null;
   const ui = validateUi(r.ui);
   if (!ui) return null;
-  return { version: 1, protected: [...r.protected], othersThreshold: { memMB: t.memMB, cpuPercent: t.cpuPercent }, recorder, ui };
+  const classify = validateClassify(r.classify);
+  if (!classify) return null;
+  return { version: 1, protected: [...r.protected], othersThreshold: { memMB: t.memMB, cpuPercent: t.cpuPercent }, recorder, ui, classify };
 }
 
 export function saveConfig(dir: string, config: Config): void {

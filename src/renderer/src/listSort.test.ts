@@ -1,10 +1,10 @@
 import { expect, test } from 'vitest';
-import type { Group } from '../../core/types';
+import type { GroupSummary } from '../../core/types';
 import { sortForList } from './listSort';
 
-const g = (id: string, extra: Partial<Group>): Group => ({
-  id, kind: 'command', label: id, tags: [], rootName: id, roots: [], pids: [], procCount: 1, cpuPercent: 0, rssKB: 0, swapKB: 0,
-  oldestAgeSec: 0, protected: false, killable: true, subgroups: [], ...extra,
+const g = (id: string, extra: Partial<GroupSummary>): GroupSummary => ({
+  id, kind: 'command', label: id, tags: [], rootName: id, pids: [], procCount: 1, cpuPercent: 0, rssKB: 0, swapKB: 0,
+  oldestAgeSec: 0, protected: false, killable: true, subgroups: [], categories: [], instances: [], ...extra,
 });
 
 test('tri par colonne, Autres en dernier quel que soit le sens', () => {

@@ -64,6 +64,8 @@ export interface Group {
 /** Groupe sans son arbre de processus : ce que reçoit le renderer à chaque snapshot. */
 export interface GroupSummary extends Omit<Group, 'roots' | 'subgroups'> {
   subgroups: GroupSummary[];
+  categories: Category[];
+  instances: InstanceSummary[];
 }
 
 /** Ce que le renderer suit : le groupe ouvert dans le détail (son arbre est envoyé) et la recherche en cours. */
@@ -109,12 +111,25 @@ export interface UiConfig {
   reducedEffects: boolean;
 }
 
+export type { Category } from './classify/categories';
+import type { Category } from './classify/categories';
+
+export interface ClassifyConfig { detectPorts: boolean; overrides: Record<string, Category> }
+
+export interface InstanceSummary {
+  key: string; groupId: string; project: string | null; category: Category;
+  source: 'manual' | 'command' | 'port' | 'package' | 'name' | 'unknown';
+  signature: string; label: string; rootPid: number; rootStartTicks: number; pids: number[]; ports: number[];
+  ageSec: number; rssKB: number; swapKB: number; cpuPercent: number; duplicate: boolean; protected: boolean;
+}
+
 export interface Config {
   version: 1;
   protected: string[];
   othersThreshold: { memMB: number; cpuPercent: number };
   recorder: RecorderConfig;
   ui: UiConfig;
+  classify: ClassifyConfig;
 }
 
 export interface ConfigState {

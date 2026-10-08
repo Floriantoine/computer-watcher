@@ -3,7 +3,7 @@ import type { Group, GroupSummary, ProcInfo, ProcNode, Snapshot, SystemInfo, Wat
 /** Groupe sans arbre : le renderer n'a besoin des processus que pour le groupe ouvert. */
 export function summarizeGroup(g: Group): GroupSummary {
   const { roots: _roots, subgroups, ...rest } = g;
-  return { ...rest, subgroups: subgroups.map(summarizeGroup) };
+  return { ...rest, subgroups: subgroups.map(summarizeGroup), categories: [], instances: [] };
 }
 
 function flattenNodes(nodes: ProcNode[], out: ProcInfo[]): ProcInfo[] {

@@ -4,7 +4,7 @@ import { cardDisplayEqual, procRowDisplayEqual, rowDisplayEqual, sameSeries } fr
 
 const g = (extra: Partial<GroupSummary> = {}): GroupSummary => ({
   id: 'app:chrome', kind: 'app', label: 'Chrome', tags: [], rootName: 'chrome', pids: [1, 2], procCount: 2,
-  cpuPercent: 3.2, rssKB: 2_000_000, swapKB: 0, oldestAgeSec: 4000, protected: false, killable: true, subgroups: [], ...extra,
+  cpuPercent: 3.2, rssKB: 2_000_000, swapKB: 0, oldestAgeSec: 4000, protected: false, killable: true, subgroups: [], categories: [], instances: [], ...extra,
 });
 const MEM = 32 * 1024 * 1024;
 
