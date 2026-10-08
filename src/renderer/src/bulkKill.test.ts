@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import type { Category, InstanceSummary, InstanceTargets, KillResult, KillTarget } from '../../core/types';
+import type { Category, GroupSummary, InstanceSummary, InstanceTargets, KillResult, KillTarget } from '../../core/types';
 import { MAX_KILL_TARGETS as CORE_MAX } from '../../core/kill';
 import {
   MAX_KILL_TARGETS,
@@ -8,6 +8,8 @@ import {
   defaultSelection,
   fetchInactive,
   fetchTargets,
+  freeCandidates,
+  PRESETS,
   includeLaunchers,
   killBatches,
   presetSelection,
@@ -366,5 +368,46 @@ describe('bulkRequest (requête construite par le dialogue)', () => {
   });
   test('une instance non protégée cochée n\'autorise pas les protégés', () => {
     expect([...bulkRequest(list, new Set([a.key]), live, undefined).protectedChecked]).toEqual([]);
+  });
+});
+
+describe('« Libérer de la mémoire » (prévision ②)', () => {
+  const grp = (id: string, kind: GroupSummary['kind'], instances: InstanceSummary[], extra: Partial<GroupSummary> = {}): GroupSummary => ({
+    id, kind, label: id, pids: [], memKB: 0, rssKB: 0, swapKB: 0, cpuPercent: 0, oldestAgeSec: 0, protected: false, killable: true,
+    subgroups: [], categories: [], instances, ...extra,
+  } as unknown as GroupSummary);
+
+  test('freeCandidates : projets/supprimés tuables seulement ; groupes qui grossissent d’abord, puis ordre d’origine', () => {
+    const a = inst('front', { groupId: 'project:a' });
+    const b = inst('front', { groupId: 'project:b' });
+    const c = inst('front', { groupId: 'deleted:c' });
+    const app = inst('front', { groupId: 'app:code' });
+    const locked = inst('front', { groupId: 'project:root' });
+    const groups = [
+      grp('project:a', 'project', [a]),
+      grp('app:code', 'app', [app]),
+      grp('project:root', 'project', [locked], { killable: false }),
+      grp('project:b', 'project', [b]),
+      grp('deleted:c', 'deleted', [c]),
+    ];
+    expect(freeCandidates(groups, [])).toEqual([a, b, c]);
+    expect(freeCandidates(groups, ['deleted:c', 'project:b', 'app:code'])).toEqual([c, b, a]);
+  });
+
+  test('presetSelection(free) = (inactives > 1 h ∪ doublons) hors protégées ; sans historique → doublons seuls', () => {
+    const a = inst('front', { ageSec: 7200 });
+    const b = inst('front', { duplicate: true });
+    const c = inst('front', { protected: true, ageSec: 7200 });
+    const d = inst('front', { ageSec: 7200 });
+    const list = [a, b, c, d];
+    expect(presetSelection(list, 'free', { h1: new Set([a.key, c.key]) })).toEqual(new Set([a.key, b.key]));
+    expect(presetSelection(list, 'free', { h1: null })).toEqual(new Set([b.key]));
+    expect(presetSelection(list, 'free', { h1: 'error' })).toEqual(new Set([b.key]));
+  });
+
+  test('presetState(free) : désactivé tant que l’historique est en lecture', () => {
+    expect(presetState('free', {})).toEqual({ enabled: false, reason: "Lecture de l'historique…" });
+    expect(presetState('free', { h1: null })).toEqual({ enabled: true });
+    expect(PRESETS.find((p) => p.id === 'free')?.label).toBe('Inactives > 1 h + doublons');
   });
 });

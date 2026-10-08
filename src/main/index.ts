@@ -21,6 +21,7 @@ import { appEventsPath, dataDir, focusStatePath } from '../core/paths';
 import { alertIdFromArgv } from '../core/alerts';
 import { buildSnapshot, flattenGroup, groupProcs, instanceTargets, isWatch, othersFollowed, type Classification, type FullSnapshot } from '../core/snapshot';
 import type { ConfigState, Group, KillResult, ProcInfo, RecorderState, Watch } from '../core/types';
+import { createFreeOpener, wantsFree } from './launchArgs';
 import { createAlertOpener, createFocusWriter, initSeenUpTo, keepSeenUpTo, markSeen, unseenFilter } from './alerts';
 import { installDesktopEntry } from './desktopEntry';
 import { createEarlyoomApplier, earlyoomStatus } from './earlyoom';
@@ -85,10 +86,10 @@ const focusWriter = createFocusWriter({
 const alertOpener = createAlertOpener((id) => {
   if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send('alert:open', id);
 });
-{
-  const id = alertIdFromArgv(process.argv);
-  if (id !== null) alertOpener.open(id);
-}
+// « Libérer de la mémoire » (`--free`) : le renderer ouvre le kill groupé pré-rempli (rien n'est tué sans confirmation).
+const freeOpener = createFreeOpener(() => {
+  if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send('free');
+});
 const history = createHistoryReader(data, () => config.recorder);
 let systemdOk = false;
 
@@ -243,6 +244,13 @@ function takeSnapshot(): FullSnapshot {
 let last: FullSnapshot | null = null;
 let watch: Watch = { groupId: null, query: '' };
 let mainWin: BrowserWindow | null = null;
+// Demandes du lancement (`--alert=<id>`, `--free`) : gardées jusqu'à ce que le renderer les prenne. Après la déclaration de
+// mainWin (l'envoi immédiat la lit : avant, ReferenceError au démarrage).
+{
+  const id = alertIdFromArgv(process.argv);
+  if (id !== null) alertOpener.open(id);
+}
+if (wantsFree(process.argv)) freeOpener.open();
 
 function send(): void {
   if (!mainWin || mainWin.isDestroyed() || !last) return;
@@ -497,6 +505,7 @@ ipcMain.handle('alerts:seenAll', () => {
   return ts === null ? configState() : applySeen({ upTo: ts });
 });
 ipcMain.handle('alerts:takePending', () => alertOpener.take());
+ipcMain.handle('free:takePending', () => freeOpener.take());
 
 /** Montre la fenêtre (la recrée si elle a été fermée), la restaure et la focalise. */
 function showWindow(): void {
@@ -509,8 +518,15 @@ function showWindow(): void {
   mainWin.focus();
 }
 
-app.on('second-instance', (_e, argv) => {
+/** Montre la fenêtre sur « Libérer de la mémoire » (barre des tâches, `--free`). */
+function openFree(): void {
   showWindow();
+  freeOpener.open();
+}
+
+app.on('second-instance', (_e, argv) => {
+  if (wantsFree(argv)) openFree();
+  else showWindow();
   const id = alertIdFromArgv(argv);
   if (id !== null) alertOpener.open(id);
 });

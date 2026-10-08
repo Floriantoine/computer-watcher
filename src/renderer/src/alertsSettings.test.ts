@@ -2,8 +2,8 @@ import { expect, test } from 'vitest';
 import { DEFAULT_CONFIG, validateConfig } from '../../core/config';
 import { parseIntervalInput, SETTINGS_ALERT_TYPES, withChannel, withInterval } from './alertsSettings';
 
-test('types réglables : ceux qui existent aujourd’hui (la prévision ② s’ajoutera ici)', () => {
-  expect(SETTINGS_ALERT_TYPES.map((t) => t.type)).toEqual(['earlyoom_kill', 'leak', 'tmpfs', 'pressure']);
+test('types réglables : ceux qui existent aujourd’hui, prévision ② comprise', () => {
+  expect(SETTINGS_ALERT_TYPES.map((t) => t.type)).toEqual(['earlyoom_kill', 'leak', 'tmpfs', 'pressure', 'forecast']);
 });
 
 test('withChannel : change un seul type, config toujours valide', () => {

@@ -80,6 +80,18 @@ const api = {
       };
     },
   },
+  free: {
+    /** « Libérer de la mémoire » demandé (`--free`, barre des tâches) et pas encore pris : une seule fois. */
+    takePending: (): Promise<boolean> => ipcRenderer.invoke('free:takePending'),
+    /** « Libérer de la mémoire » demandé alors que l'app tournait déjà. */
+    onFree(cb: () => void): () => void {
+      const handler = () => cb();
+      ipcRenderer.on('free', handler);
+      return () => {
+        ipcRenderer.removeListener('free', handler);
+      };
+    },
+  },
   tmp: {
     /** Plus gros dossiers de /tmp à cet instant (lecture seule, au plus 100 000 entrées ou 2 s). */
     topDirs: (): Promise<TmpUsage> => ipcRenderer.invoke('tmp:topDirs'),

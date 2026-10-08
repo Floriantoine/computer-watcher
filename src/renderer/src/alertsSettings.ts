@@ -2,12 +2,13 @@
 import { DESKTOP_INTERVAL_BOUNDS, type AlertChannel, type AlertType } from '../../core/alerts';
 import type { Config } from '../../core/types';
 
-/** Types réglables aujourd'hui (la prévision ② ajoutera `forecast`, les règles ⑥ `rule_action` / `rule_dry_run`). */
+/** Types réglables aujourd'hui (les règles ⑥ ajouteront `rule_action` / `rule_dry_run`). */
 export const SETTINGS_ALERT_TYPES: { type: AlertType; label: string }[] = [
   { type: 'earlyoom_kill', label: 'Kill earlyoom' },
   { type: 'leak', label: 'Fuite probable' },
   { type: 'tmpfs', label: 'Fichiers en mémoire (/tmp)' },
   { type: 'pressure', label: 'Pression mémoire' },
+  { type: 'forecast', label: 'Mémoire bientôt épuisée (prévision)' },
 ];
 
 export const CHANNEL_LABELS: [AlertChannel, string][] = [['both', 'Pop-up et bureau'], ['popup', 'Pop-up seulement'], ['none', 'Rien']];

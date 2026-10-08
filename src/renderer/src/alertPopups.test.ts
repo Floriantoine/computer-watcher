@@ -100,3 +100,10 @@ describe('clickTarget (action choisie au clic)', () => {
     expect(clickTarget(ev(3, 9, 'earlyoom_kill'), () => true)).toEqual({ view: 'metrics', at: 9 });
   });
 });
+
+describe('prévision ② : « Libérer… »', () => {
+  test('action « Libérer… » qui ouvre le kill groupé', () => {
+    expect(popupAction(ev(1, 1, 'forecast'), () => true)).toEqual({ kind: 'free', label: 'Libérer…' });
+    expect(clickTarget(ev(1, 1, 'forecast'), () => true)).toBe('free');
+  });
+});

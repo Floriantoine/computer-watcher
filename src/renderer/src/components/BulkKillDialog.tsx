@@ -38,16 +38,22 @@ interface Props {
   nameOf: (inst: InstanceSummary) => string;
   onConfirm: (req: BulkRequest) => void;
   onCancel: () => void;
+  /** Raccourci appliqué une fois son état connu (« Libérer » : quand l'historique d'1 h est lu) ; rien de coché avant. */
+  initialPreset?: Preset;
+  /** Garder l'ordre reçu (« Libérer » : groupes qui grossissent d'abord) au lieu du tri par catégorie et âge. */
+  ordered?: boolean;
 }
 
 /** Confirmation d'un kill groupé : liste cochable, raccourcis de pré-sélection, « Tuer (n) ». */
-export function BulkKillDialog({ title, instances, launchersOf, liveKeys, pendingPids, nameOf, onConfirm, onCancel }: Props) {
+export function BulkKillDialog({ title, instances, launchersOf, liveKeys, pendingPids, nameOf, onConfirm, onCancel, initialPreset, ordered }: Props) {
   // Pendant la sortie animée, le dialogue ne doit plus déclencher d'action (pas de double envoi).
   const isPresent = useIsPresent();
-  const list = useMemo(() => sortInstances(instances), [instances]);
-  const [selected, setSelected] = useState<Set<string>>(() => defaultSelection(instances, pendingPids));
+  const list = useMemo(() => (ordered ? instances : sortInstances(instances)), [instances, ordered]);
+  const [selected, setSelected] = useState<Set<string>>(() => (initialPreset ? new Set() : defaultSelection(instances, pendingPids)));
   const [preset, setPreset] = useState<Preset | null>(null);
   const [inactive, setInactive] = useState<InactiveState>({});
+  // raccourci initial : appliqué une seule fois, et jamais par-dessus un choix fait à la main entre-temps
+  const initialDone = useRef(!initialPreset);
 
   useEffect(() => {
     let alive = true;
@@ -80,9 +86,18 @@ export function BulkKillDialog({ title, instances, launchersOf, liveKeys, pendin
   const pick = (p: Preset) => {
     const next = presetSelection(list, p, inactive);
     if (!next) return;
+    initialDone.current = true;
     setPreset(p);
     setSelected(next);
   };
+  useEffect(() => {
+    if (initialDone.current || !initialPreset || !presetState(initialPreset, inactive).enabled) return;
+    const next = presetSelection(list, initialPreset, inactive);
+    if (!next) return;
+    initialDone.current = true;
+    setPreset(initialPreset);
+    setSelected(next);
+  }, [initialPreset, inactive, list]);
   const guard = (fn: () => void) => () => {
     if (isPresent) fn();
   };

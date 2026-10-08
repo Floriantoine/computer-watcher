@@ -1,19 +1,36 @@
 // Dialogue de confirmation groupée (« Tuer la sélection », « Tuer le front / le back », « Tout arrêter ») : fonctions pures.
 import { MAX_KILL_TARGETS } from '../../core/kill';
-import type { InstanceSummary, InstanceTargets as FreshEntry, KillResult, KillTarget } from '../../core/types';
+import type { GroupSummary, InstanceSummary, InstanceTargets as FreshEntry, KillResult, KillTarget } from '../../core/types';
 
 /** Cibles au plus par appel du handler `kill` (le main lève une erreur au-delà). */
 export { MAX_KILL_TARGETS };
 /** Clés au plus par appel de `instances:targets` et `classify:inactive` (borne du main). */
 export const MAX_KEYS_PER_CALL = 200;
 
-export type Preset = 'all' | 'inactive1h' | 'inactive1d' | 'duplicates';
+export type Preset = 'all' | 'inactive1h' | 'inactive1d' | 'duplicates' | 'free';
 export const PRESETS: { id: Preset; label: string }[] = [
   { id: 'all', label: 'Toutes' },
   { id: 'inactive1h', label: 'Inactives > 1 h' },
   { id: 'inactive1d', label: 'Inactives > 1 j' },
   { id: 'duplicates', label: 'Doublons seulement' },
+  { id: 'free', label: 'Inactives > 1 h + doublons' },
 ];
+
+/**
+ * « Libérer de la mémoire » (prévision ②) : instances des groupes projet / supprimé tuables ; celles des groupes qui
+ * grossissent (`growing`, clés de groupe dans cet ordre) d'abord, puis l'ordre d'origine.
+ */
+export function freeCandidates(groups: readonly GroupSummary[], growing: readonly string[]): InstanceSummary[] {
+  const eligible = groups.filter((g) => (g.kind === 'project' || g.kind === 'deleted') && g.killable);
+  const rank = (id: string) => {
+    const i = growing.indexOf(id);
+    return i < 0 ? growing.length : i;
+  };
+  return eligible
+    .map((g, i) => ({ g, i }))
+    .sort((a, b) => rank(a.g.id) - rank(b.g.id) || a.i - b.i)
+    .flatMap(({ g }) => g.instances);
+}
 export const INACTIVE_SINCE_MS: Record<'inactive1h' | 'inactive1d', number> = { inactive1h: 3600_000, inactive1d: 86400_000 };
 
 /** Résultat de `classify:inactive` par période : undefined = en cours, null = pas d'historique, 'error' = échec de l'appel. */
@@ -43,6 +60,14 @@ export function presetSelection(list: readonly InstanceSummary[], preset: Preset
   const open = list.filter((i) => !i.protected);
   if (preset === 'all') return new Set(open.map((i) => i.key));
   if (preset === 'duplicates') return new Set(open.filter((i) => i.duplicate).map((i) => i.key));
+  if (preset === 'free') {
+    // inactives > 1 h ∪ doublons ; sans historique (absent ou en erreur) : doublons seuls ; en lecture : pas encore
+    const h1 = inactive.h1;
+    if (h1 === undefined) return null;
+    const minAgeMs = INACTIVE_SINCE_MS.inactive1h;
+    const idle = (i: InstanceSummary) => !!h1 && h1 !== 'error' && h1.has(i.key) && i.ageSec * 1000 >= minAgeMs;
+    return new Set(open.filter((i) => i.duplicate || idle(i)).map((i) => i.key));
+  }
   const set = inactiveOf(preset, inactive);
   if (!set || set === 'error') return null;
   // Une instance sans échantillon compte comme inactive : on exige en plus qu'elle tourne depuis au moins T.
@@ -52,6 +77,7 @@ export function presetSelection(list: readonly InstanceSummary[], preset: Preset
 
 export function presetState(preset: Preset, inactive: InactiveState): { enabled: boolean; reason?: string } {
   if (preset === 'all' || preset === 'duplicates') return { enabled: true };
+  if (preset === 'free') return inactive.h1 === undefined ? { enabled: false, reason: "Lecture de l'historique…" } : { enabled: true };
   const set = inactiveOf(preset, inactive);
   if (set === undefined) return { enabled: false, reason: "Lecture de l'historique…" };
   if (set === 'error') return { enabled: false, reason: 'Historique indisponible (erreur)' };

@@ -50,17 +50,23 @@ export function sameUnseen(a: Unseen | undefined, b: Unseen): boolean {
 export type PopupAction =
   | { kind: 'tmp'; label: string }
   | { kind: 'group'; label: string; groupKey: string }
-  | { kind: 'instant'; label: string; ts: number };
+  | { kind: 'instant'; label: string; ts: number }
+  | { kind: 'free'; label: string };
 
 export function popupAction(e: AlertEvent, groupPresent: (key: string) => boolean): PopupAction {
   if (e.type === 'tmpfs') return { kind: 'tmp', label: 'Voir /tmp' };
+  if (e.type === 'forecast') return { kind: 'free', label: 'Libérer…' };
   if (e.groupKey && groupPresent(e.groupKey)) return { kind: 'group', label: 'Voir le groupe', groupKey: e.groupKey };
   return { kind: 'instant', label: 'Voir l’instant', ts: e.ts };
 }
 
-/** Cible du bouton d'action, calculée au clic (le groupe a pu disparaître depuis l'affichage) : sinon Métriques à l'instant. */
-export function clickTarget(e: AlertEvent, groupPresent: (key: string) => boolean): Route | 'tmp' {
+/**
+ * Cible du bouton d'action, calculée au clic (le groupe a pu disparaître depuis l'affichage) : sinon Métriques à l'instant.
+ * 'free' : kill groupé « Libérer de la mémoire » pré-rempli (prévision ②).
+ */
+export function clickTarget(e: AlertEvent, groupPresent: (key: string) => boolean): Route | 'tmp' | 'free' {
   const a = popupAction(e, groupPresent);
   if (a.kind === 'tmp') return 'tmp';
+  if (a.kind === 'free') return 'free';
   return a.kind === 'group' ? { view: 'detail', groupId: a.groupKey } : { view: 'metrics', at: e.ts };
 }

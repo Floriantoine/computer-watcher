@@ -70,10 +70,12 @@ interface Props {
   onCloseAll: () => void;
   groupPresent: (key: string) => boolean;
   onNavigate: (r: Route) => void;
+  /** « Libérer… » d'une alerte de prévision : kill groupé pré-rempli. */
+  onFree: () => void;
 }
 
 /** Pop-ups en haut à droite : restent jusqu'à fermeture, 3 au plus, le reste regroupé en « + n autres ». */
-export const AlertPopups = memo(function AlertPopups({ pending, onClose, onCloseAll, groupPresent, onNavigate }: Props) {
+export const AlertPopups = memo(function AlertPopups({ pending, onClose, onCloseAll, groupPresent, onNavigate, onFree }: Props) {
   const { visible, more } = popupStack(pending);
   // Mesure de mise en page seulement quand la pile change (pas à chaque snapshot).
   const stackKey = `${visible.map((e) => e.id).join(',')}|${more > 0}`;
@@ -120,6 +122,7 @@ export const AlertPopups = memo(function AlertPopups({ pending, onClose, onClose
                     onClick={() => {
                       const target = clickTarget(e, groupPresent);
                       if (target === 'tmp') setTmpOpen(open ? null : e.id);
+                      else if (target === 'free') onFree();
                       else onNavigate(target);
                     }}
                   >
