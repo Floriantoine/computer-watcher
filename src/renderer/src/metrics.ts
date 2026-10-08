@@ -92,6 +92,10 @@ export function refreshMsFor(preset: RangePreset, zoomed: boolean): number | nul
   return zoomed || preset === '7d' || preset === '30d' ? null : AUTO_REFRESH_MS;
 }
 
+const H = 3_600_000;
+/** Durée de chaque plage prédéfinie. */
+export const PRESET_MS: Record<RangePreset, number> = { '1h': H, '6h': 6 * H, '24h': 24 * H, '7d': 7 * 24 * H, '30d': 30 * 24 * H };
+
 const WHEEL_FACTOR = 1.25;
 
 /** Garde `[from, from + span]` dans les bornes en le décalant (la largeur ne change pas). */

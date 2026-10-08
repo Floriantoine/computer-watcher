@@ -34,6 +34,8 @@ interface Props {
   onWheel?: (w: { anchor: number; delta: number; pan: boolean }) => void;
   /** Bouton molette maintenu + glisser : déplacement horizontal en px depuis le début du geste (`done` au relâcher). */
   onDragPan?: (d: { dxPx: number; widthPx: number; phase: 'start' | 'move' | 'end' }) => void;
+  /** Étiquette du marqueur mis en avant (faux pour les petits graphes : trop peu de place). Défaut : vrai. */
+  markerLabels?: boolean;
 }
 
 interface Tip {
@@ -59,15 +61,15 @@ function zeroBased(_u: uPlot, _min: number, max: number): uPlot.Range.MinMax {
   return [0, max > 0 ? max * 1.08 : 1];
 }
 
-export function TimeChart({ ts, series, height, format, markers, onCursor, onSelectRange, focusSeries = null, focusMarker = null, xRange = null, onWheel, onDragPan }: Props) {
+export function TimeChart({ ts, series, height, format, markers, onCursor, onSelectRange, focusSeries = null, focusMarker = null, xRange = null, onWheel, onDragPan, markerLabels = true }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const plot = useRef<uPlot | null>(null);
   const reduce = !!useReducedMotionConfig();
   const [tip, setTip] = useState<Tip | null>(null);
 
   // Valeurs lues par les hooks uPlot sans recréer l'instance.
-  const live = useRef({ ts, series, format, markers, onCursor, onSelectRange, focusMarker, onWheel, onDragPan });
-  live.current = { ts, series, format, markers, onCursor, onSelectRange, focusMarker, onWheel, onDragPan };
+  const live = useRef({ ts, series, format, markers, onCursor, onSelectRange, focusMarker, onWheel, onDragPan, markerLabels });
+  live.current = { ts, series, format, markers, onCursor, onSelectRange, focusMarker, onWheel, onDragPan, markerLabels };
 
   const key = structureKey(series);
   const data = useMemo(() => toAligned(ts, series), [ts, series]);
@@ -171,7 +173,7 @@ export function TimeChart({ ts, series, height, format, markers, onCursor, onSel
             u.setSelect({ left: 0, top: 0, width: 0, height: 0 }, false);
           },
         ],
-        draw: [(u) => drawMarkers(u, live.current.markers, live.current.focusMarker)],
+        draw: [(u) => drawMarkers(u, live.current.markers, live.current.focusMarker, live.current.markerLabels)],
         ready: [
           (u) => {
             u.over.addEventListener('mousedown', (e) => (downX = e.clientX));
@@ -285,7 +287,7 @@ function measure(u: uPlot, values: string[] | null): number {
   return Math.ceil(w) + 14;
 }
 
-function drawMarkers(u: uPlot, markers: ChartMarker[] | undefined, focusTs: number | null): void {
+function drawMarkers(u: uPlot, markers: ChartMarker[] | undefined, focusTs: number | null, labels: boolean): void {
   if (!markers?.length) return;
   const { ctx, bbox } = u;
   const { min, max } = u.scales.x;
@@ -315,7 +317,7 @@ function drawMarkers(u: uPlot, markers: ChartMarker[] | undefined, focusTs: numb
     ctx.arc(x, bbox.top + 4 * pr, (look.label ? 4.5 : 3.5) * pr, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
-    if (look.label) drawMarkerLabel(u, m, x);
+    if (look.label && labels) drawMarkerLabel(u, m, x);
   }
   ctx.restore();
 }

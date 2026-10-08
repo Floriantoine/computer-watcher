@@ -10,14 +10,10 @@ test('bandes : chaque couche empilée vers la précédente du même axe', () => 
   const series = [s({ stacked: true }), s({ axis: 'right' }), s({ stacked: true }), s({ stacked: true, axis: 'right' }), s({ stacked: true })];
   expect(stackBands(series)).toEqual([{ series: [3, 1] }, { series: [5, 3] }]);
 });
-test('graphe du groupe : RAM puis swap cumulé (valeur brute en info-bulle), CPU à droite', () => {
+test('graphe du groupe : RAM, swap et CPU en courbes séparées (pas d\'empilement), CPU à droite', () => {
   const out = groupChartSeries({ ts: [1, 2], rssKB: [10, null], swapKB: [1, 2], cpu: [5, null] });
-  expect(out.map((x) => [x.label, x.axis ?? 'left', !!x.stacked])).toEqual([['RAM', 'left', true], ['Swap', 'left', true], ['CPU', 'right', false]]);
-  expect(out[0].values).toEqual([10, 0]);
-  expect(out[1].values).toEqual([11, 2]);
-  expect(out[1].raw).toEqual([1, 2]);
-  expect(out[0].raw).toEqual([10, null]);
-  expect(out[2].values).toEqual([5, null]);
+  expect(out.map((x) => [x.label, x.axis ?? 'left', !!x.stacked, x.fill])).toEqual([['RAM', 'left', false, false], ['Swap', 'left', false, false], ['CPU', 'right', false, false]]);
+  expect(out.map((x) => x.values)).toEqual([[10, null], [1, 2], [5, null]]);
 });
 
 test('mise en avant d\'une courbe : index de la série de ce groupe, sinon null', () => {
