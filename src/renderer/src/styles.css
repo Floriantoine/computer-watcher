@@ -585,7 +585,7 @@ table.tree td.spark-cell .spark { width: 64px; }
 .investigation { margin: 0 var(--gutter) 10px; }
 .investigation .inv-chart { min-width: 0; margin: 0; }
 .inv-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0 2px 6px; color: var(--label); font-size: 11px; }
-.inv-legend span { display: inline-flex; align-items: center; gap: 5px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inv-legend span { display: inline-flex; align-items: center; gap: 5px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .inv-legend i { flex: none; width: 9px; height: 9px; border-radius: 3px; }
 .inv-legend span { cursor: default; transition: opacity 0.12s; }
 .inv-legend span.dim { opacity: 0.4; }
@@ -625,6 +625,15 @@ table.tree td.spark-cell .spark { width: 64px; }
 .metrics-list .row-spark { flex: none; width: 64px; }
 .metrics-list .num { flex: none; width: 62px; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .metrics-list .num.muted { color: var(--muted); }
+.metrics-list .tmpfs-toggle { flex: none; padding: 2px 8px; font-size: 11px; }
+.metrics-list .tmpfs-toggle.on { background: rgba(232, 121, 249, 0.14); border-color: rgba(232, 121, 249, 0.4); }
+.metrics-list li.tmp-dirs-row { display: block; padding: 0 6px 8px 36px; }
+.tmp-dirs { display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; }
+.tmp-dirs ul { list-style: none; margin: 0 0 2px; padding: 0; }
+.metrics-list .tmp-dirs li { display: flex; gap: 8px; padding: 2px 0; border-radius: 0; }
+.tmp-dirs .path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.tmp-dirs .size { flex: none; text-align: right; font-variant-numeric: tabular-nums; }
+.tmp-dirs .note { color: var(--label); font-style: italic; }
 .metrics-list .list-cols { display: inline-flex; color: var(--label); font-size: 11px; padding-right: 6px; }
 .metrics-list .list-cols span { width: 62px; text-align: right; }
 .metrics-list .mono { white-space: nowrap; }

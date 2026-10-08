@@ -1,9 +1,10 @@
-import { useMemo } from 'react';
-import { BellRing, Gauge, Skull, TrendingUp, Unplug, type LucideIcon } from 'lucide-react';
+import { Fragment, useMemo, useState } from 'react';
+import { BellRing, FolderOpen, Gauge, Skull, TrendingUp, Unplug, type LucideIcon } from 'lucide-react';
 import type { HistoryEvent } from '../../../core/types';
 import { alertsFrom, eventMarkers, formatInstant } from '../metrics';
+import { TmpDirsList } from './TmpDirsList';
 
-const ICONS: Record<string, LucideIcon> = { leak: TrendingUp, earlyoom_kill: Skull, pressure: Gauge, gap: Unplug };
+const ICONS: Record<string, LucideIcon> = { leak: TrendingUp, earlyoom_kill: Skull, pressure: Gauge, gap: Unplug, tmpfs: FolderOpen };
 
 interface Props {
   events: HistoryEvent[] | undefined;
@@ -12,9 +13,13 @@ interface Props {
   onHover?: (ts: number | null) => void;
 }
 
-/** Fuites, kills earlyoom, pics de pression et trous d'enregistrement ; un clic place le curseur de l'enquête. */
+/**
+ * Fuites, kills earlyoom, pics de pression, fichiers en mémoire et trous d'enregistrement ; un clic place le curseur de l'enquête.
+ * Une alerte « fichiers en mémoire » déplie les plus gros dossiers actuels de /tmp.
+ */
 export function AlertsPanel({ events, onPick, onHover }: Props) {
   const alerts = useMemo(() => eventMarkers(alertsFrom(events ?? [])), [events]);
+  const [tmpOpen, setTmpOpen] = useState<number | null>(null);
   return (
     <section className="chart-panel metrics-list" data-testid="alerts">
       <div className="chart-panel-head">
@@ -27,14 +32,36 @@ export function AlertsPanel({ events, onPick, onHover }: Props) {
         <ul onMouseLeave={() => onHover?.(null)}>
           {alerts.map((a, i) => {
             const Icon = ICONS[a.type] ?? BellRing;
+            const open = a.type === 'tmpfs' && tmpOpen === a.ts;
             return (
-              <li key={`${a.ts}-${i}`} className="clickable" title="Voir les coupables à cet instant" onClick={() => onPick(a.ts)} onMouseEnter={() => onHover?.(a.ts)}>
-                <span className="alert-ico" style={{ color: a.color, background: `${a.color}1f` }}>
-                  <Icon size={13} strokeWidth={2.2} />
-                </span>
-                <span className="name" title={a.label}>{a.label}</span>
-                <span className="mono">{formatInstant(a.ts)}</span>
-              </li>
+              <Fragment key={`${a.ts}-${i}`}>
+                <li className="clickable" title="Voir les coupables à cet instant" onClick={() => onPick(a.ts)} onMouseEnter={() => onHover?.(a.ts)}>
+                  <span className="alert-ico" style={{ color: a.color, background: `${a.color}1f` }}>
+                    <Icon size={13} strokeWidth={2.2} />
+                  </span>
+                  <span className="name" title={a.label}>{a.label}</span>
+                  {a.type === 'tmpfs' && (
+                    <button
+                      className={`tmpfs-toggle${open ? ' on' : ''}`}
+                      data-testid="tmpfs-toggle"
+                      aria-expanded={open}
+                      title="Plus gros dossiers de /tmp à cet instant"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setTmpOpen(open ? null : a.ts);
+                      }}
+                    >
+                      Voir /tmp
+                    </button>
+                  )}
+                  <span className="mono">{formatInstant(a.ts)}</span>
+                </li>
+                {open && (
+                  <li className="tmp-dirs-row">
+                    <TmpDirsList />
+                  </li>
+                )}
+              </Fragment>
             );
           })}
         </ul>

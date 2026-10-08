@@ -190,6 +190,18 @@ export interface TopOptions { limit?: number; peakLimit?: number }
 export interface TopConsumer { key: string; label: string; kind: GroupKind; avgKB: number; maxKB: number; spark: number[] }
 /** Les deux classements, calculés en un seul parcours. */
 export interface TopResult { byAvg: TopConsumer[]; byMax: TopConsumer[] }
+export interface TmpDirUsage { path: string; sizeKB: number }
+/** Occupation actuelle de /tmp (tmpfs, en RAM), calculée à la demande par le main, en lecture seule. */
+export interface TmpUsage {
+  /** Plus gros dossiers de premier niveau, décroissants */
+  dirs: TmpDirUsage[];
+  /** Fichiers posés directement dans /tmp (cumul) */
+  rootFilesKB: number;
+  /** Dossiers illisibles ignorés */
+  skipped: number;
+  /** Arrêt au plafond d'entrées ou de durée : tailles « au moins » */
+  truncated: boolean;
+}
 export interface HistoryEvent { ts: number; type: string; groupKey: string | null; groupLabel: string | null; detail: Record<string, unknown> }
 export interface RecorderState {
   available: boolean; // systemd utilisateur disponible

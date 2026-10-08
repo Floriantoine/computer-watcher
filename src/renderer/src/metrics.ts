@@ -61,7 +61,9 @@ export function breakdownAt(inv: { ts: number[]; layers: { key: string; values: 
   return { others: at(REST_KEYS.others), shmem: at(REST_KEYS.shmem), kernel: at(REST_KEYS.kernel) };
 }
 
-const COLORS: Record<string, string> = { earlyoom_kill: '#ff5c8a', pressure: '#ffb547', gap: '#8b91a0', app_kill: '#a07cff', leak: '#ff8a3d' };
+const COLORS: Record<string, string> = {
+  earlyoom_kill: '#ff5c8a', pressure: '#ffb547', gap: '#8b91a0', app_kill: '#a07cff', leak: '#ff8a3d', tmpfs: REST_TONES.shmem,
+};
 
 function label(e: HistoryEvent): string {
   const d = e.detail;
@@ -78,6 +80,7 @@ function label(e: HistoryEvent): string {
       }
     case 'app_kill': return 'Kill depuis proc-watch';
     case 'leak': return `Fuite probable : ${e.groupLabel ?? '?'} +${formatKB(Number(d.growthKB))}`;
+    case 'tmpfs': return `Fichiers en mémoire : ${formatKB(Number(d.shmemKB))}`;
     default: return e.type;
   }
 }

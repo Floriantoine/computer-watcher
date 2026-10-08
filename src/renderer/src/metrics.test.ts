@@ -181,3 +181,9 @@ test('dragPan : glisser vers la droite remonte le temps, borné ; sans zoom, rie
   expect(dragPan(bounds, bounds, 100, 1000)).toBeNull();
   expect(dragPan({ from: 20 * M, to: 30 * M }, bounds, 100, 0)).toEqual({ from: 20 * M, to: 30 * M });
 });
+
+test('événement tmpfs : marqueur fuchsia « Fichiers en mémoire : 7,8 Go », gardé dans les alertes', () => {
+  const e = { ts: 1, type: 'tmpfs', groupKey: null, groupLabel: null, detail: { shmemKB: 8191000, thresholdKB: 2097152 } };
+  expect(eventMarkers([e])).toEqual([{ ts: 1, type: 'tmpfs', color: '#e879f9', label: 'Fichiers en mémoire : 7,8 Go' }]);
+  expect(alertsFrom([e])).toEqual([e]);
+});
