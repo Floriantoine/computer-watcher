@@ -217,7 +217,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       });
       step('fuites', () => {
         for (const l of leakCandidates(d, t, cfg.leakMinMinutes, cfg.leakMinGrowthMB)) {
-          insertEvent(d, t, 'leak', l.key, { growthKB: l.growthKB, minutes: cfg.leakMinMinutes });
+          insertEvent(d, t, 'leak', l.key, { growthKB: l.growthKB, memKB: l.memKB, minutes: cfg.leakMinMinutes });
         }
       });
       step('purge', () => {
