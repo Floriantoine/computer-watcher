@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AnimatePresence, MotionConfig, motion, useIsPresent } from 'motion/react';
 import { compileProtection } from '../../core/protection';
 import type { Category, Config, ConfigState, GroupSummary, InstanceSummary, KillResult, KillSignal, KillTarget, ProcNode, Snapshot } from '../../core/types';
@@ -109,6 +109,10 @@ export function App() {
   }, [events24h, snapshot]);
 
   const groupIds = useMemo(() => new Set(snapshot?.groupIds ?? []), [snapshot]);
+  // Stable pour les pop-ups mémoïsés : lit les groupes du dernier snapshot au rendu.
+  const groupIdsRef = useRef(groupIds);
+  groupIdsRef.current = groupIds;
+  const groupPresent = useCallback((key: string) => groupIdsRef.current.has(key), []);
   // Clés des instances du dernier snapshot (sous-groupes compris) : le dialogue groupé grise celles qui ont disparu.
   const liveKeys = useMemo(() => {
     const out = new Set<string>();
@@ -281,7 +285,7 @@ export function App() {
   return (
     <MotionConfig reducedMotion={reducedEffects ? 'always' : 'user'}>
       <div data-testid="snapshot-ready">
-        <TopNav route={route} onNavigate={setRoute} unseen={alertPopups.pending.length} />
+        <TopNav route={route} onNavigate={setRoute} unseen={alertPopups.badge} />
         <SystemBar system={snapshot.system} sparks={sparks} />
         <AnimatePresence mode="wait" initial={false}>
           <RouteFade key={routeKey}>
@@ -388,9 +392,8 @@ export function App() {
           pending={alertPopups.pending}
           onClose={alertPopups.close}
           onCloseAll={alertPopups.closeAll}
-          groupPresent={(key) => groupIds.has(key)}
-          onOpenGroup={(key) => setRoute({ view: 'detail', groupId: key })}
-          onOpenInstant={(ts) => setRoute({ view: 'metrics', at: ts })}
+          groupPresent={groupPresent}
+          onNavigate={setRoute}
         />
       </div>
     </MotionConfig>

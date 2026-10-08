@@ -12,7 +12,11 @@ export interface AlertsConfig {
   desktopMinIntervalMin: number;
   /** Alertes vues (pop-ups fermés) jusqu'à cet horodatage inclus ; 0 = jamais initialisé (le main le met à « maintenant »). */
   seenUpTo: number;
+  /** Ids des alertes fermées postérieures à seenUpTo (fermées dans le désordre), au plus MAX_SEEN_IDS. */
+  seenIds: number[];
 }
+
+export const MAX_SEEN_IDS = 200;
 
 export const DESKTOP_INTERVAL_BOUNDS = { min: 1, max: 120 } as const;
 
@@ -28,8 +32,10 @@ export const DEFAULT_ALERTS: AlertsConfig = {
   },
   desktopMinIntervalMin: 5,
   seenUpTo: 0,
+  seenIds: [],
 };
 
+export const isAlertId = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v > 0;
 export const isAlertType = (t: unknown): t is AlertType => typeof t === 'string' && (ALERT_TYPES as readonly string[]).includes(t);
 const isChannel = (c: unknown): c is AlertChannel => typeof c === 'string' && (ALERT_CHANNELS as readonly string[]).includes(c);
 
@@ -51,7 +57,9 @@ export function validateAlerts(raw: unknown): AlertsConfig | null {
   if (typeof interval !== 'number' || !Number.isInteger(interval) || interval < DESKTOP_INTERVAL_BOUNDS.min || interval > DESKTOP_INTERVAL_BOUNDS.max) return null;
   const seen = r.seenUpTo ?? 0;
   if (typeof seen !== 'number' || !Number.isFinite(seen) || seen < 0) return null;
-  return { channels, desktopMinIntervalMin: interval, seenUpTo: seen };
+  const ids = r.seenIds ?? [];
+  if (!Array.isArray(ids) || ids.length > MAX_SEEN_IDS || !ids.every(isAlertId)) return null;
+  return { channels, desktopMinIntervalMin: interval, seenUpTo: seen, seenIds: [...ids] };
 }
 
 /** Alerte telle que lue dans la table `events` (id = rowid, sert à `--alert=<id>`). */
@@ -139,4 +147,39 @@ export function alertMessage(e: AlertEvent): { title: string; body: string } {
     case 'rule_dry_run':
       return { title: `Simulation « ${str(d.rule)} » : ${str(d.target)}`, body: 'Aucun processus touché (simulation).' };
   }
+}
+
+/** Titres des notifications du bureau : fixes par type (aucun nom de processus ou de groupe, interprétés en balisage par certains démons). */
+export const DESKTOP_TITLES: Record<AlertType, string> = {
+  earlyoom_kill: 'Kill earlyoom',
+  leak: 'Fuite probable',
+  tmpfs: 'Fichiers en mémoire',
+  pressure: 'Pression mémoire',
+  forecast: 'Mémoire bientôt épuisée',
+  rule_action: 'Règle exécutée',
+  rule_dry_run: 'Règle simulée',
+};
+/** Longueur maximale du corps (caractères, avant échappement). */
+export const DESKTOP_BODY_MAX = 300;
+
+/** Retire les caractères de contrôle et de direction (sauts de ligne, tabulations → espace). */
+export function desktopText(s: string): string {
+  return s
+    .replace(/[\t\n\r\v\f\u0085\u2028\u2029]/g, ' ')
+    .replace(/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '')
+    .trim();
+}
+
+const ESC: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+const escapeMarkup = (s: string) => s.replace(/[&<>"']/g, (c) => ESC[c]!);
+
+/**
+ * Texte d'une notification du bureau : titre fixe par type ; noms et libellés seulement dans le corps, nettoyés, coupés
+ * à DESKTOP_BODY_MAX puis échappés (le corps est du balisage pour notify-send).
+ */
+export function desktopMessage(e: AlertEvent): { title: string; body: string } {
+  const m = alertMessage(e);
+  let text = desktopText([m.title, m.body].filter(Boolean).join(' — '));
+  if (text.length > DESKTOP_BODY_MAX) text = `${text.slice(0, DESKTOP_BODY_MAX - 1)}…`;
+  return { title: `proc-watch — ${DESKTOP_TITLES[e.type]}`, body: escapeMarkup(text) };
 }

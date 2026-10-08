@@ -31,7 +31,7 @@ function setup(o: { alerts?: Partial<AlertsConfig>; launch?: boolean; result?: s
   const launchApp = vi.fn();
   const rec = createRecorder({
     dataDir: join(base, 'data'), configDir: cfgDir, procRoot, now: () => t, cpuCount: 4, log: () => {},
-    notifier, launchApp: o.launch === false ? undefined : launchApp,
+    notifier, launchApp: o.launch === false ? undefined : launchApp, focusFile: join(base, 'data', 'app-focus.json'),
   });
   const db = () => new DatabaseSync(join(base, 'data', 'metrics.db'), { readOnly: true });
   return { rec, notify, launchApp, base, advance: (ms: number) => (t += ms), now: () => t, db };
@@ -46,8 +46,10 @@ test('canal « both » : une notification critique avec « Ouvrir » ; « Ouvrir
   await flush();
   expect(s.notify).toHaveBeenCalledTimes(1);
   expect(s.notify.mock.calls[0]![0]).toMatchObject({
-    title: 'Pression mémoire 30 %', urgency: 'critical', actions: [{ id: 'open', label: 'Ouvrir' }],
+    title: 'proc-watch — Pression mémoire', urgency: 'critical', actions: [{ id: 'open', label: 'Ouvrir' }],
   });
+  expect(s.notify.mock.calls[0]![0].body).toContain('Pression mémoire 30 %');
+  expect(s.notify.mock.calls[0]![0].waitMs).toBeUndefined(); // la notification vit sa vie : pas d'arrêt forcé
   const { id } = s.db().prepare("SELECT id FROM events WHERE type = 'pressure'").get() as { id: number };
   expect(s.launchApp).toHaveBeenCalledWith([`--alert=${id}`]);
   s.rec.stop();
@@ -78,7 +80,8 @@ test('kill earlyoom (défaut both) : notification « earlyoom a arrêté chrome 
   s.rec.onEarlyoomLine(JSON.stringify({ __REALTIME_TIMESTAMP: '1000500000', MESSAGE: 'sending SIGTERM to process 10 uid 1000 "chrome": oom_score 600' }));
   await flush();
   expect(s.notify).toHaveBeenCalledTimes(1);
-  expect(s.notify.mock.calls[0]![0].title).toBe('earlyoom a arrêté chrome');
+  expect(s.notify.mock.calls[0]![0].title).toBe('proc-watch — Kill earlyoom');
+  expect(s.notify.mock.calls[0]![0].body).toContain('earlyoom a arrêté chrome');
   s.rec.stop();
 });
 
@@ -162,6 +165,17 @@ test('notificateur qui rejette : le tick suivant est normal', async () => {
   s.rec.stop();
 });
 
+test('nom de processus hostile : échappé dans le corps, jamais dans le titre', async () => {
+  const s = setup();
+  s.rec.start();
+  s.rec.onEarlyoomLine(JSON.stringify({ __REALTIME_TIMESTAMP: '1000500000', MESSAGE: 'sending SIGTERM to process 10 uid 1000 "<b>x</b>&y": oom_score 600' }));
+  await flush();
+  const r = s.notify.mock.calls[0]![0];
+  expect(r.title).toBe('proc-watch — Kill earlyoom');
+  expect(r.body).toContain('&lt;b&gt;x&lt;/b&gt;&amp;y');
+  s.rec.stop();
+});
+
 test('alerte vieille de plus de 5 min (ligne de journal en retard) : pas de notification', async () => {
   const s = setup();
   s.rec.start();
@@ -180,7 +194,8 @@ test('notifyAlert (canal pour la prévision ②) : public, applique canal et ant
   s.rec.notifyAlert({ ...ev, id: 8 });
   await flush();
   expect(s.notify).toHaveBeenCalledTimes(1);
-  expect(s.notify.mock.calls[0]![0].title).toBe('Mémoire épuisée dans ~8 min');
+  expect(s.notify.mock.calls[0]![0].title).toBe('proc-watch — Mémoire bientôt épuisée');
+  expect(s.notify.mock.calls[0]![0].body).toContain('Mémoire épuisée dans ~8 min');
   s.rec.stop();
 });
 

@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { BellRing, FlaskConical, FolderOpen, Gauge, Hourglass, ShieldAlert, Skull, TrendingUp, X, type LucideIcon } from 'lucide-react';
 import { alertMessage, type AlertEvent, type AlertType, type AlertsConfig } from '../../../core/alerts';
 import type { ConfigState } from '../../../core/types';
-import { pendingPopups, popupAction, popupStack, seenAfterClose, seenAfterCloseAll } from '../alertPopups';
+import type { Route } from '../App';
+import { badgeCount, pendingPopups, popupAction, popupStack, sameUnseen, seenAfterClose } from '../alertPopups';
 import { useHistory } from '../history';
 import { eventMarkers, formatInstant } from '../metrics';
 import { TmpDirsList } from './TmpDirsList';
@@ -15,34 +16,42 @@ const ICONS: Record<AlertType, LucideIcon> = {
 const COLORS: Partial<Record<AlertType, string>> = { forecast: '#ffb547', rule_action: '#ff5c8a', rule_dry_run: '#8b91a0' };
 const colorOf = (e: AlertEvent) => COLORS[e.type] ?? eventMarkers([e])[0]!.color;
 
-/** Alertes non vues (rafraîchies toutes les 10 s), fermeture = vue, ouverture sur `--alert=<id>`. */
-export function useAlertPopups(o: { alerts: AlertsConfig | undefined; onState: (s: ConfigState) => void; onOpenAlert: (e: AlertEvent) => void }) {
-  const seenUpTo = o.alerts?.seenUpTo;
-  const events = useHistory(() => window.procWatch.alerts.unseen(), [seenUpTo], 10_000);
-  const [dismissed, setDismissed] = useState<ReadonlySet<number>>(new Set());
-  const pending = o.alerts ? pendingPopups(events, o.alerts, dismissed) : [];
+const NONE: AlertEvent[] = [];
 
-  const markSeen = (ts: number) => {
-    if (o.alerts && ts > o.alerts.seenUpTo) window.procWatch.alerts.markSeen(ts).then(o.onState, () => {});
-  };
-  const close = (id: number) => {
-    if (!o.alerts) return;
+/**
+ * Alertes non vues (rafraîchies toutes les 10 s, même référence si rien n'a changé), fermeture = vue (persistante),
+ * ouverture sur `--alert=<id>`. `close` et `closeAll` sont stables (AlertPopups est mémoïsé).
+ */
+export function useAlertPopups(o: { alerts: AlertsConfig | undefined; onState: (s: ConfigState) => void; onOpenAlert: (e: AlertEvent) => void }) {
+  const cfg = o.alerts;
+  // refetch quand le filtre côté main change (vues, ids fermés, canaux)
+  const key = cfg ? `${cfg.seenUpTo}|${cfg.seenIds.join(',')}|${JSON.stringify(cfg.channels)}` : '';
+  const data = useHistory(() => window.procWatch.alerts.unseen(), [key], 10_000, sameUnseen);
+  const [dismissed, setDismissed] = useState<ReadonlySet<number>>(() => new Set());
+  const pending = useMemo(() => (cfg && data ? pendingPopups(data.alerts, cfg, dismissed) : NONE), [cfg, data, dismissed]);
+  const badge = useMemo(() => (data ? badgeCount(data.total, data.alerts, dismissed) : 0), [data, dismissed]);
+
+  const latest = useRef({ cfg, data, dismissed, pending, onState: o.onState, onOpenAlert: o.onOpenAlert });
+  latest.current = { cfg, data, dismissed, pending, onState: o.onState, onOpenAlert: o.onOpenAlert };
+
+  const close = useCallback((id: number) => {
+    const { cfg, data, dismissed, onState } = latest.current;
+    if (!cfg) return;
     const d = new Set(dismissed).add(id);
     setDismissed(d);
-    markSeen(seenAfterClose(events ?? [], o.alerts, d));
-  };
-  const closeAll = () => {
-    if (!o.alerts) return;
+    const upTo = seenAfterClose(data?.alerts ?? [], cfg, d);
+    window.procWatch.alerts.markSeen(upTo > cfg.seenUpTo ? { upTo, ids: [id] } : { ids: [id] }).then(onState, () => {});
+  }, []);
+  const closeAll = useCallback(() => {
+    const { dismissed, pending, onState } = latest.current;
     setDismissed(new Set([...dismissed, ...pending.map((e) => e.id)]));
-    markSeen(seenAfterCloseAll(events ?? [], o.alerts));
-  };
+    window.procWatch.alerts.seenAll().then(onState, () => {});
+  }, []);
 
   // Notification « Ouvrir » : au lancement (`--alert=<id>` gardé par le main) ou app déjà ouverte (second lancement).
-  const openRef = useRef(o.onOpenAlert);
-  openRef.current = o.onOpenAlert;
   useEffect(() => {
     const go = (id: number | null) => {
-      if (id !== null) window.procWatch.alerts.get(id).then((e) => e && openRef.current(e), () => {});
+      if (id !== null) window.procWatch.alerts.get(id).then((e) => e && latest.current.onOpenAlert(e), () => {});
     };
     window.procWatch.alerts.takePending().then(go, () => {});
     return window.procWatch.alerts.onOpen((id) => {
@@ -51,7 +60,7 @@ export function useAlertPopups(o: { alerts: AlertsConfig | undefined; onState: (
     });
   }, []);
 
-  return { pending, close, closeAll };
+  return { pending, badge, close, closeAll };
 }
 
 interface Props {
@@ -59,13 +68,14 @@ interface Props {
   onClose: (id: number) => void;
   onCloseAll: () => void;
   groupPresent: (key: string) => boolean;
-  onOpenGroup: (key: string) => void;
-  onOpenInstant: (ts: number) => void;
+  onNavigate: (r: Route) => void;
 }
 
 /** Pop-ups en haut à droite : restent jusqu'à fermeture, 3 au plus, le reste regroupé en « + n autres ». */
-export function AlertPopups({ pending, onClose, onCloseAll, groupPresent, onOpenGroup, onOpenInstant }: Props) {
+export const AlertPopups = memo(function AlertPopups({ pending, onClose, onCloseAll, groupPresent, onNavigate }: Props) {
   const { visible, more } = popupStack(pending);
+  // Mesure de mise en page seulement quand la pile change (pas à chaque snapshot).
+  const stackKey = `${visible.map((e) => e.id).join(',')}|${more > 0}`;
   const [tmpOpen, setTmpOpen] = useState<number | null>(null);
   return (
     <div className="alert-popups" role="region" aria-label="Alertes" aria-live="polite" data-testid="alert-popups">
@@ -79,6 +89,7 @@ export function AlertPopups({ pending, onClose, onCloseAll, groupPresent, onOpen
             <motion.div
               key={e.id}
               layout="position"
+              layoutDependency={stackKey}
               className="alert-popup"
               data-testid="alert-popup"
               style={{ '--alert': colorOf(e) } as CSSProperties}
@@ -107,8 +118,8 @@ export function AlertPopups({ pending, onClose, onCloseAll, groupPresent, onOpen
                     aria-expanded={action.kind === 'tmp' ? open : undefined}
                     onClick={() => {
                       if (action.kind === 'tmp') setTmpOpen(open ? null : e.id);
-                      else if (action.kind === 'group') onOpenGroup(action.groupKey);
-                      else onOpenInstant(action.ts);
+                      else if (action.kind === 'group') onNavigate({ view: 'detail', groupId: action.groupKey });
+                      else onNavigate({ view: 'metrics', at: action.ts });
                     }}
                   >
                     {action.label}
@@ -126,6 +137,7 @@ export function AlertPopups({ pending, onClose, onCloseAll, groupPresent, onOpen
           <motion.div
             key="more"
             layout="position"
+            layoutDependency={stackKey}
             className="alert-popup-more"
             data-testid="alert-popups-more"
             initial={{ opacity: 0 }}
@@ -139,4 +151,4 @@ export function AlertPopups({ pending, onClose, onCloseAll, groupPresent, onOpen
       </AnimatePresence>
     </div>
   );
-}
+});

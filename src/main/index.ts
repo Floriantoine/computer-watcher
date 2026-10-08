@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import { appendFileSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { classifyGroups, type InstanceDecision } from '../core/classify/classify';
 import { readPackageHints } from '../core/classify/packageJson';
 import { CpuTracker } from '../core/collector/cpuTracker';
@@ -21,7 +21,7 @@ import { appEventsPath, dataDir, focusStatePath } from '../core/paths';
 import { alertIdFromArgv } from '../core/alerts';
 import { buildSnapshot, flattenGroup, groupProcs, instanceTargets, isWatch, othersFollowed, type Classification, type FullSnapshot } from '../core/snapshot';
 import type { ConfigState, Group, KillResult, ProcInfo, RecorderState, Watch } from '../core/types';
-import { createAlertOpener, createFocusWriter, initSeenUpTo, keepSeenUpTo, markSeen } from './alerts';
+import { createAlertOpener, createFocusWriter, initSeenUpTo, keepSeenUpTo, markSeen, unseenFilter } from './alerts';
 import { installDesktopEntry } from './desktopEntry';
 import { clearHistory, createHistoryReader } from './history';
 import { pollDelay, type WindowActivity } from './pollPolicy';
@@ -36,7 +36,14 @@ app.commandLine.appendSwitch('enable-features', 'NetworkServiceInProcess2');
 
 // Instance unique : un second lancement (bouton « Ouvrir » d'une notification, menu) réveille la fenêtre existante.
 const primary = app.requestSingleInstanceLock();
-if (!primary) app.quit();
+if (!primary) {
+  // `npm run dev` / `npm start` pendant que l'app de l'utilisateur tourne avec la même config : pas un plantage.
+  console.error(
+    "proc-watch est déjà ouvert avec cette configuration (XDG_CONFIG_HOME) : sa fenêtre est affichée et ce lancement s'arrête. " +
+      'Pour une seconde instance, lancer avec un XDG_CONFIG_HOME temporaire.',
+  );
+  app.quit();
+}
 
 const dir = configDir();
 const loaded = loadConfig(dir);
@@ -67,10 +74,11 @@ const claudeConfigDirs = claudeDirs();
 const data = dataDir();
 const focusWriter = createFocusWriter({
   write: (json) => {
-    mkdirSync(data, { recursive: true });
-    const tmp = `${focusStatePath(data)}.${process.pid}.tmp`;
-    writeFileSync(tmp, json);
-    renameSync(tmp, focusStatePath(data));
+    const file = focusStatePath(data);
+    mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+    const tmp = `${file}.${process.pid}.tmp`;
+    writeFileSync(tmp, json, { mode: 0o600 });
+    renameSync(tmp, file);
   },
 });
 const alertOpener = createAlertOpener((id) => {
@@ -447,15 +455,21 @@ ipcMain.handle('desktop:install', () => {
   return installDesktopEntry(process.env.APPIMAGE || process.execPath);
 });
 
-ipcMain.handle('alerts:unseen', () => history.unseenAlerts(config.alerts.seenUpTo));
+ipcMain.handle('alerts:unseen', () => history.unseenAlerts(config.alerts.seenUpTo, unseenFilter(config)));
 ipcMain.handle('alerts:get', (_e, id: unknown) => (Number.isSafeInteger(id) && (id as number) > 0 ? history.alert(id as number) : null));
-ipcMain.handle('alerts:markSeen', (_e, ts: unknown): ConfigState => {
-  const next = markSeen(config, ts, Date.now());
+const applySeen = (req: unknown): ConfigState => {
+  const next = markSeen(config, req, Date.now(), (ids) => history.alertTimes(ids));
   if (next) {
     saveConfig(dir, next);
     config = next;
   }
   return configState();
+};
+ipcMain.handle('alerts:markSeen', (_e, req: unknown) => applySeen(req));
+// « Tout fermer » : vues jusqu'à la plus récente des alertes non vues (toutes, pas seulement les 100 chargées).
+ipcMain.handle('alerts:seenAll', () => {
+  const ts = history.newestAlertTs(config.alerts.seenUpTo, unseenFilter(config));
+  return ts === null ? configState() : applySeen({ upTo: ts });
 });
 ipcMain.handle('alerts:takePending', () => alertOpener.take());
 

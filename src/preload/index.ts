@@ -50,11 +50,13 @@ const api = {
     events: (r: RangePreset | TimeRange): Promise<HistoryEvent[]> => ipcRenderer.invoke('history:events', r),
   },
   alerts: {
-    /** Alertes non vues (après `alerts.seenUpTo`), les plus récentes d'abord. */
-    unseen: (): Promise<AlertEvent[]> => ipcRenderer.invoke('alerts:unseen'),
+    /** Alertes non vues (les 100 plus récentes d'abord) et leur nombre total. */
+    unseen: (): Promise<{ total: number; alerts: AlertEvent[] }> => ipcRenderer.invoke('alerts:unseen'),
     get: (id: number): Promise<AlertEvent | null> => ipcRenderer.invoke('alerts:get', id),
-    /** Pop-ups fermés jusqu'à `ts` inclus. */
-    markSeen: (ts: number): Promise<ConfigState> => ipcRenderer.invoke('alerts:markSeen', ts),
+    /** Pop-ups fermés : vues jusqu'à `upTo` inclus, et `ids` fermées au-delà. */
+    markSeen: (req: { upTo?: number; ids?: number[] }): Promise<ConfigState> => ipcRenderer.invoke('alerts:markSeen', req),
+    /** « Tout fermer ». */
+    seenAll: (): Promise<ConfigState> => ipcRenderer.invoke('alerts:seenAll'),
     /** Alerte demandée au lancement (`--alert=<id>`), une seule fois. */
     takePending: (): Promise<number | null> => ipcRenderer.invoke('alerts:takePending'),
     /** Notification « Ouvrir » cliquée alors que l'app tournait déjà. */

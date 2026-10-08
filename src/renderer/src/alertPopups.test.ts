@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { DEFAULT_ALERTS, type AlertEvent, type AlertsConfig } from '../../core/alerts';
-import { MAX_VISIBLE, pendingPopups, popupAction, popupStack, seenAfterClose, seenAfterCloseAll } from './alertPopups';
+import { badgeCount, MAX_VISIBLE, pendingPopups, popupAction, popupStack, sameUnseen, seenAfterClose } from './alertPopups';
 
 const ev = (id: number, ts: number, type: AlertEvent['type'] = 'leak', groupKey: string | null = null): AlertEvent =>
   ({ id, ts, type, groupKey, groupLabel: null, detail: {} });
@@ -54,16 +54,30 @@ describe('fermeture = vue', () => {
     expect(seenAfterClose(same, cfg(), new Set([1]))).toBe(1000);
     expect(seenAfterClose(same, cfg(), new Set([1, 2]))).toBe(1100);
   });
-  test('« Tout fermer » : la plus récente', () => {
-    expect(seenAfterCloseAll(events, cfg())).toBe(1300);
-    expect(seenAfterCloseAll([], cfg())).toBe(1000);
+  test('ids déjà fermés (config seenIds) : comptés comme fermés', () => {
+    expect(seenAfterClose(events, cfg({ seenIds: [2] }), new Set([1]))).toBe(1200);
   });
 });
 
 describe('badge', () => {
-  test('nombre d’alertes non vues = pop-ups en attente (cachées comprises)', () => {
-    const p = pendingPopups([1, 2, 3, 4, 5].map((i) => ev(i, 1000 + i)), cfg(), new Set([2]));
-    expect(p.length).toBe(4);
+  test('total SQL (sans plafond) moins les fermetures pas encore enregistrées', () => {
+    const loaded = [1, 2, 3].map((i) => ev(i, 1000 + i));
+    expect(badgeCount(250, loaded, new Set())).toBe(250);
+    expect(badgeCount(250, loaded, new Set([2, 99]))).toBe(249);
+    expect(badgeCount(1, loaded, new Set([1, 2]))).toBe(0);
+  });
+  test('pendingPopups exclut les ids déjà fermés (seenIds)', () => {
+    expect(pendingPopups([ev(1, 2000), ev(2, 2100)], cfg({ seenIds: [2] }), new Set()).map((e) => e.id)).toEqual([1]);
+  });
+});
+
+describe('sameUnseen (pas de nouveau tableau si rien n’a changé)', () => {
+  test('même total et mêmes ids dans le même ordre → identique', () => {
+    const a = { total: 2, alerts: [ev(2, 1200), ev(1, 1100)] };
+    expect(sameUnseen(a, { total: 2, alerts: [ev(2, 1200), ev(1, 1100)] })).toBe(true);
+    expect(sameUnseen(a, { total: 3, alerts: [ev(2, 1200), ev(1, 1100)] })).toBe(false);
+    expect(sameUnseen(a, { total: 2, alerts: [ev(3, 1300), ev(2, 1200)] })).toBe(false);
+    expect(sameUnseen(undefined, a)).toBe(false);
   });
 });
 

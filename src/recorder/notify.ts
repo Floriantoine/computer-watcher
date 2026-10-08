@@ -4,7 +4,8 @@ import { accessSync, constants, statSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 
 export interface NotifyAction { id: string; label: string }
-export interface NotifyRequest { title: string; body: string; urgency: 'normal' | 'critical'; actions: NotifyAction[]; waitMs: number }
+/** `waitMs` : arrêt forcé du notify-send en attente d'un clic ; absent, il vit autant que la notification. */
+export interface NotifyRequest { title: string; body: string; urgency: 'normal' | 'critical'; actions: NotifyAction[]; waitMs?: number }
 /** unknown : pas encore détecté ; actions : `--action` supporté ; plain : sans boutons ; unavailable : binaire absent. */
 export type NotifierState = 'unknown' | 'actions' | 'plain' | 'unavailable';
 export interface Notifier {
@@ -15,6 +16,8 @@ export interface Notifier {
 
 const HELP_TIMEOUT_MS = 2000;
 const PLAIN_TIMEOUT_MS = 5000;
+/** Au plus 5 notify-send en attente d'un clic ; au-delà, le plus ancien est arrêté (son bouton « Ouvrir » ne répond plus). */
+export const MAX_PENDING = 5;
 /** Binaire absent : nouvelle recherche au plus toutes les 10 min (paquet installé entre-temps). */
 const RETRY_MS = 600_000;
 
@@ -58,15 +61,16 @@ export function createNotifier(deps: { bin?: string; pathEnv?: string; execFile?
   let bin: string | null = null;
   let checkedAt = 0;
   let loggedMissing = false;
-  /** Un seul notify-send en attente d'un clic : le précédent est tué quand une nouvelle notification part. */
-  let pending: ChildProcess | null = null;
+  /** notify-send en attente d'un clic, du plus ancien au plus récent. */
+  const pending: ChildProcess[] = [];
 
-  const run = (args: string[], timeout: number, track: boolean): Promise<RunResult> =>
+  const run = (args: string[], timeout: number | undefined, track: boolean): Promise<RunResult> =>
     new Promise((resolve) => {
       let child: ChildProcess;
       try {
-        child = runFile(bin!, args, { timeout, killSignal: 'SIGKILL', maxBuffer: 64 * 1024, encoding: 'utf8' }, (err, stdout, stderr) => {
-          if (pending === child) pending = null;
+        child = runFile(bin!, args, { timeout: timeout ?? 0, killSignal: 'SIGKILL', maxBuffer: 64 * 1024, encoding: 'utf8' }, (err, stdout, stderr) => {
+          const i = pending.indexOf(child);
+          if (i >= 0) pending.splice(i, 1);
           const code = (err as NodeJS.ErrnoException | null)?.code;
           resolve({ ok: !err, enoent: code === 'ENOENT' || code === 'EACCES', stdout: String(stdout ?? ''), stderr: String(stderr ?? '') });
         });
@@ -74,7 +78,7 @@ export function createNotifier(deps: { bin?: string; pathEnv?: string; execFile?
         resolve({ ok: false, enoent: true, stdout: '', stderr: '' });
         return;
       }
-      if (track) pending = child;
+      if (track) pending.push(child);
     });
 
   const missing = () => {
@@ -102,8 +106,8 @@ export function createNotifier(deps: { bin?: string; pathEnv?: string; execFile?
         await detect();
         if (st !== 'actions' && st !== 'plain') return null;
         const withActions = st === 'actions' && req.actions.length > 0;
-        if (pending) pending.kill('SIGKILL');
-        const r = await run(notifyArgs(req, withActions), withActions ? req.waitMs : PLAIN_TIMEOUT_MS, true);
+        while (withActions && pending.length >= MAX_PENDING) pending.shift()!.kill('SIGKILL');
+        const r = await run(notifyArgs(req, withActions), withActions ? req.waitMs : PLAIN_TIMEOUT_MS, withActions);
         if (r.enoent) {
           missing();
           return null;
@@ -111,7 +115,7 @@ export function createNotifier(deps: { bin?: string; pathEnv?: string; execFile?
         if (withActions && !r.ok && /unknown option/i.test(r.stderr)) {
           st = 'plain';
           log('notify-send refuse --action : notifications sans bouton');
-          await run(notifyArgs(req, false), PLAIN_TIMEOUT_MS, true);
+          await run(notifyArgs(req, false), PLAIN_TIMEOUT_MS, false);
           return null;
         }
         if (!withActions || !r.ok) return null;

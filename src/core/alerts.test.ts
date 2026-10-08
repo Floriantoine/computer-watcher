@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
-  ALERT_FLAG, alertIdFromArgv, alertMessage, appFocused, DEFAULT_ALERTS, desktopAllowed, FOCUS_FRESH_MS, validateAlerts, type AlertEvent,
+  ALERT_FLAG, alertIdFromArgv, alertMessage, appFocused, DEFAULT_ALERTS, DESKTOP_BODY_MAX, DESKTOP_TITLES, desktopAllowed, desktopMessage, desktopText,
+  FOCUS_FRESH_MS, MAX_SEEN_IDS, validateAlerts, type AlertEvent,
 } from './alerts';
 import { DEFAULT_CONFIG, validateConfig } from './config';
 
@@ -22,7 +23,13 @@ describe('validateAlerts / config', () => {
 
   test('canaux partiels : les types absents prennent leur défaut, les clés inconnues sont ignorées', () => {
     const a = validateAlerts({ channels: { leak: 'none', bogus: 'both' }, desktopMinIntervalMin: 10, seenUpTo: 1234 });
-    expect(a).toEqual({ channels: { ...DEFAULT_ALERTS.channels, leak: 'none' }, desktopMinIntervalMin: 10, seenUpTo: 1234 });
+    expect(a).toEqual({ channels: { ...DEFAULT_ALERTS.channels, leak: 'none' }, desktopMinIntervalMin: 10, seenUpTo: 1234, seenIds: [] });
+  });
+
+  test('seenIds : alertes fermées après seenUpTo (entiers > 0, au plus MAX_SEEN_IDS)', () => {
+    expect(validateAlerts({ seenIds: [3, 9] })?.seenIds).toEqual([3, 9]);
+    expect(validateAlerts({ seenIds: Array.from({ length: MAX_SEEN_IDS }, (_, i) => i + 1) })?.seenIds).toHaveLength(MAX_SEEN_IDS);
+    for (const bad of [[0], [-1], [1.5], ['2'], 'x', Array.from({ length: MAX_SEEN_IDS + 1 }, (_, i) => i + 1)]) expect(validateAlerts({ seenIds: bad })).toBeNull();
   });
 
   test.each([
@@ -101,5 +108,38 @@ describe('alertMessage', () => {
     const m = alertMessage(e);
     expect(m.title).toBe(title);
     expect(m.body).toContain(body);
+  });
+});
+
+describe('desktopMessage (texte non fiable vers notify-send)', () => {
+  const nasty = '<a href="http://x">y</a> & <img src=x> &amp; \'q\'\nfin';
+  const all: AlertEvent[] = [
+    { id: 1, ts: 0, type: 'earlyoom_kill', groupKey: null, groupLabel: null, detail: { signal: 'SIGTERM', pid: 10, name: nasty } },
+    { id: 2, ts: 0, type: 'leak', groupKey: nasty, groupLabel: nasty, detail: { growthKB: 1, memKB: 2, minutes: 60 } },
+    { id: 3, ts: 0, type: 'tmpfs', groupKey: null, groupLabel: null, detail: { shmemKB: 1, thresholdKB: 1 } },
+    { id: 4, ts: 0, type: 'pressure', groupKey: null, groupLabel: null, detail: { psi: 30 } },
+    { id: 5, ts: 0, type: 'forecast', groupKey: null, groupLabel: null, detail: { etaMin: 3, body: nasty } },
+    { id: 6, ts: 0, type: 'rule_action', groupKey: null, groupLabel: null, detail: { rule: nasty, target: nasty, result: nasty } },
+    { id: 7, ts: 0, type: 'rule_dry_run', groupKey: null, groupLabel: null, detail: { rule: nasty, target: nasty } },
+  ];
+  test.each(all)('$type : titre fixe, corps échappé, sans caractère de contrôle, longueur bornée', (e) => {
+    const m = desktopMessage(e);
+    expect(m.title).toBe(`proc-watch — ${DESKTOP_TITLES[e.type]}`);
+    expect(m.body).not.toMatch(/[<>"'\u0000-\u001f\u007f]/);
+    // tout « & » est le début d'une entité
+    expect(m.body.replace(/&(amp|lt|gt|quot|#39);/g, '')).not.toContain('&');
+    expect(m.body.length).toBeLessThanOrEqual(DESKTOP_BODY_MAX * 6);
+  });
+  test('le nom reste lisible, échappé', () => {
+    const m = desktopMessage(all[0]!);
+    expect(m.body).toContain('&lt;a href=&quot;http://x&quot;&gt;y&lt;/a&gt; &amp; &lt;img src=x&gt; &amp;amp; &#39;q&#39; fin');
+  });
+  test('texte très long : coupé avant échappement (pas d’entité tronquée)', () => {
+    const m = desktopMessage({ ...all[0]!, detail: { name: '&'.repeat(2000) } });
+    expect(m.body.endsWith('&amp;…') || m.body.endsWith('…')).toBe(true);
+    expect(m.body.replace(/&(amp|lt|gt|quot|#39);/g, '')).not.toContain('&');
+  });
+  test('desktopText : contrôles retirés, espaces conservés', () => {
+    expect(desktopText('a\u0000b\tc\u001bd\u007fe\u2028f\u202eg')).toBe('ab cde fg');
   });
 });

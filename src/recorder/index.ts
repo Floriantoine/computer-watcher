@@ -1,5 +1,5 @@
 // src/recorder/index.ts
-import { existsSync, mkdirSync, watch } from 'node:fs';
+import { mkdirSync, statSync, watch } from 'node:fs';
 import { configDir } from '../core/config';
 import { dataDir } from '../core/paths';
 import { followEarlyoom } from './journal';
@@ -13,7 +13,13 @@ const launcher = appLauncher({
   execPath: process.execPath,
   recorderScript: process.argv[1],
   uid: process.getuid?.() ?? 0,
-  exists: existsSync,
+  isFile: (p) => {
+    try {
+      return statSync(p).isFile();
+    } catch {
+      return false;
+    }
+  },
 });
 const systemdRun = resolveBin('systemd-run', process.env.PATH);
 const rec = createRecorder({

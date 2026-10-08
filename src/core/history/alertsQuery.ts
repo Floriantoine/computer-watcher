@@ -18,10 +18,33 @@ function toAlert(r: Row): AlertEvent {
   return { id: r.id, ts: r.ts, type: r.type as AlertEvent['type'], groupKey: r.gk, groupLabel: r.gl, detail };
 }
 
-/** Alertes de `ts > since`, les `limit` plus récentes d'abord (index events_ts). */
-export function queryUnseenAlerts(db: DatabaseSync, since: number, limit = 100): AlertEvent[] {
-  const rows = db.prepare(`${SELECT} WHERE e.ts > ? AND e.type IN (${TYPES}) ORDER BY e.ts DESC, e.id DESC LIMIT ?`).all(since, limit) as unknown as Row[];
+/** Types d'alerte à montrer (canal pop-up) et ids déjà fermés. */
+export interface UnseenFilter { types: readonly string[]; exclude: readonly number[] }
+
+const WHERE = `e.ts > ? AND e.type IN (SELECT value FROM json_each(?)) AND e.id NOT IN (SELECT value FROM json_each(?))`;
+const params = (since: number, f: UnseenFilter) => [since, JSON.stringify(f.types), JSON.stringify(f.exclude)] as const;
+
+/** Alertes non vues, les `limit` plus récentes d'abord (index events_ts). */
+export function queryUnseenAlerts(db: DatabaseSync, since: number, f: UnseenFilter & { limit?: number }): AlertEvent[] {
+  const rows = db.prepare(`${SELECT} WHERE ${WHERE} ORDER BY e.ts DESC, e.id DESC LIMIT ?`).all(...params(since, f), f.limit ?? 100) as unknown as Row[];
   return rows.map(toAlert);
+}
+
+/** Nombre d'alertes non vues (badge), sans limite. */
+export function countUnseenAlerts(db: DatabaseSync, since: number, f: UnseenFilter): number {
+  return (db.prepare(`SELECT COUNT(*) AS n FROM events e WHERE ${WHERE}`).get(...params(since, f)) as { n: number }).n;
+}
+
+/** Instant de l'alerte non vue la plus récente (« Tout fermer »), ou null. */
+export function newestAlertTs(db: DatabaseSync, since: number, f: UnseenFilter): number | null {
+  return (db.prepare(`SELECT MAX(e.ts) AS ts FROM events e WHERE ${WHERE}`).get(...params(since, f)) as { ts: number | null }).ts;
+}
+
+/** Instant de chaque alerte (ids absents de la base omis). */
+export function queryAlertTimes(db: DatabaseSync, ids: readonly number[]): Map<number, number> {
+  if (!ids.length) return new Map();
+  const rows = db.prepare(`SELECT id, ts FROM events WHERE id IN (SELECT value FROM json_each(?))`).all(JSON.stringify(ids)) as { id: number; ts: number }[];
+  return new Map(rows.map((r) => [r.id, r.ts]));
 }
 
 export function queryAlert(db: DatabaseSync, id: number): AlertEvent | null {

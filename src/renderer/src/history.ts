@@ -51,7 +51,13 @@ export function onLiveResume(cb: () => void): () => void {
  * Charge des données d'historique et les rafraîchit périodiquement (`refreshMs` nul : jamais) ; ignore les réponses obsolètes.
  * Pas de rafraîchissement périodique tant que la fenêtre est réduite ou cachée.
  */
-export function useHistory<T>(fetch: () => Promise<T>, deps: unknown[], refreshMs: number | null = 30_000): T | undefined {
+export function useHistory<T>(
+  fetch: () => Promise<T>,
+  deps: unknown[],
+  refreshMs: number | null = 30_000,
+  /** Réponse équivalente à la précédente : l'ancienne référence est gardée (pas de nouveau rendu). */
+  same?: (prev: T | undefined, next: T) => boolean,
+): T | undefined {
   const [data, setData] = useState<T>();
   const gen = useRef(0);
   useEffect(() => {
@@ -59,7 +65,7 @@ export function useHistory<T>(fetch: () => Promise<T>, deps: unknown[], refreshM
     const load = () =>
       fetch().then(
         (d) => {
-          if (gen.current === id) setData(d);
+          if (gen.current === id) setData((prev) => (same && same(prev, d) ? prev : d));
         },
         () => {},
       );

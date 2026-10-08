@@ -139,18 +139,32 @@ describe('createNotifier', () => {
     expect(() => process.kill(pid, 0)).toThrow(/ESRCH/);
   });
 
-  test('un seul notify-send en attente : le précédent est tué', async () => {
+  test('plusieurs notify-send en attente (au plus 5) : le 6e tue le plus ancien, les autres restent', async () => {
     const f = fakeBin('echo $$ >> "$(dirname "$0")/pids"; exec sleep 600');
     const n = createNotifier({ bin: f.bin, log: () => {} });
-    const first = n.notify(req({ waitMs: 60_000 }));
-    // attend que le premier soit lancé
-    for (let i = 0; i < 100 && !existsSync(join(f.dir, 'pids')); i++) await new Promise((r) => setTimeout(r, 20));
-    const second = n.notify(req({ waitMs: 300 }));
-    await expect(first).resolves.toBeNull();
-    await expect(second).resolves.toBeNull();
-    const pids = readFileSync(join(f.dir, 'pids'), 'utf8').trim().split('\n').map(Number);
-    expect(pids).toHaveLength(2);
-    for (const pid of pids) expect(() => process.kill(pid, 0)).toThrow(/ESRCH/);
+    const pidsFile = join(f.dir, 'pids');
+    const count = () => (existsSync(pidsFile) ? readFileSync(pidsFile, 'utf8').trim().split('\n').length : 0);
+    const waitFor = async (k: number) => {
+      for (let i = 0; i < 200 && count() < k; i++) await new Promise((r) => setTimeout(r, 20));
+    };
+    const all: Promise<string | null>[] = [];
+    for (let i = 1; i <= 5; i++) {
+      all.push(n.notify(req({ waitMs: undefined })));
+      await waitFor(i);
+    }
+    const pids = () => readFileSync(pidsFile, 'utf8').trim().split('\n').map(Number);
+    for (const pid of pids()) expect(() => process.kill(pid, 0)).not.toThrow(); // 5 vivants
+    let firstDone = false;
+    void all[0]!.then(() => (firstDone = true));
+    all.push(n.notify(req({ waitMs: undefined })));
+    await waitFor(6);
+    await expect(all[0]).resolves.toBeNull();
+    expect(firstDone).toBe(true);
+    const [first, ...rest] = pids();
+    expect(() => process.kill(first!, 0)).toThrow(/ESRCH/);
+    for (const pid of rest) expect(() => process.kill(pid, 0)).not.toThrow();
+    for (const pid of rest) process.kill(pid, 'SIGKILL'); // ménage
+    await Promise.all(all);
   });
 
   test('sans action demandée : jamais --action, même si supporté', async () => {

@@ -5,7 +5,7 @@ import { historyBackups, openHistoryDb, SCHEMA_VERSION } from '../core/history/d
 import {
   queryCulprits, queryEvents, queryGroup, queryGroups, queryInactive, queryProcs, querySystem, queryTop, rangeFromPreset, type QueryOpts,
 } from '../core/history/queries';
-import { queryAlert, queryUnseenAlerts } from '../core/history/alertsQuery';
+import { countUnseenAlerts, newestAlertTs, queryAlert, queryAlertTimes, queryUnseenAlerts, type UnseenFilter } from '../core/history/alertsQuery';
 import { clearRequestPath, dbPath, statusPath } from '../core/paths';
 import type { RangePreset, RecorderConfig, RecorderStatus, TimeRange, TopOptions, TopResult } from '../core/types';
 import { clampToDetail } from './historyIpc';
@@ -64,8 +64,12 @@ export function createHistoryReader(dataDir: string, getConfig: () => RecorderCo
     culprits: (ts: number) => run((d) => queryCulprits(d, ts, opts()), []),
     top: (r: RangePreset | TimeRange, o?: TopOptions): TopResult => run((d) => queryTop(d, toRange(r), opts(), o), { byAvg: [], byMax: [] }),
     events: (r: RangePreset | TimeRange) => run((d) => queryEvents(d, toRange(r)), []),
-    /** Alertes postérieures à `since` (pop-ups), les plus récentes d'abord. */
-    unseenAlerts: (since: number) => run((d) => queryUnseenAlerts(d, since), []),
+    /** Alertes non vues (pop-ups) : les 100 plus récentes et leur nombre total (badge). */
+    unseenAlerts: (since: number, f: UnseenFilter) =>
+      run((d) => ({ total: countUnseenAlerts(d, since, f), alerts: queryUnseenAlerts(d, since, f) }), { total: 0, alerts: [] }),
+    newestAlertTs: (since: number, f: UnseenFilter) => run((d) => newestAlertTs(d, since, f), null),
+    /** Instants des alertes (élagage des ids fermés) ; null sans base lisible. */
+    alertTimes: (ids: number[]) => run<Map<number, number> | null>((d) => queryAlertTimes(d, ids), null),
     alert: (id: number) => run((d) => queryAlert(d, id), null),
     /** Clés `pid:startTicks` actives (CPU ≥ 1 %) depuis `since` ; null sans base (ou en cas d'erreur). */
     active: (targets: { pid: number; startTicks: number }[], since: number): Set<string> | null =>

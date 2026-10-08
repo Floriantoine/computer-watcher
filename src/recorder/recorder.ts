@@ -2,7 +2,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { cpus, homedir } from 'node:os';
 import type { DatabaseSync } from 'node:sqlite';
-import { alertMessage, appFocused, desktopAllowed, parseFocusState, type AlertEvent, type AlertsConfig } from '../core/alerts';
+import { appFocused, desktopMessage, desktopAllowed, parseFocusState, type AlertEvent, type AlertsConfig } from '../core/alerts';
 import { CpuTracker } from '../core/collector/cpuTracker';
 import { readProcesses } from '../core/collector/readProcesses';
 import { readSystem } from '../core/collector/readSystem';
@@ -33,6 +33,8 @@ export interface RecorderDeps {
   notifier?: Notifier;
   /** Lance ou réveille l'app avec ces arguments (bouton « Ouvrir ») ; absent : notifications sans bouton. */
   launchApp?: (args: string[]) => void;
+  /** Fichier d'état de focus de l'app (défaut : focusStatePath). */
+  focusFile?: string;
 }
 
 export interface Recorder {
@@ -59,8 +61,6 @@ const H = 3600_000;
 const ORPHANS_EVERY = 10;
 /** Au-delà, une alerte n'est plus envoyée sur le bureau (rattrapage). */
 const MAX_DESKTOP_AGE_MS = 5 * M;
-/** Attente d'un clic sur « Ouvrir » (notify-send --action attend la fermeture de la notification). */
-const NOTIFY_WAIT_MS = 30 * M;
 
 export function createRecorder(deps: RecorderDeps): Recorder {
   const now = deps.now ?? Date.now;
@@ -126,7 +126,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
 
   const readFocus = () => {
     try {
-      return parseFocusState(readFileSync(focusStatePath(deps.dataDir), 'utf8'));
+      return parseFocusState(readFileSync(deps.focusFile ?? focusStatePath(deps.dataDir), 'utf8'));
     } catch {
       return null;
     }
@@ -144,9 +144,9 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       if (!desktopAllowed(lastDesktop, e.type, t, alertsCfg.desktopMinIntervalMin)) return;
       lastDesktop.set(e.type, t);
       const launch = deps.launchApp;
-      const { title, body } = alertMessage(e);
+      const { title, body } = desktopMessage(e);
       notifier
-        .notify({ title, body, urgency: 'critical', actions: launch ? [{ id: 'open', label: 'Ouvrir' }] : [], waitMs: NOTIFY_WAIT_MS })
+        .notify({ title, body, urgency: 'critical', actions: launch ? [{ id: 'open', label: 'Ouvrir' }] : [] })
         .then(
           (choice) => {
             if (choice === 'open') launch?.([`--alert=${e.id}`]);

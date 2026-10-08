@@ -1,7 +1,15 @@
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { _electron as electron } from 'playwright';
 
+// Config temporaire (sous ~/.cache : /tmp est en RAM) : jamais la config réelle, et pas de collision avec le verrou
+// d'instance unique d'une app proc-watch déjà ouverte. PROC_WATCH_NO_RECORDER_SYNC : le service systemd réel n'est pas touché.
+mkdirSync(join(homedir(), '.cache'), { recursive: true });
+const cfg = mkdtempSync(join(homedir(), '.cache', 'pw-smoke-'));
+const env = { ...process.env, XDG_CONFIG_HOME: cfg, PROC_WATCH_NO_RECORDER_SYNC: '1' };
 const app = await electron.launch(
-  process.env.SMOKE_EXECUTABLE ? { executablePath: process.env.SMOKE_EXECUTABLE, args: [] } : { args: ['.'] },
+  process.env.SMOKE_EXECUTABLE ? { executablePath: process.env.SMOKE_EXECUTABLE, args: [], env } : { args: ['.'], env },
 );
 try {
   const win = await app.firstWindow();
@@ -16,4 +24,5 @@ try {
   }
 } finally {
   await app.close();
+  rmSync(cfg, { recursive: true, force: true });
 }
