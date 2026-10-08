@@ -10,6 +10,7 @@ import {
 } from '../metrics';
 import { useChartZoom, ZoomChip } from '../chartZoom';
 import { AlertsPanel } from './AlertsPanel';
+import type { SettingsSection } from '../settingsNav';
 import { CulpritsPanel } from './CulpritsPanel';
 import { seriesIndexOf, type ChartSeries } from './charts/chartData';
 import { TimeChart, type ChartMarker } from './charts/TimeChart';
@@ -22,6 +23,8 @@ interface Props {
   at?: number;
   canOpen: (key: string) => boolean;
   onOpenGroup: (key: string) => void;
+  /** Lien vers une section des Réglages (ex. Alertes). */
+  onOpenSettings?: (section: SettingsSection) => void;
 }
 
 /** Teintes des couches de l'enquête (de la plus grosse à la 8e) ; les trois couches du Reste ont les leurs, en pointillés. */
@@ -56,7 +59,7 @@ interface SysChart {
   format: { left: ValueFormat };
 }
 
-export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
+export function MetricsView({ at, canOpen, onOpenGroup, onOpenSettings }: Props) {
   const [preset, setPreset] = useState<RangePreset>(() => presetFor(at));
   const z = useChartZoom(PRESET_MS[preset]);
   const { zoom, view, setZoom } = z;
@@ -266,7 +269,7 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
           </AnimatePresence>
         </section>
         <TopConsumers top={data?.top} canOpen={canOpen} onOpenGroup={onOpenGroup} onHover={setHoverKey} />
-        <AlertsPanel events={events} onPick={setCursor} onHover={setHoverTs} />
+        <AlertsPanel events={events} onPick={setCursor} onHover={setHoverTs} onSettings={onOpenSettings && (() => onOpenSettings('alerts'))} />
       </div>
     </div>
   );

@@ -17,10 +17,11 @@ import { LiveBuffer, setLive, useHistory } from './history';
 import { instanceKillPlan, projectName, reclassifyMessage, reclassifyScope, skipInstanceKill } from './instances';
 import { leakMemOf } from './memMetric';
 import { readOthersOpen, writeOthersOpen } from './othersFold';
+import type { SettingsSection } from './settingsNav';
 import { leakTimes } from './recorderForm';
 import { findGroup, visibleGroups, ipcErrorMessage, killResultMessages, killRequestForGroup, killRequestForProc, trackKills, type KillRequest, type ViewFilter } from './viewModel';
 
-export type Route = { view: 'main' } | { view: 'detail'; groupId: string } | { view: 'settings' } | { view: 'metrics'; at?: number };
+export type Route = { view: 'main' } | { view: 'detail'; groupId: string } | { view: 'settings'; section?: SettingsSection } | { view: 'metrics'; at?: number };
 
 export function App() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
@@ -342,10 +343,12 @@ export function App() {
                 at={route.at}
                 canOpen={(key) => groupIds.has(key)}
                 onOpenGroup={(key) => groupIds.has(key) && setRoute({ view: 'detail', groupId: key })}
+                onOpenSettings={(section) => setRoute({ view: 'settings', section })}
               />
             )}
             {route.view === 'settings' && (
               <SettingsView
+                request={route}
                 state={configState}
                 onSave={(c) => void saveConfig(c)}
                 onBack={() => setRoute({ view: 'main' })}

@@ -44,6 +44,7 @@
 .alert-popup-actions button { padding: 3px 10px; font-size: 11.5px; }
 .alert-popup-actions .alert-popup-go { border-color: color-mix(in srgb, var(--alert) 40%, transparent); color: var(--text); }
 .alert-popup-actions .alert-popup-go:hover { background: color-mix(in srgb, var(--alert) 14%, transparent); }
+.alert-popup-actions .alert-popup-settings { margin-left: auto; padding: 3px 7px; color: var(--muted); }
 .alert-popup-x { position: absolute; top: 7px; right: 7px; width: 22px; height: 22px; padding: 0; justify-content: center; border: 0; background: transparent; color: var(--muted); }
 .alert-popup-x:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); border: 0; }
 .alert-popup-tmp { margin-top: 4px; max-height: 180px; overflow: auto; }

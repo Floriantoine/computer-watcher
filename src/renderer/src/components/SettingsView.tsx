@@ -1,15 +1,43 @@
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
 import { AnimatePresence } from 'motion/react';
-import { AppWindow, ArrowLeft, HardDrive, Layers, ShieldCheck, Sparkles, Tags, TriangleAlert, X } from 'lucide-react';
+import {
+  AppWindow,
+  ArrowLeft,
+  BellRing,
+  Clock,
+  HardDrive,
+  Layers,
+  ShieldCheck,
+  Sparkles,
+  Tags,
+  TrendingUp,
+  TriangleAlert,
+  Wrench,
+  X,
+  type LucideIcon,
+} from 'lucide-react';
 import { DEFAULT_CONFIG } from '../../../core/defaults';
 import type { Config, ConfigState, MemoryMetric, RecorderState } from '../../../core/types';
 import { CATEGORY_META } from '../categories';
 import { overrideRows, withDetectPorts, withoutOverride } from '../classifySettings';
 import { AlertsSettings } from './AlertsSettings';
 import { formatKB } from '../format';
-import { EarlyoomPanel } from './EarlyoomPanel';
+import { EarlyoomPanel, type EarlyoomAttention } from './EarlyoomPanel';
 import { SettingsConfirm } from './SettingsConfirm';
+import { Card, NumberField, Row, SaveBar, Switch } from './settingsUi';
 import { recorderToForm, validateRecorderForm, type RecorderErrors, type RecorderForm } from '../recorderForm';
+import {
+  SETTINGS_SECTIONS,
+  initialSection,
+  numbersDirty,
+  readStoredSection,
+  sectionAttention,
+  sectionByKey,
+  writeStoredSection,
+  type FormState,
+  type SettingsSection,
+} from '../settingsNav';
+import type { RecorderNumField } from '../../../core/recorderBounds';
 
 interface Props {
   state: ConfigState;
@@ -19,12 +47,70 @@ interface Props {
   onToast: (message: string, kind?: 'error' | 'info') => void;
   /** La config a été modifiée côté main (interrupteur) : le parent la recharge. */
   onConfigChanged: () => void;
+  /** Lien profond : section demandée par la route (nouvel objet à chaque navigation). */
+  request?: { section?: SettingsSection };
 }
 
 const MEM_METRICS: [MemoryMetric, string][] = [['rss', 'RSS (rapide)'], ['pss', 'PSS (précis)']];
 
-export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast, onConfigChanged }: Props) {
+const ICONS: Record<SettingsSection, LucideIcon> = {
+  protected: ShieldCheck,
+  others: Layers,
+  display: Sparkles,
+  classify: Tags,
+  alerts: BellRing,
+  recorder: HardDrive,
+  earlyoom: Wrench,
+  desktop: AppWindow,
+};
+
+type RecField = { f: RecorderNumField; label: string; short: string; unit: string; step?: string; help?: string };
+const REC_GROUPS: { title: string; icon: LucideIcon; help?: string; fields: RecField[] }[] = [
+  {
+    title: 'Intervalle et rétention',
+    icon: Clock,
+    fields: [
+      { f: 'intervalSec', label: 'Intervalle', short: 'Intervalle', unit: 's', help: 'Une mesure toutes les n secondes.' },
+      { f: 'detailHours', label: 'Rétention détaillée', short: 'Rétention détaillée', unit: 'h', help: 'Chaque mesure, processus compris.' },
+      { f: 'summaryDays', label: 'Rétention résumée', short: 'Rétention résumée', unit: 'j', help: 'Moyennes par minute et par heure, événements.' },
+    ],
+  },
+  {
+    title: 'Seuils',
+    icon: Layers,
+    help: 'Groupes plus petits cumulés dans «\u00a0Petits groupes\u00a0».',
+    fields: [
+      { f: 'procMinMemMB', label: 'Seuil mémoire processus', short: 'Mémoire d’un processus', unit: 'Mo' },
+      { f: 'procMinCpuPercent', label: 'Seuil CPU processus', short: 'CPU d’un processus', unit: '%', step: '0.5' },
+      { f: 'groupMinMemMB', label: 'Seuil mémoire groupe', short: 'Mémoire d’un groupe', unit: 'Mo' },
+      { f: 'tmpfsAlertMB', label: 'Alerte fichiers en mémoire (/tmp, shm)', short: 'Alerte /tmp, shm', unit: 'Mo', help: 'Fichiers en mémoire (Shmem) au-delà de ce seuil.' },
+    ],
+  },
+  {
+    title: 'Fuites',
+    icon: TrendingUp,
+    help: 'Alerte quand la mémoire d’un groupe monte d’au moins la hausse pendant la durée.',
+    fields: [
+      { f: 'leakMinMinutes', label: 'Fuite : durée', short: 'Durée', unit: 'min' },
+      { f: 'leakMinGrowthMB', label: 'Fuite : hausse', short: 'Hausse', unit: 'Mo' },
+    ],
+  },
+];
+
+const CALM: FormState = { dirty: false, invalid: false };
+
+export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast, onConfigChanged, request }: Props) {
   const { config, warning, invalid } = state;
+  const [section, setSection] = useState<SettingsSection>(() => initialSection(request?.section, readStoredSection()));
+  const select = useCallback((s: SettingsSection) => {
+    setSection(s);
+    writeStoredSection(s);
+  }, []);
+  // Lien profond alors que les Réglages sont déjà ouverts : la route change d'objet, la section suit.
+  useEffect(() => {
+    if (request?.section) select(request.section);
+  }, [request, select]);
+
   const [entry, setEntry] = useState('');
   const [memMB, setMemMB] = useState(String(config.othersThreshold.memMB));
   const [cpu, setCpu] = useState(String(config.othersThreshold.cpuPercent));
@@ -37,6 +123,8 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
   const [confirmOverrides, setConfirmOverrides] = useState(false);
   const overrides = overrideRows(config.classify.overrides);
   const [now, setNow] = useState(() => Date.now());
+  const [alertsForm, setAlertsForm] = useState<FormState>(CALM);
+  const [eo, setEo] = useState<EarlyoomAttention>({ ...CALM, status: null });
 
   useEffect(() => {
     let alive = true;
@@ -99,17 +187,6 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
   const toneLabel = !rec ? 'Chargement…' : rec.running ? 'Actif' : rec.enabled ? 'Ne répond pas' : 'Désactivé';
   const ago = st?.lastSampleAt ? Math.max(0, Math.round((now - st.lastSampleAt) / 1000)) : null;
   const jobErrors = Object.entries(st?.jobErrors ?? {}).filter(([, v]) => v) as [string, string][];
-  const FIELDS: { f: keyof RecorderForm; label: string; unit: string; step?: string }[] = [
-    { f: 'intervalSec', label: 'Intervalle', unit: 's' },
-    { f: 'detailHours', label: 'Rétention détaillée', unit: 'h' },
-    { f: 'summaryDays', label: 'Rétention résumée', unit: 'j' },
-    { f: 'procMinMemMB', label: 'Seuil mémoire processus', unit: 'Mo' },
-    { f: 'procMinCpuPercent', label: 'Seuil CPU processus', unit: '%', step: '0.5' },
-    { f: 'groupMinMemMB', label: 'Seuil mémoire groupe', unit: 'Mo' },
-    { f: 'leakMinMinutes', label: 'Fuite : durée', unit: 'min' },
-    { f: 'leakMinGrowthMB', label: 'Fuite : hausse', unit: 'Mo' },
-    { f: 'tmpfsAlertMB', label: 'Alerte fichiers en mémoire (/tmp, shm)', unit: 'Mo' },
-  ];
 
   const add = () => {
     const v = entry.trim();
@@ -118,10 +195,66 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
     setEntry('');
   };
   const remove = (v: string) => onSave({ ...config, protected: config.protected.filter((x) => x !== v) });
+  const othersValid = (s: string) => s.trim() !== '' && Number.isFinite(Number(s)) && Number(s) >= 0;
   const saveThresholds = () => {
     const m = Number(memMB);
     const c = Number(cpu);
     if (memMB.trim() && cpu.trim() && Number.isFinite(m) && m >= 0 && Number.isFinite(c) && c >= 0) onSave({ ...config, othersThreshold: { memMB: m, cpuPercent: c } });
+  };
+
+  // État des formulaires (points de la barre et indicateurs « non enregistré »).
+  const othersState: FormState = {
+    dirty: numbersDirty({ memMB, cpu }, { memMB: config.othersThreshold.memMB, cpu: config.othersThreshold.cpuPercent }),
+    invalid: !othersValid(memMB) || !othersValid(cpu),
+  };
+  const recorderState: FormState = {
+    dirty: numbersDirty(form, config.recorder as unknown as Record<string, number>),
+    invalid: Object.keys(validateRecorderForm(form, config.recorder.enabled).errors).length > 0,
+  };
+  const attention = sectionAttention({
+    protectedEntry: entry,
+    protectedList: config.protected,
+    others: othersState,
+    alerts: alertsForm,
+    recorder: { ...recorderState, status: rec ? { available: rec.available, enabled: rec.enabled, running: rec.running } : null },
+    earlyoom: eo,
+  });
+
+  const tabs = useRef(new Map<SettingsSection, HTMLButtonElement>());
+  // Rangée d'onglets défilante (fenêtre étroite) : l'onglet choisi reste visible.
+  useEffect(() => {
+    if (window.matchMedia?.('(max-width: 900px)').matches) tabs.current.get(section)?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+  }, [section]);
+  const onTabKey = (e: KeyboardEvent<HTMLButtonElement>, id: SettingsSection) => {
+    const next = sectionByKey(id, e.key);
+    if (!next) return;
+    e.preventDefault();
+    tabs.current.get(next)?.focus();
+  };
+  const [focused, setFocused] = useState<SettingsSection | null>(null);
+  // Tabulation itinérante : seul l'onglet sélectionné (ou celui qui a le focus) est atteint par Tab.
+  const tabStop = focused ?? section;
+
+  const panel = (id: SettingsSection, testid: string | undefined, body: ReactNode) => {
+    const meta = SETTINGS_SECTIONS.find((s) => s.id === id)!;
+    const Icon = ICONS[id];
+    return (
+      <div
+        key={id}
+        role="tabpanel"
+        id={`settings-panel-${id}`}
+        aria-labelledby={`settings-tab-${id}`}
+        hidden={section !== id}
+        className="settings-panel"
+        data-testid={testid}
+      >
+        <header className="s-head">
+          <h3><Icon size={17} strokeWidth={2} />{meta.label}</h3>
+          <p>{meta.description}</p>
+        </header>
+        {body}
+      </div>
+    );
   };
 
   return (
@@ -132,221 +265,301 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
         </button>
         <h2>Réglages</h2>
       </div>
-      <div className="settings">
-        {warning && (
-          <div className="warning">
-            <TriangleAlert size={15} strokeWidth={2.2} />
-            <span>{warning}</span>
-          </div>
-        )}
-
-        <section>
-          <h3><ShieldCheck size={15} strokeWidth={2} />Programmes protégés</h3>
-          <p className="hint">Nom exact du processus, ou expression régulière entre slashs (ex. <code>/^systemd/</code>). Les tuer demande toujours une confirmation.</p>
-          <div className="pills">
-            {config.protected.map((p) => (
-              <span key={p} className={`pill ${invalid.includes(p) ? 'invalid' : ''}`} title={invalid.includes(p) ? 'Regex invalide, ignorée' : ''}>
-                {p}
-                <button onClick={() => remove(p)} aria-label={`Retirer ${p}`} title={`Retirer ${p}`}>
-                  <X size={12} strokeWidth={2.4} />
-                </button>
-              </span>
-            ))}
-          </div>
-          <div className="row" style={{ marginTop: 10 }}>
-            <input value={entry} placeholder="nom ou /regex/" onChange={(e) => setEntry(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && add()} />
-            <button onClick={add}>Ajouter</button>
-            <button onClick={() => onSave({ ...config, protected: [...DEFAULT_CONFIG.protected] })}>Réinitialiser</button>
-          </div>
-        </section>
-
-        <section>
-          <h3><Layers size={15} strokeWidth={2} />Carte « Autres »</h3>
-          <p className="hint">Les groupes sous ces deux seuils sont rassemblés dans une seule carte.</p>
-          <div className="row">
-            <label>Mémoire &lt; <input type="number" min="0" value={memMB} onChange={(e) => setMemMB(e.target.value)} style={{ width: 80 }} /> Mo</label>
-            <label>et CPU &lt; <input type="number" min="0" step="0.5" value={cpu} onChange={(e) => setCpu(e.target.value)} style={{ width: 70 }} /> %</label>
-            <button onClick={saveThresholds}>Enregistrer</button>
-          </div>
-        </section>
-
-        <section data-testid="effects-panel">
-          <h3><Sparkles size={15} strokeWidth={2} />Affichage</h3>
-          <div className="mem-metric-row">
-            <span>Mémoire :</span>
-            <div className="range-selector mem-metric" role="radiogroup" aria-label="Mémoire affichée" data-testid="mem-metric">
-              {MEM_METRICS.map(([m, label]) => (
+      <div className="settings settings-layout">
+        <nav className="settings-nav" aria-label="Sections des réglages">
+          <div role="tablist" aria-orientation="vertical" aria-label="Sections des réglages" className="settings-tabs">
+            {SETTINGS_SECTIONS.map(({ id, label }) => {
+              const Icon = ICONS[id];
+              const a = attention[id];
+              return (
                 <button
-                  key={m}
+                  key={id}
+                  ref={(el) => {
+                    if (el) tabs.current.set(id, el);
+                    else tabs.current.delete(id);
+                  }}
                   type="button"
-                  role="radio"
-                  aria-checked={config.ui.memoryMetric === m}
-                  data-testid={`mem-metric-${m}`}
-                  className={config.ui.memoryMetric === m ? 'active' : ''}
-                  onClick={() => config.ui.memoryMetric !== m && onSave({ ...config, ui: { ...config.ui, memoryMetric: m } })}
+                  role="tab"
+                  id={`settings-tab-${id}`}
+                  aria-controls={`settings-panel-${id}`}
+                  aria-selected={section === id}
+                  tabIndex={tabStop === id ? 0 : -1}
+                  data-testid={`settings-nav-${id}`}
+                  className={section === id ? 'active' : ''}
+                  onClick={() => select(id)}
+                  onKeyDown={(e) => onTabKey(e, id)}
+                  onFocus={() => setFocused(id)}
+                  onBlur={() => setFocused(null)}
+                  title={a ? a.reasons.join(' · ') : undefined}
                 >
-                  {config.ui.memoryMetric === m && <span className="range-indicator" />}
-                  <span>{label}</span>
+                  <Icon size={15} strokeWidth={2} />
+                  <span className="s-nav-label">{label}</span>
+                  {a && <span className={`s-dot ${a.tone}`} data-testid={`settings-dot-${id}`} aria-label={a.reasons.join(', ')} role="img" />}
                 </button>
-              ))}
+              );
+            })}
+          </div>
+        </nav>
+
+        <div className="settings-main">
+          {warning && (
+            <div className="warning">
+              <TriangleAlert size={15} strokeWidth={2.2} />
+              <span>{warning}</span>
             </div>
-          </div>
-          <p className="hint">PSS répartit la mémoire partagée entre les processus ; l'historique reste en RSS.</p>
-          <p className="hint">Sans flou ni animations superflues : moins de travail pour la carte graphique et le processeur.</p>
-          <div className="rec-switch">
-            <button
-              type="button"
-              role="switch"
-              aria-checked={config.ui.reducedEffects}
-              aria-label="Effets visuels réduits"
-              className="switch"
-              onClick={() => onSave({ ...config, ui: { ...config.ui, reducedEffects: !config.ui.reducedEffects } })}
-            >
-              <i />
-            </button>
-            <span>Effets visuels réduits</span>
-          </div>
-        </section>
-
-        <section data-testid="classify-panel">
-          <h3><Tags size={15} strokeWidth={2} />Classement</h3>
-          <p className="hint">Les instances (front, back, BDD…) sont classées automatiquement. Une correction faite avec « Reclasser » dans le détail d'un projet est retenue pour ce projet et ce motif de commande.</p>
-          <div className="rec-switch">
-            <button
-              type="button"
-              role="switch"
-              aria-checked={config.classify.detectPorts}
-              aria-label="Détecter les ports"
-              className="switch"
-              onClick={() => onSave(withDetectPorts(config, !config.classify.detectPorts))}
-            >
-              <i />
-            </button>
-            <span>Détecter les ports</span>
-          </div>
-          <p className="hint">Ports TCP en écoute des projets et des bases, lus toutes les 10 s. Ceux des processus d'autres utilisateurs ne sont pas lisibles.</p>
-          <h4 className="overrides-title">Corrections manuelles{overrides.length > 0 && <span className="cat-count">{overrides.length}</span>}</h4>
-          {overrides.length === 0 ? (
-            <p className="hint" data-testid="overrides-empty">Aucune correction : tout est classé automatiquement.</p>
-          ) : (
-            <>
-              <ul className="overrides" data-testid="overrides-list">
-                {overrides.map((o) => {
-                  const m = CATEGORY_META[o.category];
-                  const Icon = m.icon;
-                  return (
-                    <li key={o.key} data-testid="override-row">
-                      <span className="ov-project" title={o.scope}>{o.project}</span>
-                      <code className="ov-sig" title={o.signature}>{o.signature || '—'}</code>
-                      <span className="cat-tag" style={{ '--cat': m.color } as CSSProperties}>
-                        <Icon size={11} strokeWidth={2.4} />
-                        {m.label}
-                      </span>
-                      <button
-                        className="ov-remove"
-                        onClick={() => onSave(withoutOverride(config, o.key))}
-                        aria-label={`Retirer la correction ${o.signature} de ${o.project}`}
-                        title="Retirer (revenir à l'automatique)"
-                      >
-                        <X size={13} strokeWidth={2.4} />
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-              <div className="row" style={{ marginTop: 10 }}>
-                <button className="danger" onClick={() => setConfirmOverrides(true)}>Tout effacer</button>
-              </div>
-            </>
           )}
-          <AnimatePresence>
-            {confirmOverrides && (
-              <SettingsConfirm
-                key="overrides"
-                id="overrides-title"
-                title={`Effacer les ${overrides.length} correction${overrides.length > 1 ? 's' : ''} ?`}
-                text="Toutes les instances reviendront au classement automatique."
-                confirmLabel="Tout effacer"
-                onCancel={() => setConfirmOverrides(false)}
-                onConfirm={() => {
-                  setConfirmOverrides(false);
-                  onSave(withoutOverride(config, null));
-                }}
-              />
-            )}
-          </AnimatePresence>
-        </section>
 
-        <section>
-          <h3><AppWindow size={15} strokeWidth={2} />Menu des applications</h3>
-          <p className="hint">Crée un raccourci proc-watch dans le menu de ton bureau (version AppImage ou .deb).</p>
-          <button onClick={onInstallDesktop}>Ajouter au menu des applications</button>
-        </section>
-
-        <AlertsSettings config={config} onSave={onSave} />
-
-        <section data-testid="recorder-panel">
-          <h3><HardDrive size={15} strokeWidth={2} />Enregistrement</h3>
-          <p className="hint">Un service en arrière-plan note la mémoire, le CPU et les événements pour l'onglet Métriques, même quand proc-watch est fermé.</p>
-          <div className="rec-switch">
-            <button
-              type="button"
-              role="switch"
-              aria-checked={!!rec?.enabled}
-              aria-label="Enregistrer l'historique"
-              className="switch"
-              disabled={!rec || !rec.available || busy}
-              onClick={() => void toggleRecorder()}
-            >
-              <i />
-            </button>
-            <span>Enregistrer l'historique</span>
-          </div>
-          {rec && !rec.available && <p className="hint rec-note">systemd utilisateur indisponible : l'enregistrement en arrière-plan ne peut pas être installé</p>}
-          <div className="rec-status">
-            <span className={`dot ${tone}`} aria-hidden />
-            <strong data-testid="recorder-state">{toneLabel}</strong>
-            {ago !== null && <span>Dernier échantillon il y a {ago} s</span>}
-            {st && <span>Base : {formatKB(Math.round(st.dbSizeBytes / 1024))}</span>}
-            {st && <span>Kills earlyoom : {st.earlyoomSource === 'ok' ? 'suivis' : 'indisponibles'}</span>}
-          </div>
-          {st?.lastError && <p className="rec-error">{st.lastError}</p>}
-          {st?.warning && <p className="hint rec-note">{st.warning}</p>}
-          {jobErrors.map(([k, v]) => (
-            <p key={k} className="rec-error">{k} : {v}</p>
-          ))}
-          <div className="rec-fields">
-            {FIELDS.map(({ f, label, unit, step }) => (
-              <div key={f} className="rec-field">
-                <label>
-                  {label}
-                  <input type="number" min="0" step={step} value={form[f]} aria-invalid={!!errors[f]} aria-label={label} onChange={(e) => setField(f, e.target.value)} style={{ width: 84 }} />
-                  {unit}
-                </label>
-                {errors[f] && <span className="field-error">{errors[f]}</span>}
+          {panel(
+            'protected',
+            'protected-panel',
+            <Card title="Programmes protégés" icon={<ShieldCheck size={14} strokeWidth={2} />}>
+              <p className="hint">
+                Nom exact du processus, ou expression régulière entre slashs (ex. <code>/^systemd/</code>). Les tuer demande toujours une
+                confirmation. Enregistré dès l'ajout ou le retrait.
+              </p>
+              <div className="pills">
+                {config.protected.length === 0 && <span className="hint" style={{ margin: 0 }}>Aucun programme protégé.</span>}
+                {config.protected.map((p) => (
+                  <span key={p} className={`pill ${invalid.includes(p) ? 'invalid' : ''}`} title={invalid.includes(p) ? 'Regex invalide, ignorée' : ''}>
+                    {p}
+                    <button onClick={() => remove(p)} aria-label={`Retirer ${p}`} title={`Retirer ${p}`}>
+                      <X size={12} strokeWidth={2.4} />
+                    </button>
+                  </span>
+                ))}
               </div>
-            ))}
-          </div>
-          <div className="row" style={{ marginTop: 12 }}>
-            <button onClick={saveRecorder}>Enregistrer</button>
-            <button className="danger" onClick={() => setConfirmClear(true)}>Vider l'historique</button>
-          </div>
-          <AnimatePresence>
-            {confirmClear && (
-              <SettingsConfirm
-                key="clear"
-                id="clear-title"
-                title="Vider tout l'historique ?"
-                text="Toutes les mesures et tous les événements enregistrés seront supprimés. Cette action est définitive."
-                confirmLabel="Vider"
-                onCancel={() => setConfirmClear(false)}
-                onConfirm={() => void clearHistory()}
-              />
-            )}
-          </AnimatePresence>
-        </section>
+              <div className="s-add">
+                <input
+                  value={entry}
+                  placeholder="nom ou /regex/"
+                  aria-label="Programme à protéger"
+                  data-testid="protected-entry"
+                  onChange={(e) => setEntry(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && add()}
+                />
+                <button className="primary" onClick={add} disabled={!entry.trim()}>Ajouter</button>
+              </div>
+              <div className="s-foot">
+                {attention.protected && (
+                  <span className="s-unsaved" role="status">
+                    <i aria-hidden />
+                    Saisie pas encore ajoutée
+                  </span>
+                )}
+                <button onClick={() => onSave({ ...config, protected: [...DEFAULT_CONFIG.protected] })}>Réinitialiser</button>
+              </div>
+            </Card>,
+          )}
 
-        <EarlyoomPanel protectedList={config.protected} onToast={onToast} />
+          {panel(
+            'others',
+            'others-panel',
+            <Card title="Seuils de regroupement" icon={<Layers size={14} strokeWidth={2} />}>
+              <Row label="Mémoire en dessous de" error={othersValid(memMB) ? null : 'Un nombre ≥ 0 est attendu'}>
+                {(id) => <NumberField id={id} value={memMB} unit="Mo" ariaLabel="Mémoire" invalid={!othersValid(memMB)} onChange={setMemMB} onEnter={saveThresholds} />}
+              </Row>
+              <Row
+                label="et CPU en dessous de"
+                error={othersValid(cpu) ? null : 'Un nombre ≥ 0 est attendu'}
+                help="Les groupes sous ces deux seuils sont rassemblés dans une seule carte."
+              >
+                {(id) => <NumberField id={id} value={cpu} step="0.5" unit="%" ariaLabel="CPU" invalid={!othersValid(cpu)} onChange={setCpu} onEnter={saveThresholds} />}
+              </Row>
+              <SaveBar dirty={othersState.dirty} onSave={saveThresholds} testid="others-save" />
+            </Card>,
+          )}
+
+          {panel(
+            'display',
+            'effects-panel',
+            <Card title="Affichage" icon={<Sparkles size={14} strokeWidth={2} />}>
+              <Row label="Mémoire affichée" help="PSS répartit la mémoire partagée entre les processus ; l'historique reste en RSS.">
+                {() => (
+                  <div className="range-selector mem-metric" role="radiogroup" aria-label="Mémoire affichée" data-testid="mem-metric">
+                    {MEM_METRICS.map(([m, label]) => (
+                      <button
+                        key={m}
+                        type="button"
+                        role="radio"
+                        aria-checked={config.ui.memoryMetric === m}
+                        data-testid={`mem-metric-${m}`}
+                        className={config.ui.memoryMetric === m ? 'active' : ''}
+                        onClick={() => config.ui.memoryMetric !== m && onSave({ ...config, ui: { ...config.ui, memoryMetric: m } })}
+                      >
+                        {config.ui.memoryMetric === m && <span className="range-indicator" />}
+                        <span>{label}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </Row>
+              <Row label="Effets visuels réduits" help="Sans flou ni animations superflues : moins de travail pour la carte graphique et le processeur.">
+                {(id) => (
+                  <Switch
+                    id={id}
+                    checked={config.ui.reducedEffects}
+                    label="Effets visuels réduits"
+                    onToggle={() => onSave({ ...config, ui: { ...config.ui, reducedEffects: !config.ui.reducedEffects } })}
+                  />
+                )}
+              </Row>
+              <p className="hint s-auto">Enregistré dès le changement.</p>
+            </Card>,
+          )}
+
+          {panel(
+            'classify',
+            'classify-panel',
+            <>
+              <Card title="Détection" icon={<Tags size={14} strokeWidth={2} />}>
+                <p className="hint">
+                  Les instances (front, back, BDD…) sont classées automatiquement. Une correction faite avec « Reclasser » dans le détail d'un
+                  projet est retenue pour ce projet et ce motif de commande.
+                </p>
+                <Row label="Détecter les ports" help="Ports TCP en écoute des projets et des bases, lus toutes les 10 s. Ceux des processus d'autres utilisateurs ne sont pas lisibles.">
+                  {(id) => (
+                    <Switch id={id} checked={config.classify.detectPorts} label="Détecter les ports" onToggle={() => onSave(withDetectPorts(config, !config.classify.detectPorts))} />
+                  )}
+                </Row>
+              </Card>
+              <Card title={<>Corrections manuelles{overrides.length > 0 && <span className="cat-count">{overrides.length}</span>}</>}>
+                {overrides.length === 0 ? (
+                  <p className="hint" style={{ margin: 0 }} data-testid="overrides-empty">Aucune correction : tout est classé automatiquement.</p>
+                ) : (
+                  <>
+                    <ul className="overrides" data-testid="overrides-list">
+                      {overrides.map((o) => {
+                        const m = CATEGORY_META[o.category];
+                        const Icon = m.icon;
+                        return (
+                          <li key={o.key} data-testid="override-row">
+                            <span className="ov-project" title={o.scope}>{o.project}</span>
+                            <code className="ov-sig" title={o.signature}>{o.signature || '—'}</code>
+                            <span className="cat-tag" style={{ '--cat': m.color } as CSSProperties}>
+                              <Icon size={11} strokeWidth={2.4} />
+                              {m.label}
+                            </span>
+                            <button
+                              className="ov-remove"
+                              onClick={() => onSave(withoutOverride(config, o.key))}
+                              aria-label={`Retirer la correction ${o.signature} de ${o.project}`}
+                              title="Retirer (revenir à l'automatique)"
+                            >
+                              <X size={13} strokeWidth={2.4} />
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                    <div className="s-foot">
+                      <button className="danger" onClick={() => setConfirmOverrides(true)}>Tout effacer</button>
+                    </div>
+                  </>
+                )}
+              </Card>
+              <AnimatePresence>
+                {confirmOverrides && (
+                  <SettingsConfirm
+                    key="overrides"
+                    id="overrides-title"
+                    title={`Effacer les ${overrides.length} correction${overrides.length > 1 ? 's' : ''} ?`}
+                    text="Toutes les instances reviendront au classement automatique."
+                    confirmLabel="Tout effacer"
+                    onCancel={() => setConfirmOverrides(false)}
+                    onConfirm={() => {
+                      setConfirmOverrides(false);
+                      onSave(withoutOverride(config, null));
+                    }}
+                  />
+                )}
+              </AnimatePresence>
+            </>,
+          )}
+
+          {panel('alerts', undefined, <AlertsSettings config={config} onSave={onSave} onFormState={setAlertsForm} />)}
+
+          {panel(
+            'recorder',
+            'recorder-panel',
+            <>
+              <Card title="Service" icon={<HardDrive size={14} strokeWidth={2} />}>
+                <p className="hint">Un service en arrière-plan note la mémoire, le CPU et les événements pour l'onglet Métriques, même quand proc-watch est fermé.</p>
+                <Row label="Enregistrer l'historique" help={rec && !rec.available ? undefined : 'Démarre ou arrête le service systemd utilisateur.'}>
+                  {(id) => (
+                    <Switch id={id} checked={!!rec?.enabled} label="Enregistrer l'historique" disabled={!rec || !rec.available || busy} onToggle={() => void toggleRecorder()} />
+                  )}
+                </Row>
+                {rec && !rec.available && <p className="hint rec-note">systemd utilisateur indisponible : l'enregistrement en arrière-plan ne peut pas être installé</p>}
+                <div className="rec-status s-status">
+                  <span className={`dot ${tone}`} aria-hidden />
+                  <strong data-testid="recorder-state">{toneLabel}</strong>
+                  {ago !== null && <span>Dernier échantillon il y a {ago} s</span>}
+                  {st && <span>Base : {formatKB(Math.round(st.dbSizeBytes / 1024))}</span>}
+                  {st && (
+                    <span>
+                      Kills earlyoom :{' '}
+                      <button className="s-link" data-testid="recorder-earlyoom-link" onClick={() => select('earlyoom')}>
+                        {st.earlyoomSource === 'ok' ? 'suivis' : 'indisponibles'}
+                      </button>
+                    </span>
+                  )}
+                </div>
+                {st?.lastError && <p className="rec-error">{st.lastError}</p>}
+                {st?.warning && <p className="hint rec-note">{st.warning}</p>}
+                {jobErrors.map(([k, v]) => (
+                  <p key={k} className="rec-error">{k} : {v}</p>
+                ))}
+              </Card>
+
+              <div className="s-grid s-grid-3">
+                {REC_GROUPS.map(({ title, icon: Icon, help, fields }) => (
+                  <Card key={title} title={title} icon={<Icon size={14} strokeWidth={2} />}>
+                    {fields.map(({ f, label, short, unit, step, help: h }) => (
+                      <Row key={f} label={short} help={h} error={errors[f]}>
+                        {(id) => <NumberField id={id} step={step} value={form[f]} unit={unit} ariaLabel={label} invalid={!!errors[f]} onChange={(v) => setField(f, v)} onEnter={saveRecorder} />}
+                      </Row>
+                    ))}
+                    {help && <p className="hint s-card-note">{help}</p>}
+                  </Card>
+                ))}
+              </div>
+              <SaveBar dirty={recorderState.dirty} onSave={saveRecorder} testid="recorder-save" />
+
+              <Card title="Zone de danger" icon={<TriangleAlert size={14} strokeWidth={2} />} danger testid="danger-zone">
+                <div className="s-danger-row">
+                  <p className="hint" style={{ margin: 0 }}>Supprime toutes les mesures et tous les événements enregistrés. Une confirmation est demandée.</p>
+                  <button className="danger" onClick={() => setConfirmClear(true)}>Vider l'historique</button>
+                </div>
+              </Card>
+              <AnimatePresence>
+                {confirmClear && (
+                  <SettingsConfirm
+                    key="clear"
+                    id="clear-title"
+                    title="Vider tout l'historique ?"
+                    text="Toutes les mesures et tous les événements enregistrés seront supprimés. Cette action est définitive."
+                    confirmLabel="Vider"
+                    onCancel={() => setConfirmClear(false)}
+                    onConfirm={() => void clearHistory()}
+                  />
+                )}
+              </AnimatePresence>
+            </>,
+          )}
+
+          {panel('earlyoom', undefined, <EarlyoomPanel protectedList={config.protected} onToast={onToast} onAttention={setEo} />)}
+
+          {panel(
+            'desktop',
+            'desktop-panel',
+            <Card title="Raccourci" icon={<AppWindow size={14} strokeWidth={2} />}>
+              <div className="s-danger-row">
+                <p className="hint" style={{ margin: 0 }}>Crée un raccourci proc-watch dans le menu de ton bureau (version AppImage ou .deb).</p>
+                <button className="primary" onClick={onInstallDesktop}>Ajouter au menu des applications</button>
+              </div>
+            </Card>,
+          )}
+        </div>
       </div>
     </>
   );

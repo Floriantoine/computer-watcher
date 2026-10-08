@@ -1,11 +1,12 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { BellRing, FlaskConical, FolderOpen, Gauge, Hourglass, ShieldAlert, Skull, TrendingUp, X, type LucideIcon } from 'lucide-react';
+import { BellRing, FlaskConical, FolderOpen, Gauge, Hourglass, Settings2, ShieldAlert, Skull, TrendingUp, X, type LucideIcon } from 'lucide-react';
 import { alertMessage, type AlertEvent, type AlertType, type AlertsConfig } from '../../../core/alerts';
 import type { ConfigState } from '../../../core/types';
 import type { Route } from '../App';
 import { badgeCount, clickTarget, pendingPopups, popupAction, popupStack, sameUnseen, seenAfterClose } from '../alertPopups';
 import { useHistory } from '../history';
+import { settingsSectionForAlert } from '../settingsNav';
 import { eventMarkers, formatInstant } from '../metrics';
 import { TmpDirsList } from './TmpDirsList';
 import '../alerts.css';
@@ -125,6 +126,15 @@ export const AlertPopups = memo(function AlertPopups({ pending, onClose, onClose
                     {action.label}
                   </button>
                   <button onClick={() => onClose(e.id)}>Fermer</button>
+                  <button
+                    className="alert-popup-settings"
+                    data-testid="alert-popup-settings"
+                    title={e.type === 'earlyoom_kill' ? 'Réglages earlyoom' : 'Régler les alertes'}
+                    aria-label={e.type === 'earlyoom_kill' ? 'Réglages earlyoom' : 'Régler les alertes'}
+                    onClick={() => onNavigate({ view: 'settings', section: settingsSectionForAlert(e.type) })}
+                  >
+                    <Settings2 size={12} strokeWidth={2} />
+                  </button>
                 </div>
               </div>
               <button className="alert-popup-x" aria-label={`Fermer l’alerte ${title}`} title="Fermer" onClick={() => onClose(e.id)}>
