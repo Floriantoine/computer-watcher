@@ -14,7 +14,7 @@ export const DEFAULT_RECORDER: RecorderConfig = {
   tmpfsAlertMB: 2048,
 };
 
-export const DEFAULT_UI: UiConfig = { reducedEffects: false, memoryMetric: 'rss' };
+export const DEFAULT_UI: UiConfig = { reducedEffects: false, memoryMetric: 'rss', trayIcon: true, closeToTray: true, swapSleepMinMB: 100 };
 
 export const DEFAULT_CLASSIFY: ClassifyConfig = { detectPorts: true, overrides: {} };
 

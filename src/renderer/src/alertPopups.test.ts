@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { DEFAULT_ALERTS, type AlertEvent, type AlertsConfig } from '../../core/alerts';
-import { badgeCount, clickTarget, MAX_VISIBLE, pendingPopups, popupAction, popupStack, sameUnseen, seenAfterClose } from './alertPopups';
+import { badgeCount, clickTarget, MAX_VISIBLE, pendingPopups, popupAction, popupSnooze, popupStack, sameUnseen, seenAfterClose } from './alertPopups';
 
 const ev = (id: number, ts: number, type: AlertEvent['type'] = 'leak', groupKey: string | null = null): AlertEvent =>
   ({ id, ts, type, groupKey, groupLabel: null, detail: {} });
@@ -99,4 +99,16 @@ describe('clickTarget (action choisie au clic)', () => {
     expect(clickTarget(ev(2, 7, 'tmpfs'), () => true)).toBe('tmp');
     expect(clickTarget(ev(3, 9, 'earlyoom_kill'), () => true)).toEqual({ view: 'metrics', at: 9 });
   });
+});
+
+describe('prévision ② : « Libérer… »', () => {
+  test('action « Libérer… » qui ouvre le kill groupé', () => {
+    expect(popupAction(ev(1, 1, 'forecast'), () => true)).toEqual({ kind: 'free', label: 'Libérer…' });
+    expect(clickTarget(ev(1, 1, 'forecast'), () => true)).toBe('free');
+  });
+});
+
+test('popupSnooze : « Ignorer 30 min » seulement pour la prévision', () => {
+  expect(popupSnooze(ev(1, 1, 'forecast'))).toBe('Ignorer 30 min');
+  expect(popupSnooze(ev(1, 1, 'leak'))).toBeNull();
 });

@@ -5,7 +5,7 @@ export type SettingsSection = 'protected' | 'others' | 'display' | 'classify' | 
 export const SETTINGS_SECTIONS: { id: SettingsSection; label: string; description: string }[] = [
   { id: 'protected', label: 'Protégés', description: 'Programmes dont le kill demande toujours une confirmation.' },
   { id: 'others', label: 'Carte « Autres »', description: 'Seuils sous lesquels les petits groupes sont rassemblés dans une seule carte.' },
-  { id: 'display', label: 'Affichage', description: 'Mémoire affichée et effets visuels.' },
+  { id: 'display', label: 'Affichage', description: 'Mémoire affichée, effets visuels et barre des tâches.' },
   { id: 'classify', label: 'Classement', description: 'Classement automatique des instances, ports et corrections manuelles.' },
   { id: 'alerts', label: 'Alertes', description: 'Où chaque type d’alerte est signalé, et à quelle fréquence.' },
   { id: 'recorder', label: 'Enregistrement', description: 'Service d’arrière-plan qui alimente l’onglet Métriques.' },

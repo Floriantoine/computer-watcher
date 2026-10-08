@@ -1,5 +1,5 @@
-import { expect, test } from 'vitest';
-import { LiveBuffer, onLiveResume, setLive } from './history';
+import { describe, expect, test, vi } from 'vitest';
+import { LiveBuffer, onLiveResume, pollWhileLive, setLive } from './history';
 
 const sys = (mem: number) => ({ memTotalKB: 100, memAvailableKB: 100 - mem, swapTotalKB: 10, swapFreeKB: 10, load1: 1, psiSome10: 0, shmemKB: 0 });
 
@@ -34,4 +34,30 @@ test('reprise de la collecte en direct : les abonnés sont prévenus une fois pa
   setLive(false);
   setLive(true);
   expect(n).toBe(1);
+});
+
+describe('pollWhileLive', () => {
+  test('appelle load tout de suite, puis à chaque intervalle seulement si la collecte est en direct ; reprise → load', () => {
+    vi.useFakeTimers();
+    try {
+      const load = vi.fn();
+      const stop = pollWhileLive(load, 5000);
+      expect(load).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(5000);
+      expect(load).toHaveBeenCalledTimes(2);
+      setLive(false);
+      vi.advanceTimersByTime(15_000);
+      expect(load).toHaveBeenCalledTimes(2);
+      setLive(true);
+      expect(load).toHaveBeenCalledTimes(3);
+      stop();
+      vi.advanceTimersByTime(10_000);
+      setLive(false);
+      setLive(true);
+      expect(load).toHaveBeenCalledTimes(3);
+    } finally {
+      setLive(true);
+      vi.useRealTimers();
+    }
+  });
 });

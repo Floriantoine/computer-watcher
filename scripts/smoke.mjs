@@ -23,6 +23,8 @@ try {
     await win.screenshot({ path: 'smoke-detail.png' });
   }
 } finally {
+  // Fermer la fenêtre la garderait dans la barre des tâches : quitter explicitement.
+  await app.evaluate(({ app }) => app.quit()).catch(() => {});
   await app.close();
   rmSync(cfg, { recursive: true, force: true });
 }

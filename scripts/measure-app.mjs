@@ -4,7 +4,9 @@
 // visible puis réduite, affiche un tableau par type et ferme l'app. Les actions sur la fenêtre (minimize, focus…)
 // passent par l'inspecteur Node du seul processus main (--inspect), qui ne touche pas au renderer.
 // Scénarios : visible (fenêtre considérée active : un événement focus est émis toutes les 10 s, comme un utilisateur
-// présent), background (blur puis 62 s d'attente : rythme de fond), minimized (win.minimize()), hidden (win.hide()).
+// présent), background (blur puis 62 s d'attente : rythme de fond), minimized (win.minimize()), hidden (win.hide()),
+// closed (win.close() : fenêtre cachée dans la barre des tâches si le bureau a une zone de notification ; le KWin
+// imbriqué n'en a pas, d'où MEASURE_KWIN=0 pour ce scénario).
 // Affichage : par défaut chaque app tourne dans son propre KWin imbriqué virtuel (kwin_wayland --virtual, bus D-Bus et config à part) :
 // la fenêtre est réellement affichée et active quel que soit l'état du bureau (écran verrouillé, autre bureau…), et
 // rien n'apparaît à l'écran. MEASURE_KWIN=0 : utiliser la session courante.
@@ -247,7 +249,17 @@ try {
   for (const sc of SCENARIOS) {
     if (sc === 'minimized') await onAll('win.minimize()');
     if (sc === 'hidden') await onAll('win.hide()');
-    if (sc === 'minimized' || sc === 'hidden') await sleep(3000);
+    if (sc === 'closed') {
+      // depuis une fenêtre affichée, comme un clic sur la croix
+      await onAll('(win.restore(), win.show())');
+      await sleep(1000);
+      await onAll('win.close()');
+    }
+    if (sc === 'minimized' || sc === 'hidden' || sc === 'closed') await sleep(3000);
+    if (sc === 'closed') {
+      const st = await Promise.race([onAll("win ? (win.isVisible() ? 'visible' : 'cachée') : 'fermée'"), sleep(2000).then(() => apps.map(() => null))]);
+      console.log(`après close() : ${st.map((r) => r.result?.result?.value ?? 'app terminée').join(', ')}`);
+    }
     if (sc === 'background') {
       await onAll("win.emit('blur')");
       await sleep(62_000);
@@ -257,16 +269,24 @@ try {
       await onAll("win.emit('focus')");
       keepFocus = setInterval(() => void onAll("win.emit('focus')").catch(() => {}), 10_000);
     }
-    const label = { visible: 'visible', background: 'visible sans focus', minimized: 'réduite', hidden: 'cachée' }[sc] ?? sc;
+    const label = { visible: 'visible', background: 'visible sans focus', minimized: 'réduite', hidden: 'cachée', closed: 'cachée (barre)' }[sc] ?? sc;
     const results = await sample(roots, SAMPLE_S);
     if (keepFocus) clearInterval(keepFocus);
     results.forEach((rows, i) => print(`Fenêtre ${label} (${page})${apps.length > 1 ? ` — ${apps[i].dir}` : ''}`, rows));
   }
 } finally {
-  for (const { child, ws, cfg } of apps) {
+  for (const { child, ws, cfg, dir } of apps) {
     ws.close();
     child.kill('SIGTERM');
+    // garde-fou : une app qui ne se termine pas en 5 s (fenêtre retenue dans la barre des tâches) est tuée
+    const t0 = Date.now();
+    const force = setTimeout(() => {
+      console.log(`SIGKILL forcé : ${dir} ne s'est pas terminé 5 s après SIGTERM`);
+      child.kill('SIGKILL');
+    }, 5000);
     await new Promise((r) => (child.exitCode !== null ? r() : child.once('exit', r)));
+    clearTimeout(force);
+    console.log(`${dir} terminé ${Date.now() - t0} ms après SIGTERM`);
     rmSync(cfg, { recursive: true, force: true });
   }
   for (const kwin of kwins) await kwin.stop();

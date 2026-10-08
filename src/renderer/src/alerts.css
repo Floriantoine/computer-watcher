@@ -88,4 +88,5 @@
 .alert-channels li { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .alert-channels .alert-type { display: inline-flex; align-items: center; gap: 8px; color: var(--text-2); }
 .alert-channels .alert-type svg { color: var(--alert, var(--label)); }
+.alert-channels .alert-type-note { font-size: 11px; color: var(--text-3, var(--label)); padding: 1px 7px; border-radius: 999px; background: rgba(255, 181, 71, 0.1); border: 1px solid rgba(255, 181, 71, 0.25); }
 .alert-interval { margin-top: 12px; }

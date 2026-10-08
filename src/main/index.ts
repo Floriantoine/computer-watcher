@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Tray } from 'electron';
 import { appendFileSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -17,10 +17,13 @@ import { recordSeparate, stickyIds } from '../core/grouping/stickyCards';
 import { killRequest, planKill, sendSignals } from '../core/kill';
 import { compileProtection } from '../core/protection';
 import { formatAppEvent } from '../core/history/events';
-import { appEventsPath, dataDir, focusStatePath } from '../core/paths';
+import { appEventsPath, dataDir, focusStatePath, forecastSnoozePath } from '../core/paths';
 import { alertIdFromArgv } from '../core/alerts';
 import { buildSnapshot, flattenGroup, groupProcs, instanceTargets, isWatch, othersFollowed, wantsAllPorts, type Classification, type FullSnapshot } from '../core/snapshot';
 import type { ConfigState, Group, KillResult, ProcInfo, RecorderState, Watch } from '../core/types';
+import { createFreeOpener, wantsFree } from './launchArgs';
+import { SNOOZE_MS } from '../core/forecast/forecast';
+import { writeSnooze } from '../core/forecast/snooze';
 import { createAlertOpener, createFocusWriter, initSeenUpTo, keepSeenUpTo, markSeen, unseenFilter } from './alerts';
 import { installDesktopEntry } from './desktopEntry';
 import { createEarlyoomApplier, earlyoomStatus } from './earlyoom';
@@ -28,6 +31,7 @@ import { clearHistory, createHistoryReader } from './history';
 import { pollDelay, type WindowActivity } from './pollPolicy';
 import { PortSweep } from './portSweep';
 import { sharedScan } from './tmpUsage';
+import { closeAction, confirmTray, createTrayController, defaultRun, statusNotifierAvailable, type TrayController } from './tray';
 import {
   applyOverride, classifySetKey, isGroupKeys, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState as computeRecorderState,
 } from './historyIpc';
@@ -86,10 +90,10 @@ const focusWriter = createFocusWriter({
 const alertOpener = createAlertOpener((id) => {
   if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send('alert:open', id);
 });
-{
-  const id = alertIdFromArgv(process.argv);
-  if (id !== null) alertOpener.open(id);
-}
+// « Libérer de la mémoire » (`--free`) : le renderer ouvre le kill groupé pré-rempli (rien n'est tué sans confirmation).
+const freeOpener = createFreeOpener(() => {
+  if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send('free');
+});
 const history = createHistoryReader(data, () => config.recorder);
 let systemdOk = false;
 
@@ -269,6 +273,13 @@ function takeSnapshot(): FullSnapshot {
 let last: FullSnapshot | null = null;
 let watch: Watch = { groupId: null, query: '' };
 let mainWin: BrowserWindow | null = null;
+// Demandes du lancement (`--alert=<id>`, `--free`) : gardées jusqu'à ce que le renderer les prenne. Après la déclaration de
+// mainWin (l'envoi immédiat la lit : avant, ReferenceError au démarrage).
+{
+  const id = alertIdFromArgv(process.argv);
+  if (id !== null) alertOpener.open(id);
+}
+if (wantsFree(process.argv)) freeOpener.open();
 
 function send(): void {
   if (!mainWin || mainWin.isDestroyed() || !last) return;
@@ -332,6 +343,25 @@ function createWindow(): void {
     schedule();
     if (wasHidden) setLive(true);
   };
+  // Fermer la fenêtre la cache dans la barre des tâches (si l'icône y est réellement) ; le `hide` qui suit suspend la collecte.
+  // Avant de cacher, la zone de notification est revérifiée (hôte toujours là ?) : non, erreur ou plus de 1 s → on quitte,
+  // jamais de fenêtre invisible sans moyen de la rouvrir.
+  let closing = false;
+  win.on('close', (e) => {
+    if (closeAction({ closeToTray: config.ui.closeToTray, trayActive: trayCtl?.active() === true, quitting }) !== 'hide') return;
+    e.preventDefault();
+    if (closing) return;
+    closing = true;
+    void confirmTray(() => statusNotifierAvailable(defaultRun)).then((ok) => {
+      closing = false;
+      if (win.isDestroyed() || quitting) return;
+      if (ok && trayCtl?.active()) win.hide();
+      else {
+        quitting = true;
+        app.quit();
+      }
+    });
+  });
   win.on('minimize', () => {
     focusWriter.set(false);
     pause();
@@ -412,6 +442,7 @@ ipcMain.handle('config:set', (_e, next: unknown) => {
   if (!checked) throw new Error('Configuration invalide');
   const valid = keepSeenUpTo(checked, config);
   const recorderChanged = valid.recorder.enabled !== config.recorder.enabled;
+  const trayChanged = valid.ui.trayIcon !== config.ui.trayIcon;
   if (valid.classify.detectPorts !== config.classify.detectPorts) portsAt = 0;
   const overridesChanged = JSON.stringify(valid.classify.overrides) !== JSON.stringify(config.classify.overrides);
   config = valid;
@@ -420,6 +451,7 @@ ipcMain.handle('config:set', (_e, next: unknown) => {
   warning = null;
   saveConfig(dir, config);
   if (recorderChanged) void syncRecorder(true);
+  if (trayChanged) void syncTray();
   // Correction retirée depuis les Réglages : classement à jour sans attendre le prochain tick (fenêtre réduite comprise).
   if (overridesChanged) reclassify();
   return configState();
@@ -527,6 +559,14 @@ ipcMain.handle('alerts:seenAll', () => {
   return ts === null ? configState() : applySeen({ upTo: ts });
 });
 ipcMain.handle('alerts:takePending', () => alertOpener.take());
+ipcMain.handle('free:takePending', () => freeOpener.take());
+// « Ignorer 30 min » du pop-up de prévision : fichier d'état lu par le service avant toute alerte de prévision.
+ipcMain.handle('forecast:snooze', () => {
+  const at = Date.now();
+  const until = at + SNOOZE_MS;
+  writeSnooze(forecastSnoozePath(data), until, at);
+  return until;
+});
 
 /** Montre la fenêtre (la recrée si elle a été fermée), la restaure et la focalise. */
 function showWindow(): void {
@@ -539,8 +579,73 @@ function showWindow(): void {
   mainWin.focus();
 }
 
-app.on('second-instance', (_e, argv) => {
+/** Montre la fenêtre sur « Libérer de la mémoire » (barre des tâches, `--free`). */
+function openFree(): void {
   showWindow();
+  freeOpener.open();
+}
+
+// Icône dans la barre des tâches : seulement si le bureau a une zone de notification (StatusNotifierWatcher), sinon
+// fermer la fenêtre quitte comme avant.
+let quitting = false;
+let trayCtl: TrayController | null = null;
+let traySyncing: Promise<void> = Promise.resolve();
+app.on('before-quit', () => {
+  quitting = true;
+});
+
+async function doSyncTray(): Promise<void> {
+  if (!config.ui.trayIcon) {
+    trayCtl?.stop();
+    trayCtl = null;
+    return;
+  }
+  if (trayCtl || !(await statusNotifierAvailable(defaultRun)) || !config.ui.trayIcon || quitting) return;
+  trayCtl = createTrayController({
+    createTray: (img) => new Tray(img as Electron.NativeImage),
+    image: (reps) => {
+      const img = nativeImage.createEmpty();
+      for (const r of reps) img.addRepresentation({ scaleFactor: r.scaleFactor, buffer: r.png });
+      return img;
+    },
+    menu: (items) => Menu.buildFromTemplate(items),
+    watchMenu: (m, onShow, onHide) => {
+      (m as Electron.Menu).on('menu-will-show', onShow);
+      (m as Electron.Menu).on('menu-will-close', onHide);
+    },
+    readSystem: () => readSystem(),
+    setInterval: (fn, ms) => setInterval(fn, ms),
+    clearInterval: (h) => clearInterval(h as NodeJS.Timeout),
+    onOpen: showWindow,
+    onFree: openFree,
+    onQuit: () => {
+      quitting = true;
+      app.quit();
+    },
+  });
+}
+
+/** Crée ou retire l'icône selon `config.ui.trayIcon` (appels sérialisés). */
+function syncTray(): Promise<void> {
+  const run = () => doSyncTray().catch((e) => console.error('tray:', e));
+  traySyncing = traySyncing.then(run, run);
+  return traySyncing;
+}
+
+/**
+ * Pour Réglages › Affichage : zone de notification présente et, si l'icône est demandée, icône réellement créée
+ * (créée maintenant si elle manque : zone apparue après le démarrage).
+ */
+ipcMain.handle('tray:available', async () => {
+  const ok = await statusNotifierAvailable(defaultRun);
+  if (!ok || !config.ui.trayIcon) return ok;
+  if (!trayCtl) await syncTray();
+  return trayCtl?.active() === true;
+});
+
+app.on('second-instance', (_e, argv) => {
+  if (wantsFree(argv)) openFree();
+  else showWindow();
   const id = alertIdFromArgv(argv);
   if (id !== null) alertOpener.open(id);
 });
@@ -549,5 +654,6 @@ app.whenReady().then(() => {
   if (!primary) return;
   createWindow();
   void syncRecorder(false);
+  void syncTray();
 });
 app.on('window-all-closed', () => app.quit());

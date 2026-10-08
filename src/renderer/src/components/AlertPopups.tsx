@@ -4,7 +4,7 @@ import { BellRing, FlaskConical, FolderOpen, Gauge, Hourglass, Settings2, Shield
 import { alertMessage, type AlertEvent, type AlertType, type AlertsConfig } from '../../../core/alerts';
 import type { ConfigState } from '../../../core/types';
 import type { Route } from '../App';
-import { badgeCount, clickTarget, pendingPopups, popupAction, popupStack, sameUnseen, seenAfterClose } from '../alertPopups';
+import { badgeCount, clickTarget, pendingPopups, popupAction, popupSnooze, popupStack, sameUnseen, seenAfterClose } from '../alertPopups';
 import { useHistory } from '../history';
 import { settingsSectionForAlert } from '../settingsNav';
 import { eventMarkers, formatInstant } from '../metrics';
@@ -70,10 +70,14 @@ interface Props {
   onCloseAll: () => void;
   groupPresent: (key: string) => boolean;
   onNavigate: (r: Route) => void;
+  /** « Libérer… » d'une alerte de prévision : kill groupé pré-rempli. */
+  onFree: () => void;
+  /** « Ignorer 30 min » d'une alerte de prévision (le service n'alerte plus pendant 30 min), puis fermeture. */
+  onSnooze: (id: number) => void;
 }
 
 /** Pop-ups en haut à droite : restent jusqu'à fermeture, 3 au plus, le reste regroupé en « + n autres ». */
-export const AlertPopups = memo(function AlertPopups({ pending, onClose, onCloseAll, groupPresent, onNavigate }: Props) {
+export const AlertPopups = memo(function AlertPopups({ pending, onClose, onCloseAll, groupPresent, onNavigate, onFree, onSnooze }: Props) {
   const { visible, more } = popupStack(pending);
   // Mesure de mise en page seulement quand la pile change (pas à chaque snapshot).
   const stackKey = `${visible.map((e) => e.id).join(',')}|${more > 0}`;
@@ -85,6 +89,7 @@ export const AlertPopups = memo(function AlertPopups({ pending, onClose, onClose
           const Icon = ICONS[e.type] ?? BellRing;
           const { title, body } = alertMessage(e);
           const action = popupAction(e, groupPresent);
+          const snooze = popupSnooze(e);
           const open = action.kind === 'tmp' && tmpOpen === e.id;
           return (
             <motion.div
@@ -120,11 +125,17 @@ export const AlertPopups = memo(function AlertPopups({ pending, onClose, onClose
                     onClick={() => {
                       const target = clickTarget(e, groupPresent);
                       if (target === 'tmp') setTmpOpen(open ? null : e.id);
+                      else if (target === 'free') onFree();
                       else onNavigate(target);
                     }}
                   >
                     {action.label}
                   </button>
+                  {snooze && (
+                    <button data-testid="alert-popup-snooze" onClick={() => onSnooze(e.id)}>
+                      {snooze}
+                    </button>
+                  )}
                   <button onClick={() => onClose(e.id)}>Fermer</button>
                   <button
                     className="alert-popup-settings"

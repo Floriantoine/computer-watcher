@@ -1,19 +1,43 @@
 // Dialogue de confirmation groupée (« Tuer la sélection », « Tuer le front / le back », « Tout arrêter ») : fonctions pures.
 import { MAX_KILL_TARGETS } from '../../core/kill';
-import type { InstanceSummary, InstanceTargets as FreshEntry, KillResult, KillTarget } from '../../core/types';
+import type { GroupSummary, InstanceSummary, InstanceTargets as FreshEntry, KillResult, KillTarget } from '../../core/types';
 
 /** Cibles au plus par appel du handler `kill` (le main lève une erreur au-delà). */
 export { MAX_KILL_TARGETS };
 /** Clés au plus par appel de `instances:targets` et `classify:inactive` (borne du main). */
 export const MAX_KEYS_PER_CALL = 200;
 
-export type Preset = 'all' | 'inactive1h' | 'inactive1d' | 'duplicates';
+export type Preset = 'all' | 'inactive1h' | 'inactive1d' | 'duplicates' | 'free';
 export const PRESETS: { id: Preset; label: string }[] = [
   { id: 'all', label: 'Toutes' },
   { id: 'inactive1h', label: 'Inactives > 1 h' },
   { id: 'inactive1d', label: 'Inactives > 1 j' },
   { id: 'duplicates', label: 'Doublons seulement' },
+  { id: 'free', label: 'Inactives > 1 h + doublons' },
 ];
+
+/** Pourquoi une demande « Libérer » ne peut pas ouvrir le dialogue maintenant (toast), ou null. */
+export function freeBlockedReason(s: { sending: boolean; dialogOpen: boolean }): string | null {
+  if (s.sending) return 'Libérer de la mémoire : un kill groupé est en cours d’envoi, réessayer dans un instant';
+  if (s.dialogOpen) return 'Libérer de la mémoire : un dialogue de kill groupé est déjà ouvert';
+  return null;
+}
+
+/**
+ * « Libérer de la mémoire » (prévision ②) : instances des groupes projet / supprimé tuables ; celles des groupes qui
+ * grossissent (`growing`, clés de groupe dans cet ordre) d'abord, puis l'ordre d'origine.
+ */
+export function freeCandidates(groups: readonly GroupSummary[], growing: readonly string[]): InstanceSummary[] {
+  const eligible = groups.filter((g) => (g.kind === 'project' || g.kind === 'deleted') && g.killable);
+  const rank = (id: string) => {
+    const i = growing.indexOf(id);
+    return i < 0 ? growing.length : i;
+  };
+  return eligible
+    .map((g, i) => ({ g, i }))
+    .sort((a, b) => rank(a.g.id) - rank(b.g.id) || a.i - b.i)
+    .flatMap(({ g }) => g.instances);
+}
 export const INACTIVE_SINCE_MS: Record<'inactive1h' | 'inactive1d', number> = { inactive1h: 3600_000, inactive1d: 86400_000 };
 
 /** Résultat de `classify:inactive` par période : undefined = en cours, null = pas d'historique, 'error' = échec de l'appel. */
@@ -43,6 +67,14 @@ export function presetSelection(list: readonly InstanceSummary[], preset: Preset
   const open = list.filter((i) => !i.protected);
   if (preset === 'all') return new Set(open.map((i) => i.key));
   if (preset === 'duplicates') return new Set(open.filter((i) => i.duplicate).map((i) => i.key));
+  if (preset === 'free') {
+    // inactives > 1 h ∪ doublons ; sans historique (absent ou en erreur) : doublons seuls ; en lecture : pas encore
+    const h1 = inactive.h1;
+    if (h1 === undefined) return null;
+    const minAgeMs = INACTIVE_SINCE_MS.inactive1h;
+    const idle = (i: InstanceSummary) => !!h1 && h1 !== 'error' && h1.has(i.key) && i.ageSec * 1000 >= minAgeMs;
+    return new Set(open.filter((i) => i.duplicate || idle(i)).map((i) => i.key));
+  }
   const set = inactiveOf(preset, inactive);
   if (!set || set === 'error') return null;
   // Une instance sans échantillon compte comme inactive : on exige en plus qu'elle tourne depuis au moins T.
@@ -52,11 +84,41 @@ export function presetSelection(list: readonly InstanceSummary[], preset: Preset
 
 export function presetState(preset: Preset, inactive: InactiveState): { enabled: boolean; reason?: string } {
   if (preset === 'all' || preset === 'duplicates') return { enabled: true };
+  if (preset === 'free') return inactive.h1 === undefined ? { enabled: false, reason: "Lecture de l'historique…" } : { enabled: true };
   const set = inactiveOf(preset, inactive);
   if (set === undefined) return { enabled: false, reason: "Lecture de l'historique…" };
   if (set === 'error') return { enabled: false, reason: 'Historique indisponible (erreur)' };
   if (set === null) return { enabled: false, reason: "Pas d'historique : le service d'enregistrement est arrêté ou n'a encore rien enregistré" };
   return { enabled: true };
+}
+
+/**
+ * Sélection du dialogue groupé. `userMade` : l'utilisateur a coché, décoché ou choisi un raccourci ; la pré-sélection
+ * initiale ne l'écrase alors jamais. `applied` : raccourci initial déjà appliqué (une seule fois).
+ */
+export interface BulkSelection { selected: ReadonlySet<string>; preset: Preset | null; userMade: boolean; applied: boolean }
+
+/** À l'ouverture : avec un raccourci initial, rien de coché tant qu'il n'est pas applicable ; sinon `defaultSelection`. */
+export function initialSelection(list: readonly InstanceSummary[], pendingPids: { has(pid: number): boolean } | undefined, initialPreset?: Preset): BulkSelection {
+  return initialPreset
+    ? { selected: new Set(), preset: null, userMade: false, applied: false }
+    : { selected: defaultSelection(list, pendingPids), preset: null, userMade: false, applied: true };
+}
+
+export function toggleSelection(s: BulkSelection, key: string): BulkSelection {
+  return { ...s, selected: toggleKey(s.selected, key), preset: null, userMade: true };
+}
+
+export function pickSelection(s: BulkSelection, list: readonly InstanceSummary[], preset: Preset, inactive: InactiveState): BulkSelection {
+  const next = presetSelection(list, preset, inactive);
+  return next ? { ...s, selected: next, preset, userMade: true } : s;
+}
+
+/** Applique le raccourci initial dès qu'il est disponible, une seule fois, et jamais par-dessus un choix de l'utilisateur. */
+export function applyInitialPreset(s: BulkSelection, list: readonly InstanceSummary[], initialPreset: Preset | undefined, inactive: InactiveState): BulkSelection {
+  if (s.applied || s.userMade || !initialPreset || !presetState(initialPreset, inactive).enabled) return s;
+  const next = presetSelection(list, initialPreset, inactive);
+  return next ? { ...s, selected: next, preset: initialPreset, applied: true } : s;
 }
 
 /** Clés cochées encore présentes au dernier snapshot, dans l'ordre de la liste. */

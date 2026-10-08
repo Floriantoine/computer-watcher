@@ -58,18 +58,8 @@ test('findGroup cherche aussi dans les sous-groupes', () => {
   expect(findGroup([], 'x')).toBeUndefined();
 });
 
-describe('pressureLevel', () => {
-  const sys = (swapUsedPct: number, psi: number | null): SystemInfo => ({
-    memTotalKB: 100, memAvailableKB: 50, swapTotalKB: 100, swapFreeKB: 100 - swapUsedPct, load1: 1, psiSome10: psi, shmemKB: 0,
-  });
-  test.each([
-    [10, 0, 'ok'], [50, 0, 'warn'], [70, 0, 'bad'], [0, 10, 'warn'], [0, 25, 'bad'], [0, null, 'ok'],
-  ])('swap %i %%, PSI %s → %s', (swap, psi, level) => {
-    expect(pressureLevel(sys(swap, psi))).toBe(level);
-  });
-  test('pas de swap → ok', () => {
-    expect(pressureLevel({ ...sys(0, 0), swapTotalKB: 0, swapFreeKB: 0 })).toBe('ok');
-  });
+test('pressureLevel réexporté depuis core/pressure', () => {
+  expect(pressureLevel({ memTotalKB: 100, memAvailableKB: 50, swapTotalKB: 100, swapFreeKB: 20, load1: 1, psiSome10: 0, shmemKB: 0 })).toBe('bad');
 });
 
 describe('requêtes de kill', () => {

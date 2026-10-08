@@ -43,11 +43,16 @@ function validateRecorder(raw: unknown): RecorderConfig | null {
 function validateUi(raw: unknown): UiConfig | null {
   if (raw === undefined) return { ...DEFAULT_UI };
   if (typeof raw !== 'object' || raw === null) return null;
-  const r = raw as Record<string, unknown>;
+  // champs ajoutés après coup : absents d'une config existante → valeurs par défaut (pas de réinitialisation)
+  const r: Record<string, unknown> = { ...(raw as Record<string, unknown>) };
+  for (const k of ['memoryMetric', 'trayIcon', 'closeToTray', 'swapSleepMinMB'] as const) if (r[k] === undefined) r[k] = DEFAULT_UI[k];
   if (typeof r.reducedEffects !== 'boolean') return null;
-  const memoryMetric = r.memoryMetric === undefined ? 'rss' : r.memoryMetric;
+  const memoryMetric = r.memoryMetric;
   if (memoryMetric !== 'rss' && memoryMetric !== 'pss') return null;
-  return { reducedEffects: r.reducedEffects, memoryMetric };
+  if (typeof r.trayIcon !== 'boolean' || typeof r.closeToTray !== 'boolean') return null;
+  const sleep = r.swapSleepMinMB;
+  if (!Number.isInteger(sleep) || (sleep as number) < 1 || (sleep as number) > 65_536) return null;
+  return { reducedEffects: r.reducedEffects, memoryMetric, trayIcon: r.trayIcon, closeToTray: r.closeToTray, swapSleepMinMB: sleep as number };
 }
 
 export const MAX_OVERRIDES = 500;
