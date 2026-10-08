@@ -375,7 +375,7 @@ describe('règle 1 ter : outils de dev lancés par Claude dans un projet', () =>
     expect(byId(groups, 'app:firefox').launchedByClaude).toBeUndefined();
   });
 
-  test('claude imbriqué sous un outil déplacé : la session interne et tout son sous-arbre restent dans Claude', () => {
+  test('claude lancé par npx sous un shell : le lanceur reste dans Claude (jamais de carte projet qui tuerait la session) ; la session imbriquée suit la même règle', () => {
     const groups = buildGroups(shellSession(A, 'npx @anthropic-ai/claude-code',
       proc({ pid: 31, name: 'npm exec @anth', ppid: 30, cwd: A, cmdline: 'npm exec @anthropic-ai/claude-code' }),
       proc({ pid: 32, name: 'claude', ppid: 31, cwd: A }),
@@ -383,8 +383,42 @@ describe('règle 1 ter : outils de dev lancés par Claude dans un projet', () =>
       proc({ pid: 34, name: 'zsh', ppid: 32, cwd: A, cmdline: bash('npm run dev') }),
       proc({ pid: 35, name: 'node', ppid: 34, cwd: A, cmdline: 'node node_modules/.bin/vite' }),
     ), o);
-    expect(byId(groups, 'claude').pids.sort()).toEqual([20, 30, 32, 33, 34, 35]);
-    expect(byId(groups, `project:${A}`).pids).toEqual([31]);
+    expect(byId(groups, 'claude').pids.sort()).toEqual([20, 30, 31, 32, 33, 34]);
+    expect(byId(groups, `project:${A}`).pids).toEqual([35]);
+    expect(byId(groups, `project:${A}`).launchedByClaude).toEqual([35]);
+  });
+
+  test('script Agent SDK (node agent.js → claude) : le script reste dans Claude, les outils de la session imbriquée partent', () => {
+    const groups = buildGroups(shellSession(B, 'node agent.js',
+      proc({ pid: 31, name: 'node', ppid: 30, cwd: B, cmdline: 'node agent.js' }),
+      proc({ pid: 32, name: 'claude', ppid: 31, cwd: B }),
+      proc({ pid: 34, name: 'zsh', ppid: 32, cwd: B, cmdline: bash('npx vitest') }),
+      proc({ pid: 35, name: 'npm exec vitest', ppid: 34, cwd: B, cmdline: 'npm exec vitest' }),
+    ), o);
+    expect(byId(groups, 'claude').pids.sort()).toEqual([20, 30, 31, 32, 34]);
+    expect(byId(groups, `project:${B}`).pids).toEqual([35]);
+  });
+
+  test('claude lancé directement depuis un shell de l’outil Bash : ses outils de dev partent aussi', () => {
+    const groups = buildGroups(shellSession(B, 'claude -p x',
+      proc({ pid: 32, name: 'claude', ppid: 30, cwd: B }),
+      proc({ pid: 33, name: 'node', ppid: 32, cwd: B, cmdline: 'node /home/u/tools/server/build/index.js' }),
+      proc({ pid: 34, name: 'zsh', ppid: 32, cwd: B, cmdline: bash('npm run dev') }),
+      proc({ pid: 35, name: 'node', ppid: 34, cwd: B, cmdline: 'node node_modules/.bin/vite' }),
+    ), o);
+    expect(byId(groups, 'claude').pids.sort()).toEqual([20, 30, 32, 33, 34]);
+    expect(byId(groups, `project:${B}`).pids).toEqual([35]);
+  });
+
+  test('shell enfant direct de claude sans le marqueur de l’outil Bash (MCP via bash -c, shell inconnu) : reste dans Claude', () => {
+    const groups = buildGroups(session(
+      proc({ pid: 30, name: 'bash', ppid: 20, cwd: A, cmdline: 'bash -c source .env && node build/index.js' }),
+      proc({ pid: 31, name: 'node', ppid: 30, cwd: A, cmdline: 'node build/index.js' }),
+      proc({ pid: 32, name: 'nu', ppid: 20, cwd: A, cmdline: 'nu -c npm run dev' }),
+      proc({ pid: 33, name: 'node', ppid: 32, cwd: A, cmdline: 'node node_modules/.bin/vite' }),
+    ), o);
+    expect(byId(groups, 'claude').pids.sort()).toEqual([20, 30, 31, 32, 33]);
+    expect(groups.find((g) => g.id.startsWith('project:'))).toBeUndefined();
   });
 
   test('claude → zsh → npx jest → sh -c → node worker : tout dans le projet, rien dans command:sh', () => {

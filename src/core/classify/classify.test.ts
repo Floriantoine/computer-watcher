@@ -57,7 +57,7 @@ describe('classifyGroups', () => {
     const P = '/home/u/acme/backend';
     const procs = [
       proc('claude', 'claude', { pid: 9001, cwd: P }),
-      proc('zsh', '/usr/bin/zsh -c npx jest', { pid: 9002, ppid: 9001, cwd: P }),
+      proc('zsh', '/usr/bin/zsh -c source /home/u/.claude/shell-snapshots/s.sh && eval npx jest', { pid: 9002, ppid: 9001, cwd: P }),
       proc('npm exec jest', 'npm exec jest', { pid: 9003, ppid: 9002, cwd: P }),
       proc('node', `node ${P}/node_modules/.bin/jest`, { pid: 9004, ppid: 9003, cwd: P }),
       proc('node', `node ${P}/node_modules/jest-worker/build/processChild.js`, { pid: 9005, ppid: 9004, cwd: P }),
@@ -79,7 +79,7 @@ describe('classifyGroups', () => {
     const P = '/home/u/acme/backend';
     const procs = [
       proc('claude', 'claude', { pid: 9101, cwd: P }),
-      proc('zsh', '/usr/bin/zsh -c npx jest', { pid: 9102, ppid: 9101, cwd: P }),
+      proc('zsh', '/usr/bin/zsh -c source /home/u/.claude/shell-snapshots/s.sh && eval npx jest', { pid: 9102, ppid: 9101, cwd: P }),
       proc('npm exec jest', 'npm exec jest', { pid: 9103, ppid: 9102, cwd: P }),
       proc('sh', 'sh -c jest', { pid: 9104, ppid: 9103, cwd: P }),
       proc('node', `node ${P}/node_modules/.bin/jest`, { pid: 9105, ppid: 9104, cwd: P }),
