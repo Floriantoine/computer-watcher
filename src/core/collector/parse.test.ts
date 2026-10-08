@@ -41,7 +41,7 @@ describe('parseCmdline', () => {
 describe('métriques système', () => {
   test('parseMeminfo', () => {
     const m = 'MemTotal:       32563200 kB\nMemFree:  1000 kB\nMemAvailable:   11534336 kB\nSwapTotal:      21495804 kB\nSwapFree:        1363148 kB\n';
-    expect(parseMeminfo(m)).toEqual({ memTotalKB: 32563200, memAvailableKB: 11534336, swapTotalKB: 21495804, swapFreeKB: 1363148, shmemKB: 0 });
+    expect(parseMeminfo(m)).toEqual({ memTotalKB: 32563200, memAvailableKB: 11534336, swapTotalKB: 21495804, swapFreeKB: 1363148, shmemKB: null }); // ligne Shmem absente : inconnu, pas 0
   });
   test('parseMeminfo : Shmem (fichiers en mémoire : /tmp, /dev/shm)', () => {
     const m = 'MemTotal:       32563200 kB\nMemAvailable:   11534336 kB\nBuffers:  100 kB\nSwapTotal:      21495804 kB\nSwapFree:        1363148 kB\n'

@@ -5,7 +5,7 @@ import { expect, test } from 'vitest';
 import { openHistoryDb } from './db';
 import {
   detectGap, formatAppEvent, takeAppEvents, insertEvent, lastEventTs, lastSampleTs, parseAppEvents, parseEarlyoom, parseJournalLine, shouldRecordPressure,
-  shouldRecordTmpfs,
+  shouldRecordTmpfs, type TmpfsAlertState,
 } from './events';
 
 test('parseEarlyoom : format récent avec uid', () => {
@@ -127,22 +127,53 @@ test('insertEvent résout le groupe ; lastSampleTs / lastEventTs', () => {
   expect(lastSampleTs(db)).toBe(99);
 });
 
-test('shouldRecordTmpfs : strictement au-dessus du seuil, au plus une fois par heure, réarmée sous le seuil', () => {
-  const T = 2_097_152;
-  const M = 60_000;
-  const fresh = { lastTs: null, armed: false };
-  // première fois au-dessus
-  const a = shouldRecordTmpfs(T + 1, T, fresh, 0);
-  expect(a).toEqual({ record: true, state: { lastTs: 0, armed: false } });
-  // égal au seuil : « dépasse » = strictement
-  expect(shouldRecordTmpfs(T, T, fresh, 0).record).toBe(false);
-  // toujours au-dessus 30 min plus tard : non ; 61 min : oui
-  expect(shouldRecordTmpfs(T + 1, T, a.state, 30 * M).record).toBe(false);
-  expect(shouldRecordTmpfs(T + 1, T, a.state, 61 * M)).toEqual({ record: true, state: { lastTs: 61 * M, armed: false } });
-  // au-dessus à t, sous le seuil à t+10 min (réarmée), au-dessus à t+20 min → oui
-  const below = shouldRecordTmpfs(T - 1, T, a.state, 10 * M);
-  expect(below).toEqual({ record: false, state: { lastTs: 0, armed: true } });
-  expect(shouldRecordTmpfs(T + 1, T, below.state, 20 * M)).toEqual({ record: true, state: { lastTs: 20 * M, armed: false } });
-  // redémarrage du service : état { armed: false, lastTs: il y a 20 min }, toujours au-dessus → non
-  expect(shouldRecordTmpfs(T + 1, T, { lastTs: 100 * M, armed: false }, 120 * M).record).toBe(false);
+const GB = 1_048_576;
+const TMIN = 60_000;
+const T = 2_097_152; // 2048 Mo
+const fresh = (): TmpfsAlertState => ({ lastTs: null, armed: false, belowSince: null });
+
+test('shouldRecordTmpfs : strictement au-dessus, au plus une fois par heure tant que ça dure', () => {
+  const a = shouldRecordTmpfs(T + 1, T, fresh(), 0);
+  expect(a).toEqual({ record: true, state: { lastTs: 0, armed: false, belowSince: null } });
+  expect(shouldRecordTmpfs(T, T, fresh(), 0).record).toBe(false); // égal : pas « dépasse »
+  expect(shouldRecordTmpfs(T + 1, T, a.state, 30 * TMIN).record).toBe(false);
+  expect(shouldRecordTmpfs(T + 1, T, a.state, 61 * TMIN)).toMatchObject({ record: true, state: { lastTs: 61 * TMIN } });
+  // redémarrage du service (dernier événement il y a 20 min, pas réarmée) : rien
+  expect(shouldRecordTmpfs(T + 1, T, { lastTs: 100 * TMIN, armed: false, belowSince: null }, 120 * TMIN).record).toBe(false);
+});
+
+test('shouldRecordTmpfs : oscillation 1,93 ↔ 2,3 Go toutes les 5 s pendant 50 min → un seul événement', () => {
+  let st = fresh();
+  let n = 0;
+  for (let t = 0, i = 0; t < 50 * TMIN; t += 5000, i++) {
+    const r = shouldRecordTmpfs(i % 2 === 0 ? 2.3 * GB : 1.93 * GB, T, st, t);
+    st = r.state;
+    if (r.record) n++;
+  }
+  expect(n).toBe(1);
+});
+
+test('shouldRecordTmpfs : réarmée seulement après 5 min continues sous 90 % du seuil', () => {
+  const fired = shouldRecordTmpfs(T + 1, T, fresh(), 0).state;
+  const low = 0.85 * T;
+  // 4 min sous 90 %, puis au-dessus : pas réarmée
+  let st = fired;
+  for (let t = TMIN; t <= 5 * TMIN; t += 5000) st = shouldRecordTmpfs(low, T, st, t).state;
+  expect(shouldRecordTmpfs(T + 1, T, st, 5 * TMIN + 5000).record).toBe(false);
+  // une remontée entre 90 % et le seuil remet le compteur à zéro
+  st = fired;
+  st = shouldRecordTmpfs(low, T, st, TMIN).state;
+  st = shouldRecordTmpfs(0.95 * T, T, st, 3 * TMIN).state;
+  st = shouldRecordTmpfs(low, T, st, 4 * TMIN).state;
+  expect(shouldRecordTmpfs(T + 1, T, st, 7 * TMIN).record).toBe(false);
+  // 5 min continues sous 90 % : réarmée, l'alerte repart dès le retour au-dessus
+  st = fired;
+  for (let t = TMIN; t <= 6 * TMIN; t += 5000) st = shouldRecordTmpfs(low, T, st, t).state;
+  expect(st.armed).toBe(true);
+  expect(shouldRecordTmpfs(T + 1, T, st, 6 * TMIN + 5000)).toMatchObject({ record: true, state: { armed: false } });
+});
+
+test('shouldRecordTmpfs : Shmem inconnu (null) → rien, état inchangé', () => {
+  const st = { lastTs: 5, armed: true, belowSince: 3 };
+  expect(shouldRecordTmpfs(null, T, st, 10)).toEqual({ record: false, state: st });
 });

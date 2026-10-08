@@ -69,7 +69,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
   let errSeq = 0;
   st.jobErrors = jobErrors;
   let lastPressureTs: number | null = null;
-  let tmpfs: TmpfsAlertState = { lastTs: null, armed: false };
+  let tmpfs: TmpfsAlertState = { lastTs: null, armed: false, belowSince: null };
 
   const writeStatus = () => {
     try {
@@ -135,7 +135,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       lastMinute = last === null ? current : Math.max(Math.floor(last / M) * M, current - cfg.detailHours * 3600_000);
       lastHour = Math.floor(lastMinute / H) * H;
       lastPressureTs = lastEventTs(db, 'pressure');
-      tmpfs = { lastTs: lastEventTs(db, 'tmpfs'), armed: false };
+      tmpfs = { lastTs: lastEventTs(db, 'tmpfs'), armed: false, belowSince: null };
       writeStatus();
     },
 
@@ -160,8 +160,9 @@ export function createRecorder(deps: RecorderDeps): Recorder {
         }
         const thresholdKB = cfg.tmpfsAlertMB * 1024;
         const r = shouldRecordTmpfs(system.shmemKB, thresholdKB, tmpfs, ts);
-        tmpfs = r.state;
+        // état retenu seulement après l'écriture : un échec est retenté au tick suivant
         if (r.record) insertEvent(db, ts, 'tmpfs', null, { shmemKB: system.shmemKB, thresholdKB });
+        tmpfs = r.state;
         st.lastSampleAt = ts;
         ok('tick');
         writeStatus();

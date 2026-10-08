@@ -67,8 +67,8 @@ export function parseMeminfo(content: string) {
     memAvailableKB: kb('MemAvailable'),
     swapTotalKB: kb('SwapTotal'),
     swapFreeKB: kb('SwapFree'),
-    /** Fichiers en mémoire (tmpfs : /tmp, /dev/shm ; mémoire partagée) */
-    shmemKB: kb('Shmem'),
+    /** Fichiers en mémoire (tmpfs : /tmp, /dev/shm ; mémoire partagée) ; null si la ligne manque (inconnu, pas 0) */
+    shmemKB: field(content, 'Shmem') === undefined ? null : kb('Shmem'),
   };
 }
 

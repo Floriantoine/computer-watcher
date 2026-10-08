@@ -32,7 +32,7 @@ export interface SystemInfo {
   /** /proc/pressure/memory "some avg10", null si PSI indisponible */
   psiSome10: number | null;
   /** Champ Shmem de /proc/meminfo : fichiers en mémoire (/tmp, /dev/shm) et mémoire partagée */
-  shmemKB: number;
+  shmemKB: number | null;
 }
 
 export interface ProcNode {
