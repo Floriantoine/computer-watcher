@@ -78,11 +78,10 @@ const REC_GROUPS: { title: string; icon: LucideIcon; help?: string; fields: RecF
   {
     title: 'Seuils',
     icon: Layers,
-    help: 'Groupes plus petits cumulés dans «\u00a0Petits groupes\u00a0».',
     fields: [
       { f: 'procMinMemMB', label: 'Seuil mémoire processus', short: 'Mémoire d’un processus', unit: 'Mo' },
       { f: 'procMinCpuPercent', label: 'Seuil CPU processus', short: 'CPU d’un processus', unit: '%', step: '0.5' },
-      { f: 'groupMinMemMB', label: 'Seuil mémoire groupe', short: 'Mémoire d’un groupe', unit: 'Mo' },
+      { f: 'groupMinMemMB', label: 'Seuil mémoire groupe', short: 'Mémoire d’un groupe', unit: 'Mo', help: 'Groupes plus petits cumulés dans «\u00a0Petits groupes\u00a0».' },
       { f: 'tmpfsAlertMB', label: 'Alerte fichiers en mémoire (/tmp, shm)', short: 'Alerte /tmp, shm', unit: 'Mo', help: 'Fichiers en mémoire (Shmem) au-delà de ce seuil.' },
     ],
   },
