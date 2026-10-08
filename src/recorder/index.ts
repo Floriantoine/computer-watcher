@@ -1,11 +1,13 @@
 // src/recorder/index.ts
 import { mkdirSync, statSync, watch } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { configDir } from '../core/config';
 import { dataDir } from '../core/paths';
 import { followEarlyoom } from './journal';
 import { appLauncher, appLaunchCommand, launchApp } from './launchApp';
 import { createNotifier, resolveBin } from './notify';
 import { createRecorder } from './recorder';
+import { serviceKill } from './ruleRunner';
 
 // Bouton « Ouvrir » des notifications : lanceur de l'app déduit de l'emplacement du service (voir launchApp.ts).
 const launcher = appLauncher({
@@ -27,6 +29,10 @@ const rec = createRecorder({
   configDir: configDir(),
   notifier: createNotifier(),
   launchApp: launcher ? (args) => launchApp(appLaunchCommand(launcher, args, systemdRun)) : undefined,
+  // Règles actives : seul endroit où un vrai signal peut partir (PROC_WATCH_NO_KILL=1 : aucun).
+  kill: serviceKill(),
+  // out/main/recorder.js → dossier de l'app (jamais visé par une règle)
+  appRoot: process.argv[1] ? resolve(dirname(process.argv[1]), '..', '..') : null,
 });
 rec.start();
 

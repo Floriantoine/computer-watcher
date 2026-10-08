@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { expect, test } from 'vitest';
 import { openHistoryDb } from './db';
 import {
-  detectGap, formatAppEvent, takeAppEvents, insertEvent, lastEventTs, lastSampleTs, parseAppEvents, parseEarlyoom, parseJournalLine, shouldRecordPressure,
+  detectGap, formatAppEvent, takeAppEvents, insertEvent, lastEventTs, lastSampleTs, parseAppEvents, parseEarlyoom, parseJournalLine, ruleEventsSince, shouldRecordPressure,
   shouldRecordTmpfs, type TmpfsAlertState,
 } from './events';
 
@@ -181,4 +181,16 @@ test('shouldRecordTmpfs : réarmée seulement après 5 min continues sous 90 % d
 test('shouldRecordTmpfs : Shmem inconnu (null) → rien, état inchangé', () => {
   const st = { lastTs: 5, armed: true, belowSince: 3 };
   expect(shouldRecordTmpfs(null, T, st, 10)).toEqual({ record: false, state: st });
+});
+
+test('ruleEventsSince : rule_action et rule_dry_run depuis `since`, détail sans ruleId ignoré', () => {
+  const { db } = openHistoryDb(join(mkdtempSync(join(tmpdir(), 'pw-ev-')), 'm.db'));
+  const ins = (ts: number, type: string, detail: string) => db.prepare('INSERT INTO events(ts, type, group_id, detail) VALUES (?, ?, NULL, ?)').run(ts, type, detail);
+  ins(5, 'rule_action', '{"ruleId":"r-a","result":"sigterm"}');
+  ins(10, 'rule_dry_run', '{"ruleId":"r-b","result":"dry_run"}');
+  ins(11, 'rule_action', '{"result":"sigterm"}');
+  ins(12, 'forecast', '{"ruleId":"r-x","result":"x"}');
+  ins(13, 'rule_action', 'pas du json');
+  expect(ruleEventsSince(db, 10)).toEqual([{ ts: 10, type: 'rule_dry_run', ruleId: 'r-b', result: 'dry_run' }]);
+  expect(ruleEventsSince(db, 0)).toHaveLength(2);
 });

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { DEFAULT_THRESHOLDS } from './earlyoom';
 import {
-  ALERT_EVERY_MS, MarginBuffer, alertCondition, alertText, floorKB, forecast, formatGo, marginKB, stepAlert, type AlertState, type MarginSample,
+  ALERT_EVERY_MS, MarginBuffer, alertCondition, alertText, conditionHeld, floorKB, forecast, formatGo, marginKB, stepAlert, type AlertState, type MarginSample,
 } from './forecast';
 
 const GO = 1024 * 1024;
@@ -212,5 +212,16 @@ describe('textes', () => {
   test('formatGo', () => {
     expect(formatGo(3_250_000)).toBe('3,1 Go');
     expect(formatGo(819_200)).toBe('800 Mo');
+  });
+});
+
+describe('conditionHeld (règles ⑥)', () => {
+  const f = { marginKB: 1024 * 1024, floorKB: 2 * 1024 * 1024, slopeKBPerMin: -1024 * 1024, etaMin: 1, decliningMinutes: 4, spanMin: 5 };
+  test('vraie seulement si la condition tient depuis ≥ 30 s, sans l’anti-répétition ni « Ignorer »', () => {
+    const s = { lastAlertAt: 0, snoozedUntil: 1e12, holdingSince: 1000 };
+    expect(conditionHeld(f, s, 1000 + 29_999)).toBe(false);
+    expect(conditionHeld(f, s, 1000 + 30_000)).toBe(true);
+    expect(conditionHeld(f, { ...s, holdingSince: null }, 1e6)).toBe(false);
+    expect(conditionHeld({ ...f, decliningMinutes: 1 }, s, 1e6)).toBe(false);
   });
 });

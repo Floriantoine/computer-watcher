@@ -24,6 +24,8 @@ export interface RuleTarget {
   memKB: number;
   targets: KillTarget[];
   names: string[];
+  /** RAM + swap de chaque processus visé (même ordre que `targets`). */
+  memKBs: number[];
   /** Processus de la cible retirés par la liste « jamais tuer » / protégés / autre uid. */
   excluded: number;
 }
@@ -118,6 +120,7 @@ export function evaluateRules(input: EvalInput, state: RuleState): RuleDecision[
       memKB: keptProcs.reduce((s, p) => s + mem(p), 0),
       targets: keptProcs.map((p) => ({ pid: p.pid, startTicks: p.startTicks })),
       names: keptProcs.map((p) => p.name),
+      memKBs: keptProcs.map(mem),
       excluded: refused.size,
     };
   };
@@ -255,4 +258,28 @@ function candidatesFor(rule: Rule, input: EvalInput, groups: readonly Group[], s
         .map((g) => ({ key: g.id, kind: 'group' as const, group: g, label: g.label, pids: flattenGroup(g).map((p) => p.pid), sizeKB: mem(g) }));
     }
   }
+}
+
+/** Événement de règle relu dans la base (voir ruleEventsSince). */
+export interface RuleEventRow { ts: number; type: 'rule_action' | 'rule_dry_run'; ruleId: string; result: string }
+
+/**
+ * État après un redémarrage du service, d'après les événements de la dernière heure : dernier déclenchement par règle,
+ * actions réelles et simulations (quotas), pauses de quota en cours. L'escalade SIGKILL n'est pas une action à part.
+ */
+export function restoreRuleState(rows: readonly RuleEventRow[], now: number): RuleState {
+  const st = emptyRuleState();
+  for (const r of rows) {
+    if (r.ts > now || r.ts <= now - HOUR_MS) continue;
+    if (r.result === 'quota') {
+      st.pausedUntil.set(r.ruleId, Math.max(st.pausedUntil.get(r.ruleId) ?? 0, r.ts + QUOTA_PAUSE_MS));
+      continue;
+    }
+    if (r.result === 'sigkill') continue;
+    (r.type === 'rule_action' ? st.actions : st.dryRuns).push(r.ts);
+    st.lastFire.set(r.ruleId, Math.max(st.lastFire.get(r.ruleId) ?? 0, r.ts));
+  }
+  st.actions.sort((a, b) => a - b);
+  st.dryRuns.sort((a, b) => a - b);
+  return st;
 }

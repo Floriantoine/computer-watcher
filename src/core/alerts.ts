@@ -143,9 +143,37 @@ export function alertMessage(e: AlertEvent): { title: string; body: string } {
       return { title, body: typeof d.body === 'string' ? d.body : '' };
     }
     case 'rule_action':
-      return { title: `Règle « ${str(d.rule)} » : ${str(d.target)}`, body: `Action ${str(d.result)}.` };
     case 'rule_dry_run':
-      return { title: `Simulation « ${str(d.rule)} » : ${str(d.target)}`, body: 'Aucun processus touché (simulation).' };
+      return ruleEventText(e.type, d);
+  }
+}
+
+/**
+ * Textes des événements de règles (⑥), partagés par le pop-up, la notification du bureau et la liste « Alertes » :
+ * « Règle « vitest > 4 Go » : vitest arrêté (4,3 Go) », « Simulation « … » : aurait arrêté vitest (4,3 Go) »,
+ * « Règle « … » : quota atteint ».
+ */
+export function ruleEventText(type: 'rule_action' | 'rule_dry_run', d: Record<string, unknown>): { title: string; body: string } {
+  const str = (v: unknown) => (typeof v === 'string' || typeof v === 'number' ? String(v) : '?');
+  const rule = `« ${str(d.rule)} »`;
+  const target = str(d.target);
+  const mem = Number.isFinite(Number(d.memKB)) && d.memKB !== undefined ? ` (${fmtKB(Number(d.memKB))})` : '';
+  const pause = 'Au plus 10 actions par heure : la règle est en pause pendant 1 h.';
+  if (type === 'rule_dry_run') {
+    if (d.result === 'quota') return { title: `Simulation ${rule} : quota atteint`, body: pause };
+    return { title: `Simulation ${rule} : aurait arrêté ${target}${mem}`, body: 'Aucun processus touché (simulation).' };
+  }
+  switch (d.result) {
+    case 'sigterm':
+      return { title: `Règle ${rule} : ${target} arrêté${mem}`, body: `SIGTERM envoyé ; SIGKILL 5 s plus tard s'il est toujours là.` };
+    case 'sigkill':
+      return { title: `Règle ${rule} : ${target} forcé (SIGKILL)`, body: 'Toujours vivant 5 s après SIGTERM.' };
+    case 'refused':
+      return { title: `Règle ${rule} : ${target} non arrêté`, body: 'Garde-fous : aucun signal envoyé.' };
+    case 'quota':
+      return { title: `Règle ${rule} : quota atteint`, body: pause };
+    default:
+      return { title: `Règle ${rule} : ${target}`, body: `Résultat : ${str(d.result)}.` };
   }
 }
 

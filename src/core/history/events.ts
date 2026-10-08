@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
 
-export type EventType = 'earlyoom_kill' | 'pressure' | 'gap' | 'app_kill' | 'leak' | 'tmpfs' | 'forecast';
+export type EventType = 'earlyoom_kill' | 'pressure' | 'gap' | 'app_kill' | 'leak' | 'tmpfs' | 'forecast' | 'rule_action' | 'rule_dry_run';
 
 const EARLYOOM = /sending (SIGTERM|SIGKILL) to process (\d+)(?: uid (\d+))? "([^"]*)"/;
 
@@ -165,4 +165,21 @@ export function lastSampleTs(db: DatabaseSync): number | null {
 
 export function lastEventTs(db: DatabaseSync, type: EventType): number | null {
   return (db.prepare('SELECT MAX(ts) AS ts FROM events WHERE type = ?').get(type) as { ts: number | null }).ts;
+}
+
+/** Événements de règles depuis `since` (ordre chronologique) ; détail sans `ruleId` ou `result` texte ignoré. */
+export function ruleEventsSince(db: DatabaseSync, since: number): { ts: number; type: 'rule_action' | 'rule_dry_run'; ruleId: string; result: string }[] {
+  const rows = db
+    .prepare("SELECT ts, type, detail FROM events WHERE type IN ('rule_action', 'rule_dry_run') AND ts >= ? ORDER BY ts, id")
+    .all(since) as { ts: number; type: 'rule_action' | 'rule_dry_run'; detail: string }[];
+  const out: { ts: number; type: 'rule_action' | 'rule_dry_run'; ruleId: string; result: string }[] = [];
+  for (const r of rows) {
+    try {
+      const d = JSON.parse(r.detail) as Record<string, unknown>;
+      if (typeof d.ruleId === 'string' && typeof d.result === 'string') out.push({ ts: r.ts, type: r.type, ruleId: d.ruleId, result: d.result });
+    } catch {
+      // détail illisible ignoré
+    }
+  }
+  return out;
 }

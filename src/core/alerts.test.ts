@@ -143,3 +143,17 @@ describe('desktopMessage (texte non fiable vers notify-send)', () => {
     expect(desktopText('a\u0000b\tc\u001bd\u007fe\u2028f\u202eg')).toBe('ab cde fg');
   });
 });
+
+describe('textes des règles (⑥)', () => {
+  const ev = (type: 'rule_action' | 'rule_dry_run', detail: Record<string, unknown>) => alertMessage({ id: 1, ts: 0, type, groupKey: null, groupLabel: null, detail });
+  const d = { rule: 'vitest > 4 Go', target: 'vitest', memKB: 4.3 * 1024 * 1024 };
+  test('action, escalade, refus, quota, simulation', () => {
+    expect(ev('rule_action', { ...d, result: 'sigterm' }).title).toBe('Règle « vitest > 4 Go » : vitest arrêté (4,3 Go)');
+    expect(ev('rule_action', { ...d, result: 'sigkill' }).title).toBe('Règle « vitest > 4 Go » : vitest forcé (SIGKILL)');
+    expect(ev('rule_action', { ...d, result: 'refused' }).title).toBe('Règle « vitest > 4 Go » : vitest non arrêté');
+    expect(ev('rule_action', { rule: 'vitest > 4 Go', result: 'quota' }).title).toBe('Règle « vitest > 4 Go » : quota atteint');
+    expect(ev('rule_action', { rule: 'vitest > 4 Go', result: 'quota' }).body).toMatch(/pause pendant 1 h/);
+    expect(ev('rule_dry_run', { ...d, result: 'dry_run' })).toEqual({ title: 'Simulation « vitest > 4 Go » : aurait arrêté vitest (4,3 Go)', body: 'Aucun processus touché (simulation).' });
+    expect(ev('rule_dry_run', { rule: 'x', result: 'quota' }).title).toBe('Simulation « x » : quota atteint');
+  });
+});

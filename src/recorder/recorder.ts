@@ -3,7 +3,10 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writ
 import { cpus, homedir } from 'node:os';
 import type { DatabaseSync } from 'node:sqlite';
 import { appFocused, desktopMessage, desktopAllowed, parseFocusState, type AlertEvent, type AlertsConfig } from '../core/alerts';
+import { classifyGroups, type InstanceDecision } from '../core/classify/classify';
+import { readPackageHints } from '../core/classify/packageJson';
 import { CpuTracker } from '../core/collector/cpuTracker';
+import { readListeningPorts } from '../core/collector/ports';
 import { readProcesses } from '../core/collector/readProcesses';
 import { readSystem } from '../core/collector/readSystem';
 import { loadConfig } from '../core/config';
@@ -12,19 +15,26 @@ import { claudeDirs } from '../core/grouping/claudeDirs';
 import { createProjectRootCache } from '../core/grouping/projectRootCache';
 import { DEV_TOOL } from '../core/grouping/rules';
 import { readEarlyoomThresholds } from '../core/forecast/earlyoom';
-import { MarginBuffer, SNOOZE_MS, alertText, forecast, stepAlert, type AlertState, type Forecast } from '../core/forecast/forecast';
+import { MarginBuffer, SNOOZE_MS, alertText, conditionHeld, forecast, stepAlert, type AlertState, type Forecast } from '../core/forecast/forecast';
 import { readSnooze, writeSnooze } from '../core/forecast/snooze';
 import { historyBackups, openHistoryDb } from '../core/history/db';
 import {
-  detectGap, insertEvent, lastEventTs, lastSampleTs, parseEarlyoom, parseJournalLine, shouldRecordPressure, shouldRecordTmpfs, takeAppEvents,
+  detectGap, insertEvent, lastEventTs, lastSampleTs, parseEarlyoom, parseJournalLine, ruleEventsSince, shouldRecordPressure, shouldRecordTmpfs, takeAppEvents,
   type TmpfsAlertState,
 } from '../core/history/events';
-import { queryCulprits } from '../core/history/queries';
+import { historyCovers, queryCulprits, queryInactive } from '../core/history/queries';
+import type { KillFn } from '../core/kill';
+import { compileProtection, type Protection } from '../core/protection';
+import { emptyRuleState, evaluateRules, needsClassification, restoreRuleState, type RuleState } from '../core/rules/engine';
+import type { RulesConfig } from '../core/rules/types';
+import type { Group } from '../core/types';
+import { flattenGroup } from '../core/snapshot';
 import { aggregateHour, aggregateMinute, clearAll, leakCandidates, purge } from '../core/history/maintenance';
 import { HistoryWriter } from '../core/history/writer';
 import { appEventsPath, clearRequestPath, dbPath, focusStatePath, forecastSnoozePath, statusPath } from '../core/paths';
 import type { RecorderConfig, RecorderStatus, SystemInfo } from '../core/types';
 import type { Notifier } from './notify';
+import { createRuleRunner } from './ruleRunner';
 
 export interface RecorderDeps {
   dataDir: string;
@@ -41,6 +51,19 @@ export interface RecorderDeps {
   focusFile?: string;
   /** Seuils d'earlyoom pour la prévision (défaut : /etc/default/earlyoom). */
   earlyoomFile?: string;
+  /**
+   * Signal des règles actives. Absent : aucun signal possible (chaque envoi échoue en NOKILL). Le service réel passe
+   * serviceKill() ; les tests un espion.
+   */
+  kill?: KillFn;
+  /** Pid du service (défaut : process.pid) : lui et ses ancêtres ne sont jamais visés. */
+  selfPid?: number;
+  /** Uid courant (défaut : process.getuid()). */
+  currentUid?: number;
+  /** Dossier de l'app proc-watch, jamais visée (défaut : null). */
+  appRoot?: string | null;
+  /** Minuterie de l'escalade SIGTERM → SIGKILL (défaut : setTimeout). */
+  ruleTimers?: { setTimeout(fn: () => void, ms: number): unknown };
 }
 
 export interface Recorder {
@@ -61,6 +84,8 @@ export interface Recorder {
   notifyAlert(e: AlertEvent): void;
   /** Dernière prévision d'épuisement de la mémoire (null : pas assez d'échantillons). */
   forecast(): Forecast | null;
+  /** Compteurs des règles (tests, mesures) : classements faits pour les règles, évaluations. */
+  stats(): { classifyRuns: number; ruleEvaluations: number };
 }
 
 const M = 60_000;
@@ -76,6 +101,10 @@ const RETRY_FIRST_MS = 10_000;
 const RETRY_MAX_MS = 5 * M;
 /** Sans prévision plus de 6 min après le démarrage : « indisponible » (moins de 5 échantillons en 5 min). */
 const FORECAST_WARMUP_MS = 6 * M;
+/** Règles : ports en écoute relus au plus toutes les 60 s (classement des instances). */
+const RULE_PORTS_EVERY_MS = 60_000;
+/** Règles : cache des décisions de classement vidé toutes les 60 s (durée du cache de package.json). */
+const RULE_DECISIONS_MAX_AGE_MS = 60_000;
 
 export function createRecorder(deps: RecorderDeps): Recorder {
   const now = deps.now ?? Date.now;
@@ -88,9 +117,23 @@ export function createRecorder(deps: RecorderDeps): Recorder {
   const wantCwd = (name: string) => DEV_TOOL.test(name);
   // Outils Claude détachés : rangés dans Claude (seuls les outils de dev ont leur dossier de travail lu ici).
   const claudeConfigDirs = claudeDirs();
-  const initial = loadConfig(deps.configDir).config;
+  const loadedInitial = loadConfig(deps.configDir);
+  const initial = loadedInitial.config;
   let cfg: RecorderConfig = initial.recorder;
   let alertsCfg: AlertsConfig = initial.alerts;
+  let rulesCfg: RulesConfig = initial.rules;
+  let overrides = initial.classify.overrides;
+  let detectPorts = initial.classify.detectPorts;
+  let protection: Protection = compileProtection(initial.protected);
+  /** Journalisées une fois par changement (la config est relue à chaque écriture du fichier). */
+  let lastIssues = '';
+  const logRuleIssues = (issues: { index: number; name: string | null; error: string }[] | undefined) => {
+    const key = JSON.stringify(issues ?? []);
+    if (key === lastIssues) return;
+    lastIssues = key;
+    for (const i of issues ?? []) log(`règles: règle ${i.name ? `« ${i.name} »` : `n° ${i.index + 1}`} ignorée : ${i.error}`);
+  };
+  logRuleIssues(loadedInitial.ruleIssues);
   /** Dernière notification du bureau par type (anti-spam). */
   const lastDesktop = new Map<string, number>();
   let db: DatabaseSync | null = null;
@@ -101,9 +144,9 @@ export function createRecorder(deps: RecorderDeps): Recorder {
   let purges = 0;
   const st: RecorderStatus = { pid: process.pid, startedAt: now(), lastSampleAt: null, lastError: null, earlyoomSource: 'unavailable', dbSizeBytes: 0, warning: null };
 
-  type Job = 'tick' | 'minute' | 'earlyoom';
-  const jobErrors: Record<Job, string | null> = { tick: null, minute: null, earlyoom: null };
-  const errorAt: Record<Job, number> = { tick: 0, minute: 0, earlyoom: 0 };
+  type Job = 'tick' | 'minute' | 'earlyoom' | 'rules';
+  const jobErrors: Record<Job, string | null> = { tick: null, minute: null, earlyoom: null, rules: null };
+  const errorAt: Record<Job, number> = { tick: 0, minute: 0, earlyoom: 0, rules: 0 };
   let errSeq = 0;
   st.jobErrors = jobErrors;
   let lastPressureTs: number | null = null;
@@ -134,7 +177,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
   /** lastError = erreur non nulle la plus récente ; chaque travail n'efface que la sienne. */
   const refreshLastError = () => {
     let best: Job | null = null;
-    for (const j of ['tick', 'minute', 'earlyoom'] as Job[]) if (jobErrors[j] && (!best || errorAt[j] > errorAt[best])) best = j;
+    for (const j of ['tick', 'minute', 'earlyoom', 'rules'] as Job[]) if (jobErrors[j] && (!best || errorAt[j] > errorAt[best])) best = j;
     st.lastError = best ? jobErrors[best] : null;
   };
   const ok = (job: Job) => {
@@ -157,7 +200,8 @@ export function createRecorder(deps: RecorderDeps): Recorder {
     }
   };
 
-  const notifyAlert = (e: AlertEvent): void => {
+  /** `always` : sans l'anti-spam par type (une notification à chaque action d'une règle). */
+  const notifyAlert = (e: AlertEvent, always = false): void => {
     const notifier = deps.notifier;
     if (!notifier) return;
     try {
@@ -166,7 +210,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       // ligne de journal rattrapée en retard : l'alerte reste dans l'app (pop-up), pas sur le bureau
       if (t - e.ts > MAX_DESKTOP_AGE_MS) return;
       if (appFocused(readFocus(), t)) return; // l'app au premier plan montre déjà le pop-up
-      if (!desktopAllowed(lastDesktop, e.type, t, alertsCfg.desktopMinIntervalMin)) return;
+      if (!always && !desktopAllowed(lastDesktop, e.type, t, alertsCfg.desktopMinIntervalMin)) return;
       lastDesktop.set(e.type, t);
       const launch = deps.launchApp;
       const { title, body } = desktopMessage(e);
@@ -257,11 +301,76 @@ export function createRecorder(deps: RecorderDeps): Recorder {
     }
   };
 
+  // Règles automatiques (⑥) : état (quotas, dépassements), classement à la demande, exécution.
+  const selfPid = deps.selfPid ?? process.pid;
+  const currentUid = deps.currentUid ?? process.getuid?.() ?? -1;
+  const appRoot = deps.appRoot ?? null;
+  let ruleState: RuleState = emptyRuleState();
+  const counters = { classifyRuns: 0, ruleEvaluations: 0 };
+  const decisions = new Map<string, InstanceDecision>();
+  let decisionsAt = 0;
+  let rulePorts = new Map<number, number[]>();
+  let rulePortsAt = 0;
+  const noKill: KillFn = (pid, signal) => {
+    log(`règles: aucun kill injecté, ${signal} non envoyé au processus ${pid}`);
+    throw Object.assign(new Error('kill absent'), { code: 'NOKILL' });
+  };
+  let runner: ReturnType<typeof createRuleRunner> | null = null;
+  const ruleRunner = (d: DatabaseSync) =>
+    (runner ??= createRuleRunner({
+      db: d, kill: deps.kill ?? noKill, readProcs: () => readProcesses(procRoot, { cmdlineCache }), selfPid, currentUid, appRoot,
+      isProtected: (name) => protection.isProtected(name),
+      notify: (e) => notifyAlert(e, e.type === 'rule_action'),
+      setTimeout: (fn, ms) => (deps.ruleTimers ?? { setTimeout: (f: () => void, t: number) => setTimeout(f, t) }).setTimeout(fn, ms),
+      now, log,
+    }));
+
+  const classifyForRules = (groups: Group[], ts: number) => {
+    counters.classifyRuns++;
+    if (!(ts - decisionsAt >= 0 && ts - decisionsAt < RULE_DECISIONS_MAX_AGE_MS)) {
+      decisions.clear();
+      decisionsAt = ts;
+    }
+    if (!detectPorts) rulePorts = new Map();
+    else if (!(ts - rulePortsAt >= 0 && ts - rulePortsAt < RULE_PORTS_EVERY_MS)) {
+      rulePortsAt = ts;
+      const pids = groups.filter((g) => g.kind === 'project' || g.kind === 'deleted').flatMap((g) => flattenGroup(g).map((p) => p.pid));
+      rulePorts = pids.length ? readListeningPorts(pids, procRoot) : new Map();
+      decisions.clear();
+    }
+    return classifyGroups(groups, { overrides, ports: rulePorts, pkg: (root) => readPackageHints(root), isProtected: protection.isProtected, memo: decisions });
+  };
+
+  /** Règles après l'écriture du tick, dans leur propre try : une erreur ici ne casse jamais l'échantillonnage. */
+  const runRules = (d: DatabaseSync, ts: number, groups: Group[]) => {
+    // interrupteur général éteint, ou aucune règle activée : rien (pas même de classement ni de simulation)
+    if (!rulesCfg.enabled || !rulesCfg.list.some((r) => r.enabled)) return;
+    try {
+      counters.ruleEvaluations++;
+      const classification = needsClassification(rulesCfg.list, rulesCfg.enabled) ? classifyForRules(groups, ts) : null;
+      const wantsForecast = rulesCfg.list.some((r) => r.enabled && r.condition.kind === 'forecast');
+      const fc = wantsForecast && lastForecast ? { forecast: lastForecast, held: conditionHeld(lastForecast, forecastState, ts) } : null;
+      const opts = { now: ts, detailHours: cfg.detailHours, intervalSec: cfg.intervalSec };
+      const growthKB = fc?.held ? new Map(queryCulprits(d, ts, opts, 5, 50).map((c) => [c.key, c.deltaKB])) : new Map<string, number>();
+      const out = evaluateRules({
+        now: ts, enabled: rulesCfg.enabled, rules: rulesCfg.list, groups, classification, forecast: fc, growthKB,
+        // sans historique couvrant toute la période (service récent, trou d'enregistrement) : null, rien n'est « inactif »
+        inactive: (targets, since) => (historyCovers(d, since, ts) ? queryInactive(d, targets, since, opts) : null),
+        isProtected: protection.isProtected, appRoot, currentUid, selfPid,
+      }, ruleState);
+      ruleRunner(d).run(out);
+      if (jobErrors.rules) ok('rules');
+    } catch (e) {
+      fail('rules', 'règles', e);
+    }
+  };
+
   return {
     config: () => cfg,
-    notifyAlert,
+    notifyAlert: (e) => notifyAlert(e),
     forecast: () => lastForecast,
     status: () => ({ ...st }),
+    stats: () => ({ ...counters }),
 
     start() {
       mkdirSync(deps.dataDir, { recursive: true, mode: 0o700 });
@@ -296,6 +405,12 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       tmpfs = { lastTs: lastEventTs(db, 'tmpfs'), armed: false, belowSince: null };
       // pas de nouvelle alerte de prévision juste après un redémarrage du service
       forecastState = { lastAlertAt: lastEventTs(db, 'forecast'), snoozedUntil: readSnooze(snoozeFile(), now()), holdingSince: null };
+      // quotas et pauses des règles : survivent à un redémarrage du service
+      try {
+        ruleState = restoreRuleState(ruleEventsSince(db, now() - H), now());
+      } catch (e) {
+        log(`règles: état non restauré : ${(e as Error).message}`);
+      }
       writeStatus();
     },
 
@@ -307,8 +422,8 @@ export function createRecorder(deps: RecorderDeps): Recorder {
         const system = readSystem(procRoot);
         const groups = buildGroups(procs, {
           home: homedir(),
-          currentUid: process.getuid?.() ?? -1,
-          isProtected: () => false,
+          currentUid,
+          isProtected: protection.isProtected,
           othersThreshold: { memMB: 0, cpuPercent: 0 },
           projectRootOf,
           claudeDirs: claudeConfigDirs,
@@ -329,6 +444,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
         }
         tmpfs = r.state;
         runForecast(db, ts, system);
+        runRules(db, ts, groups);
         st.lastSampleAt = ts;
         ok('tick');
         writeStatus();
@@ -417,9 +533,16 @@ export function createRecorder(deps: RecorderDeps): Recorder {
     },
 
     reloadConfig() {
-      const c = loadConfig(deps.configDir).config;
+      const loaded = loadConfig(deps.configDir);
+      const c = loaded.config;
       cfg = c.recorder;
       alertsCfg = c.alerts;
+      if (JSON.stringify(c.classify.overrides) !== JSON.stringify(overrides) || c.classify.detectPorts !== detectPorts) decisions.clear();
+      overrides = c.classify.overrides;
+      detectPorts = c.classify.detectPorts;
+      protection = compileProtection(c.protected);
+      logRuleIssues(loaded.ruleIssues);
+      rulesCfg = c.rules;
     },
 
     setEarlyoomSource(s) {
@@ -447,6 +570,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       db?.close();
       db = null;
       writer = null;
+      runner = null;
     },
   };
 }

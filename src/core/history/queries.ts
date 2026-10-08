@@ -450,3 +450,13 @@ export function queryInactive(db: DatabaseSync, targets: { pid: number; startTic
   }
   return active;
 }
+
+/**
+ * L'historique couvre-t-il [since, now] ? Premier agrégat par minute au plus 5 min après `since`, et aucun trou
+ * d'enregistrement (événement `gap`) depuis. Sinon une règle « inactive depuis T » ne conclut rien (null côté moteur).
+ */
+export function historyCovers(db: DatabaseSync, since: number, now: number): boolean {
+  const first = (db.prepare('SELECT MIN(ts) AS ts FROM system_minute').get() as { ts: number | null }).ts;
+  if (first === null || first > since + 5 * M) return false;
+  return db.prepare("SELECT 1 FROM events WHERE type = 'gap' AND ts >= ? AND ts <= ? LIMIT 1").get(since, now + M) === undefined;
+}

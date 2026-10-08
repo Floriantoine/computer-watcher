@@ -7,7 +7,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { openHistoryDb } from './db';
 import { createV3Db } from './testDb';
 import { aggregateMinute } from './maintenance';
-import { bucketMs, pickSource, queryInactive, queryCulprits, queryEvents, queryGroup, queryGroups, PROC_TREE_MAX, queryProcs, queryProcsAt, queryProcTree, querySystem, queryTop, rangeFromPreset } from './queries';
+import { bucketMs, historyCovers, pickSource, queryInactive, queryCulprits, queryEvents, queryGroup, queryGroups, PROC_TREE_MAX, queryProcs, queryProcsAt, queryProcTree, querySystem, queryTop, rangeFromPreset } from './queries';
 
 const H = 3600_000;
 const M = 60_000;
@@ -591,4 +591,16 @@ describe('querySystem : Shmem et somme des groupes (découpage du Reste)', () =>
       expect(s.shmemKB.every((v) => v === null)).toBe(true);
     }
   });
+});
+
+test('historyCovers : premier agrégat ≤ since + 5 min et aucun trou depuis', () => {
+  const { db } = seeded(); // minutes 0 à 9
+  expect(historyCovers(db, 0, 10 * M)).toBe(true);
+  expect(historyCovers(db, -5 * M, 10 * M)).toBe(true);
+  expect(historyCovers(db, -6 * M, 10 * M)).toBe(false); // service plus récent que la période
+  db.prepare("INSERT INTO events(ts,type,group_id,detail) VALUES (?, 'gap', NULL, '{}')").run(8 * M);
+  expect(historyCovers(db, 0, 10 * M)).toBe(false);
+  expect(historyCovers(db, 9 * M, 10 * M)).toBe(true); // trou avant la période
+  const empty = openHistoryDb(join(mkdtempSync(join(tmpdir(), 'pw-q-')), 'e.db')).db;
+  expect(historyCovers(empty, 0, M)).toBe(false);
 });

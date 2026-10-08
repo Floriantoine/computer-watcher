@@ -130,6 +130,14 @@ export function alertCondition(f: Forecast | null): boolean {
 export interface AlertState { lastAlertAt: number | null; snoozedUntil: number | null; holdingSince: number | null; missed?: boolean }
 
 /**
+ * Décision de stepAlert sans l'anti-répétition ni « Ignorer » : condition (a)(b)(c) vraie et tenue depuis au moins
+ * HOLD_MS (d). Sert aux règles automatiques (⑥, condition « épuisement prévu »), qui ne recalculent rien.
+ */
+export function conditionHeld(f: Forecast | null, s: AlertState, now: number): boolean {
+  return alertCondition(f) && s.holdingSince !== null && s.holdingSince <= now && now - s.holdingSince >= HOLD_MS;
+}
+
+/**
  * Une évaluation : (d) condition tenue depuis au moins HOLD_MS, puis anti-répétition (30 min) et « Ignorer 30 min ».
  * `state` est le nouvel état ; en cas d'alerte, `lastAlertAt` y vaut `now` (à ne retenir qu'une fois l'alerte enregistrée).
  */
