@@ -4,7 +4,7 @@ import { baseName, programIndex, splitArgs } from '../classify/argv';
 import { isMcpServer } from '../classify/rules';
 import { isUnderAny } from './claudeDirs';
 import { projectLabel } from './projectRoot';
-import { APP_NAMES, CLAUDE_NAME, DEV_TOOL, appLabel } from './rules';
+import { APP_NAMES, CLAUDE_NAME, DEV_TOOL, SHELL_NAMES, appLabel, isTestBrowser } from './rules';
 
 export interface GroupingOptions {
   home: string;
@@ -63,10 +63,10 @@ export function buildGroups(procs: ProcInfo[], opts: GroupingOptions): Group[] {
 
   const dirs = opts.claudeDirs ?? [];
   const homeDir = trimSlash(opts.home);
-  /** Dossier de projet réel (ni `/`, ni le dossier personnel, ni la config de Claude) ; dossier supprimé compris. */
+  /** Dossier de projet réel : ni `/`, ni le dossier personnel, ni la config de Claude, ni un dossier supprimé. */
   const inRealProject = (p: ProcInfo): boolean => {
-    if (p.cwd === null || isUnderAny(p.cwd, dirs)) return false;
-    const root = p.cwdDeleted ? p.cwd : opts.projectRootOf(p.cwd);
+    if (p.cwd === null || p.cwdDeleted || isUnderAny(p.cwd, dirs)) return false;
+    const root = opts.projectRootOf(p.cwd);
     if (root === null) return false;
     const r = trimSlash(root);
     return r !== '/' && r !== homeDir && !isUnderAny(r, dirs);
@@ -101,42 +101,52 @@ export function buildGroups(procs: ProcInfo[], opts: GroupingOptions): Group[] {
     return key;
   };
 
-  // 1. Sessions Claude : chaque claude de premier niveau et ses descendants, sauf les outils de dev lancés dans un vrai
-  // projet (jest, vite, npm run dev…) : eux et tout leur sous-arbre sortent de la carte Claude vers leur projet (1 bis),
-  // marqués « lancés par Claude ». Un serveur MCP ou un outil de
-  // ~/.claude garde tout son sous-arbre dans Claude.
+  // 1. Sessions Claude : chaque claude de premier niveau et ses descendants. Exception : un outil de dev lancé dans un
+  // vrai projet (jest, vite, npm run dev…) sous un shell de l'outil Bash sort de la carte Claude avec tout son
+  // sous-arbre (1 bis), marqué « lancé par Claude ». Restent dans Claude avec tout leur sous-arbre : les enfants directs
+  // de claude autres que les shells (c'est ainsi que Claude lance ses serveurs MCP), les serveurs MCP reconnus à leur nom
+  // et les programmes de ~/.claude.
   for (const p of procs) {
     if (p.name !== CLAUDE_NAME || hasAncestor(p, (a) => a.name === CLAUDE_NAME)) continue;
     meta.set('claude', { kind: 'claude', label: 'Claude' });
     const stack: { p: ProcInfo; tool: boolean }[] = [{ p, tool: false }];
     while (stack.length) {
       const { p: c, tool } = stack.pop()!;
-      if (keyOf.has(c.pid) || claudeLaunched.has(c.pid)) continue;
-      const inTool = tool || isClaudeTool(c);
-      if (c !== p && !inTool && DEV_TOOL.test(c.name) && inRealProject(c)) {
-        movedRoots.push(c);
-        continue;
+      if (keyOf.has(c.pid)) continue;
+      let inTool = tool;
+      if (c !== p && !inTool) {
+        const directChild = byPid.get(c.ppid)?.name === CLAUDE_NAME;
+        inTool = (directChild && !SHELL_NAMES.has(c.name)) || isClaudeTool(c);
+        if (!inTool && DEV_TOOL.test(c.name) && inRealProject(c)) {
+          movedRoots.push(c);
+          continue;
+        }
       }
       keyOf.set(c.pid, 'claude');
       for (const k of children.get(c.pid) ?? []) stack.push({ p: k, tool: inTool });
     }
   }
 
-
-  // 1 bis. Chaque outil sorti de Claude emmène tout son sous-arbre dans son projet, tel qu'il était sous Claude
-  // (navigateur de Playwright, `sh -c` intermédiaires, workers) : avant les applis, pour qu'un chromium de test ne
-  // rejoigne pas la carte Chrome de l'utilisateur (ni son kill). Instances et lanceurs s'y calculent comme d'habitude.
+  // 1 bis. Chaque outil sorti de Claude emmène son sous-arbre dans son projet, tel qu'il était sous Claude (`sh -c`
+  // intermédiaires, workers, navigateurs de test) : avant les applis, pour qu'un chromium de test ne rejoigne pas la
+  // carte Chrome de l'utilisateur (ni son kill). Deux arrêts : un claude imbriqué (la session et tout son sous-arbre
+  // restent dans Claude) et une vraie appli (navigateur ouvert par `vite --open` : l'étape 2 la range dans sa carte).
   for (const root of movedRoots) {
     const key = devToolKey(root);
-    const before = keyOf.size;
-    assignTree(root, key, () => false);
-    if (keyOf.size === before) continue;
-    const stack = [root];
+    const stack: { p: ProcInfo; inBrowser: boolean }[] = [{ p: root, inBrowser: false }];
     while (stack.length) {
-      const c = stack.pop()!;
-      if (keyOf.get(c.pid) !== key || claudeLaunched.has(c.pid)) continue;
+      const { p: c, inBrowser } = stack.pop()!;
+      if (keyOf.has(c.pid)) continue;
+      if (c.name === CLAUDE_NAME) {
+        meta.set('claude', { kind: 'claude', label: 'Claude' });
+        assignTree(c, 'claude', () => false);
+        continue;
+      }
+      const app = APP_NAMES.has(c.name);
+      if (app && !inBrowser && !isTestBrowser(c.cmdline)) continue;
+      keyOf.set(c.pid, key);
       claudeLaunched.add(c.pid);
-      stack.push(...(children.get(c.pid) ?? []));
+      for (const k of children.get(c.pid) ?? []) stack.push({ p: k, inBrowser: inBrowser || app });
     }
   }
 

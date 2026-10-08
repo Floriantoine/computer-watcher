@@ -96,6 +96,32 @@ describe('classifyGroups', () => {
     expect(project.launcherPids.sort()).toEqual([9103, 9104]);
   });
 
+  it('processus qui change de groupe entre deux relevés : clé d’instance stable dans son nouveau groupe', () => {
+    const P = '/home/u/acme/backend';
+    const o = {
+      home: '/home/u', currentUid: 1000, isProtected: () => false, othersThreshold: { memMB: 0, cpuPercent: 0 },
+      projectRootOf: (cwd: string) => (cwd.startsWith(P) ? P : null), claudeDirs: ['/home/u/.claude'],
+    };
+    const claude = proc('claude', 'claude', { pid: 9201, cwd: P });
+    const zsh = proc('zsh', '/usr/bin/zsh -c source /home/u/.claude/shell-snapshots/s.sh && eval npm run dev', { pid: 9202, ppid: 9201, cwd: P });
+    const npm = proc('npm run dev', 'npm run dev', { pid: 9203, ppid: 9202, cwd: P });
+    const vite = proc('node', `node ${P}/node_modules/.bin/vite`, { pid: 9204, ppid: 9203, cwd: P });
+    const keyOf = (procs: ReturnType<typeof proc>[], memo: NonNullable<ClassifyContext['memo']>) => {
+      const cls = classifyGroups(buildGroups(procs, o), ctx({ memo }));
+      return cls.get(`project:${P}`)!.instances.find((i) => i.rootPid === 9204)!;
+    };
+    const memo: NonNullable<ClassifyContext['memo']> = new Map();
+    // 1. sous la session Claude  2. relevé suivant identique  3. session fermée : npm rattaché à systemd (step 3)
+    const k1 = keyOf([claude, zsh, npm, vite], memo);
+    const k2 = keyOf([{ ...claude }, { ...zsh }, { ...npm }, { ...vite }], memo);
+    const k3 = keyOf([{ ...npm, ppid: 1 }, { ...vite }], memo);
+    expect(k1.key).toBe(`project:${P}#9204:${vite.startTicks}`);
+    expect(k2.key).toBe(k1.key);
+    expect(k3.key).toBe(k1.key);
+    expect([k1.launchedBy, k2.launchedBy, k3.launchedBy]).toEqual(['claude', 'claude', undefined]);
+    expect(k3.category).toBe('front');
+  });
+
   it('serveur de dev lancé à la main : instance non marquée', () => {
     const { tree } = npmVite();
     const inst = classifyGroups([group('project:/home/u/acme', 'project', [tree])], ctx()).get('project:/home/u/acme')!.instances[0]!;
@@ -106,7 +132,7 @@ describe('classifyGroups', () => {
   it('cache des décisions : même résultat, réutilisé tant que l\'appelant ne le vide pas, entrées disparues retirées', () => {
     const { tree } = npmVite(42);
     const g = group('project:/home/u/acme', 'project', [tree]);
-    const memo = new Map();
+    const memo: NonNullable<ClassifyContext['memo']> = new Map();
     const plain = classifyGroups([g], ctx()).get(g.id)!;
     expect(classifyGroups([g], ctx({ memo })).get(g.id)).toEqual(plain);
     expect(memo.size).toBe(1);
@@ -124,7 +150,7 @@ describe('classifyGroups', () => {
     const srv = proc('node', 'node tools/serve.mjs');
     const helper = proc('node', 'node tools/helper.js');
     const esb = proc('esbuild', '/x/node_modules/@esbuild/linux-x64/bin/esbuild src/main.ts --bundle --watch');
-    const memo = new Map();
+    const memo: NonNullable<ClassifyContext['memo']> = new Map();
     const before = classifyGroups([group('project:/x', 'project', [node(srv, node(helper))])], ctx({ memo })).get('project:/x')!;
     expect(before.instances[0]!.category).not.toBe('build');
     const after = classifyGroups([group('project:/x', 'project', [node(srv, node(esb))])], ctx({ memo })).get('project:/x')!;

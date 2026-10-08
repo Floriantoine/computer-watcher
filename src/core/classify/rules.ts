@@ -37,17 +37,50 @@ const viteSub = (c: Ctx): string | undefined => {
 };
 const MCP_NAME = /^(.+-mcp|mcp-server-.+)$/;
 const MCP_CLI = /(^|\/)@[^/]+\/mcp\/cli(\.[cm]?js)?$/;
-/** Paquet MCP passé à un lanceur (`npx -y @upstash/context7-mcp@latest`, `uvx mcp-server-fetch`), version comprise. */
-const MCP_PACKAGE = /^(@modelcontextprotocol\/.+|(@[^/]+\/)?(.+-mcp|mcp-server-.+|mcp)(@[^/]*)?)$/;
+/** Paquet MCP lancé par npx, pnpm dlx, bunx, uvx, uv run (version ôtée) : `@upstash/context7-mcp`, `@playwright/mcp`, `mcp-server-fetch`. */
+const MCP_PACKAGE = /^(@modelcontextprotocol\/.+|@[^/]+\/mcp|(@[^/]+\/)?(.+-mcp|mcp-server(-.+)?|.+-mcp-server))$/;
+const SHELLS = new Set(['sh', 'bash', 'dash', 'zsh', 'fish', 'ksh']);
+/** Options de lanceur qui prennent une valeur (sautée) ; -p/--package/--from : la valeur est le paquet lancé. */
+const LAUNCHER_VALUE_OPTS = new Set(['--with', '--python', '--index', '--index-url', '--registry', '--cache', '--directory', '--project', '-w', '--workspace']);
+const LAUNCHER_PACKAGE_OPTS = new Set(['-p', '--package', '--from']);
+
+/** Paquets lancés par un lanceur (`npx`, `npm exec`, `pnpm dlx`, `bunx`, `uvx`, `uv run`, `uv tool run|uvx`) ; null si ce n'en est pas un. */
+function launchedPackages(c: Ctx): string[] | null {
+  let rest = c.rawRest;
+  if (['npx', 'pnpx', 'bunx', 'uvx'].includes(c.cmd)) { /* paquet juste après */ }
+  else if (['npm', 'pnpm', 'yarn', 'bun'].includes(c.cmd) && ['exec', 'dlx', 'x'].includes(rest[0] ?? '')) rest = rest.slice(1);
+  else if (c.cmd === 'uv' && rest[0] === 'run') rest = rest.slice(1);
+  else if (c.cmd === 'uv' && rest[0] === 'tool' && ['run', 'uvx'].includes(rest[1] ?? '')) rest = rest.slice(2);
+  else return null;
+  const out: string[] = [];
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
+    if (a === '--') continue;
+    if (a.startsWith('-')) {
+      const [opt, val] = a.split('=', 2);
+      if (LAUNCHER_PACKAGE_OPTS.has(opt)) { const v = val ?? rest[++i]; if (v) out.push(v); }
+      else if (LAUNCHER_VALUE_OPTS.has(opt) && val === undefined) i++;
+      continue;
+    }
+    out.push(a);
+    break;
+  }
+  return out;
+}
+
+const stripVersion = (pkg: string): string => pkg.replace(/(.)@[^/@]*$/, '$1');
 
 /**
- * Serveur MCP : programme significatif `*-mcp`, `mcp-server-*` ou `@x/mcp/cli`, ou paquet MCP en argument d'un lanceur
- * (`npm exec @upstash/context7-mcp`, `uvx mcp-server-fetch`, `npx @modelcontextprotocol/server-…`). Mêmes motifs que la règle « ai » du classement.
+ * Serveur MCP : programme significatif `*-mcp`, `mcp-server-*` ou `@x/mcp/cli`, ou paquet MCP lancé par un lanceur
+ * (`npm exec @upstash/context7-mcp`, `uvx mcp-server-fetch`, `npx @modelcontextprotocol/server-…`) : seul le paquet lancé
+ * compte, pas ses arguments. Jamais la ligne de commande d'un shell (celles de l'outil Bash contiennent n'importe quoi).
  */
 export function isMcpServer(name: string, cmdline: string): boolean {
   const c = ctxOf(name, cmdline);
+  if (SHELLS.has(c.cmd)) return false;
   if (MCP_NAME.test(c.cmd) || MCP_CLI.test(c.rawCmd)) return true;
-  return c.raw.some((a) => !a.startsWith('-') && MCP_PACKAGE.test(a.includes('/') && !a.startsWith('@') ? baseName(a) : a));
+  const pkgs = launchedPackages(c);
+  return pkgs !== null && pkgs.some((p) => MCP_PACKAGE.test(stripVersion(p)));
 }
 
 const BROWSER = /^(chrome|chromium|chromium-browser|google-chrome|firefox|brave|msedge)([-_].*)?$/;
