@@ -14,7 +14,8 @@ import type { Notifier, NotifyRequest } from './notify';
 import { createRecorder } from './recorder';
 
 const GB = 1024 * 1024;
-const vitestRule = (over: Partial<Rule> = {}): Rule => ({ ...RULE_TEMPLATES[0]!, id: 'r-v', createdAt: 0, enabled: true, ...over });
+// simulatedSince ancien : une règle Active est effective (sinon le service la traite en Simulation, voir recorder.rules.safety)
+const vitestRule = (over: Partial<Rule> = {}): Rule => ({ ...RULE_TEMPLATES[0]!, id: 'r-v', createdAt: 0, enabled: true, simulatedSince: 0, ...over });
 
 function setup(o: { rules?: RulesConfig; protectedNames?: string[] } = {}) {
   const base = mkdtempSync(join(tmpdir(), 'pw-rules-'));
@@ -33,9 +34,13 @@ function setup(o: { rules?: RulesConfig; protectedNames?: string[] } = {}) {
   const cfgDir = join(base, 'cfg');
   mkdirSync(cfgDir, { recursive: true });
   const writeCfg = (rules: RulesConfig) =>
-    writeFileSync(join(cfgDir, 'config.json'), JSON.stringify({ ...DEFAULT_CONFIG, protected: o.protectedNames ?? DEFAULT_CONFIG.protected, classify: { detectPorts: false, overrides: {} }, rules }));
+    writeFileSync(join(cfgDir, 'config.json'), JSON.stringify({
+      ...DEFAULT_CONFIG, recorder: { ...DEFAULT_CONFIG.recorder, intervalSec: 30 }, protected: o.protectedNames ?? DEFAULT_CONFIG.protected,
+      classify: { detectPorts: false, overrides: {} }, rules,
+    }));
   writeCfg(o.rules ?? { enabled: true, list: [vitestRule()] });
   let t = 10_000_000;
+  let mono = 0;
   const kill = vi.fn<KillFn>();
   const notify = vi.fn(async (_r: NotifyRequest) => null);
   const notifier: Notifier = { notify, state: () => 'actions' };
@@ -43,7 +48,7 @@ function setup(o: { rules?: RulesConfig; protectedNames?: string[] } = {}) {
   const logs: string[] = [];
   const rec = createRecorder({
     dataDir: join(base, 'data'), configDir: cfgDir, procRoot, now: () => t, cpuCount: 4, log: (m) => logs.push(m), notifier,
-    focusFile: join(base, 'data', 'app-focus.json'), kill, selfPid: 900, currentUid: 1000, appRoot: null,
+    focusFile: join(base, 'data', 'app-focus.json'), kill, selfPid: 900, currentUid: 1000, appRoot: null, monoNow: () => mono,
     ruleTimers: { setTimeout: (fn) => timers.push(fn) },
   });
   const db = () => new DatabaseSync(join(base, 'data', 'metrics.db'), { readOnly: true });
@@ -53,6 +58,7 @@ function setup(o: { rules?: RulesConfig; protectedNames?: string[] } = {}) {
   const run = (ms: number) => {
     for (let s = 0; s < ms; s += 30_000) {
       t += 30_000;
+      mono += 30_000;
       rec.tick();
     }
   };
@@ -137,7 +143,7 @@ test('règle invalide écrite à la main → ignorée seule, journalisée ; la v
   const bad = { ...vitestRule({ id: 'r-bad', name: 'cassée' }), condition: { ...vitestRule().condition, overMB: 1 } };
   s.writeCfg({ enabled: true, list: [bad as Rule, vitestRule()] });
   s.rec.reloadConfig();
-  expect(s.logs.some((l) => /« cassée » ignorée : seuil/.test(l))).toBe(true);
+  expect(s.logs.some((l) => /1 règle ignorée : « cassée » \(seuil/.test(l))).toBe(true);
   s.rec.start();
   s.run(6 * 60_000);
   expect(s.events().map((e) => e.ruleId)).toEqual(['r-v']);

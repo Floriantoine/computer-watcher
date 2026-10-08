@@ -625,3 +625,19 @@ test('queryRuleStats : rule_action + rule_dry_run des 7 derniers jours par ruleI
     'r-b': { lastTs: now - 500, lastResult: 'quota', count7d: 0 },
   });
 });
+
+test('historyCovers : minutes manquantes (mise en veille, sans événement gap) → non couvert', () => {
+  const { db } = seeded(); // minutes 0 à 9 seulement
+  expect(historyCovers(db, 0, 10 * M)).toBe(true);
+  expect(historyCovers(db, 0, 30 * M)).toBe(false); // 20 minutes sans agrégat
+  db.prepare("INSERT INTO events(ts,type,group_id,detail) VALUES (?, 'gap', NULL, '{}')").run(99 * H); // trou daté dans le futur
+  expect(historyCovers(db, 0, 10 * M)).toBe(false);
+});
+
+test('queryInactive : seuil d’activité réglable (max(1, procMinCpuPercent))', () => {
+  const { db } = seeded(); // chrome : cpu 5 % à chaque échantillon
+  const t = [{ pid: 10, startTicks: 100 }];
+  expect(queryInactive(db, t, 0, opts(10 * M)).size).toBe(1);
+  expect(queryInactive(db, t, 0, opts(10 * M), 5).size).toBe(1);
+  expect(queryInactive(db, t, 0, opts(10 * M), 6).size).toBe(0);
+});

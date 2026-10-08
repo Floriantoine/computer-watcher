@@ -9,13 +9,15 @@ export const NEVER_KILL: readonly (string | RegExp)[] = [
   // Claude
   'claude', 'claude-desktop',
   // terminaux
-  'warp', 'warp-terminal', 'konsole', 'yakuake', 'gnome-terminal-', 'gnome-terminal', 'kitty', 'alacritty', 'wezterm',
+  'warp', 'warp-terminal', 'konsole', 'yakuake', 'gnome-terminal-', 'gnome-terminal', 'gnome-terminal-server', 'kitty', 'alacritty', 'wezterm',
   'wezterm-gui', 'ghostty', 'foot', 'xterm', 'tilix', 'terminator', 'tmux: server', 'tmux', 'screen',
   // shells
   'bash', 'zsh', 'fish', 'sh', 'dash', 'ksh', 'tcsh', 'csh', 'nu',
-  // bureau
-  'kwin_wayland', 'kwin_wayland_wr', 'kwin_x11', 'plasmashell', 'ksmserver', 'Xwayland', 'Xorg', 'sddm', 'gdm', 'gnome-shell',
-  /^sddm/, /^kded/, /^xdg-desktop-por/,
+  // bureau et session (KDE, GNOME, X), démons de session
+  'kwin_wayland', 'kwin_wayland_wr', 'kwin_wayland_wrapper', 'kwin_x11', 'plasmashell', 'ksmserver', 'Xwayland', 'Xorg', 'sddm', 'gdm', 'gnome-shell',
+  'kactivitymanagerd', 'dconf-service', 'xembedsniproxy', 'gmenudbusmenuproxy', 'kaccess', 'gpg-agent', 'ssh-agent',
+  /^sddm/, /^kwin/, /^plasma/, /^startplasma/, /^kscreen/, /^kwallet/, /^ksecret/, /^polkit/, /^xdg-/, /^at-spi/, /^gpg-agent/, /^ssh-agent/,
+  /^krunner/, /^kded/, /^kdeconnect/, /^baloo/, /^gvfs/, /^ibus/, /^fcitx/, /^org_kde_/, /^kglobalaccel/, /^kiod/, /^gnome-session/, /^gsd-/,
   // système
   'init', 'login', 'sshd', 'agetty', 'earlyoom', 'polkitd', 'wireplumber', 'pulseaudio',
   /^systemd/, /^dbus/, /^pipewire/,
@@ -34,8 +36,17 @@ const PROC_WATCH_PATH = /(^|[\s/=])proc-watch[^\s/]*(\/|\s|$)/;
 const RECORDER_SCRIPT = /(^|[\s/])recorder\.js(\s|$)/;
 const CLAUDE_CMD = /(^|[\s/])(claude|claude-desktop)(\s|$)/;
 
+/** Longueur maximale du nom d'un processus (comm, TASK_COMM_LEN − 1) : au-delà, le noyau tronque. */
+export const COMM_MAX = 15;
+
+/**
+ * Nom exact ou regex de la liste ; un nom de 15 caractères (peut-être tronqué) est aussi couvert s'il commence un nom
+ * plus long de la liste (« gmenudbusmenupr » → gmenudbusmenuproxy).
+ */
 export function isNeverKillName(name: string): boolean {
-  return EXACT.has(name) || REGEXES.some((r) => r.test(name));
+  if (EXACT.has(name) || REGEXES.some((r) => r.test(name))) return true;
+  if (name.length === COMM_MAX) for (const e of EXACT) if (e.length > COMM_MAX && e.startsWith(name)) return true;
+  return false;
 }
 
 /**
@@ -53,7 +64,10 @@ export function isNeverKill(p: { name: string; cmdline: string }, appRoot: strin
   return false;
 }
 
-export interface GuardProc { pid: number; ppid: number; name: string; cmdline: string; uid: number }
+/** Comme grouping/claudeDirs.isUnderAny, sans import Node (ce module sert aussi au renderer). */
+const isUnderAny = (path: string, dirs: readonly string[]) => dirs.some((d) => path === d || path.startsWith(d.endsWith('/') ? d : `${d}/`));
+
+export interface GuardProc { pid: number; ppid: number; name: string; cmdline: string; uid: number; cwd?: string | null }
 
 export interface GuardContext {
   /** Tous les processus connus (pour remonter les ancêtres et trouver les descendants). */
@@ -62,11 +76,17 @@ export interface GuardContext {
   selfPid: number;
   appRoot: string | null;
   isProtected: (name: string) => boolean;
+  /** Dossiers de config de Claude (chemins réels) : un processus qui y travaille, ou un de ses descendants, est à Claude. */
+  claudeDirs?: readonly string[];
+  /** Pids du groupe Claude du dernier instantané (outils détachés compris). */
+  claudePids?: ReadonlySet<number>;
 }
 
 export type GuardReason = 'never-kill' | 'claude' | 'protected' | 'root' | 'uid' | 'self' | 'unknown' | 'launcher';
 
-const isClaude = (p: GuardProc) => CLAUDE_NAMES.has(p.name) || CLAUDE_CMD.test(p.cmdline.split(/\s+/, 1)[0] ?? '');
+const isClaude = (p: GuardProc, ctx: GuardContext) =>
+  CLAUDE_NAMES.has(p.name) || CLAUDE_CMD.test(p.cmdline.split(/\s+/, 1)[0] ?? '') || !!ctx.claudePids?.has(p.pid) ||
+  (!!ctx.claudeDirs?.length && !!p.cwd && isUnderAny(p.cwd, ctx.claudeDirs));
 
 /** Raison propre au processus lui-même (sans regarder ses descendants). */
 function ownReason(pid: number, ctx: GuardContext, selfChain: ReadonlySet<number>): GuardReason | null {
@@ -78,12 +98,19 @@ function ownReason(pid: number, ctx: GuardContext, selfChain: ReadonlySet<number
   if (selfChain.has(pid)) return 'self';
   if (isNeverKill(p, ctx.appRoot)) return 'never-kill';
   if (ctx.isProtected(p.name)) return 'protected';
-  // ancêtre Claude (session, outil, outil de dev lancé par Claude) ou proc-watch (fenêtres de l'app)
+  if (isClaude(p, ctx)) return 'claude';
+  // ancêtre Claude (session, outil, outil de dev lancé par Claude) ou proc-watch (fenêtres de l'app) ; un ancêtre absent
+  // de la lecture (course, entrée illisible) : refus, on ne sait pas qui est au-dessus
   const seen = new Set<number>([pid]);
-  for (let cur = ctx.byPid.get(p.ppid); cur && !seen.has(cur.pid); cur = ctx.byPid.get(cur.ppid)) {
-    seen.add(cur.pid);
-    if (isClaude(cur)) return 'claude';
-    if (cur.pid === ctx.selfPid || cur.name === 'proc-watch' || PROC_WATCH_PATH.test(cur.cmdline)) return 'self';
+  let cur: GuardProc = p;
+  while (cur.ppid > 1) {
+    const parent = ctx.byPid.get(cur.ppid);
+    if (!parent) return 'unknown';
+    if (seen.has(parent.pid)) return 'unknown';
+    seen.add(parent.pid);
+    if (isClaude(parent, ctx)) return 'claude';
+    if (parent.pid === ctx.selfPid || parent.name === 'proc-watch' || PROC_WATCH_PATH.test(parent.cmdline)) return 'self';
+    cur = parent;
   }
   return null;
 }

@@ -25,9 +25,10 @@ import {
 import { historyCovers, queryCulprits, queryInactive } from '../core/history/queries';
 import type { KillFn } from '../core/kill';
 import { compileProtection, type Protection } from '../core/protection';
-import { emptyRuleState, evaluateRules, needsClassification, restoreRuleState, type RuleState } from '../core/rules/engine';
-import type { RulesConfig } from '../core/rules/types';
-import type { Group } from '../core/types';
+import { simulatedLongEnough } from '../core/rules/config';
+import { emptyRuleState, evaluateRules, needsClassification, restoreRuleState, ruleRevision, type RuleState } from '../core/rules/engine';
+import type { Rule, RuleIssue, RulesConfig } from '../core/rules/types';
+import type { Group, RecorderConfig as RecCfg } from '../core/types';
 import { flattenGroup } from '../core/snapshot';
 import { aggregateHour, aggregateMinute, clearAll, leakCandidates, purge } from '../core/history/maintenance';
 import { HistoryWriter } from '../core/history/writer';
@@ -64,6 +65,16 @@ export interface RecorderDeps {
   appRoot?: string | null;
   /** Minuterie de l'escalade SIGTERM → SIGKILL (défaut : setTimeout). */
   ruleTimers?: { setTimeout(fn: () => void, ms: number): unknown };
+  /**
+   * Horloge monotone des règles (cooldown, quotas, pauses, durées) ; défaut : performance.now() (CLOCK_MONOTONIC, ne recule
+   * jamais). L'horloge murale (`now`) ne sert qu'à l'historique.
+   */
+  monoNow?: () => number;
+}
+
+/** Seuil d'activité de « inactive depuis T » : un processus sous procMinCpuPercent n'est pas enregistré, donc pas « actif ». */
+export function inactiveCpuThreshold(cfg: RecCfg): number {
+  return Math.max(1, cfg.procMinCpuPercent);
 }
 
 export interface Recorder {
@@ -125,13 +136,17 @@ export function createRecorder(deps: RecorderDeps): Recorder {
   let overrides = initial.classify.overrides;
   let detectPorts = initial.classify.detectPorts;
   let protection: Protection = compileProtection(initial.protected);
-  /** Journalisées une fois par changement (la config est relue à chaque écriture du fichier). */
+  /** Une seule ligne par ensemble de règles invalides, et seulement quand il change (la config est relue à chaque écriture). */
   let lastIssues = '';
-  const logRuleIssues = (issues: { index: number; name: string | null; error: string }[] | undefined) => {
+  const logRuleIssues = (issues: RuleIssue[] | undefined) => {
     const key = JSON.stringify(issues ?? []);
     if (key === lastIssues) return;
     lastIssues = key;
-    for (const i of issues ?? []) log(`règles: règle ${i.name ? `« ${i.name} »` : `n° ${i.index + 1}`} ignorée : ${i.error}`);
+    const list = issues ?? [];
+    if (!list.length) return;
+    const n = list.filter((i) => i.index >= 0).length;
+    const parts = list.slice(0, 5).map((i) => (i.index < 0 ? i.error : `${i.name ? `« ${i.name} »` : `n° ${i.index + 1}`} (${i.error})`));
+    log(`règles: ${n} règle${n > 1 ? 's' : ''} ignorée${n > 1 ? 's' : ''} : ${parts.join(' ; ')}${list.length > 5 ? ' ; …' : ''}`);
   };
   logRuleIssues(loadedInitial.ruleIssues);
   /** Dernière notification du bureau par type (anti-spam). */
@@ -315,14 +330,42 @@ export function createRecorder(deps: RecorderDeps): Recorder {
     log(`règles: aucun kill injecté, ${signal} non envoyé au processus ${pid}`);
     throw Object.assign(new Error('kill absent'), { code: 'NOKILL' });
   };
+  const mono = deps.monoNow ?? (() => performance.now());
+  /** Pids du groupe Claude au dernier tick (revérifiés avant chaque signal). */
+  let claudePids: ReadonlySet<number> = new Set();
+  /**
+   * Mode effectif : une règle Active sans période de Simulation d'au moins 10 min (écrite à la main, début dans le futur)
+   * est traitée en Simulation, avec une ligne de journal par règle.
+   */
+  const demoted = new Set<string>();
+  const effective = (r: Rule, wallNow: number): Rule => {
+    if (r.mode !== 'active' || simulatedLongEnough(r, wallNow)) {
+      demoted.delete(r.id);
+      return r;
+    }
+    if (!demoted.has(r.id)) {
+      demoted.add(r.id);
+      log(`règles: « ${r.name} » Active traitée en Simulation : moins de 10 min de Simulation enregistrées (simulatedSince ${r.simulatedSince ?? 'absent'})`);
+    }
+    return { ...r, mode: 'simulate' };
+  };
+  /** Révision de la règle si elle peut encore agir maintenant (sinon null) : relue avant SIGTERM et SIGKILL. */
+  const currentRevision = (ruleId: string): string | null => {
+    if (!rulesCfg.enabled) return null;
+    const r = rulesCfg.list.find((x) => x.id === ruleId);
+    if (!r || !r.enabled) return null;
+    const e = effective(r, now());
+    return e.mode === 'active' ? ruleRevision(e) : null;
+  };
   let runner: ReturnType<typeof createRuleRunner> | null = null;
   const ruleRunner = (d: DatabaseSync) =>
     (runner ??= createRuleRunner({
+      // relecture complète (dossier de travail de chaque processus : appartenance à Claude par ~/.claude)
       db: d, kill: deps.kill ?? noKill, readProcs: () => readProcesses(procRoot, { cmdlineCache }), selfPid, currentUid, appRoot,
       isProtected: (name) => protection.isProtected(name),
       notify: (e) => notifyAlert(e, e.type === 'rule_action'),
       setTimeout: (fn, ms) => (deps.ruleTimers ?? { setTimeout: (f: () => void, t: number) => setTimeout(f, t) }).setTimeout(fn, ms),
-      now, log,
+      now, monoNow: mono, log, ruleRevision: currentRevision, claudeDirs: claudeConfigDirs, claudePids: () => claudePids,
     }));
 
   const classifyForRules = (groups: Group[], ts: number) => {
@@ -347,15 +390,18 @@ export function createRecorder(deps: RecorderDeps): Recorder {
     if (!rulesCfg.enabled || !rulesCfg.list.some((r) => r.enabled)) return;
     try {
       counters.ruleEvaluations++;
-      const classification = needsClassification(rulesCfg.list, rulesCfg.enabled) ? classifyForRules(groups, ts) : null;
+      claudePids = new Set(groups.filter((g) => g.kind === 'claude').flatMap((g) => g.pids));
+      const rules = rulesCfg.list.map((r) => (r.enabled ? effective(r, ts) : r));
+      const classification = needsClassification(rules, rulesCfg.enabled) ? classifyForRules(groups, ts) : null;
       const wantsForecast = rulesCfg.list.some((r) => r.enabled && r.condition.kind === 'forecast');
       const fc = wantsForecast && lastForecast ? { forecast: lastForecast, held: conditionHeld(lastForecast, forecastState, ts) } : null;
       const opts = { now: ts, detailHours: cfg.detailHours, intervalSec: cfg.intervalSec };
       const growthKB = fc?.held ? new Map(queryCulprits(d, ts, opts, 5, 50).map((c) => [c.key, c.deltaKB])) : new Map<string, number>();
       const out = evaluateRules({
-        now: ts, enabled: rulesCfg.enabled, rules: rulesCfg.list, groups, classification, forecast: fc, growthKB,
+        now: mono(), wallNow: ts, maxGapMs: 2 * cfg.intervalSec * 1000,
+        enabled: rulesCfg.enabled, rules, groups, classification, forecast: fc, growthKB,
         // sans historique couvrant toute la période (service récent, trou d'enregistrement) : null, rien n'est « inactif »
-        inactive: (targets, since) => (historyCovers(d, since, ts) ? queryInactive(d, targets, since, opts) : null),
+        inactive: (targets, since) => (historyCovers(d, since, ts) ? queryInactive(d, targets, since, opts, inactiveCpuThreshold(cfg)) : null),
         isProtected: protection.isProtected, appRoot, currentUid, selfPid,
       }, ruleState);
       ruleRunner(d).run(out);
@@ -407,7 +453,8 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       forecastState = { lastAlertAt: lastEventTs(db, 'forecast'), snoozedUntil: readSnooze(snoozeFile(), now()), holdingSince: null };
       // quotas et pauses des règles : survivent à un redémarrage du service
       try {
-        ruleState = restoreRuleState(ruleEventsSince(db, now() - H), now());
+        // tout ce qui est daté dans le futur (horloge revenue en arrière) est relu aussi, compté comme « maintenant »
+        ruleState = restoreRuleState(ruleEventsSince(db, now() - H), now(), mono());
       } catch (e) {
         log(`règles: état non restauré : ${(e as Error).message}`);
       }

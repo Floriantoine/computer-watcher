@@ -209,8 +209,8 @@ describe('garde-fous', () => {
   });
 
   test('instance où un processus est protégé par la config : celui-ci retiré, les autres visés', () => {
-    const root = proc('node', 'node server', { pid: 830, ppid: 500, rssKB: GB });
-    const pg = proc('postgres', 'postgres', { pid: 831, ppid: 500, rssKB: GB });
+    const root = proc('node', 'node server', { pid: 830, ppid: 1, rssKB: GB });
+    const pg = proc('postgres', 'postgres', { pid: 831, ppid: 1, rssKB: GB });
     const g = mkGroup('project:/home/u/beta', 'project', [node(root), node(pg)], 'beta');
     const d = twice(memRule('beta'), [g], null, { isProtected: (n) => n === 'postgres' });
     expect(fires(d)).toHaveLength(1);
@@ -270,9 +270,10 @@ describe('garde-fous', () => {
 
 describe('inactive (b)', () => {
   function project(kind: GroupKind = 'project', category: Category = 'back', over: Partial<InstanceSummary> = {}) {
-    const p = proc('node', 'node server.js', { pid: 900 + 50, ppid: 500, startTicks: 9500, ageSec: 2 * 86400, rssKB: GB });
+    // parent pid 1 : la chaîne d'ancêtres est entièrement connue (sinon refus « unknown »)
+    const p = proc('node', 'node server.js', { pid: 900 + 50, ppid: 1, startTicks: 9500, ageSec: 2 * 86400, rssKB: GB });
     const n = node(p);
-    p.ppid = 500;
+    p.ppid = 1;
     const g = mkGroup(kind === 'project' ? 'project:/home/u/acme' : 'deleted', kind, [n], 'acme');
     const i = inst(g, n, category, 'node server.js', over);
     return { groups: [g], classification: cls([[g, [i]]]), key: `${p.pid}:${p.startTicks}` };
@@ -329,7 +330,7 @@ describe('prévision (c)', () => {
   const r = rule({ kind: 'forecast', underMin: 3, includeApps: [] });
   function world() {
     const mk = (id: string, kind: GroupKind, pid: number, gb: number, name = 'node') => {
-      const p = proc(name, `${name} ${id}`, { pid, ppid: 500, rssKB: gb * GB });
+      const p = proc(name, `${name} ${id}`, { pid, ppid: 1, rssKB: gb * GB });
       return mkGroup(id, kind, [node(p)], id);
     };
     const groups = [
@@ -337,30 +338,38 @@ describe('prévision (c)', () => {
       mk('command:postgres', 'command', 1004, 10, 'postgres'), mk('app:firefox', 'app', 1005, 12, 'firefox'), mk('claude', 'claude', 1006, 20, 'claude'),
     ];
     const growthKB = new Map([
-      ['project:/a', 2 * GB], ['project:/b', 0.5 * GB], ['project:/c', -GB], ['command:postgres', 3 * GB], ['app:firefox', GB], ['claude', 5 * GB],
+      ['project:/a', 2 * GB], ['project:/b', 0.5 * GB], ['project:/c', -GB], ['command:postgres', 3 * GB], ['app:firefox', 2.5 * GB], ['claude', 5 * GB],
     ]);
     return { groups, growthKB };
   }
   const target = (d: RuleDecision[]) => (d[0]?.outcome === 'fire' ? d[0].target.key : null);
+  /** Condition tenue observée 30 s par le moteur (HOLD_MS) : deux évaluations. */
+  const twice = (over: Partial<EvalInput>) => {
+    const st = emptyRuleState();
+    evaluateRules(input({ now: 0, ...over }), st);
+    return evaluateRules(input({ now: 30_000, ...over }), st);
+  };
 
-  test('ETA 2 min, 4 minutes en baisse, condition tenue → B (le plus gros qui grossit, hors protégé, appli non choisie, Claude)', () => {
-    const d = evaluateRules(input({ rules: [r], ...world(), forecast: { forecast: f(2, 4), held: true }, isProtected: (n) => n === 'postgres' }), emptyRuleState());
-    expect(target(d)).toBe('project:/b');
+  test('ETA 2 min, 4 minutes en baisse, condition tenue → A (la plus forte croissance ; hors commande, appli non choisie, Claude)', () => {
+    const d = twice({ rules: [r], ...world(), forecast: { forecast: f(2, 4), held: true }, isProtected: (n) => n === 'postgres' });
+    expect(target(d)).toBe('project:/a');
   });
   test('appli choisie explicitement (firefox) → visée', () => {
     const r2 = rule({ kind: 'forecast', underMin: 3, includeApps: ['firefox'] });
-    const d = evaluateRules(input({ rules: [r2], ...world(), forecast: { forecast: f(2, 4), held: true }, isProtected: (n) => n === 'postgres' }), emptyRuleState());
+    const d = twice({ rules: [r2], ...world(), forecast: { forecast: f(2, 4), held: true }, isProtected: (n) => n === 'postgres' });
     expect(target(d)).toBe('app:firefox');
   });
+  test('condition tenue pas encore observée 30 s par le moteur → rien', () => {
+    expect(evaluateRules(input({ rules: [r], ...world(), forecast: { forecast: f(2, 4), held: true } }), emptyRuleState())).toEqual([]);
+  });
   test('ETA 2 min mais 1 minute en baisse → rien ; condition pas tenue (stepAlert) → rien ; ETA 4 min → rien', () => {
-    expect(evaluateRules(input({ rules: [r], ...world(), forecast: { forecast: f(2, 1), held: true } }), emptyRuleState())).toEqual([]);
-    expect(evaluateRules(input({ rules: [r], ...world(), forecast: { forecast: f(2, 4), held: false } }), emptyRuleState())).toEqual([]);
-    expect(evaluateRules(input({ rules: [r], ...world(), forecast: { forecast: f(4, 4), held: true } }), emptyRuleState())).toEqual([]);
+    expect(twice({ rules: [r], ...world(), forecast: { forecast: f(2, 1), held: true } })).toEqual([]);
+    expect(twice({ rules: [r], ...world(), forecast: { forecast: f(2, 4), held: false } })).toEqual([]);
+    expect(twice({ rules: [r], ...world(), forecast: { forecast: f(4, 4), held: true } })).toEqual([]);
   });
   test('aucun groupe qui grossit → rien', () => {
     const w = world();
-    const d = evaluateRules(input({ rules: [r], groups: w.groups, growthKB: new Map([...w.growthKB].map(([k]) => [k, -1])), forecast: { forecast: f(2, 4), held: true } }), emptyRuleState());
-    expect(d).toEqual([]);
+    expect(twice({ rules: [r], groups: w.groups, growthKB: new Map([...w.growthKB].map(([k]) => [k, -1])), forecast: { forecast: f(2, 4), held: true } })).toEqual([]);
   });
 });
 

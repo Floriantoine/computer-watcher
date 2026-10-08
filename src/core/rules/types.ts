@@ -24,6 +24,11 @@ export interface Rule {
   mode: RuleMode;
   condition: RuleCondition;
   createdAt: number;
+  /**
+   * Début de la période de Simulation en cours (ou de la dernière, pour une règle active). Le main n'autorise le passage
+   * en Active qu'après MIN_SIMULATION_MS ; le service traite en Simulation une règle active sans cette période.
+   */
+  simulatedSince?: number;
 }
 
 export interface RulesConfig {

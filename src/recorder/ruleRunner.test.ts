@@ -24,7 +24,7 @@ const target = (over: Partial<RuleTarget> = {}): RuleTarget => ({
   targets: [{ pid: 700, startTicks: 7000 }], names: ['node'], memKBs: [4.3 * GB], excluded: 0, ...over,
 });
 const fire = (mode: 'simulate' | 'active', t: RuleTarget = target(), ruleId = 'r-a'): RuleDecision => ({
-  ruleId, ruleName: 'vitest > 4 Go', mode, outcome: 'fire', target: t,
+  ruleId, ruleName: 'vitest > 4 Go', mode, outcome: 'fire', target: t, revision: 'rev',
   condition: { kind: 'memory', target: 'instance', match: { by: 'name', value: 'vitest' }, overMB: 4096, forMin: 5 },
 });
 
@@ -40,7 +40,7 @@ function setup(o: { procs?: ProcSample[][]; kill?: KillFn } = {}) {
   const log = vi.fn<(m: string) => void>();
   const deps: RuleRunnerDeps = {
     db, kill, readProcs, selfPid: 900, currentUid: 1000, appRoot: null, isProtected: () => false, notify,
-    setTimeout: (fn, ms) => timers.push({ fn, ms }), now: () => 1_000_000, log,
+    setTimeout: (fn, ms) => timers.push({ fn, ms }), now: () => 1_000_000, log, ruleRevision: () => 'rev',
   };
   const runner = createRuleRunner(deps);
   const events = () =>
@@ -130,7 +130,7 @@ describe('Active', () => {
     const s2 = setup({ procs: [[base[2]!, vitest]] }); // 500 absent : chaîne inconnue
     s2.runner.run([fire('active')]);
     expect(s2.kill).not.toHaveBeenCalled();
-    expect(s2.events()[0]).toMatchObject({ result: 'refused', refused: [{ pid: 700, error: 'SELF' }] });
+    expect(s2.events()[0]).toMatchObject({ result: 'refused', refused: [{ pid: 700, error: 'GUARD:unknown' }] });
   });
 
   test('autre uid → EPERM, aucun kill', () => {
@@ -154,7 +154,7 @@ describe('Active', () => {
     const prot = setup();
     const r = createRuleRunner({
       db: prot.db, kill: prot.kill, readProcs: prot.readProcs, selfPid: 900, currentUid: 1000, appRoot: null, isProtected: (n) => n === 'node',
-      notify: prot.notify, setTimeout: () => 0, now: () => 1, log: () => {},
+      notify: prot.notify, setTimeout: () => 0, now: () => 1, log: () => {}, ruleRevision: () => 'rev',
     });
     r.run([fire('active')]);
     expect(prot.kill).not.toHaveBeenCalled();
@@ -165,7 +165,7 @@ describe('Active', () => {
     const s = setup();
     const r = createRuleRunner({
       db: s.db, kill: s.kill, readProcs: s.readProcs, selfPid: 900, currentUid: 1000, appRoot: null, isProtected: (n) => protectedNames.includes(n),
-      notify: s.notify, setTimeout: (fn, ms) => s.timers.push({ fn, ms }), now: () => 1, log: () => {},
+      notify: s.notify, setTimeout: (fn, ms) => s.timers.push({ fn, ms }), now: () => 1, log: () => {}, ruleRevision: () => 'rev',
     });
     r.run([fire('active')]);
     protectedNames = ['node'];

@@ -432,7 +432,9 @@ export const INACTIVE_DETAIL_MS = 30 * M;
  * échapper), depuis la minute entamée à `since`. Une cible jamais enregistrée (sous les seuils) n'est jamais active.
  * Par cible : clé unique (pid, start_ticks) puis parcours de la clé primaire (proc_id, ts) arrêté au premier échantillon actif.
  */
-export function queryInactive(db: DatabaseSync, targets: { pid: number; startTicks: number }[], since: number, o: QueryOpts): Set<string> {
+export function queryInactive(
+  db: DatabaseSync, targets: { pid: number; startTicks: number }[], since: number, o: QueryOpts, activeCpuPercent: number = ACTIVE_CPU_PERCENT,
+): Set<string> {
   const active = new Set<string>();
   if (targets.length === 0) return active;
   const split = o.now - Math.min(INACTIVE_DETAIL_MS, o.detailHours * H);
@@ -447,19 +449,29 @@ export function queryInactive(db: DatabaseSync, targets: { pid: number; startTic
     if (active.has(key)) continue;
     const row = findProc.get(t.pid, t.startTicks) as { id: number } | undefined;
     if (!row) continue;
-    if (detail.get(row.id, detailFrom, ACTIVE_CPU_PERCENT) || minute?.get(row.id, minuteFrom, split, ACTIVE_CPU_PERCENT)) active.add(key);
+    if (detail.get(row.id, detailFrom, activeCpuPercent) || minute?.get(row.id, minuteFrom, split, activeCpuPercent)) active.add(key);
   }
   return active;
 }
 
+/** Minutes sans agrégat tolérées dans la période (agrégation en retard d'une minute ou deux). */
+export const COVER_MISSING_MINUTES = 5;
+
 /**
- * L'historique couvre-t-il [since, now] ? Premier agrégat par minute au plus 5 min après `since`, et aucun trou
- * d'enregistrement (événement `gap`) depuis. Sinon une règle « inactive depuis T » ne conclut rien (null côté moteur).
+ * L'historique couvre-t-il [since, now] ? Premier agrégat par minute au plus 5 min après `since`, aucun trou
+ * d'enregistrement (événement `gap`) depuis, et un agrégat pour chaque minute de la période à 5 près (une mise en veille
+ * ne laisse pas d'événement `gap`, mais des minutes manquantes). Sinon « inactive depuis T » ne conclut rien.
  */
 export function historyCovers(db: DatabaseSync, since: number, now: number): boolean {
+  if (!(now > since)) return false;
   const first = (db.prepare('SELECT MIN(ts) AS ts FROM system_minute').get() as { ts: number | null }).ts;
   if (first === null || first > since + 5 * M) return false;
-  return db.prepare("SELECT 1 FROM events WHERE type = 'gap' AND ts >= ? AND ts <= ? LIMIT 1").get(since, now + M) === undefined;
+  if (db.prepare("SELECT 1 FROM events WHERE type = 'gap' AND ts >= ? LIMIT 1").get(since) !== undefined) return false;
+  const from = Math.ceil(since / M) * M;
+  const to = Math.floor(now / M) * M;
+  const expected = Math.max(0, (to - from) / M);
+  const { n } = db.prepare('SELECT COUNT(*) AS n FROM system_minute WHERE ts >= ? AND ts < ?').get(from, to) as { n: number };
+  return n >= expected - COVER_MISSING_MINUTES;
 }
 
 /**

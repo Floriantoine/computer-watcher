@@ -1,6 +1,6 @@
 // src/core/rules/engine.ts — moteur des règles automatiques (⑥). Pur : aucun effet de bord hors `state`, aucune
 // horloge (instant fourni), aucun accès à /proc ni à la base (fonctions `inactive` et `isProtected` injectées).
-import { MIN_DECLINING, type Forecast } from '../forecast/forecast';
+import { HOLD_MS, MIN_DECLINING, type Forecast } from '../forecast/forecast';
 import { flattenGroup, type Classification } from '../snapshot';
 import type { Group, KillTarget, ProcInfo } from '../types';
 import { filterTargets, type GuardContext } from './neverKill';
@@ -11,6 +11,8 @@ export const MAX_ACTIONS_PER_HOUR = 10;
 export const INACTIVE_CHECK_MS = 60_000;
 /** Quota horaire atteint : la règle est mise en pause pendant 1 h. */
 export const QUOTA_PAUSE_MS = 3600_000;
+/** (c) : seuls les groupes qui ont grossi d'au moins 100 Mio sur 5 min sont des coupables. */
+export const FORECAST_MIN_GROWTH_KB = 100 * 1024;
 const HOUR_MS = 3600_000;
 
 export interface RuleTarget {
@@ -45,14 +47,31 @@ export interface RuleState {
   pausedUntil: Map<string, number>;
   /** ruleId → dernier « rien à arrêter » signalé (au plus un par RULE_COOLDOWN_MS) */
   lastGuard: Map<string, number>;
+  /** Dernière évaluation (horloges monotone et murale) : détecte les trous (veille, saut d'horloge). */
+  lastEval: { mono: number; wall: number } | null;
+  /** Instant mural du dernier trou : « inactive depuis T » exige une période observée sans trou. */
+  lastGapWall: number | null;
+  /** Début (monotone) de la condition de prévision tenue, observée sans trou. */
+  forecastHeldSince: number | null;
 }
 
 export const emptyRuleState = (): RuleState => ({
   overSince: new Map(), lastFire: new Map(), actions: [], dryRuns: [], lastInactiveCheck: new Map(), pausedUntil: new Map(), lastGuard: new Map(),
+  lastEval: null, lastGapWall: null, forecastHeldSince: null,
 });
 
+/**
+ * Horloges : tous les instants de l'état (cooldown, quotas, pauses, durées) sont MONOTONES (`now`) ; seuls l'historique et
+ * l'inactivité utilisent l'heure murale (`wallNow`). Un instant de l'état dans le futur compte comme « maintenant » :
+ * un recul d'horloge ne libère jamais un quota ni ne lève une pause.
+ */
 export interface EvalInput {
+  /** Horloge monotone (ms). */
   now: number;
+  /** Horloge murale (ms) ; absente → `now`. */
+  wallNow?: number;
+  /** Écart maximal entre deux évaluations (2 × intervalle) ; au-delà, ou si une horloge recule, les durées repartent. */
+  maxGapMs?: number;
   /** Interrupteur général « Règles automatiques » : éteint → aucune décision, aucun appel. */
   enabled: boolean;
   rules: readonly Rule[];
@@ -72,7 +91,7 @@ export interface EvalInput {
 
 export type SkipReason = 'cooldown' | 'hourly-quota' | 'guard';
 export type RuleDecision =
-  | { ruleId: string; ruleName: string; mode: RuleMode; outcome: 'fire'; target: RuleTarget; condition: RuleCondition }
+  | { ruleId: string; ruleName: string; mode: RuleMode; outcome: 'fire'; target: RuleTarget; condition: RuleCondition; revision: string }
   | { ruleId: string; ruleName: string; mode: RuleMode; outcome: 'skip'; reason: SkipReason; target: RuleTarget | null };
 
 /** Règle activée de type instance, catégorie ou inactive : le service doit classer les groupes. */
@@ -84,19 +103,37 @@ export function needsClassification(rules: readonly Rule[], enabled = true): boo
 
 const mem = (p: { rssKB: number; swapKB: number }) => p.rssKB + p.swapKB;
 
-/** Candidate avant filtrage : clé, groupe, libellé, pids, taille (pour choisir la plus grosse). */
-interface Candidate { key: string; kind: 'instance' | 'group'; group: Group; label: string; pids: number[]; sizeKB: number }
+/** Révision d'une règle : la règle telle qu'enregistrée. Une escalade SIGKILL n'a lieu que si elle n'a pas changé. */
+export const ruleRevision = (r: Rule): string => JSON.stringify(r);
+
+/** Candidate avant filtrage : clé, groupe, libellé, pids, taille ; `growthKB` (prévision) classe avant la taille. */
+interface Candidate { key: string; kind: 'instance' | 'group'; group: Group; label: string; pids: number[]; sizeKB: number; growthKB?: number }
 
 export function evaluateRules(input: EvalInput, state: RuleState): RuleDecision[] {
   if (!input.enabled) return [];
   const { now } = input;
+  const wall = input.wallNow ?? now;
+  // Trou entre deux évaluations (veille, saut ou recul d'une horloge) : toutes les durées observées repartent de zéro.
+  const last = state.lastEval;
+  const maxGap = input.maxGapMs ?? Infinity;
+  if (last && (now < last.mono || now - last.mono > maxGap || wall < last.wall || wall - last.wall > maxGap)) {
+    state.overSince.clear();
+    state.forecastHeldSince = null;
+    state.lastGapWall = Math.max(wall, last.wall);
+  }
+  state.lastEval = { mono: now, wall };
   const enabledRules = input.rules.filter((r) => r.enabled);
   // état des règles retirées ou désactivées
   const live = new Set(enabledRules.map((r) => r.id));
   for (const k of state.overSince.keys()) if (!live.has(k.slice(0, k.indexOf('|')))) state.overSince.delete(k);
+  // fenêtre glissante d'1 h : un instant dans le futur reste compté (échec fermé)
   const cut = now - HOUR_MS;
-  state.actions = state.actions.filter((t) => t > cut && t <= now);
-  state.dryRuns = state.dryRuns.filter((t) => t > cut && t <= now);
+  state.actions = state.actions.filter((t) => t > cut);
+  state.dryRuns = state.dryRuns.filter((t) => t > cut);
+  // prévision tenue, observée par le moteur sans trou
+  const held = !!input.forecast?.held;
+  if (!held) state.forecastHeldSince = null;
+  else if (state.forecastHeldSince === null || state.forecastHeldSince > now) state.forecastHeldSince = now;
   if (enabledRules.length === 0) return [];
 
   // Groupes visables : jamais « Autres » ni Claude ; processus connus (pour les ancêtres et les descendants).
@@ -129,13 +166,13 @@ export function evaluateRules(input: EvalInput, state: RuleState): RuleDecision[
   for (const rule of enabledRules) {
     const paused = state.pausedUntil.get(rule.id);
     if (paused !== undefined) {
-      if (now < paused && now >= paused - QUOTA_PAUSE_MS) continue;
+      if (now < paused) continue;
       state.pausedUntil.delete(rule.id);
     }
     const ready = candidatesFor(rule, input, groups, state);
     if (ready.length === 0) continue;
-    // la plus grosse cible qui reste non vide après la liste « jamais tuer »
-    ready.sort((a, b) => b.sizeKB - a.sizeKB);
+    // la plus forte croissance (prévision), puis la plus grosse cible, qui reste non vide après la liste « jamais tuer »
+    ready.sort((a, b) => (b.growthKB ?? 0) - (a.growthKB ?? 0) || b.sizeKB - a.sizeKB);
     let target: RuleTarget | null = null;
     for (const c of ready) {
       const t = toTarget(c);
@@ -147,15 +184,16 @@ export function evaluateRules(input: EvalInput, state: RuleState): RuleDecision[
     const base = { ruleId: rule.id, ruleName: rule.name, mode: rule.mode };
     if (!target) {
       // rien à arrêter : signalé au plus une fois par RULE_COOLDOWN_MS
-      const last = state.lastGuard.get(rule.id);
-      if (last === undefined || now < last || now - last >= RULE_COOLDOWN_MS) {
+      const lastGuard = state.lastGuard.get(rule.id);
+      if (lastGuard === undefined || now - lastGuard >= RULE_COOLDOWN_MS) {
         state.lastGuard.set(rule.id, now);
         out.push({ ...base, outcome: 'skip', reason: 'guard', target: toTarget(ready[0]!) });
       }
       continue;
     }
     const lastFire = state.lastFire.get(rule.id);
-    if (lastFire !== undefined && now >= lastFire && now - lastFire < RULE_COOLDOWN_MS) {
+    // un dernier déclenchement « dans le futur » compte comme maintenant : cooldown
+    if (lastFire !== undefined && now - lastFire < RULE_COOLDOWN_MS) {
       out.push({ ...base, outcome: 'skip', reason: 'cooldown', target });
       continue;
     }
@@ -168,7 +206,7 @@ export function evaluateRules(input: EvalInput, state: RuleState): RuleDecision[
     used.push(now);
     state.lastFire.set(rule.id, now);
     state.overSince.delete(`${rule.id}|${target.key}`);
-    out.push({ ...base, outcome: 'fire', target, condition: rule.condition });
+    out.push({ ...base, outcome: 'fire', target, condition: rule.condition, revision: ruleRevision(rule) });
   }
   return out;
 }
@@ -222,8 +260,12 @@ function candidatesFor(rule: Rule, input: EvalInput, groups: readonly Group[], s
       return ready;
     }
     case 'inactive': {
+      const wall = input.wallNow ?? now;
+      const since = wall - c.forHours * HOUR_MS;
+      // un trou dans la période (veille, saut d'horloge) : activité inconnue, rien n'est « inactif »
+      if (state.lastGapWall !== null && since < state.lastGapWall) return [];
       const last = state.lastInactiveCheck.get(rule.id);
-      if (last !== undefined && now >= last && now - last < INACTIVE_CHECK_MS) return [];
+      if (last !== undefined && now - last < INACTIVE_CHECK_MS) return [];
       state.lastInactiveCheck.set(rule.id, now);
       if (!input.inactive || !input.classification) return [];
       const minAgeSec = c.forHours * 3600;
@@ -243,19 +285,24 @@ function candidatesFor(rule: Rule, input: EvalInput, groups: readonly Group[], s
         }
       }
       if (!cands.length) return [];
-      const active = input.inactive(cands.flatMap((x) => x.targets), now - c.forHours * HOUR_MS);
+      const active = input.inactive(cands.flatMap((x) => x.targets), since);
       if (!active) return [];
       return cands.filter((x) => !x.targets.some((t) => active.has(`${t.pid}:${t.startTicks}`))).map((x) => x.cand);
     }
     case 'forecast': {
       const f = input.forecast;
       if (!f || !f.held) return [];
+      // tenue et observée sans trou pendant HOLD_MS par le moteur lui-même
+      if (state.forecastHeldSince === null || now - state.forecastHeldSince < HOLD_MS) return [];
       const { etaMin, decliningMinutes } = f.forecast;
       if (etaMin === null || !(etaMin < c.underMin) || decliningMinutes < MIN_DECLINING) return [];
+      // par défaut seulement les projets (et dossiers supprimés) ; une appli seulement si elle est cochée ; jamais une commande
       const apps = new Set(c.includeApps.map((n) => `app:${n}`));
       return groups
-        .filter((g) => (input.growthKB.get(g.id) ?? 0) > 0 && (g.kind !== 'app' || apps.has(g.id)))
-        .map((g) => ({ key: g.id, kind: 'group' as const, group: g, label: g.label, pids: flattenGroup(g).map((p) => p.pid), sizeKB: mem(g) }));
+        .filter((g) => (input.growthKB.get(g.id) ?? 0) >= FORECAST_MIN_GROWTH_KB && (g.kind === 'project' || g.kind === 'deleted' || (g.kind === 'app' && apps.has(g.id))))
+        .map((g) => ({
+          key: g.id, kind: 'group' as const, group: g, label: g.label, pids: flattenGroup(g).map((p) => p.pid), sizeKB: mem(g), growthKB: input.growthKB.get(g.id)!,
+        }));
     }
   }
 }
@@ -267,17 +314,20 @@ export interface RuleEventRow { ts: number; type: 'rule_action' | 'rule_dry_run'
  * État après un redémarrage du service, d'après les événements de la dernière heure : dernier déclenchement par règle,
  * actions réelles et simulations (quotas), pauses de quota en cours. L'escalade SIGKILL n'est pas une action à part.
  */
-export function restoreRuleState(rows: readonly RuleEventRow[], now: number): RuleState {
+export function restoreRuleState(rows: readonly RuleEventRow[], wallNow: number, monoNow: number = wallNow): RuleState {
   const st = emptyRuleState();
+  // instant mural → monotone ; un événement daté dans le futur (horloge revenue en arrière) compte comme « maintenant »
+  const toMono = (ts: number) => monoNow - Math.max(0, wallNow - ts);
   for (const r of rows) {
-    if (r.ts > now || r.ts <= now - HOUR_MS) continue;
+    if (wallNow - r.ts >= HOUR_MS) continue;
+    const t = toMono(r.ts);
     if (r.result === 'quota') {
-      st.pausedUntil.set(r.ruleId, Math.max(st.pausedUntil.get(r.ruleId) ?? 0, r.ts + QUOTA_PAUSE_MS));
+      st.pausedUntil.set(r.ruleId, Math.max(st.pausedUntil.get(r.ruleId) ?? -Infinity, t + QUOTA_PAUSE_MS));
       continue;
     }
     if (r.result === 'sigkill') continue;
-    (r.type === 'rule_action' ? st.actions : st.dryRuns).push(r.ts);
-    st.lastFire.set(r.ruleId, Math.max(st.lastFire.get(r.ruleId) ?? 0, r.ts));
+    (r.type === 'rule_action' ? st.actions : st.dryRuns).push(t);
+    st.lastFire.set(r.ruleId, Math.max(st.lastFire.get(r.ruleId) ?? -Infinity, t));
   }
   st.actions.sort((a, b) => a - b);
   st.dryRuns.sort((a, b) => a - b);
