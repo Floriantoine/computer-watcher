@@ -19,6 +19,7 @@ import { appEventsPath, dataDir } from '../core/paths';
 import { buildSnapshot, flattenGroup, followsOthers, groupProcs, instanceTargets, isWatch, type Classification, type FullSnapshot } from '../core/snapshot';
 import type { ConfigState, Group, KillResult, RecorderState, Watch } from '../core/types';
 import { installDesktopEntry } from './desktopEntry';
+import { createEarlyoomApplier, earlyoomStatus } from './earlyoom';
 import { clearHistory, createHistoryReader } from './history';
 import { pollDelay, type WindowActivity } from './pollPolicy';
 import {
@@ -366,6 +367,10 @@ ipcMain.handle('recorder:setEnabled', async (_e, enabled: unknown) => {
   return recorderState();
 });
 ipcMain.handle('recorder:clearHistory', () => clearHistory(data, { running: recorderState().running, pid: history.status()?.pid, beforeDelete: history.close }));
+
+ipcMain.handle('earlyoom:status', () => earlyoomStatus());
+const applyEarlyoomIpc = createEarlyoomApplier(() => config.protected);
+ipcMain.handle('earlyoom:apply', (_e, s: unknown) => applyEarlyoomIpc(s));
 
 ipcMain.handle('desktop:install', () => {
   if (!app.isPackaged) throw new Error('Disponible uniquement dans la version installée (AppImage ou .deb)');

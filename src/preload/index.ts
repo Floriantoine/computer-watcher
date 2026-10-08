@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
+import type { EarlyoomSettings } from '../core/earlyoom';
 import type {
-  Category, Config, ConfigState, Culprit, InstanceTargets, ProcInfo, Watch, GroupHistory, GroupsHistory, HistoryEvent, KillResult, KillTarget, KillSignal, ProcsHistory, RangePreset,
+  ApplyResult, Category, EarlyoomStatus, Config, ConfigState, Culprit, InstanceTargets, ProcInfo, Watch, GroupHistory, GroupsHistory, HistoryEvent, KillResult, KillTarget, KillSignal, ProcsHistory, RangePreset,
   RecorderState, Snapshot, SystemSeries, TimeRange, TopOptions, TopResult,
 } from '../core/types';
 
@@ -47,6 +48,11 @@ const api = {
     culprits: (ts: number): Promise<Culprit[]> => ipcRenderer.invoke('history:culprits', ts),
     top: (r: RangePreset | TimeRange, o?: TopOptions): Promise<TopResult> => ipcRenderer.invoke('history:top', r, o),
     events: (r: RangePreset | TimeRange): Promise<HistoryEvent[]> => ipcRenderer.invoke('history:events', r),
+  },
+  earlyoom: {
+    status: (): Promise<EarlyoomStatus> => ipcRenderer.invoke('earlyoom:status'),
+    /** pkexec d'un script fixe : la ligne est reconstruite et validée par le main (liste protégée de la config). */
+    apply: (s: EarlyoomSettings): Promise<ApplyResult> => ipcRenderer.invoke('earlyoom:apply', s),
   },
   recorder: {
     status: (): Promise<RecorderState> => ipcRenderer.invoke('recorder:status'),

@@ -1,3 +1,5 @@
+import type { EarlyoomSettings } from './earlyoom';
+
 export interface ProcSample {
   pid: number;
   ppid: number;
@@ -188,3 +190,19 @@ export interface RecorderState {
   status: RecorderStatus | null;
 }
 export interface RecorderStatus { pid: number; startedAt: number; lastSampleAt: number | null; lastError: string | null; earlyoomSource: 'ok' | 'unavailable'; dbSizeBytes: number; /** Avertissement non bloquant (ex. migration faite sans copie de sécurité) */ warning?: string | null; jobErrors?: Record<'tick' | 'minute' | 'earlyoom', string | null> }
+
+/** État d'earlyoom vu par l'app (Réglages › earlyoom). */
+export interface EarlyoomStatus {
+  /** /usr/bin/earlyoom (ou PROC_WATCH_EARLYOOM_BIN, pour les captures) */
+  installed: boolean;
+  /** Sortie de `earlyoom -v` (« earlyoom 1.9.0 » → « 1.9.0 ») */
+  version: string | null;
+  /** `systemctl is-active earlyoom` */
+  active: 'active' | 'inactive' | 'failed' | 'unknown';
+  /** /etc/default/earlyoom lu */
+  file: { settings: EarlyoomSettings; converted: string[]; line: string } | null;
+  installHint: string;
+}
+export type ApplyResult =
+  | { ok: true; line: string }
+  | { ok: false; reason: 'cancelled' | 'invalid' | 'failed' | 'unavailable'; message: string };
