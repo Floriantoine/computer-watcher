@@ -6,6 +6,12 @@ import { openHistoryDb } from './db';
 import { aggregateMinute } from './maintenance';
 import { queryGroups, queryProcsAt, querySystem, queryTop, rangeFromPreset } from './queries';
 
+// Objectifs réels (150 ms, 50 ms pour queryProcsAt) : vérifiés avec PROC_WATCH_PERF=1 (`npm run test:recorder`),
+// sur une machine au repos. Dans `npm test`, la suite tourne en parallèle sur tous les cœurs (et parfois à côté d'un
+// build) : les temps varient d'un facteur 3 à 5 sans régression. On garde donc une borne 10 fois plus large, qui
+// attrape encore une vraie régression (index perdu, balayage complet : plusieurs secondes) sans échouer sous charge.
+const STRICT = process.env.PROC_WATCH_PERF === '1';
+const SLACK = STRICT ? 1 : 10;
 const H = 3600_000;
 const M = 60_000;
 
@@ -37,7 +43,7 @@ test('performance : 24 h x 100 groupes à 5 s', () => {
     fn();
     const ms = performance.now() - t0;
     console.info(`${name}: ${ms.toFixed(1)} ms`);
-    expect(ms).toBeLessThan(name.startsWith("queryProcsAt") ? 50 : 150);
+    expect(ms).toBeLessThan((name.startsWith('queryProcsAt') ? 50 : 150) * SLACK);
   };
   time('queryGroups 24h', () => expect(queryGroups(db, rangeFromPreset('24h', now), o).series).toHaveLength(100));
   time('queryGroups 1h', () => expect(queryGroups(db, rangeFromPreset('1h', now), o).series).toHaveLength(100));

@@ -7,6 +7,11 @@ import { expect, test } from 'vitest';
 import { addProc, makeProcRoot } from '../core/collector/fakeProc';
 import { createRecorder } from './recorder';
 
+// minuteJob après un saut de 31 jours rattrape et purge un mois de minutes : ≈ 2,5 s sur une machine
+// calme, plus que les 5 s par défaut de Vitest sous charge (suite complète, build en parallèle).
+// La borne reste finie : une boucle de rattrapage devenue quadratique échouerait toujours.
+const SLOW_MS = 30_000;
+
 function setup() {
   const base = mkdtempSync(join(tmpdir(), 'pw-r-'));
   const procRoot = makeProcRoot(1000);
@@ -102,7 +107,7 @@ test('après une purge qui supprime un processus en cache, le tick suivant recr�
   expect(db().prepare('SELECT COUNT(*) n FROM proc_samples WHERE proc_id NOT IN (SELECT id FROM procs)').get()).toEqual({ n: 0 });
   expect(db().prepare('SELECT COUNT(*) n FROM proc_samples').get()).toEqual({ n: 2 });
   rec.stop();
-});
+}, SLOW_MS);
 
 test('redémarrage : la minute en cours à l\'arrêt est agrégée', () => {
   const { rec, db, base, procRoot } = setup();
@@ -129,7 +134,7 @@ test('une étape de minuteJob en échec ne bloque pas la purge ; erreurs par tra
   expect(s.lastError).toMatch(/^minute: /);
   expect(db().prepare('SELECT COUNT(*) n FROM system_samples').get()).toEqual({ n: 0 }); // purge exécutée malgré tout
   rec.stop();
-});
+}, SLOW_MS);
 
 test('base d\'une version plus récente : statut en erreur, inactif, aucune écriture', () => {
   const { rec, base, db } = setup();
