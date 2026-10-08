@@ -22,6 +22,7 @@ import { CATEGORY_META } from '../categories';
 import { overrideRows, withDetectPorts, withoutOverride } from '../classifySettings';
 import { AlertsSettings } from './AlertsSettings';
 import { formatKB } from '../format';
+import { pollWhileLive } from '../history';
 import { EarlyoomPanel, type EarlyoomAttention } from './EarlyoomPanel';
 import { SettingsConfirm } from './SettingsConfirm';
 import { Card, NumberField, Row, SaveBar, Switch } from './settingsUi';
@@ -149,11 +150,11 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
         },
         () => {},
       );
-    void load();
-    const t = setInterval(load, 5000);
+    // fenêtre réduite ou cachée dans la barre des tâches : pas de sondage
+    const stop = pollWhileLive(() => void load(), 5000);
     return () => {
       alive = false;
-      clearInterval(t);
+      stop();
     };
   }, []);
 

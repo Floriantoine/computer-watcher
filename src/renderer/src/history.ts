@@ -50,6 +50,22 @@ export function onLiveResume(cb: () => void): () => void {
 }
 
 /**
+ * `load` tout de suite, puis toutes les `ms` tant que la collecte est en direct (rien fenêtre réduite ou cachée),
+ * et à chaque reprise. Renvoie l'arrêt.
+ */
+export function pollWhileLive(load: () => void, ms: number): () => void {
+  load();
+  const t = setInterval(() => {
+    if (live) load();
+  }, ms);
+  const off = onLiveResume(load);
+  return () => {
+    clearInterval(t);
+    off();
+  };
+}
+
+/**
  * Charge des données d'historique et les rafraîchit périodiquement (`refreshMs` nul : jamais) ; ignore les réponses obsolètes.
  * Pas de rafraîchissement périodique tant que la fenêtre est réduite ou cachée.
  */

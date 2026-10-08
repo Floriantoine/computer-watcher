@@ -258,13 +258,18 @@ try {
     results.forEach((rows, i) => print(`Fenêtre ${label} (page Processus)${apps.length > 1 ? ` — ${apps[i].dir}` : ''}`, rows));
   }
 } finally {
-  for (const { child, ws, cfg } of apps) {
+  for (const { child, ws, cfg, dir } of apps) {
     ws.close();
     child.kill('SIGTERM');
     // garde-fou : une app qui ne se termine pas en 5 s (fenêtre retenue dans la barre des tâches) est tuée
-    const force = setTimeout(() => child.kill('SIGKILL'), 5000);
+    const t0 = Date.now();
+    const force = setTimeout(() => {
+      console.log(`SIGKILL forcé : ${dir} ne s'est pas terminé 5 s après SIGTERM`);
+      child.kill('SIGKILL');
+    }, 5000);
     await new Promise((r) => (child.exitCode !== null ? r() : child.once('exit', r)));
     clearTimeout(force);
+    console.log(`${dir} terminé ${Date.now() - t0} ms après SIGTERM`);
     rmSync(cfg, { recursive: true, force: true });
   }
   for (const kwin of kwins) await kwin.stop();

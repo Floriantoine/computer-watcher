@@ -12,10 +12,14 @@ export interface TrayLike {
   destroy(): void;
 }
 export interface TrayMenuItem { label?: string; type?: 'separator'; enabled?: boolean; click?: () => void }
+/** Une représentation de l'icône : PNG et facteur d'échelle (1x = 22 px, 2x = 44 px pour les écrans HiDPI). */
+export interface IconRep { scaleFactor: number; png: Buffer }
 export interface TrayDeps {
   createTray(image: unknown): TrayLike;
-  image(png: Buffer): unknown;
+  image(reps: IconRep[]): unknown;
   menu(items: TrayMenuItem[]): unknown;
+  /** Signale l'ouverture et la fermeture du menu, si la plateforme le permet (sinon jamais appelé). */
+  watchMenu?(menu: unknown, onShow: () => void, onHide: () => void): void;
   readSystem(): SystemInfo;
   setInterval(fn: () => void, ms: number): unknown;
   clearInterval(h: unknown): void;
@@ -28,10 +32,28 @@ export interface TrayDeps {
 export const TRAY_EVERY_MS = 10_000;
 
 /**
- * Icône de la barre des tâches : redessinée seulement si sa clé (tranche de 5 % de RAM, niveau de pression) change,
- * menu refait seulement si ses libellés changent.
+ * Clé de reconstruction du menu, plus grossière que ses libellés : RAM et swap au pas de 0,5 Go, charge au pas de 0,5,
+ * pression au pas de 5 %. Le menu n'est refait (un LayoutUpdated dbusmenu) que si elle change.
  */
-export function createTrayController(deps: TrayDeps): { update(): void; stop(): void; stats(): { redraws: number; menus: number } } {
+export function menuKey(s: SystemInfo): string {
+  const half = (kb: number) => Math.round((Math.max(0, kb) / (1024 * 1024)) * 2);
+  const psi = s.psiSome10 === null ? '-' : String(Math.round(s.psiSome10 / 5));
+  return `${half(s.memTotalKB - s.memAvailableKB)}:${half(s.swapTotalKB - s.swapFreeKB)}:${Math.round(s.load1 * 2)}:${psi}`;
+}
+
+export interface TrayController {
+  update(): void;
+  stop(): void;
+  /** Vrai si l'icône existe réellement (créée et pas encore détruite). */
+  active(): boolean;
+  stats(): { redraws: number; menus: number };
+}
+
+/**
+ * Icône de la barre des tâches : redessinée seulement si sa clé (tranche de 5 % de RAM, niveau de pression) change,
+ * menu refait seulement si `menuKey` change, et jamais pendant qu'il est ouvert (appliqué à sa fermeture).
+ */
+export function createTrayController(deps: TrayDeps): TrayController {
   let redraws = 0;
   let menus = 0;
   let key = '';
@@ -39,6 +61,9 @@ export function createTrayController(deps: TrayDeps): { update(): void; stop(): 
   let tooltip = '';
   let tray: TrayLike | null = null;
   let timer: unknown = null;
+  let stopped = false;
+  let menuOpen = false;
+  let pending: SystemInfo | null = null;
 
   const draw = (s: SystemInfo) => {
     const pct = memPercent(s);
@@ -46,7 +71,7 @@ export function createTrayController(deps: TrayDeps): { update(): void; stop(): 
     const next = iconKey(pct, level);
     if (next === key && tray) return;
     key = next;
-    const img = deps.image(encodePng(ringPixels(pct, level), TRAY_SIZE, TRAY_SIZE));
+    const img = deps.image([1, 2].map((scaleFactor) => ({ scaleFactor, png: encodePng(ringPixels(pct, level, TRAY_SIZE * scaleFactor), TRAY_SIZE * scaleFactor, TRAY_SIZE * scaleFactor) })));
     redraws++;
     if (tray) tray.setImage(img);
     else {
@@ -55,27 +80,44 @@ export function createTrayController(deps: TrayDeps): { update(): void; stop(): 
     }
   };
 
+  const buildMenu = (s: SystemInfo) => {
+    const l = trayMenuLabels(s);
+    menus++;
+    const m = deps.menu([
+      { label: l.mem, enabled: false },
+      { label: l.pressure, enabled: false },
+      { type: 'separator' },
+      { label: 'Ouvrir proc-watch', click: () => deps.onOpen() },
+      { label: 'Libérer de la mémoire…', click: () => deps.onFree() },
+      { type: 'separator' },
+      { label: 'Quitter', click: () => deps.onQuit() },
+    ]);
+    deps.watchMenu?.(
+      m,
+      () => void (menuOpen = true),
+      () => {
+        menuOpen = false;
+        if (pending && tray && !stopped) {
+          const p = pending;
+          pending = null;
+          buildMenu(p);
+        }
+      },
+    );
+    tray!.setContextMenu(m);
+  };
+
   const describe = (s: SystemInfo) => {
     const l = trayMenuLabels(s);
     if (l.tooltip !== tooltip) {
       tooltip = l.tooltip;
       tray!.setToolTip(l.tooltip);
     }
-    const k = `${l.mem}\n${l.pressure}`;
+    const k = menuKey(s);
     if (k === labelsKey) return;
     labelsKey = k;
-    menus++;
-    tray!.setContextMenu(
-      deps.menu([
-        { label: l.mem, enabled: false },
-        { label: l.pressure, enabled: false },
-        { type: 'separator' },
-        { label: 'Ouvrir proc-watch', click: () => deps.onOpen() },
-        { label: 'Libérer de la mémoire…', click: () => deps.onFree() },
-        { type: 'separator' },
-        { label: 'Quitter', click: () => deps.onQuit() },
-      ]),
-    );
+    if (menuOpen) pending = s;
+    else buildMenu(s);
   };
 
   const update = () => {
@@ -91,7 +133,6 @@ export function createTrayController(deps: TrayDeps): { update(): void; stop(): 
     describe(s);
   };
 
-  let stopped = false;
   update();
   timer = deps.setInterval(update, TRAY_EVERY_MS);
 
@@ -104,6 +145,7 @@ export function createTrayController(deps: TrayDeps): { update(): void; stop(): 
       tray?.destroy();
       tray = null;
     },
+    active: () => tray !== null,
     stats: () => ({ redraws, menus }),
   };
 }
@@ -115,16 +157,44 @@ export const defaultRun: Run = (cmd, args) =>
     execFile(cmd, args, { timeout: 3000 }, (err, stdout) => resolve({ ok: !err, stdout: String(stdout) }));
   });
 
-/** org.kde.StatusNotifierWatcher a-t-il un propriétaire sur le bus de session ? Toute erreur → false. */
+/**
+ * Zone de notification réellement affichée : le watcher (org.kde.StatusNotifierWatcher, tenu par kded sous KDE) a un
+ * propriétaire sur le bus de session **et** un hôte est enregistré (widget « Zone de notification » de plasmashell…).
+ * Watcher sans hôte (widget retiré, plasmashell arrêté) → faux. Toute erreur → faux.
+ */
 export async function statusNotifierAvailable(run: Run): Promise<boolean> {
   try {
-    const r = await run('busctl', [
+    const owner = await run('busctl', [
       '--user', 'call', 'org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus', 'NameHasOwner', 's', 'org.kde.StatusNotifierWatcher',
     ]);
-    return r.ok && r.stdout.trim() === 'b true';
+    if (!owner.ok || owner.stdout.trim() !== 'b true') return false;
+    const host = await run('busctl', [
+      '--user', 'get-property', 'org.kde.StatusNotifierWatcher', '/StatusNotifierWatcher', 'org.kde.StatusNotifierWatcher', 'IsStatusNotifierHostRegistered',
+    ]);
+    return host.ok && host.stdout.trim() === 'b true';
   } catch {
     return false;
   }
+}
+
+/** Plafond de la vérification faite au moment de fermer la fenêtre. */
+export const TRAY_CHECK_MS = 1000;
+
+/** `check` au plus `timeoutMs` : faux s'il répond non, lève ou tarde (fermer quitte alors au lieu de cacher). */
+export function confirmTray(check: () => Promise<boolean>, timeoutMs = TRAY_CHECK_MS): Promise<boolean> {
+  return new Promise((resolve) => {
+    const t = setTimeout(() => resolve(false), timeoutMs);
+    check().then(
+      (ok) => {
+        clearTimeout(t);
+        resolve(ok === true);
+      },
+      () => {
+        clearTimeout(t);
+        resolve(false);
+      },
+    );
+  });
 }
 
 /** Fermer la fenêtre la cache dans la barre seulement si l'icône est réellement affichée et que l'app ne quitte pas. */
