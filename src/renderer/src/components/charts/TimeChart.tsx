@@ -32,6 +32,8 @@ interface Props {
   xRange?: { from: number; to: number } | null;
   /** Ctrl + molette (zoom) ou Maj + molette (déplacement) sur le graphe. */
   onWheel?: (w: { anchor: number; delta: number; pan: boolean }) => void;
+  /** Bouton molette maintenu + glisser : déplacement horizontal en px depuis le début du geste (`done` au relâcher). */
+  onDragPan?: (d: { dxPx: number; widthPx: number; phase: 'start' | 'move' | 'end' }) => void;
 }
 
 interface Tip {
@@ -57,15 +59,15 @@ function zeroBased(_u: uPlot, _min: number, max: number): uPlot.Range.MinMax {
   return [0, max > 0 ? max * 1.08 : 1];
 }
 
-export function TimeChart({ ts, series, height, format, markers, onCursor, onSelectRange, focusSeries = null, focusMarker = null, xRange = null, onWheel }: Props) {
+export function TimeChart({ ts, series, height, format, markers, onCursor, onSelectRange, focusSeries = null, focusMarker = null, xRange = null, onWheel, onDragPan }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const plot = useRef<uPlot | null>(null);
   const reduce = !!useReducedMotionConfig();
   const [tip, setTip] = useState<Tip | null>(null);
 
   // Valeurs lues par les hooks uPlot sans recréer l'instance.
-  const live = useRef({ ts, series, format, markers, onCursor, onSelectRange, focusMarker, onWheel });
-  live.current = { ts, series, format, markers, onCursor, onSelectRange, focusMarker, onWheel };
+  const live = useRef({ ts, series, format, markers, onCursor, onSelectRange, focusMarker, onWheel, onDragPan });
+  live.current = { ts, series, format, markers, onCursor, onSelectRange, focusMarker, onWheel, onDragPan };
 
   const key = structureKey(series);
   const data = useMemo(() => toAligned(ts, series), [ts, series]);
@@ -195,6 +197,24 @@ export function TimeChart({ ts, series, height, format, markers, onCursor, onSel
               },
               { passive: false },
             );
+            // Bouton molette : glisser pour se déplacer (sans le défilement automatique ni le collage de Linux).
+            u.over.addEventListener('mousedown', (e) => {
+              if (e.button !== 1 || !live.current.onDragPan) return;
+              e.preventDefault();
+              const x0 = e.clientX;
+              const widthPx = u.over.clientWidth;
+              live.current.onDragPan({ dxPx: 0, widthPx, phase: 'start' });
+              const move = (ev: MouseEvent) => live.current.onDragPan?.({ dxPx: ev.clientX - x0, widthPx, phase: 'move' });
+              const up = (ev: MouseEvent) => {
+                if (ev.button !== 1) return;
+                window.removeEventListener('mousemove', move);
+                window.removeEventListener('mouseup', up);
+                live.current.onDragPan?.({ dxPx: ev.clientX - x0, widthPx, phase: 'end' });
+              };
+              window.addEventListener('mousemove', move);
+              window.addEventListener('mouseup', up);
+            });
+            u.over.addEventListener('auxclick', (e) => e.button === 1 && e.preventDefault());
           },
         ],
       },

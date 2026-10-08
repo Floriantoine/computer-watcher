@@ -121,3 +121,28 @@ export function wheelPan(view: TimeRange, bounds: TimeRange, delta: number): Tim
   const shift = Math.max(-span, Math.min(span, (span * 0.1 * delta) / 100));
   return clampWindow(Math.round(view.from + shift), span, bounds);
 }
+
+/** Zoom mémorisé : largeur + bord droit ; `to: null` = collé au bout, la fenêtre suit le direct. */
+export interface ZoomState { span: number; to: number | null }
+
+/** Au plus 60 s (ou 2 % de la fenêtre) du bout : considéré « au bout ». */
+const EDGE_TOLERANCE_MS = 60_000;
+
+export function toZoom(view: TimeRange, now: number): ZoomState {
+  const span = view.to - view.from;
+  const tol = Math.max(EDGE_TOLERANCE_MS, span * 0.02);
+  return { span, to: now - view.to <= tol ? null : view.to };
+}
+
+export function zoomRange(z: ZoomState, now: number): TimeRange {
+  const to = z.to ?? now;
+  return { from: to - z.span, to };
+}
+
+/** Bouton molette maintenu : la fenêtre suit la souris (glisser à droite = remonter le temps) ; `null` sans zoom. */
+export function dragPan(view: TimeRange, bounds: TimeRange, dxPx: number, widthPx: number): TimeRange | null {
+  const span = view.to - view.from;
+  if (span >= bounds.to - bounds.from) return null;
+  if (widthPx <= 0) return view;
+  return clampWindow(Math.round(view.from - (dxPx / widthPx) * span), span, bounds);
+}

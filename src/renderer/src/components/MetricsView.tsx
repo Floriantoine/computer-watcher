@@ -5,7 +5,7 @@ import type { Culprit, RangePreset, TimeRange } from '../../../core/types';
 import { formatKB } from '../format';
 import { useHistory } from '../history';
 import { ipcErrorMessage } from '../viewModel';
-import { eventMarkers, fetchMetrics, formatInstant, INVESTIGATION_LAYERS, investigationSeries, refreshMsFor, wheelPan, wheelZoom } from '../metrics';
+import { eventMarkers, fetchMetrics, formatInstant, INVESTIGATION_LAYERS, investigationSeries, refreshMsFor, wheelPan, wheelZoom, dragPan, toZoom, zoomRange, type ZoomState } from '../metrics';
 import { AlertsPanel } from './AlertsPanel';
 import { CulpritsPanel } from './CulpritsPanel';
 import { seriesIndexOf, type ChartSeries } from './charts/chartData';
@@ -51,16 +51,23 @@ interface SysChart {
 
 export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
   const [preset, setPreset] = useState<RangePreset>(() => presetFor(at));
-  const [zoom, setZoomNow] = useState<TimeRange | null>(null);
-  // Fenêtre affichée : suit la molette tout de suite ; `zoom` (qui recharge les données) suit 250 ms après le dernier cran.
+  // Zoom (recharge les données) : largeur + bord droit ; collé au bout (`to: null`), il suit le direct.
+  const [zoom, setZoomNow] = useState<ZoomState | null>(null);
+  const zoomRef = useRef<ZoomState | null>(null);
+  zoomRef.current = zoom;
+  // Fenêtre affichée : suit la molette / le glisser tout de suite ; `zoom` suit 250 ms après le dernier geste.
   const [view, setView] = useState<TimeRange | null>(null);
   const viewRef = useRef<TimeRange | null>(null);
   viewRef.current = view;
   const wheelTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const setZoom = (z: TimeRange | null) => {
+  const commitLater = (next: TimeRange | null, delay = 250) => {
     if (wheelTimer.current) clearTimeout(wheelTimer.current);
-    setView(z);
-    setZoomNow(z);
+    wheelTimer.current = setTimeout(() => setZoomNow(next ? toZoom(next, Date.now()) : null), delay);
+  };
+  const setZoom = (r: TimeRange | null) => {
+    if (wheelTimer.current) clearTimeout(wheelTimer.current);
+    setView(r);
+    setZoomNow(r ? toZoom(r, Date.now()) : null);
   };
   useEffect(() => () => { if (wheelTimer.current) clearTimeout(wheelTimer.current); }, []);
   const [cursor, setCursor] = useState<number | null>(at ?? null);
@@ -80,10 +87,16 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
   // Une seule plage explicite pour toutes les requêtes : mêmes buckets, donc mêmes horodatages pour le système et les groupes.
   const data = useHistory(
     // Enquête : on ne charge que les groupes aux plus hauts pics ; le reste est déduit de la mémoire totale du système.
-    () => fetchMetrics(window.procWatch.history, zoom ?? { from: Date.now() - PRESET_MS[preset], to: Date.now() }),
+    () => fetchMetrics(window.procWatch.history, zoom ? zoomRange(zoom, Date.now()) : { from: Date.now() - PRESET_MS[preset], to: Date.now() }),
     [preset, zoom, reloadGen],
-    refreshMsFor(preset, zoom !== null),
+    // Zoom figé : rien ne bouge, pas de rafraîchissement ; zoom en direct : comme la plage complète.
+    refreshMsFor(preset, zoom !== null && zoom.to !== null),
   );
+  // En direct, la fenêtre affichée est celle des données fraîches (elle avance à chaque rafraîchissement).
+  const dragging = useRef(false);
+  useEffect(() => {
+    if (zoomRef.current?.to === null && !dragging.current) setView(null);
+  }, [data]);
   const system = data?.system;
   const events = data?.events;
 
@@ -156,15 +169,37 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
     const half = Math.max(r.to - r.from, MIN_ZOOM_MS) / 2;
     setZoom({ from: Math.round(mid - half), to: Math.round(mid + half) });
   };
-  const onWheel = (w: { anchor: number; delta: number; pan: boolean }) => {
+  /** Fenêtre visible maintenant : celle du geste en cours, sinon celle du zoom, sinon la plage complète. */
+  const currentView = (bounds: TimeRange): TimeRange => viewRef.current ?? (zoomRef.current ? zoomRange(zoomRef.current, bounds.to) : bounds);
+  const presetBounds = (): TimeRange => {
     const now = Date.now();
-    const bounds = { from: now - PRESET_MS[preset], to: now };
-    const cur = viewRef.current ?? bounds;
-    if (w.pan && !viewRef.current) return; // rien à déplacer sans zoom
+    return { from: now - PRESET_MS[preset], to: now };
+  };
+  const onWheel = (w: { anchor: number; delta: number; pan: boolean }) => {
+    const bounds = presetBounds();
+    if (w.pan && !zoomRef.current && !viewRef.current) return; // rien à déplacer sans zoom
+    const cur = currentView(bounds);
     const next = w.pan ? wheelPan(cur, bounds, w.delta) : wheelZoom(cur, bounds, w.anchor, w.delta, MIN_ZOOM_MS);
     setView(next);
-    if (wheelTimer.current) clearTimeout(wheelTimer.current);
-    wheelTimer.current = setTimeout(() => setZoomNow(next), 250);
+    commitLater(next);
+  };
+  const dragStart = useRef<TimeRange | null>(null);
+  const onDragPan = (d: { dxPx: number; widthPx: number; phase: 'start' | 'move' | 'end' }) => {
+    const bounds = presetBounds();
+    if (d.phase === 'start') {
+      dragStart.current = zoomRef.current || viewRef.current ? currentView(bounds) : null;
+      dragging.current = dragStart.current !== null;
+      if (wheelTimer.current) clearTimeout(wheelTimer.current);
+      return;
+    }
+    if (!dragStart.current) return; // pas de zoom : rien à déplacer
+    const next = dragPan(dragStart.current, bounds, d.dxPx, d.widthPx);
+    setView(next);
+    if (d.phase === 'end') {
+      dragging.current = false;
+      dragStart.current = null;
+      commitLater(next, 0);
+    }
   };
   const pickPreset = (p: RangePreset) => {
     setZoom(null);
@@ -177,7 +212,15 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
         <RangeSelector value={preset} onChange={pickPreset} />
         {zoom && (
           <>
-            <span className="zoom-chip mono"><ZoomIn size={12} strokeWidth={2} />{formatAxisTime(zoom.from, zoom.to - zoom.from)} → {formatAxisTime(zoom.to, zoom.to - zoom.from)}</span>
+            {zoom.to === null ? (
+              <span className="zoom-chip mono live" data-testid="zoom-live" title="Collé au bout : la fenêtre avance avec le temps">
+                <i className="live-dot" />En direct · {formatAxisTime(Date.now() - zoom.span, zoom.span)} → maintenant
+              </span>
+            ) : (
+              <span className="zoom-chip mono" title="Fenêtre figée : revenez au bout pour suivre le direct">
+                <ZoomIn size={12} strokeWidth={2} />{formatAxisTime(zoom.to - zoom.span, zoom.span)} → {formatAxisTime(zoom.to, zoom.span)}
+              </span>
+            )}
             <button onClick={() => setZoom(null)} data-testid="reset-zoom">
               <RotateCcw size={13} strokeWidth={2} /> Réinitialiser le zoom
             </button>
@@ -189,7 +232,7 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
           </button>
         )}
         <span className="spacer" />
-        <span className="sub hint">Glisser ou Ctrl + molette pour zoomer · Maj + molette pour se déplacer · double-clic pour revenir · clic pour les coupables</span>
+        <span className="sub hint">Glisser ou Ctrl + molette pour zoomer · clic molette ou Maj + molette pour se déplacer · double-clic pour revenir · clic pour les coupables</span>
       </div>
 
       <StatusBanner
@@ -216,7 +259,7 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
               {'sub' in c && <span className="sub">{c.sub}</span>}
             </div>
             {'series' in c ? (
-              <TimeChart ts={system!.ts} series={c.series} height={96} format={c.format} markers={markers} focusMarker={hoverTs} xRange={view} onWheel={onWheel} onCursor={setCursor} onSelectRange={onSelectRange} />
+              <TimeChart ts={system!.ts} series={c.series} height={96} format={c.format} markers={markers} focusMarker={hoverTs} xRange={view} onWheel={onWheel} onDragPan={onDragPan} onCursor={setCursor} onSelectRange={onSelectRange} />
             ) : (
               <div className="chart-empty small">{data === undefined ? 'Chargement…' : 'Pas de données'}</div>
             )}
@@ -238,7 +281,7 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
                   </span>
                 ))}
               </div>
-              <TimeChart ts={inv.ts} series={inv.series} height={320} format={KB} markers={markers} focusSeries={focusSeries} focusMarker={hoverTs} xRange={view} onWheel={onWheel} onCursor={setCursor} onSelectRange={onSelectRange} />
+              <TimeChart ts={inv.ts} series={inv.series} height={320} format={KB} markers={markers} focusSeries={focusSeries} focusMarker={hoverTs} xRange={view} onWheel={onWheel} onDragPan={onDragPan} onCursor={setCursor} onSelectRange={onSelectRange} />
             </>
           ) : (
             <div className="chart-empty tall">{data === undefined ? 'Chargement…' : 'Pas encore assez de données pour l’enquête'}</div>

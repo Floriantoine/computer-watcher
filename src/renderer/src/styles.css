@@ -524,6 +524,8 @@ table.tree td.spark-cell .spark { width: 64px; }
 .metrics-toolbar .hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .metrics-toolbar button { padding: 4px 10px; font-size: 11.5px; }
 .zoom-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 99px; background: rgba(124, 92, 255, 0.12); border: 1px solid rgba(124, 92, 255, 0.3); color: var(--text-2); }
+.zoom-chip.live { background: rgba(47, 179, 122, 0.12); border-color: rgba(47, 179, 122, 0.35); }
+.live-dot { width: 7px; height: 7px; border-radius: 50%; background: #2fb37a; box-shadow: 0 0 0 3px rgba(47, 179, 122, 0.18); }
 .metrics-banner { display: flex; align-items: center; gap: 9px; margin: 0 var(--gutter) 12px; padding: 9px 12px; border-radius: var(--r-md); background: rgba(255, 181, 71, 0.08); border: 1px solid rgba(255, 181, 71, 0.25); color: #ffd9a0; }
 .metrics-banner svg { flex: none; color: var(--amber); }
 .metrics-banner b { font-weight: 600; }

@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { alertsFrom, eventMarkers, fetchMetrics, formatInstant, investigationSeries, refreshMsFor, wheelPan, wheelZoom } from './metrics';
+import { alertsFrom, eventMarkers, fetchMetrics, formatInstant, investigationSeries, refreshMsFor, wheelPan, wheelZoom, dragPan, toZoom, zoomRange } from './metrics';
 
 test('investigationSeries : top n + Reste, valeurs brutes (courbes séparées, pas d\'empilement)', () => {
   const h = {
@@ -122,4 +122,25 @@ test('wheelPan : décale la fenêtre sans sortir des bornes ; sans zoom, rien à
   expect(wheelPan({ from: 55 * M, to: 59 * M + 30_000 }, bounds, 1000)).toEqual({ from: 55 * M + 30_000, to: 60 * M });
   expect(wheelPan({ from: M, to: 11 * M }, bounds, -1000)).toEqual({ from: 0, to: 10 * M });
   expect(wheelPan(bounds, bounds, 100)).toBeNull();
+});
+
+test('toZoom : une fenêtre collée au bout (à la tolérance près) suit le direct, sinon elle est figée', () => {
+  const now = 60 * M;
+  expect(toZoom({ from: 40 * M, to: now }, now)).toEqual({ span: 20 * M, to: null });
+  expect(toZoom({ from: 40 * M - 30_000, to: now - 30_000 }, now)).toEqual({ span: 20 * M, to: null }); // < 60 s
+  expect(toZoom({ from: 30 * M, to: 50 * M }, now)).toEqual({ span: 20 * M, to: 50 * M });
+});
+
+test('zoomRange : en direct, la fenêtre avance avec le temps ; figée, elle ne bouge pas', () => {
+  expect(zoomRange({ span: 20 * M, to: null }, 90 * M)).toEqual({ from: 70 * M, to: 90 * M });
+  expect(zoomRange({ span: 20 * M, to: 50 * M }, 90 * M)).toEqual({ from: 30 * M, to: 50 * M });
+});
+
+test('dragPan : glisser vers la droite remonte le temps, borné ; sans zoom, rien', () => {
+  // 100 px sur 1000 px d'une fenêtre de 10 min = 1 min
+  expect(dragPan({ from: 20 * M, to: 30 * M }, bounds, 100, 1000)).toEqual({ from: 19 * M, to: 29 * M });
+  expect(dragPan({ from: 20 * M, to: 30 * M }, bounds, -100, 1000)).toEqual({ from: 21 * M, to: 31 * M });
+  expect(dragPan({ from: 55 * M, to: 59 * M }, bounds, -10_000, 1000)).toEqual({ from: 56 * M, to: 60 * M });
+  expect(dragPan(bounds, bounds, 100, 1000)).toBeNull();
+  expect(dragPan({ from: 20 * M, to: 30 * M }, bounds, 100, 0)).toEqual({ from: 20 * M, to: 30 * M });
 });
