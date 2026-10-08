@@ -1,7 +1,8 @@
 // src/main/historyIpc.ts — parties pures de l'IPC historique (validation, état du service)
 import { isCategory } from '../core/classify/categories';
-import { MAX_OVERRIDE_KEY, MAX_OVERRIDES } from '../core/config';
-import type { Category, RangePreset, RecorderState, RecorderStatus, TimeRange, TopOptions } from '../core/types';
+import { MAX_OVERRIDE_KEY, MAX_OVERRIDES, validateConfigDetailed } from '../core/config';
+import { checkRulesTransition } from '../core/rules/config';
+import type { Category, Config, RangePreset, RecorderState, RecorderStatus, TimeRange, TopOptions } from '../core/types';
 
 export const isRange = (r: unknown): r is RangePreset | TimeRange =>
   ['1h', '6h', '24h', '7d', '30d'].includes(r as string) ||
@@ -83,3 +84,21 @@ export function applyOverride(overrides: Record<string, Category>, key: string, 
   next[key] = category;
   return next;
 }
+
+/**
+ * `config:set` : validation stricte (une règle refusée refuse tout l'enregistrement, contrairement à la lecture du
+ * fichier), puis transition des règles (une nouvelle règle, ou une règle active modifiée, démarre en Simulation).
+ * Lève une erreur au texte affichable tel quel ; rien n'est sauvegardé.
+ */
+export function checkConfigSet(next: unknown, current: Config): Config {
+  const checked = validateConfigDetailed(next);
+  if (!checked) throw new Error('Configuration invalide');
+  const issue = checked.ruleIssues[0];
+  if (issue) throw new Error(`Règle ${issue.name ? `« ${issue.name} »` : `n° ${issue.index + 1}`} invalide : ${issue.error}`);
+  const err = checkRulesTransition(current.rules, checked.config.rules);
+  if (err) throw new Error(err);
+  return checked.config;
+}
+
+/** Handler `kill` de l'app : PROC_WATCH_NO_KILL=1 (vérifications visuelles) → aucun signal, chaque cible refusée NOKILL. */
+export const noKill = (env: NodeJS.ProcessEnv = process.env): boolean => env.PROC_WATCH_NO_KILL === '1';

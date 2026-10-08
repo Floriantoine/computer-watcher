@@ -1,6 +1,7 @@
-import { expect, test } from 'vitest';
+import { describe, expect, test } from 'vitest';
+import { DEFAULT_CONFIG } from '../core/config';
 import type { RecorderStatus } from '../core/types';
-import { applyOverride, clampToDetail, classifySetKey, isGroupKeys, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState } from './historyIpc';
+import { applyOverride, checkConfigSet, noKill, clampToDetail, classifySetKey, isGroupKeys, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState } from './historyIpc';
 
 test('isRange : préréglages et plages valides uniquement', () => {
   for (const ok of ['1h', '6h', '24h', '7d', '30d', { from: 0, to: 10 }]) expect(isRange(ok)).toBe(true);
@@ -90,4 +91,32 @@ test('isProcTreeRequest : clé de 1 à 4 096 caractères, instant fini, ≥ 0, �
 test('isOptionalGroupKey : absent, ou clé de 1 à 4 096 caractères', () => {
   for (const ok of [undefined, 'a', 'x'.repeat(4096)]) expect(isOptionalGroupKey(ok)).toBe(true);
   for (const bad of ['', 'x'.repeat(4097), 3, null, {}, ['a']]) expect(isOptionalGroupKey(bad)).toBe(false);
+});
+
+describe('config:set et règles (⑥)', () => {
+  const rule = {
+    id: 'r-a', name: 'vitest', enabled: true, mode: 'simulate' as const, createdAt: 1,
+    condition: { kind: 'memory' as const, target: 'instance' as const, match: { by: 'name' as const, value: 'vitest' }, overMB: 4096, forMin: 5 },
+  };
+  const current = { ...DEFAULT_CONFIG, rules: { enabled: true, list: [rule] } };
+
+  test('nouvelle règle active → rejet, message « démarre en Simulation »', () => {
+    const next = { ...current, rules: { enabled: true, list: [rule, { ...rule, id: 'r-b', mode: 'active' }] } };
+    expect(() => checkConfigSet(next, current)).toThrow(/^Une nouvelle règle démarre en Simulation/);
+  });
+  test('règle existante passée en Active → acceptée', () => {
+    const next = { ...current, rules: { enabled: true, list: [{ ...rule, mode: 'active' }] } };
+    expect(checkConfigSet(next, current).rules.list[0]!.mode).toBe('active');
+  });
+  test('règle invalide envoyée par le renderer → tout est refusé (strict), avec le nom de la règle', () => {
+    const next = { ...current, rules: { enabled: true, list: [rule, { ...rule, id: 'r-c', name: 'cassée', condition: { ...rule.condition, overMB: 1 } }] } };
+    expect(() => checkConfigSet(next, current)).toThrow(/^Règle « cassée » invalide : seuil/);
+  });
+  test('config invalide → « Configuration invalide »', () => {
+    expect(() => checkConfigSet({ version: 2 }, current)).toThrow('Configuration invalide');
+  });
+  test('PROC_WATCH_NO_KILL=1 → noKill', () => {
+    expect(noKill({ PROC_WATCH_NO_KILL: '1' })).toBe(true);
+    expect(noKill({})).toBe(false);
+  });
 });

@@ -1,5 +1,6 @@
 import type { AlertsConfig } from './alerts';
 import type { EarlyoomSettings } from './earlyoom';
+import type { RuleIssue, RulesConfig } from './rules/types';
 
 export interface ProcSample {
   pid: number;
@@ -165,6 +166,8 @@ export interface Config {
   ui: UiConfig;
   classify: ClassifyConfig;
   alerts: AlertsConfig;
+  /** Règles automatiques (⑥) : éteintes par défaut. */
+  rules: RulesConfig;
 }
 
 export interface ConfigState {
@@ -172,6 +175,8 @@ export interface ConfigState {
   warning: string | null;
   /** Entrées regex invalides de la liste protégée */
   invalid: string[];
+  /** Règles du fichier refusées par la validation (ignorées seules), affichées dans Réglages › Règles. */
+  ruleIssues?: RuleIssue[];
 }
 
 /** PID + startTicks : startTicks identifie le processus et détecte un PID réutilisé. */
@@ -245,7 +250,7 @@ export interface RecorderState {
   running: boolean; // statut écrit il y a moins de 3 intervalles
   status: RecorderStatus | null;
 }
-export interface RecorderStatus { pid: number; startedAt: number; lastSampleAt: number | null; lastError: string | null; earlyoomSource: 'ok' | 'unavailable'; dbSizeBytes: number; /** Avertissement non bloquant (ex. migration faite sans copie de sécurité) */ warning?: string | null; jobErrors?: Record<'tick' | 'minute' | 'earlyoom', string | null>; /** Prévision ② : en préparation (moins de 6 min depuis le démarrage), calculée, ou indisponible (moins de 5 échantillons sur 5 min) */ forecast?: 'warming' | 'ok' | 'unavailable' }
+export interface RecorderStatus { pid: number; startedAt: number; lastSampleAt: number | null; lastError: string | null; earlyoomSource: 'ok' | 'unavailable'; dbSizeBytes: number; /** Avertissement non bloquant (ex. migration faite sans copie de sécurité) */ warning?: string | null; jobErrors?: Partial<Record<'tick' | 'minute' | 'earlyoom' | 'rules', string | null>>; /** Prévision ② : en préparation (moins de 6 min depuis le démarrage), calculée, ou indisponible (moins de 5 échantillons sur 5 min) */ forecast?: 'warming' | 'ok' | 'unavailable' }
 
 /** État d'earlyoom vu par l'app (Réglages › earlyoom). */
 export interface EarlyoomStatus {

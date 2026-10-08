@@ -197,3 +197,26 @@ test('recorder.tmpfsAlertMB : 2048 Mo par défaut, ajouté si absent, bornes 100
     expect(validateConfig({ ...DEFAULT_CONFIG, recorder: { ...DEFAULT_RECORDER, tmpfsAlertMB: bad } }), String(bad)).toBeNull();
   }
 });
+
+describe('règles (⑥)', () => {
+  test('config v1 existante sans « rules » → valide, règles éteintes, liste vide', () => {
+    const { rules: _r, ...old } = { ...DEFAULT_CONFIG, rules: undefined };
+    const c = validateConfig(old);
+    expect(c).not.toBeNull();
+    expect(c!.rules).toEqual({ enabled: false, list: [] });
+    expect(DEFAULT_CONFIG.rules).toEqual({ enabled: false, list: [] });
+  });
+
+  test('une règle invalide écrite à la main → seule cette règle ignorée, erreur visible, reste de la config gardé', () => {
+    const dir = tmp();
+    const good = { id: 'r-ok', name: 'ok', enabled: true, mode: 'simulate', createdAt: 1, condition: { kind: 'forecast', underMin: 3, includeApps: [] } };
+    const bad = { ...good, id: 'r-bad', name: 'cassée', condition: { kind: 'forecast', underMin: 99, includeApps: [] } };
+    writeFileSync(join(dir, 'config.json'), JSON.stringify({ ...DEFAULT_CONFIG, protected: ['x'], rules: { enabled: true, list: [bad, good] } }));
+    const r = loadConfig(dir);
+    expect(r.warning).toBeNull();
+    expect(r.config.protected).toEqual(['x']);
+    expect(r.config.rules).toEqual({ enabled: true, list: [good] });
+    expect(r.ruleIssues).toEqual([{ index: 0, id: 'r-bad', name: 'cassée', error: expect.stringMatching(/délai/) }]);
+    expect(existsSync(join(dir, 'config.json.bak'))).toBe(false);
+  });
+});

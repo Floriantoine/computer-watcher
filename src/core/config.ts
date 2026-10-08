@@ -5,6 +5,8 @@ import { DEFAULT_CLASSIFY, DEFAULT_CONFIG, DEFAULT_RECORDER, DEFAULT_UI } from '
 import { inBounds, RECORDER_BOUNDS, type RecorderNumField } from './recorderBounds';
 import { isCategory } from './classify/categories';
 import { validateAlerts } from './alerts';
+import { validateRulesDetailed } from './rules/config';
+import type { RuleIssue } from './rules/types';
 import type { Category, ClassifyConfig, Config, RecorderConfig, UiConfig } from './types';
 
 export { DEFAULT_CONFIG };
@@ -76,6 +78,13 @@ function validateClassify(raw: unknown): ClassifyConfig | null {
   return { detectPorts: r.detectPorts, overrides };
 }
 
+/** Comme validateConfig, avec les règles refusées une à une (`ruleIssues`) ; une règle invalide n'invalide jamais la config. */
+export function validateConfigDetailed(raw: unknown): { config: Config; ruleIssues: RuleIssue[] } | null {
+  const config = validateConfig(raw);
+  if (!config) return null;
+  return { config, ruleIssues: validateRulesDetailed((raw as Record<string, unknown>).rules).issues };
+}
+
 export function validateConfig(raw: unknown): Config | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const r = raw as Record<string, unknown>;
@@ -92,7 +101,8 @@ export function validateConfig(raw: unknown): Config | null {
   if (!classify) return null;
   const alerts = validateAlerts(r.alerts);
   if (!alerts) return null;
-  return { version: 1, protected: [...r.protected], othersThreshold: { memMB: t.memMB, cpuPercent: t.cpuPercent }, recorder, ui, classify, alerts };
+  const { rules } = validateRulesDetailed(r.rules);
+  return { version: 1, protected: [...r.protected], othersThreshold: { memMB: t.memMB, cpuPercent: t.cpuPercent }, recorder, ui, classify, alerts, rules };
 }
 
 export function saveConfig(dir: string, config: Config): void {
@@ -102,7 +112,8 @@ export function saveConfig(dir: string, config: Config): void {
   renameSync(tmp, join(dir, FILE));
 }
 
-export function loadConfig(dir: string): { config: Config; warning: string | null } {
+/** `ruleIssues` : présent seulement si des règles du fichier sont refusées (ignorées seules, fichier non modifié). */
+export function loadConfig(dir: string): { config: Config; warning: string | null; ruleIssues?: RuleIssue[] } {
   const file = join(dir, FILE);
   let text: string;
   try {
@@ -126,8 +137,8 @@ export function loadConfig(dir: string): { config: Config; warning: string | nul
   } catch {
     parsed = undefined;
   }
-  const config = validateConfig(parsed);
-  if (config) return { config, warning: null };
+  const checked = validateConfigDetailed(parsed);
+  if (checked) return checked.ruleIssues.length ? { config: checked.config, warning: null, ruleIssues: checked.ruleIssues } : { config: checked.config, warning: null };
   try {
     renameSync(file, `${file}.bak`);
     saveConfig(dir, DEFAULT_CONFIG);

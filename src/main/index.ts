@@ -9,7 +9,7 @@ import { readListeningPorts } from '../core/collector/ports';
 import { applyPss, PssCache, pssTargets } from '../core/collector/pss';
 import { readProcesses, type CwdEntry, type StatusEntry } from '../core/collector/readProcesses';
 import { readSystem } from '../core/collector/readSystem';
-import { configDir, loadConfig, saveConfig, validateConfig } from '../core/config';
+import { configDir, loadConfig, saveConfig } from '../core/config';
 import { buildGroups, isOverThreshold } from '../core/grouping/buildGroups';
 import { claudeDirs } from '../core/grouping/claudeDirs';
 import { createProjectRootCache } from '../core/grouping/projectRootCache';
@@ -32,7 +32,7 @@ import { pollDelay, type WindowActivity } from './pollPolicy';
 import { sharedScan } from './tmpUsage';
 import { closeAction, confirmTray, createTrayController, defaultRun, statusNotifierAvailable, type TrayController } from './tray';
 import {
-  applyOverride, classifySetKey, isGroupKeys, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState as computeRecorderState,
+  applyOverride, checkConfigSet, classifySetKey, isGroupKeys, noKill, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState as computeRecorderState,
 } from './historyIpc';
 import { autoManageService, defaultSystemctl, recorderSyncDisabled, ensureRecorderService, recorderExecArgs, systemctlAvailable, unitPath } from './recorderService';
 
@@ -54,6 +54,8 @@ const dir = configDir();
 const loaded = loadConfig(dir);
 let config = loaded.config;
 let warning = loaded.warning;
+/** Règles du fichier refusées à la lecture (ignorées seules) : affichées dans Réglages › Règles jusqu'au prochain enregistrement. */
+let ruleIssues = loaded.ruleIssues ?? [];
 {
   // Alertes « vues » jusqu'à maintenant au premier lancement : pas de pop-up pour l'historique déjà enregistré.
   const init = initSeenUpTo(config, Date.now());
@@ -260,7 +262,7 @@ function send(): void {
   mainWin.webContents.send('snapshot', buildSnapshot(last, watch));
 }
 
-const configState = (): ConfigState => ({ config, warning, invalid: protection.invalid });
+const configState = (): ConfigState => ({ config, warning, invalid: protection.invalid, ...(ruleIssues.length ? { ruleIssues } : {}) });
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -376,6 +378,8 @@ ipcMain.handle('kill', (_e, raw: unknown, rawSignal: unknown): KillResult[] => {
   const req = killRequest(raw, rawSignal);
   if (!req) return [];
   const { targets, signal } = req;
+  // vérifications visuelles : aucun signal
+  if (noKill()) return [...new Set(targets.map((t) => t.pid))].map((pid) => ({ pid, ok: false, error: 'NOKILL' }));
   const { ordered, refused } = planKill(targets, readProcesses(), { selfPid: process.pid, currentUid: uid });
   const results = [...refused, ...sendSignals(ordered, signal)];
   const killed = results.filter((r) => r.ok).map((r) => r.pid);
@@ -408,8 +412,8 @@ ipcMain.handle('watch', (_e, w: unknown) => {
 ipcMain.handle('group:procs', (_e, id: unknown) => (typeof id === 'string' && last ? groupProcs(last.groups, id) : []));
 
 ipcMain.handle('config:set', (_e, next: unknown) => {
-  const checked = validateConfig(next);
-  if (!checked) throw new Error('Configuration invalide');
+  // validation stricte (règles comprises) et transition des règles : une nouvelle règle démarre en Simulation
+  const checked = checkConfigSet(next, config);
   const valid = keepSeenUpTo(checked, config);
   const recorderChanged = valid.recorder.enabled !== config.recorder.enabled;
   const trayChanged = valid.ui.trayIcon !== config.ui.trayIcon;
@@ -419,6 +423,7 @@ ipcMain.handle('config:set', (_e, next: unknown) => {
   if (overridesChanged) overridesVersion++; // autre réglage : le cache de classement reste valable
   protection = compileProtection(config.protected);
   warning = null;
+  ruleIssues = [];
   saveConfig(dir, config);
   if (recorderChanged) void syncRecorder(true);
   if (trayChanged) void syncTray();
