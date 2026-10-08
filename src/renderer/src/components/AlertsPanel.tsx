@@ -8,10 +8,12 @@ const ICONS: Record<string, LucideIcon> = { leak: TrendingUp, earlyoom_kill: Sku
 interface Props {
   events: HistoryEvent[] | undefined;
   onPick: (ts: number) => void;
+  /** Survol d'une alerte : met en avant son marqueur dans les graphes (null en sortie). */
+  onHover?: (ts: number | null) => void;
 }
 
 /** Fuites, kills earlyoom, pics de pression et trous d'enregistrement ; un clic place le curseur de l'enquête. */
-export function AlertsPanel({ events, onPick }: Props) {
+export function AlertsPanel({ events, onPick, onHover }: Props) {
   const alerts = useMemo(() => eventMarkers(alertsFrom(events ?? [])), [events]);
   return (
     <section className="chart-panel metrics-list" data-testid="alerts">
@@ -22,11 +24,11 @@ export function AlertsPanel({ events, onPick }: Props) {
       {!alerts.length ? (
         <div className="chart-empty small">{events === undefined ? 'Chargement…' : 'Aucune alerte sur la plage'}</div>
       ) : (
-        <ul>
+        <ul onMouseLeave={() => onHover?.(null)}>
           {alerts.map((a, i) => {
             const Icon = ICONS[a.type] ?? BellRing;
             return (
-              <li key={`${a.ts}-${i}`} className="clickable" title="Voir les coupables à cet instant" onClick={() => onPick(a.ts)}>
+              <li key={`${a.ts}-${i}`} className="clickable" title="Voir les coupables à cet instant" onClick={() => onPick(a.ts)} onMouseEnter={() => onHover?.(a.ts)}>
                 <span className="alert-ico" style={{ color: a.color, background: `${a.color}1f` }}>
                   <Icon size={13} strokeWidth={2.2} />
                 </span>

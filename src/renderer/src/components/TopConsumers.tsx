@@ -8,10 +8,12 @@ interface Props {
   top: TopConsumer[] | undefined;
   canOpen: (key: string) => boolean;
   onOpenGroup: (key: string) => void;
+  /** Survol d'une ligne : met en avant la courbe du groupe dans l'enquête (null en sortie). */
+  onHover?: (key: string | null) => void;
 }
 
 /** Plus gros consommateurs de mémoire (moyenne) sur la plage : mini-courbe, pic et moyenne. */
-export function TopConsumers({ top, canOpen, onOpenGroup }: Props) {
+export function TopConsumers({ top, canOpen, onOpenGroup, onHover }: Props) {
   return (
     <section className="chart-panel metrics-list" data-testid="top-consumers">
       <div className="chart-panel-head">
@@ -22,7 +24,7 @@ export function TopConsumers({ top, canOpen, onOpenGroup }: Props) {
       {!top?.length ? (
         <div className="chart-empty small">{top === undefined ? 'Chargement…' : 'Aucune donnée sur la plage'}</div>
       ) : (
-        <ul>
+        <ul onMouseLeave={() => onHover?.(null)}>
           {top.map((t) => {
             const open = canOpen(t.key);
             return (
@@ -31,6 +33,7 @@ export function TopConsumers({ top, canOpen, onOpenGroup }: Props) {
                 className={open ? 'clickable' : ''}
                 title={open ? 'Voir le détail' : 'Groupe terminé'}
                 onClick={open ? () => onOpenGroup(t.key) : undefined}
+                onMouseEnter={() => onHover?.(t.key)}
               >
                 <GroupIcon id={t.key} kind={t.kind} size="sm" />
                 <span className="name" title={t.label}>{t.label}</span>

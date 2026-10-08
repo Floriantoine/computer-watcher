@@ -8,7 +8,7 @@ import { ipcErrorMessage } from '../viewModel';
 import { eventMarkers, fetchMetrics, formatInstant, INVESTIGATION_LAYERS, investigationSeries, refreshMsFor } from '../metrics';
 import { AlertsPanel } from './AlertsPanel';
 import { CulpritsPanel } from './CulpritsPanel';
-import type { ChartSeries } from './charts/chartData';
+import { seriesIndexOf, type ChartSeries } from './charts/chartData';
 import { TimeChart, type ChartMarker } from './charts/TimeChart';
 import { formatAxisTime, KB_FORMAT, PERCENT_FORMAT, type ChartTone, type ValueFormat } from './charts/uplotTheme';
 import { RangeSelector } from './RangeSelector';
@@ -119,12 +119,18 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
     const series: ChartSeries[] = r.layers.map((l, i) => ({
       label: l.label,
       values: l.values,
-      raw: l.raw,
       tone: l.key === '__rest' ? REST_TONE : LAYER_TONES[i % LAYER_TONES.length],
-      stacked: true,
+      fill: false,
+      emphasis: true,
+      dash: l.key === '__rest' ? [4, 4] : undefined,
     }));
-    return { ts: r.ts, series };
+    return { ts: r.ts, series, keys: r.layers.map((l) => l.key) };
   }, [data?.groups, system]);
+
+  // Survol d'un groupe (Top, légende) ou d'une alerte : mise en avant dans les graphes.
+  const [hoverKey, setHoverKey] = useState<string | null>(null);
+  const [hoverTs, setHoverTs] = useState<number | null>(null);
+  const focusSeries = inv ? seriesIndexOf(inv.keys, hoverKey) : null;
 
   const markers = useMemo((): ChartMarker[] => {
     const m: ChartMarker[] = eventMarkers(events ?? []);
@@ -189,7 +195,7 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
               {'sub' in c && <span className="sub">{c.sub}</span>}
             </div>
             {'series' in c ? (
-              <TimeChart ts={system!.ts} series={c.series} height={96} format={c.format} markers={markers} onCursor={setCursor} onSelectRange={onSelectRange} />
+              <TimeChart ts={system!.ts} series={c.series} height={96} format={c.format} markers={markers} focusMarker={hoverTs} onCursor={setCursor} onSelectRange={onSelectRange} />
             ) : (
               <div className="chart-empty small">{data === undefined ? 'Chargement…' : 'Pas de données'}</div>
             )}
@@ -204,12 +210,14 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
           </div>
           {inv ? (
             <>
-              <div className="inv-legend">
+              <div className="inv-legend" onMouseLeave={() => setHoverKey(null)}>
                 {inv.series.map((s, i) => (
-                  <span key={i}><i style={{ background: s.tone }} />{s.label}</span>
+                  <span key={i} className={focusSeries !== null && focusSeries !== i ? 'dim' : ''} onMouseEnter={() => setHoverKey(inv.keys[i])}>
+                    <i style={{ background: s.tone }} />{s.label}
+                  </span>
                 ))}
               </div>
-              <TimeChart ts={inv.ts} series={inv.series} height={320} format={KB} markers={markers} onCursor={setCursor} onSelectRange={onSelectRange} />
+              <TimeChart ts={inv.ts} series={inv.series} height={320} format={KB} markers={markers} focusSeries={focusSeries} focusMarker={hoverTs} onCursor={setCursor} onSelectRange={onSelectRange} />
             </>
           ) : (
             <div className="chart-empty tall">{data === undefined ? 'Chargement…' : 'Pas encore assez de données pour l’enquête'}</div>
@@ -253,8 +261,8 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
             )}
           </AnimatePresence>
         </section>
-        <TopConsumers top={data?.top} canOpen={canOpen} onOpenGroup={onOpenGroup} />
-        <AlertsPanel events={events} onPick={setCursor} />
+        <TopConsumers top={data?.top} canOpen={canOpen} onOpenGroup={onOpenGroup} onHover={setHoverKey} />
+        <AlertsPanel events={events} onPick={setCursor} onHover={setHoverTs} />
       </div>
     </div>
   );

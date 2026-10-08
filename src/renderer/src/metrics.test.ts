@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import { alertsFrom, eventMarkers, fetchMetrics, formatInstant, investigationSeries, refreshMsFor } from './metrics';
 
-test('investigationSeries : top n + Reste, cumulé', () => {
+test('investigationSeries : top n + Reste, valeurs brutes (courbes séparées, pas d\'empilement)', () => {
   const h = {
     ts: [0, 1],
     series: [
@@ -12,7 +12,7 @@ test('investigationSeries : top n + Reste, cumulé', () => {
   };
   const r = investigationSeries(h, 2);
   expect(r.layers.map((l) => l.label)).toEqual(['A', 'B', 'Reste']);
-  expect(r.layers.map((l) => l.values)).toEqual([[10, 20], [15, 20], [16, 21]]);
+  expect(r.layers.map((l) => l.values)).toEqual([[10, 20], [5, null], [1, 1]]);
 });
 
 test('investigationSeries : Reste = total système − top n (jamais négatif)', () => {
@@ -26,7 +26,7 @@ test('investigationSeries : Reste = total système − top n (jamais négatif)',
   const r = investigationSeries(h, 1, [100, null, 20]);
   expect(r.layers.map((l) => l.label)).toEqual(['A', 'Reste']);
   // Le groupe B, hors du top, est compris dans le Reste ; total inconnu → Reste nul.
-  expect(r.layers.map((l) => l.values)).toEqual([[10, 20, 30], [100, 20, 30]]);
+  expect(r.layers.map((l) => l.values)).toEqual([[10, 20, 30], [90, 0, 0]]);
 });
 
 test('eventMarkers : couleurs et libellés', () => {

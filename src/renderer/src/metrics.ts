@@ -1,9 +1,10 @@
-import { stackSeries, topKeysByMax } from '../../core/history/series';
+import { topKeysByMax } from '../../core/history/series';
 import type { GroupsHistory, HistoryEvent, RangePreset, SystemSeries, TimeRange, TopOptions, TopResult } from '../../core/types';
 import { formatKB } from './format';
 
 /**
- * Couches de l'enquête : les `n` plus gros groupes (par max) + « Reste », valeurs cumulées prêtes à empiler.
+ * Courbes de l'enquête : les `n` plus gros groupes (par max) + « Reste », en valeurs brutes (une courbe par groupe,
+ * pas d'empilement : empilées, la hausse d'une couche du bas soulevait toutes les autres et faisait croire que tout montait).
  * Sans `totalKB`, le Reste est la somme des autres séries de `h`. Avec `totalKB` (mémoire utilisée du système,
  * alignée sur `h.ts`), le Reste vaut `total − top n` (borné à 0) : on peut alors ne charger que les plus gros groupes.
  */
@@ -20,10 +21,9 @@ export function investigationSeries(h: GroupsHistory, n = 8, totalKB?: (number |
     return h.series.filter((s) => !topSet.has(s.key)).reduce((sum, s) => sum + (s.memKB[i] ?? 0), 0);
   });
   const raw = [...top.map((k) => byKey.get(k)!), rest];
-  const stacked = stackSeries(raw);
   const labels = [...top.map((k) => h.series.find((s) => s.key === k)!.label), 'Reste'];
   const keys = [...top, '__rest'];
-  return { ts: h.ts, layers: stacked.map((values, i) => ({ key: keys[i], label: labels[i], values, raw: raw[i] })) };
+  return { ts: h.ts, layers: raw.map((values, i) => ({ key: keys[i], label: labels[i], values })) };
 }
 
 const COLORS: Record<string, string> = { earlyoom_kill: '#ff5c8a', pressure: '#ffb547', gap: '#8b91a0', app_kill: '#a07cff', leak: '#ff8a3d' };
