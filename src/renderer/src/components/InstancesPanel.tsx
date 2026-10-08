@@ -4,7 +4,7 @@ import type { Category, GroupSummary, InstanceSummary, MemoryMetric } from '../.
 import { CATEGORY_META } from '../categories';
 import { formatAge, formatCpu, formatKB } from '../format';
 import { memLabel } from '../memMetric';
-import { freePortLabel } from '../ports';
+import { freePortLabel, instanceFreeable } from '../ports';
 import { headerKillActions, instanceRowEqual, instanceSpark, showRevertToAuto, sortInstances } from '../instances';
 import { ClaudeLaunchedBadge, DuplicateBadge } from './CategoryTag';
 import { ReclassMenu } from './ReclassMenu';
@@ -99,6 +99,7 @@ export function InstancesPanel(props: Props) {
             stuck={i.pids.filter((p) => stuckPids.has(p))}
             pending={i.pids.some((p) => pendingPids.has(p))}
             canKill={group.killable}
+            freeable={instanceFreeable(group.kind, i)}
             menuOpen={menuFor === i.key}
             memLabel={mem}
             actions={rowActions}
@@ -115,12 +116,14 @@ interface RowProps {
   stuck: number[];
   pending: boolean;
   canKill: boolean;
+  /** « Libérer :port » : instance non protégée qui écoute, dans un groupe projet / dossier supprimé */
+  freeable: boolean;
   menuOpen: boolean;
   memLabel: string;
   actions: RowActions;
 }
 
-function InstanceRowImpl({ inst: i, spark, stuck, pending, canKill, menuOpen, memLabel: memName, actions }: RowProps) {
+function InstanceRowImpl({ inst: i, spark, stuck, pending, canKill, freeable, menuOpen, memLabel: memName, actions }: RowProps) {
   const m = CATEGORY_META[i.category];
   const Icon = m.icon;
   const manual = i.source === 'manual';
@@ -160,7 +163,7 @@ function InstanceRowImpl({ inst: i, spark, stuck, pending, canKill, menuOpen, me
           <ForceButton onClick={() => actions.force(stuck)} />
         ) : (
           <>
-            {i.ports.length > 0 && !i.protected && (
+            {freeable && (
               // Même chemin que le bouton kill de l'instance ; jamais sur une instance protégée (son bouton kill demande confirmation).
               <button
                 type="button"
@@ -184,4 +187,4 @@ function InstanceRowImpl({ inst: i, spark, stuck, pending, canKill, menuOpen, me
 }
 
 /** Ne se re-rend que si ce que la ligne affiche a changé (les actions sont stables). */
-const InstanceRow = memo(InstanceRowImpl, (a, b) => a.actions === b.actions && a.memLabel === b.memLabel && instanceRowEqual(a, b));
+const InstanceRow = memo(InstanceRowImpl, (a, b) => a.actions === b.actions && a.memLabel === b.memLabel && a.freeable === b.freeable && instanceRowEqual(a, b));

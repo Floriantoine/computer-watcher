@@ -19,7 +19,7 @@ describe('rendu des lignes de ports', () => {
     row({ port: 3000, pid: 30, groupId: 'claude', groupLabel: 'Claude', instanceKey: null, category: null, label: 'node', protected: true, freeable: false }),
     row({ port: 3000, pid: 40, groupId: 'spotify', groupLabel: 'Spotify', instanceKey: null, category: null, label: 'spotify', freeable: false }),
   ];
-  const info: OpenPortsInfo = { ports: rows, otherUsers: [{ port: 631, uid: 0 }], unreadable: [7777] };
+  const info: OpenPortsInfo = { ports: rows, otherUsers: [{ port: 631, uid: 0 }], unreadable: [7777], tooBig: 1 };
 
   it('« Libérer » seulement sur la ligne arrêtable ; les autres : « Voir le groupe », « protégé » si protégées', () => {
     const html = renderToStaticMarkup(createElement(PortResults, { port: 3000, info, pendingPids: new Set<number>(), onFree: noop, onOpenGroup: noop }));
@@ -34,7 +34,15 @@ describe('rendu des lignes de ports', () => {
     expect(count(html, 'free-port')).toBe(1);
     expect(html).toContain("1 port d&#x27;un autre utilisateur non affiché");
     expect(html).toContain('1 port sans processus lisible');
+    expect(html).toContain('1 processus trop gros pour être lu');
     expect(html).not.toContain('uid 0');
+  });
+
+  it('passe en cours : petit message « Recherche des ports… », pas de tableau', () => {
+    const html = renderToStaticMarkup(createElement(PortResults, { port: 3000, info: null, pendingPids: new Set<number>(), onFree: noop, onOpenGroup: noop }));
+    expect(html).toContain('Recherche des ports…');
+    expect(html).toContain('data-testid="port-pending"');
+    expect(count(html, 'port-row')).toBe(0);
   });
 
   it('égalité des lignes (mémoïsation) : même affichage → pas de re-rendu', () => {

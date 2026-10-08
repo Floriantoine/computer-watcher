@@ -81,7 +81,7 @@ describe('openPorts', () => {
   });
 
   it('pid inconnu du snapshot (disparu) : ignoré', () => {
-    expect(openPorts(full, new Map([[999, [7000]]]), [], 1000)).toEqual({ ports: [], otherUsers: [], unreadable: [] });
+    expect(openPorts(full, new Map([[999, [7000]]]), [], 1000)).toEqual({ ports: [], otherUsers: [], unreadable: [], tooBig: 0 });
   });
 
   it('protection : ligne d\'instance = protection de l\'instance ; ligne de processus = protection du groupe', () => {
@@ -97,6 +97,12 @@ describe('openPorts', () => {
 
   it('seules les instances de projet / dossier supprimé sont arrêtables (pas « Autres », pas les applis)', () => {
     expect(info.ports.filter((p) => p.freeable).map((p) => p.port)).toEqual([3000, 8080, 8080]);
+  });
+
+  it('processus trop gros pour être lus : comptés (leurs ports restent dans unreadable)', () => {
+    expect(info.tooBig).toBe(0);
+    const r = openPorts(full, byPid, [...sockets, { inode: 9, port: 7777, uid: 1000 }], 1000, 2);
+    expect(r).toMatchObject({ tooBig: 2, unreadable: [7777] });
   });
 
   it('ports à soi sans processus lisible (autre espace de noms, plafond de fd) : comptés à part', () => {

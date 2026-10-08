@@ -18,7 +18,8 @@ function harness(pids = [1, 2, 3, 4, 5]) {
     readSlice: (list, start) => {
       calls.slices.push(start);
       const next = Math.min(start + 2, list.length);
-      return { ports: new Map(list.slice(start, next).map((p) => [p, [3000 + p]])), next };
+      // le pid 4 a trop de fd pour une tranche
+      return { ports: new Map(list.slice(start, next).filter((p) => p !== 4).map((p) => [p, [3000 + p]])), next, tooBig: list.slice(start, next).filter((p) => p === 4) };
     },
     pids: () => pids,
     schedule: (fn, ms) => {
@@ -67,7 +68,8 @@ describe('PortSweep', () => {
     expect(h.calls.sockets).toBe(1);
     expect(h.calls.done).toBe(1);
     expect(h.sweep.listen!.byPid.get(5)).toEqual([3005]);
-    expect(h.sweep.listen!.byPid.size).toBe(5);
+    expect(h.sweep.listen!.byPid.size).toBe(4);
+    expect(h.sweep.listen!.tooBig).toBe(1);
     // sockets dédoublonnés par (port, uid)
     expect(h.sweep.listen!.sockets).toHaveLength(1);
   });

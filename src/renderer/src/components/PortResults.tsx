@@ -98,7 +98,7 @@ export function PortResults({ port, info, pendingPids, onFree, onOpenGroup }: Pr
         <h3><Plug size={14} strokeWidth={2} /> Qui écoute :{port} ?</h3>
       </div>
       {!info ? (
-        <p className="port-empty">Recherche…</p>
+        <p className="port-empty port-pending" data-testid="port-pending">Recherche des ports…</p>
       ) : rows.length === 0 ? (
         <p className="port-empty" data-testid="port-empty">{portSearchEmpty(port, info)}</p>
       ) : (

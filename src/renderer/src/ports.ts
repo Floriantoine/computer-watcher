@@ -20,10 +20,15 @@ export function freePortCheck(
   const inst = instances.get(row.instanceKey);
   if (!inst) return { ok: false, message: `L'instance « ${row.label} » a disparu` };
   const kind = groupKind(inst.groupId);
-  if (inst.protected || (kind !== 'project' && kind !== 'deleted')) return { ok: false, message: NOT_FREEABLE };
+  if (!instanceFreeable(kind, { ...inst, ports: [row.port] })) return { ok: false, message: NOT_FREEABLE };
   const holds = current ? current.ports.some((p) => p.port === row.port && p.instanceKey === inst.key) : inst.ports.includes(row.port);
   if (!holds) return { ok: false, message: `« ${row.label} » ne tient plus :${row.port}` };
   return { ok: true, inst };
+}
+
+/** Bouton « Libérer :port » d'une instance (détail) : instance non protégée, qui écoute, d'un groupe projet / dossier supprimé. */
+export function instanceFreeable(groupKind: GroupKind | undefined, inst: InstanceSummary): boolean {
+  return (groupKind === 'project' || groupKind === 'deleted') && !inst.protected && inst.ports.length > 0;
 }
 
 /** Lignes du port cherché (processus de l'utilisateur seulement). */
@@ -41,6 +46,12 @@ export function unreadableNote(n: number): string | null {
   return n === 1 ? '1 port sans processus lisible' : `${n} ports sans processus lisible`;
 }
 
+/** Note de la liste : processus à trop de fd pour être lus sans bloquer l'app. */
+export function tooBigNote(n: number): string | null {
+  if (n <= 0) return null;
+  return n === 1 ? '1 processus trop gros pour être lu' : `${n} processus trop gros pour être lus`;
+}
+
 /** Recherche `:port` sans ligne : port libre, tenu par un autre utilisateur, ou par un de ses processus illisible. */
 export function portSearchEmpty(port: number, info: OpenPortsInfo): string {
   const uids = [...new Set(info.otherUsers.filter((o) => o.port === port).map((o) => o.uid))];
@@ -48,6 +59,6 @@ export function portSearchEmpty(port: number, info: OpenPortsInfo): string {
     const who = uids.length === 1 ? `un autre utilisateur (uid ${uids[0]})` : `d'autres utilisateurs (uid ${uids.join(', ')})`;
     return `:${port} est écouté par ${who} : non arrêtable depuis proc-watch`;
   }
-  if (info.unreadable.includes(port)) return `:${port} est écouté par un de vos processus illisible (conteneur, autre espace de noms…) : non arrêtable depuis proc-watch`;
+  if (info.unreadable.includes(port)) return `:${port} est écouté par un de vos processus illisible (processus trop gros, conteneur, autre espace de noms…) : non arrêtable depuis proc-watch`;
   return `Aucun processus n'écoute :${port}`;
 }

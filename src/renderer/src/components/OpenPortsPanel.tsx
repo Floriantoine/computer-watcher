@@ -1,6 +1,6 @@
 import { Network } from 'lucide-react';
 import type { OpenPort, OpenPortsInfo } from '../../../core/openPorts';
-import { otherUsersNote, unreadableNote } from '../ports';
+import { otherUsersNote, tooBigNote, unreadableNote } from '../ports';
 import { PortRow, PortRowsHead } from './PortResults';
 
 interface Props {
@@ -13,7 +13,7 @@ interface Props {
 
 /** Onglet Métriques : ports en écoute des processus de l'utilisateur, triés par port, avec « Libérer :port ». */
 export function OpenPortsPanel({ info, pendingPids, onFree, onOpenGroup }: Props) {
-  const note = info ? [otherUsersNote(new Set(info.otherUsers.map((o) => o.port)).size), unreadableNote(info.unreadable.length)].filter(Boolean).join(' · ') : '';
+  const note = info ? [otherUsersNote(new Set(info.otherUsers.map((o) => o.port)).size), unreadableNote(info.unreadable.length), tooBigNote(info.tooBig)].filter(Boolean).join(' · ') : '';
   return (
     <section className="chart-panel open-ports" data-testid="open-ports">
       <div className="chart-panel-head">

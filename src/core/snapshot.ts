@@ -98,7 +98,7 @@ export interface FullSnapshot {
   /** Mémoire des processus et groupes : PSS si 'pss' (absent → 'rss'). */
   memMetric?: MemoryMetric;
   /** Ports lus dans les fd des processus de l'utilisateur (tous, en mode « ports ») et sockets en écoute de /proc/net. */
-  listen?: { byPid: ReadonlyMap<number, number[]>; sockets: readonly ListenSocket[] };
+  listen?: { byPid: ReadonlyMap<number, number[]>; sockets: readonly ListenSocket[]; tooBig?: number };
 }
 
 /** Le renderer a besoin des ports de tous les processus : panneau « Ports ouverts » ou recherche `:port`. */
@@ -114,12 +114,13 @@ export function buildSnapshot(full: FullSnapshot, watch: Watch): Snapshot {
   const pss = full.memMetric === 'pss';
   const port = parsePortQuery(query);
   // Passe de lecture pas encore terminée (`listen` absent) : null, le renderer affiche « Recherche… ».
-  const ports = wantsAllPorts(watch) && full.listen ? openPorts(full, full.listen.byPid, full.listen.sockets, full.currentUid) : null;
+  const ports = wantsAllPorts(watch) && full.listen ? openPorts(full, full.listen.byPid, full.listen.sockets, full.currentUid, full.listen.tooBig ?? 0) : null;
   let matches: string[] | null = null;
   if (port !== null) {
+    // Passe en cours : pas de filtre (les cartes restent affichées, sans clignotement).
     // Groupes de premier niveau : « Autres » correspond si l'un de ses sous-groupes écoute ce port.
     const ids = new Set(ports ? portMatches(ports, port).groupIds : []);
-    matches = full.groups.filter((g) => ids.has(g.id) || g.subgroups.some((s) => ids.has(s.id))).map((g) => g.id);
+    matches = ports ? full.groups.filter((g) => ids.has(g.id) || g.subgroups.some((s) => ids.has(s.id))).map((g) => g.id) : null;
   } else if (query) matches = full.groups.filter((g) => groupMatches(g, query)).map((g) => g.id);
   const inOthers = (g: Group) => watch.othersOpen === true || (!!followed && (followed === g || g.subgroups.includes(followed)));
   return {

@@ -109,17 +109,17 @@ describe('readListeningPortsSlice', () => {
     const root = setup();
     const sockets = readAllListenSockets(root);
     const first = readListeningPortsSlice([10, 11, 12], 0, sockets, 5, root);
-    expect(first).toEqual({ ports: new Map([[10, [5173]], [11, [5432]]]), next: 2 });
+    expect(first).toEqual({ ports: new Map([[10, [5173]], [11, [5432]]]), next: 2, tooBig: [] });
     const second = readListeningPortsSlice([10, 11, 12], first.next, sockets, 5, root);
-    expect(second).toEqual({ ports: new Map(), next: 3 });
+    expect(second).toEqual({ ports: new Map(), next: 3, tooBig: [] });
   });
-  it('au moins un pid par tranche, même au-delà du budget ; pid illisible sauté', () => {
+  it('pid illisible sauté ; pid à plus de fd que le budget : jamais lu, signalé (tooBig)', () => {
     const root = setup();
     const sockets = readAllListenSockets(root);
-    expect(readListeningPortsSlice([99, 10, 11], 0, sockets, 2, root)).toEqual({ ports: new Map([[10, [5173]]]), next: 2 });
+    expect(readListeningPortsSlice([99, 10, 11], 0, sockets, 2, root)).toEqual({ ports: new Map([[11, [5432]]]), next: 3, tooBig: [10] });
   });
   it('fin de liste : next = longueur', () => {
     const root = setup();
-    expect(readListeningPortsSlice([10], 1, readAllListenSockets(root), 5, root)).toEqual({ ports: new Map(), next: 1 });
+    expect(readListeningPortsSlice([10], 1, readAllListenSockets(root), 5, root)).toEqual({ ports: new Map(), next: 1, tooBig: [] });
   });
 });

@@ -145,8 +145,10 @@ describe('buildSnapshot', () => {
     // ni panneau ni recherche de port : rien
     expect(buildSnapshot({ ...base, listen }, { groupId: null, query: 'vite' }).openPorts).toBeNull();
     expect(buildSnapshot({ ...base, listen }, { groupId: null, query: '' }).openPorts).toBeNull();
-    // ports pas encore lus (passe en cours) : null (« Recherche… ») et aucune carte retenue
-    expect(buildSnapshot(base, { groupId: null, query: ':3000' })).toMatchObject({ openPorts: null, matches: [] });
+    // ports pas encore lus (passe en cours) : null (« Recherche des ports… ») et pas de filtre : les cartes restent affichées
+    expect(buildSnapshot(base, { groupId: null, query: ':3000' })).toMatchObject({ openPorts: null, matches: null });
+    // trop gros pour être lus : compté
+    expect(buildSnapshot({ ...base, listen: { ...listen, tooBig: 3 } }, { groupId: null, query: ':3000' }).openPorts?.tooBig).toBe(3);
   });
 
   test('recherche : ids des groupes de premier niveau qui correspondent', () => {

@@ -42,13 +42,15 @@ export interface OpenPortsInfo {
   otherUsers: OtherUserPort[];
   /** Ports écoutés sous son propre uid sans processus lisible (autre espace de noms de pid, plafond de fd), triés */
   unreadable: number[];
+  /** Processus de l'utilisateur à trop de fd pour être lus (leurs ports sont dans `unreadable`) */
+  tooBig: number;
 }
 
 /**
  * Liste des ports ouverts : `portsByPid` (ports lus dans les fd des processus de l'utilisateur) rattachés à leur groupe et à leur
  * instance ; `sockets` (tous utilisateurs) donne les ports des autres utilisateurs, signalés à part et jamais arrêtables.
  */
-export function openPorts(full: FullSnapshot, portsByPid: ReadonlyMap<number, number[]>, sockets: readonly ListenSocket[], currentUid: number): OpenPortsInfo {
+export function openPorts(full: FullSnapshot, portsByPid: ReadonlyMap<number, number[]>, sockets: readonly ListenSocket[], currentUid: number, tooBig = 0): OpenPortsInfo {
   const ports: OpenPort[] = [];
   const instOf = new Map<number, InstanceSummary>();
   for (const c of full.classification.values()) for (const i of c.instances) for (const pid of i.pids) instOf.set(pid, i);
@@ -92,7 +94,7 @@ export function openPorts(full: FullSnapshot, portsByPid: ReadonlyMap<number, nu
   otherUsers.sort((a, b) => a.port - b.port || a.uid - b.uid);
   const held = new Set(ports.map((p) => p.port));
   const unreadable = [...new Set(sockets.filter((s) => s.uid === currentUid && !held.has(s.port)).map((s) => s.port))].sort((a, b) => a - b);
-  return { ports, otherUsers, unreadable };
+  return { ports, otherUsers, unreadable, tooBig };
 }
 
 /** Recherche `:port` : groupes (les plus précis) qui écoutent ce port, et autres utilisateurs qui l'écoutent. */

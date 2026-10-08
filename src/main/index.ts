@@ -19,7 +19,7 @@ import { compileProtection } from '../core/protection';
 import { formatAppEvent } from '../core/history/events';
 import { appEventsPath, dataDir, focusStatePath, forecastSnoozePath } from '../core/paths';
 import { alertIdFromArgv } from '../core/alerts';
-import { buildSnapshot, flattenGroup, groupProcs, instanceTargets, isWatch, othersFollowed, wantsAllPorts, type Classification, type FullSnapshot } from '../core/snapshot';
+import { buildSnapshot, flattenGroup, groupProcs, instanceTargets, isWatch, othersFollowed, type Classification, type FullSnapshot } from '../core/snapshot';
 import type { ConfigState, Group, KillResult, ProcInfo, RecorderState, Watch } from '../core/types';
 import { createFreeOpener, wantsFree } from './launchArgs';
 import { SNOOZE_MS } from '../core/forecast/forecast';
@@ -29,6 +29,7 @@ import { installDesktopEntry } from './desktopEntry';
 import { createEarlyoomApplier, earlyoomStatus } from './earlyoom';
 import { clearHistory, createHistoryReader } from './history';
 import { pollDelay, type WindowActivity } from './pollPolicy';
+import { portModes } from './portModes';
 import { PortSweep } from './portSweep';
 import { sharedScan } from './tmpUsage';
 import { closeAction, confirmTray, createTrayController, defaultRun, statusNotifierAvailable, type TrayController } from './tray';
@@ -174,8 +175,12 @@ const portSweep = new PortSweep({
   },
 });
 
+/** Fenêtre cachée, réduite ou fermée : aucune lecture des ports de tous les processus (pause() arrête la passe en cours). */
+let windowHidden = true;
+const sweepWanted = () => portModes({ detectPorts: config.classify.detectPorts, watch, visible: !windowHidden }).sweep;
+
 function refreshPorts(groups: Group[], now: number): void {
-  if (!config.classify.detectPorts) {
+  if (!portModes({ detectPorts: config.classify.detectPorts, watch, visible: !windowHidden }).classify) {
     if (ports.size) {
       ports = new Map();
       portsKey = '';
@@ -264,7 +269,7 @@ function takeSnapshot(): FullSnapshot {
   recordSeparate(separateSeen, groups, now, (g) => isOverThreshold(g, config.othersThreshold));
   refreshPorts(groups, now);
   const classification = classify(groups, now);
-  portSweep.setMode(wantsAllPorts(watch));
+  portSweep.setMode(sweepWanted());
   portSweep.tick(); // la passe lit `last` : planifiée, elle s'exécute après ce snapshot
   return { takenAt: Date.now(), currentUid: uid, system: readSystem(), groups, classification, memMetric: config.ui.memoryMetric, listen: portSweep.listen };
 }
@@ -333,12 +338,15 @@ function createWindow(): void {
   };
   const pause = () => {
     activity.hidden = true;
+    windowHidden = true;
+    portSweep.setMode(false);
     schedule();
     setLive(false);
   };
   const resume = () => {
     const wasHidden = activity.hidden;
     activity.hidden = false;
+    windowHidden = false;
     push(); // snapshot frais tout de suite
     schedule();
     if (wasHidden) setLive(true);
@@ -384,11 +392,14 @@ function createWindow(): void {
     if (activity.hidden || slowed) resume();
   });
   win.webContents.on('did-finish-load', () => {
+    windowHidden = activity.hidden;
     push();
     schedule();
   });
   win.on('closed', () => {
     focusWriter.set(false);
+    windowHidden = true;
+    portSweep.setMode(false);
     if (timer) clearTimeout(timer);
     timer = null;
     mainWin = null;
@@ -427,7 +438,7 @@ ipcMain.handle('watch', (_e, w: unknown) => {
   watch = { groupId: w.groupId, query: w.query, othersOpen: w.othersOpen === true, ports: w.ports === true };
   // Panneau « Ports ouverts » ouvert ou recherche `:port` commencée : passe planifiée tout de suite (jamais ici, en synchrone) ;
   // sortie du mode : liste effacée.
-  portSweep.setMode(wantsAllPorts(watch));
+  portSweep.setMode(sweepWanted()); // reçu fenêtre cachée : aucune passe lancée
   if (last && last.listen !== portSweep.listen) last = { ...last, listen: portSweep.listen };
   // « Autres » déplié, ou ouverture de « Autres » / d'un de ses sous-groupes : leur classement est calculé tout de suite (reclassify envoie).
   const others = last?.groups.find((g) => g.kind === 'others');

@@ -109,14 +109,15 @@ function portsOf(dir: string, fds: string[], byInode: ReadonlyMap<number, number
 
 /**
  * Lecture par tranches (pour ne pas bloquer le main) : à partir de `pids[start]`, lit les pids tant que le total de fd parcourus
- * reste ≤ `maxFds` (au moins un pid lisible par tranche ; un pid à plus de MAX_FDS_PER_READ fd est sauté). `next` : indice du
- * prochain pid à lire (`pids.length` en fin de liste).
+ * reste ≤ `maxFds`. Un pid à plus de `maxFds` fd n'est jamais lu (il bloquerait le main au-delà du budget) : il est renvoyé dans
+ * `tooBig`. `next` : indice du prochain pid à lire (`pids.length` en fin de liste).
  */
-export function readListeningPortsSlice(pids: readonly number[], start: number, sockets: readonly ListenSocket[], maxFds: number, procRoot = '/proc'): { ports: Map<number, number[]>; next: number } {
+export function readListeningPortsSlice(pids: readonly number[], start: number, sockets: readonly ListenSocket[], maxFds: number, procRoot = '/proc'): { ports: Map<number, number[]>; next: number; tooBig: number[] } {
   const out = new Map<number, number[]>();
+  const tooBig: number[] = [];
   const byInode = new Map<number, number>();
   for (const s of sockets) byInode.set(s.inode, s.port);
-  if (byInode.size === 0) return { ports: out, next: pids.length };
+  if (byInode.size === 0) return { ports: out, next: pids.length, tooBig };
   let used = 0;
   let i = start;
   for (; i < pids.length; i++) {
@@ -127,11 +128,14 @@ export function readListeningPortsSlice(pids: readonly number[], start: number, 
     } catch {
       continue;
     }
-    if (fds.length > MAX_FDS_PER_READ) continue;
-    if (used > 0 && used + fds.length > maxFds) break;
+    if (fds.length > maxFds) {
+      tooBig.push(pids[i]);
+      continue;
+    }
+    if (used + fds.length > maxFds) break;
     used += fds.length;
     const ports = portsOf(dir, fds, byInode);
     if (ports) out.set(pids[i], ports);
   }
-  return { ports: out, next: i };
+  return { ports: out, next: i, tooBig };
 }

@@ -4,12 +4,14 @@ import { dedupeSockets, type ListenSocket } from '../core/collector/ports';
 export interface Listen {
   byPid: ReadonlyMap<number, number[]>;
   sockets: readonly ListenSocket[];
+  /** Processus à trop de fd pour une tranche, non lus */
+  tooBig: number;
 }
 
 export interface PortSweepDeps {
   /** Sockets en écoute bruts (/proc/net/tcp{,6}) */
   readSockets(): ListenSocket[];
-  readSlice(pids: readonly number[], start: number, sockets: readonly ListenSocket[], maxFds: number): { ports: Map<number, number[]>; next: number };
+  readSlice(pids: readonly number[], start: number, sockets: readonly ListenSocket[], maxFds: number): { ports: Map<number, number[]>; next: number; tooBig: number[] };
   /** Pids de l'utilisateur à lire, périmètre du classement en tête */
   pids(): number[];
   schedule(fn: () => void, ms: number): unknown;
@@ -36,7 +38,7 @@ export class PortSweep {
   listen: Listen | undefined;
   private all = false;
   private timer: unknown = null;
-  private running: { pids: number[]; i: number; acc: Map<number, number[]>; sockets: ListenSocket[] } | null = null;
+  private running: { pids: number[]; i: number; acc: Map<number, number[]>; sockets: ListenSocket[]; tooBig: number } | null = null;
   private doneAt = -Infinity;
 
   constructor(
@@ -75,10 +77,11 @@ export class PortSweep {
 
   private step(): void {
     if (!this.all) return;
-    this.running ??= { pids: this.deps.pids(), i: 0, acc: new Map(), sockets: this.deps.readSockets() };
+    this.running ??= { pids: this.deps.pids(), i: 0, acc: new Map(), sockets: this.deps.readSockets(), tooBig: 0 };
     const r = this.running;
     const slice = this.deps.readSlice(r.pids, r.i, r.sockets, this.opts.maxFds);
     for (const [pid, ports] of slice.ports) r.acc.set(pid, ports);
+    r.tooBig += slice.tooBig.length;
     r.i = slice.next;
     if (r.i < r.pids.length) {
       this.plan(this.opts.gapMs);
@@ -86,7 +89,7 @@ export class PortSweep {
     }
     this.running = null;
     this.doneAt = this.deps.now();
-    this.listen = { byPid: r.acc, sockets: dedupeSockets(r.sockets) };
+    this.listen = { byPid: r.acc, sockets: dedupeSockets(r.sockets), tooBig: r.tooBig };
     this.deps.onDone(this.listen);
   }
 }
