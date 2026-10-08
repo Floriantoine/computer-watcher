@@ -791,3 +791,4 @@ table.replay-tree td.name { color: var(--text-2); }
 table.replay-tree td.state { color: var(--label); }
 table.replay-tree tr.dead td { opacity: 0.45; }
 table.replay-tree tr.dead td.state { opacity: 1; color: var(--muted); }
+table.replay-tree tr.omitted td { color: var(--muted); font-style: italic; }

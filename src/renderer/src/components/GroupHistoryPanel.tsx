@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ChartLine, Pause, Play } from 'lucide-react';
 import type { RangePreset } from '../../../core/types';
 import { useChartZoom, ZoomChip } from '../chartZoom';
@@ -8,6 +8,7 @@ import { groupChartSeries } from './charts/chartData';
 import { TimeChart, type ChartMarker } from './charts/TimeChart';
 import { KB_FORMAT, PERCENT_FORMAT } from './charts/uplotTheme';
 import { RangeSelector } from './RangeSelector';
+import { ClickDelay, replayInstant } from '../replay';
 import type { Replay } from '../useReplay';
 
 const CHART_FORMAT = { left: KB_FORMAT, right: PERCENT_FORMAT };
@@ -33,6 +34,25 @@ export function GroupHistoryPanel({ groupId, replay, markers: extra }: { groupId
     if (instant !== null) m.push({ ts: instant, color: '#e7e9ee', label: 'Instant examiné' });
     return m;
   }, [events, extra, instant]);
+  // Clic : fige l'instant après 250 ms, sauf si c'est un double-clic (retour du zoom).
+  const latest = useRef({ replay, h });
+  latest.current = { replay, h };
+  const clicks = useMemo(
+    () =>
+      new ClickDelay(250, (exact) => {
+        const { replay: r, h: d } = latest.current;
+        if (!r || !d || d.ts.length < 2) return;
+        // Point de la série le plus proche de l'instant cliqué ; sur 7 j / 30 j (buckets d'une heure), l'instant cliqué lui-même.
+        const i = d.ts.reduce((best, t, k) => (Math.abs(t - exact) < Math.abs(d.ts[best] - exact) ? k : best), 0);
+        r.pick(replayInstant(d.ts[i], exact, d.ts[1] - d.ts[0]));
+      }),
+    [],
+  );
+  useEffect(() => () => clicks.dispose(), [clicks]);
+  const onSelectRange = (r: { from: number; to: number } | null) => {
+    if (r === null) clicks.cancel();
+    z.onSelectRange(r);
+  };
   const pickRange = (r: RangePreset) => {
     z.setZoom(null);
     setRange(r);
@@ -72,11 +92,11 @@ export function GroupHistoryPanel({ groupId, replay, markers: extra }: { groupId
           format={CHART_FORMAT}
           focusSeries={hover}
           markers={markers}
-          onCursor={replay?.pick}
+          onCursor={replay ? (_t, exact) => clicks.click(exact) : undefined}
           xRange={z.view}
           onWheel={z.onWheel}
           onDragPan={z.onDragPan}
-          onSelectRange={z.onSelectRange}
+          onSelectRange={onSelectRange}
         />
       ) : (
         <div className="chart-empty">{h === undefined ? 'Chargement…' : "Pas encore d'historique pour ce groupe"}</div>

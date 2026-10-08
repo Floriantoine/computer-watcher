@@ -12,7 +12,8 @@ function hhmm(ts: number, at: number): string {
   return d.toDateString() === new Date(at).toDateString() ? t : `${p2(d.getDate())}/${p2(d.getMonth() + 1)} ${t}`;
 }
 
-export function ReplayTree({ nodes, at }: { nodes: ReplayNode[]; at: number }): ReactElement {
+/** `omitted` : processus au-delà de la taille maximale renvoyée (les plus petits), signalés en dernière ligne. */
+export function ReplayTree({ nodes, at, omitted = 0 }: { nodes: ReplayNode[]; at: number; omitted?: number }): ReactElement {
   const rows: ReactElement[] = [];
   const walk = (ns: ReplayNode[], depth: number) => {
     for (const n of ns) {
@@ -33,11 +34,18 @@ export function ReplayTree({ nodes, at }: { nodes: ReplayNode[]; at: number }): 
     }
   };
   walk(nodes, 0);
+  if (omitted > 0) {
+    rows.push(
+      <tr key="__omitted" className="omitted" data-testid="replay-omitted">
+        <td colSpan={6} className="mono">… {omitted} autres processus (les plus petits) non affichés</td>
+      </tr>,
+    );
+  }
   return (
     <div className="panel-scroll">
       <table className="tree replay-tree" data-testid="replay-tree">
         <thead>
-          <tr><th>PID</th><th>Nom</th><th className="num">CPU</th><th className="num">RAM</th><th className="num">Swap</th><th>État</th></tr>
+          <tr><th>PID</th><th>Nom</th><th className="num">CPU</th><th className="num" title="Mémoire résidente enregistrée par le service (RSS), pas la PSS">RSS (enregistrée)</th><th className="num">Swap</th><th>État</th></tr>
         </thead>
         <tbody>{rows}</tbody>
       </table>

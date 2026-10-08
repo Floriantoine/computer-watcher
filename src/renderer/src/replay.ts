@@ -1,5 +1,5 @@
 // src/renderer/src/replay.ts — rejeu « voyage dans le temps » : arbre reconstruit depuis l'historique (pur)
-import type { ProcNode, ProcTreeRow, TimeRange } from '../../core/types';
+import type { ProcNode, ProcTreeAt, ProcTreeRow, TimeRange } from '../../core/types';
 
 export interface ReplayNode { row: ProcTreeRow; dead: boolean; diedAt: number | null; children: ReplayNode[] }
 
@@ -54,4 +54,42 @@ export const REPLAY_SPEED = 60;
 export function nextReplayTs(ts: number, range: TimeRange, elapsedMs: number): { ts: number; done: boolean } {
   const next = ts + elapsedMs * REPLAY_SPEED;
   return next >= range.to ? { ts: range.to, done: true } : { ts: next, done: false };
+}
+
+/**
+ * Instant figé par un clic : l'échantillon sous le curseur tant que les points sont fins (≤ 1 min), sinon (7 j, 30 j :
+ * buckets d'une heure) l'instant cliqué lui-même — l'arbre est alors celui de la minute enregistrée la plus proche.
+ */
+export function replayInstant(snapped: number, exact: number, stepMs: number): number {
+  return stepMs > 60_000 ? Math.round(exact) : snapped;
+}
+
+/**
+ * Clic simple différé : un double-clic (retour du zoom) envoie deux `click` puis `dblclick` ; seul un clic resté seul
+ * pendant `delayMs` fige l'instant. `cancel` au dblclick.
+ */
+export class ClickDelay {
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  constructor(private delayMs: number, private fire: (ts: number) => void) {}
+  click(ts: number): void {
+    this.cancel();
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.fire(ts);
+    }, this.delayMs);
+  }
+  cancel(): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+  }
+  dispose(): void {
+    this.cancel();
+  }
+}
+
+/** Arbre vide : trou d'enregistrement (service arrêté) ou groupe sous les seuils d'enregistrement. */
+export function replayEmptyText(t: ProcTreeAt): string {
+  return t.recorded
+    ? "Aucun processus au-dessus des seuils d'enregistrement à cet instant"
+    : "Trou d'enregistrement : le service n'échantillonnait pas à cet instant";
 }

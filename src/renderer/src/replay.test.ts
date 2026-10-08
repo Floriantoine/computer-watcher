@@ -1,6 +1,6 @@
-import { describe, expect, test } from 'vitest';
-import type { ProcInfo, ProcNode, ProcTreeRow } from '../../core/types';
-import { liveKeySet, nextReplayTs, REPLAY_SPEED, replayTree, type ReplayNode } from './replay';
+import { describe, expect, test, vi } from 'vitest';
+import type { ProcInfo, ProcNode, ProcTreeAt, ProcTreeRow } from '../../core/types';
+import { ClickDelay, liveKeySet, nextReplayTs, REPLAY_SPEED, replayEmptyText, replayInstant, replayTree, type ReplayNode } from './replay';
 import { replayReducer, type ReplayState } from './useReplay';
 
 const row = (pid: number, ppid: number | null, rssKB = 100, swapKB: number | null = 0, lastSeenTs = 1000): ProcTreeRow => ({
@@ -94,5 +94,40 @@ describe('replayReducer (état du rejeu)', () => {
 
   test('pick pendant la lecture : met en pause', () => {
     expect(replayReducer({ instant: t, playing: true, range }, { type: 'pick', ts: t - 5000 })).toMatchObject({ instant: t - 5000, playing: false });
+  });
+});
+
+describe('gestes et textes du rejeu', () => {
+  test('replayInstant : instant de l\'échantillon en détail, instant cliqué sur des buckets ≥ 1 min (7 j, 30 j)', () => {
+    expect(replayInstant(1000, 3456.7, 5000)).toBe(1000);
+    expect(replayInstant(1000, 3456.7, 60_000)).toBe(1000);
+    expect(replayInstant(3_600_000, 4_100_123.4, 3_600_000)).toBe(4_100_123);
+  });
+
+  test('ClickDelay : un clic simple fige après le délai ; un double-clic (retour du zoom) ne fige rien', () => {
+    vi.useFakeTimers();
+    const fired: number[] = [];
+    const d = new ClickDelay(250, (ts) => fired.push(ts));
+    d.click(1);
+    vi.advanceTimersByTime(249);
+    expect(fired).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(fired).toEqual([1]);
+    d.click(2);
+    d.click(2); // second clic du double-clic
+    d.cancel(); // dblclick
+    vi.advanceTimersByTime(1000);
+    expect(fired).toEqual([1]);
+    d.click(3);
+    d.dispose();
+    vi.advanceTimersByTime(1000);
+    expect(fired).toEqual([1]);
+    vi.useRealTimers();
+  });
+
+  test('replayEmptyText : trou d\'enregistrement ou processus sous les seuils', () => {
+    const at = (recorded: boolean): ProcTreeAt => ({ ts: 0, source: 'detail', procs: [], recorded, omitted: 0 });
+    expect(replayEmptyText(at(false))).toMatch(/^Trou d'enregistrement/);
+    expect(replayEmptyText(at(true))).toBe("Aucun processus au-dessus des seuils d'enregistrement à cet instant");
   });
 });

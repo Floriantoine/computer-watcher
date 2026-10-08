@@ -20,8 +20,8 @@ interface Props {
   /** Format des valeurs par axe (graduations et info-bulle). */
   format: { left: ValueFormat; right?: ValueFormat };
   markers?: ChartMarker[];
-  /** Clic sur un instant du graphe. */
-  onCursor?: (ts: number) => void;
+  /** Clic sur un instant du graphe : instant du point sous le curseur, et instant exact sous la souris. */
+  onCursor?: (ts: number, exact: number) => void;
   /** Glisser : plage sélectionnée ; double-clic : `null` (retour à la plage complète). */
   onSelectRange?: (r: { from: number; to: number } | null) => void;
   /** Courbe mise en avant (index dans `series`) : les autres sont estompées. */
@@ -182,7 +182,8 @@ export function TimeChart({ ts, series, height, format, markers, onCursor, onSel
               const { idx, left } = u.cursor;
               if (left == null || left < 0) return;
               const t = idx != null ? live.current.ts[idx] : undefined;
-              live.current.onCursor?.(t ?? u.posToVal(left, 'x'));
+              const exact = u.posToVal(left, 'x');
+              live.current.onCursor?.(t ?? exact, exact);
             });
             u.over.addEventListener('dblclick', () => live.current.onSelectRange?.(null));
             u.over.addEventListener('mouseleave', () => setTip(null));

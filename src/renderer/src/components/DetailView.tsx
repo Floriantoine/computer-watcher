@@ -7,7 +7,7 @@ import { procSparkMap, useHistory } from '../history';
 import { GroupHistoryPanel } from './GroupHistoryPanel';
 import { ticksIndex } from '../instances';
 import { formatInstant } from '../metrics';
-import { liveKeySet, replayTree } from '../replay';
+import { liveKeySet, replayEmptyText, replayTree } from '../replay';
 import { useReplay, type Replay } from '../useReplay';
 import { InstancesPanel } from './InstancesPanel';
 import { ProcTree } from './ProcTree';
@@ -58,7 +58,8 @@ function ReplayPanel({ replay, liveRoots }: { replay: Replay; liveRoots: ProcNod
     <div className="panel replay-panel">
       <div className="panel-head replay-banner" data-testid="replay-banner">
         <History size={14} strokeWidth={2} />
-        <h3>Arbre au {formatInstant(instant)}</h3>
+        {/* Instant de l'arbre affiché (l'arbre précédent reste à l'écran pendant le chargement du suivant). */}
+        <h3>Arbre au {formatInstant(tree ? tree.ts : instant)}</h3>
         <span className="sub">
           — seuls les processus au-dessus des seuils d'enregistrement apparaissent{tree?.source === 'minute' ? ' (moyennes par minute)' : ''}
         </span>
@@ -70,9 +71,9 @@ function ReplayPanel({ replay, liveRoots }: { replay: Replay; liveRoots: ProcNod
       ) : tree === null ? (
         <p className="empty">Historique indisponible</p>
       ) : nodes.length === 0 ? (
-        <p className="empty">Aucun processus enregistré à cet instant</p>
+        <p className="empty" data-testid="replay-empty">{replayEmptyText(tree)}</p>
       ) : (
-        <ReplayTree nodes={nodes} at={instant} />
+        <ReplayTree nodes={nodes} at={tree.ts} omitted={tree.omitted} />
       )}
     </div>
   );
