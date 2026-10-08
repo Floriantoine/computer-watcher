@@ -53,7 +53,7 @@ test.skipIf(process.env.PROC_WATCH_PERF !== '1')('requêtes Métriques et taille
   const ins = {
     group: db.prepare('INSERT INTO groups(id,key,label,kind) VALUES (?,?,?,?)'),
     proc: db.prepare('INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id,ppid) VALUES (?,?,?,?,?,?,?)'),
-    sm: db.prepare('INSERT INTO system_minute VALUES (?,?,?,?,?,?,?,?,?,?,?)'),
+    sm: db.prepare('INSERT INTO system_minute(ts, mem_used_kb_avg, mem_used_kb_max, mem_total_kb, swap_used_kb_avg, swap_used_kb_max, swap_total_kb, psi_avg, psi_max, load1_avg, cpu_avg) VALUES (?,?,?,?,?,?,?,?,?,?,?)'),
     gm: db.prepare('INSERT INTO group_minute VALUES (?,?,?,?,?,?)'),
     pm: db.prepare('INSERT INTO proc_minute VALUES (?,?,?,?,?)'),
     ev: db.prepare('INSERT INTO events(ts,type,group_id,detail) VALUES (?,?,?,?)'),
@@ -87,7 +87,7 @@ test.skipIf(process.env.PROC_WATCH_PERF !== '1')('requêtes Métriques et taille
   const tSummary = performance.now();
 
   // --- 24 h de détail écrites par le vrai writer (règle de repli du service), puis agrégées comme le service ---
-  const sys: SystemInfo = { memTotalKB: 32e6, memAvailableKB: 12e6, swapTotalKB: 20e6, swapFreeKB: 16e6, load1: 1.5, psiSome10: 2 };
+  const sys: SystemInfo = { memTotalKB: 32e6, memAvailableKB: 12e6, swapTotalKB: 20e6, swapFreeKB: 16e6, load1: 1.5, psiSome10: 2, shmemKB: 0 };
   const writer = new HistoryWriter(db);
   const churnAlive: { id: number; pid: number; until: number }[] = [];
   let maxGroupsPerTick = 0;

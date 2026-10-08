@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { openHistoryDb } from './db';
+import { createV3Db } from './testDb';
 import { aggregateMinute } from './maintenance';
 import { bucketMs, pickSource, queryInactive, queryCulprits, queryEvents, queryGroup, queryGroups, queryProcs, queryProcsAt, querySystem, queryTop, rangeFromPreset } from './queries';
 
@@ -19,7 +20,7 @@ function seeded() {
   // 10 minutes, un tick toutes les 5 s ; Chrome monte de 1 Mo par tick, a reste à 500 Mo
   for (let ts = 0; ts < 10 * M; ts += 5000) {
     const chrome = 1000 * 1024 + (ts / 5000) * 1024;
-    db.prepare('INSERT INTO system_samples VALUES (?,?,?,?,?,?,?,?)').run(ts, chrome + 500 * 1024, 32_000_000, 100, 20_000_000, 2, 1, 10);
+    db.prepare('INSERT INTO system_samples(ts, mem_used_kb, mem_total_kb, swap_used_kb, swap_total_kb, psi_some10, load1, cpu_percent) VALUES (?,?,?,?,?,?,?,?)').run(ts, chrome + 500 * 1024, 32_000_000, 100, 20_000_000, 2, 1, 10);
     db.prepare('INSERT INTO group_samples VALUES (?,?,?,?,?,?)').run(ts, 1, chrome, 0, 5, 3);
     db.prepare('INSERT INTO group_samples VALUES (?,?,?,?,?,?)').run(ts, 2, 500 * 1024, 0, 1, 1);
     db.prepare('INSERT INTO proc_samples VALUES (?,?,?,?,?)').run(ts, 1, chrome, 0, 5);
@@ -125,7 +126,7 @@ test('queryCulprits : même règle sur la source minute', () => {
   for (let m = 5; m >= 0; m--) rows.push([at - m * M, 1, 500 * 1024]);
   rows.push([at, 2, 10 * 1024 * 1024]); // apparu à la dernière minute
   const db = culpritDb('group_minute', rows);
-  for (let m = 5; m >= 0; m--) db.prepare('INSERT INTO system_minute VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(at - m * M, 1, 1, 100, 0, 0, 100, 0, 0, 1, 1);
+  for (let m = 5; m >= 0; m--) db.prepare('INSERT INTO system_minute(ts, mem_used_kb_avg, mem_used_kb_max, mem_total_kb, swap_used_kb_avg, swap_used_kb_max, swap_total_kb, psi_avg, psi_max, load1_avg, cpu_avg) VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(at - m * M, 1, 1, 100, 0, 0, 100, 0, 0, 1, 1);
   const c = queryCulprits(db, at, opts(now));
   expect(c[0]).toMatchObject({ key: 'app:new', deltaKB: 10 * 1024 * 1024 });
   expect(c[1]).toMatchObject({ key: 'app:flat', deltaKB: 0 });
@@ -145,7 +146,7 @@ test('queryCulprits : trou du recorder au début de la fenêtre (minute)', () =>
   const rows: [number, number, number][] = [];
   for (let m = 2; m >= 0; m--) rows.push([at - m * M, 2, 2 * 1024 * 1024]);
   const db = culpritDb('group_minute', rows);
-  for (let m = 2; m >= 0; m--) db.prepare('INSERT INTO system_minute VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(at - m * M, 1, 1, 100, 0, 0, 100, 0, 0, 1, 1);
+  for (let m = 2; m >= 0; m--) db.prepare('INSERT INTO system_minute(ts, mem_used_kb_avg, mem_used_kb_max, mem_total_kb, swap_used_kb_avg, swap_used_kb_max, swap_total_kb, psi_avg, psi_max, load1_avg, cpu_avg) VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(at - m * M, 1, 1, 100, 0, 0, 100, 0, 0, 1, 1);
   expect(queryCulprits(db, at, opts(now))[0]).toMatchObject({ key: 'app:new', deltaKB: 0 });
 });
 
@@ -186,7 +187,7 @@ test('lecture seule pendant qu\'un écrivain tient une transaction : pas d\'erre
   const { db, path } = seeded();
   const reader = openHistoryDb(path, { readOnly: true }).db;
   db.exec('BEGIN');
-  db.prepare('INSERT INTO system_samples VALUES (?,?,?,?,?,?,?,?)').run(10 * M, 1, 1, 1, 1, null, 0, 0);
+  db.prepare('INSERT INTO system_samples(ts, mem_used_kb, mem_total_kb, swap_used_kb, swap_total_kb, psi_some10, load1, cpu_percent) VALUES (?,?,?,?,?,?,?,?)').run(10 * M, 1, 1, 1, 1, null, 0, 0);
   expect(() => querySystem(reader, { from: 0, to: 11 * M }, opts(11 * M))).not.toThrow();
   db.exec('COMMIT');
   reader.close();
@@ -196,7 +197,7 @@ test('au plus 1000 points même quand from n\'est pas aligné sur le bucket', ()
   const path = join(mkdtempSync(join(tmpdir(), 'pw-q-')), 'm.db');
   const { db } = openHistoryDb(path);
   db.exec('BEGIN');
-  const ins = db.prepare('INSERT INTO system_samples VALUES (?,?,?,?,?,?,?,?)');
+  const ins = db.prepare('INSERT INTO system_samples(ts, mem_used_kb, mem_total_kb, swap_used_kb, swap_total_kb, psi_some10, load1, cpu_percent) VALUES (?,?,?,?,?,?,?,?)');
   for (let ts = 0; ts <= 5_010_000; ts += 1000) ins.run(ts, 1, 1, 1, 1, null, 0, 0);
   db.exec('COMMIT');
   const to = 5_004_000;
@@ -285,7 +286,7 @@ function hourSeeded() {
   for (let h = 0; h < 240; h++) {
     db.prepare('INSERT INTO group_hour VALUES (?,?,?,?,?,?)').run(h * H, 1, 1000 + h, 0, 2000 + h, 5);
     db.prepare('INSERT INTO group_hour VALUES (?,?,?,?,?,?)').run(h * H, 2, 300, 0, 300, 1);
-    db.prepare('INSERT INTO system_hour VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(h * H, 5000, 6000 + h, 8000, 0, 0, 100, 1, 2, 0.5, 10);
+    db.prepare('INSERT INTO system_hour(ts, mem_used_kb_avg, mem_used_kb_max, mem_total_kb, swap_used_kb_avg, swap_used_kb_max, swap_total_kb, psi_avg, psi_max, load1_avg, cpu_avg) VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(h * H, 5000, 6000 + h, 8000, 0, 0, 100, 1, 2, 0.5, 10);
     db.prepare('INSERT INTO proc_minute VALUES (?,?,?,?,?)').run(h * H, 1, 900, 950 + h, 5);
   }
   return db;
@@ -315,7 +316,7 @@ test('base v2 (sans tables horaires, lecture seule) : les plages > 48 h retomben
           INSERT INTO groups(id,key,label,kind) VALUES (1,'app:a','A','app');`);
   for (let m = 0; m < 3; m++) {
     w.prepare('INSERT INTO group_minute VALUES (?,?,?,?,?,?)').run(100 * H + m * M, 1, 10, 0, 10, 0);
-    w.prepare('INSERT INTO system_minute VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(100 * H + m * M, 1, 1, 8, 0, 0, 1, null, null, 0, 0);
+    w.prepare('INSERT INTO system_minute(ts, mem_used_kb_avg, mem_used_kb_max, mem_total_kb, swap_used_kb_avg, swap_used_kb_max, swap_total_kb, psi_avg, psi_max, load1_avg, cpu_avg) VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(100 * H + m * M, 1, 1, 8, 0, 0, 1, null, null, 0, 0);
   }
   w.close();
   const { db } = openHistoryDb(path, { readOnly: true });
@@ -371,5 +372,59 @@ describe('queryInactive (« inactives depuis »)', () => {
     // échantillon détaillé récent aussi pris en compte quand la période dépasse la rétention
     db.prepare('INSERT INTO proc_samples VALUES (?,?,?,?,?)').run(now - M, 2, 1000, 0, 2);
     expect(queryInactive(db, targets, now - 31 * H, opts(now))).toEqual(new Set(['20:200', '21:210']));
+  });
+});
+
+describe('querySystem : Shmem et somme des groupes (découpage du Reste)', () => {
+  test('détail : shmemKB = max du bucket, groupsKB = somme des groupes par bucket', () => {
+    const { db } = seeded();
+    db.exec('UPDATE system_samples SET shmem_kb = 1000 + ts / 5000');
+    const s = querySystem(db, { from: 0, to: 10 * M }, opts(10 * M));
+    expect(s.shmemKB.slice(0, 3)).toEqual([1000, 1001, 1002]);
+    // Chrome (1000 Mo + 1 Mo par tick) + a (500 Mo)
+    expect(s.groupsKB.slice(0, 2)).toEqual([1500 * 1024, 1501 * 1024]);
+    expect(s.groupsKB).toHaveLength(s.ts.length);
+  });
+
+  test('minute : shmemKB = MAX(shmem_kb_max), groupsKB depuis mem_kb_max', () => {
+    const { db } = seeded();
+    db.exec('UPDATE system_minute SET shmem_kb_max = 7, shmem_kb_avg = 5');
+    const s = querySystem(db, { from: 0, to: 30 * H }, opts(30 * H));
+    expect(s.ts[0]).toBe(0);
+    expect(s.shmemKB[0]).toBe(7);
+    // bucket de 2 min (30 h de plage) : pic de Chrome = 1000 Mo + 23 Mo (24 ticks), a = 500 Mo
+    expect(s.ts[1] - s.ts[0]).toBe(2 * M);
+    expect(s.groupsKB[0]).toBe(1023 * 1024 + 500 * 1024);
+  });
+
+  test('heure : groupsKB = somme des pics horaires, shmemKB des heures', () => {
+    const db = hourSeeded();
+    db.exec('UPDATE system_hour SET shmem_kb_max = ts / 3600000');
+    const now = 240 * H;
+    const s = querySystem(db, rangeFromPreset('7d', now), opts(now));
+    expect(s.shmemKB.at(-1)).toBe(239);
+    expect(s.groupsKB.at(-1)).toBe(2000 + 239 + 300);
+  });
+
+  test('base v3 en lecture seule (colonnes shmem absentes) : shmemKB tout null, aucune exception', () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'pw-q-')), 'v3.db');
+    const w = createV3Db(path);
+    w.exec("INSERT INTO groups(id,key,label,kind) VALUES (1,'app:a','A','app')");
+    for (let ts = 0; ts < 2 * M; ts += 5000) {
+      w.prepare('INSERT INTO system_samples VALUES (?,?,?,?,?,?,?,?)').run(ts, 100, 1000, 0, 0, null, 0, 0);
+      w.prepare('INSERT INTO group_samples VALUES (?,?,?,?,?,?)').run(ts, 1, 40, 2, 0, 1);
+    }
+    w.prepare('INSERT INTO system_minute VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(0, 1, 1, 8, 0, 0, 1, null, null, 0, 0);
+    w.prepare('INSERT INTO system_hour VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(0, 1, 1, 8, 0, 0, 1, null, null, 0, 0);
+    w.close();
+    const { db } = openHistoryDb(path, { readOnly: true });
+    const d = querySystem(db, { from: 0, to: 2 * M }, opts(2 * M));
+    expect(d.ts.length).toBeGreaterThan(0);
+    expect(d.shmemKB.every((v) => v === null)).toBe(true);
+    expect(d.groupsKB[0]).toBe(42);
+    for (const r of [{ from: 0, to: 30 * H }, { from: 0, to: 30 * 24 * H }]) {
+      const s = querySystem(db, r, opts(r.to));
+      expect(s.shmemKB.every((v) => v === null)).toBe(true);
+    }
   });
 });

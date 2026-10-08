@@ -23,6 +23,10 @@ export interface ProcSample {
 export interface ProcInfo extends ProcSample {
   /** % d'un cœur, comme top */
   cpuPercent: number;
+  /** Mode PSS : PSS demandé mais illisible (autre utilisateur, hidepid…) ; rssKB reste alors le RSS. */
+  pssDenied?: boolean;
+  /** Mode PSS : processus affiché pas encore lu (lectures étalées sur plusieurs passes) ; rssKB reste le RSS. */
+  pssPending?: boolean;
 }
 
 export interface SystemInfo {
@@ -33,6 +37,8 @@ export interface SystemInfo {
   load1: number;
   /** /proc/pressure/memory "some avg10", null si PSI indisponible */
   psiSome10: number | null;
+  /** Champ Shmem de /proc/meminfo : fichiers en mémoire (/tmp, /dev/shm) et mémoire partagée */
+  shmemKB: number | null;
 }
 
 export interface ProcNode {
@@ -66,6 +72,8 @@ export interface Group {
 /** Groupe sans son arbre de processus : ce que reçoit le renderer à chaque snapshot. */
 export interface GroupSummary extends Omit<Group, 'roots' | 'subgroups'> {
   subgroups: GroupSummary[];
+  /** Mode PSS : processus du groupe comptés en RSS (PSS illisible ou pas encore lu) ; absent si aucun ou en RSS. */
+  pssFallback?: number;
   categories: Category[];
   instances: InstanceSummary[];
 }
@@ -74,6 +82,8 @@ export interface GroupSummary extends Omit<Group, 'roots' | 'subgroups'> {
 export interface Watch {
   groupId: string | null;
   query: string;
+  /** Carte « Autres » dépliée sur la page Processus (ses sous-groupes sont alors résumés). */
+  othersOpen?: boolean;
 }
 
 export interface Snapshot {
@@ -81,7 +91,7 @@ export interface Snapshot {
   /** UID de l'utilisateur qui fait tourner proc-watch */
   currentUid: number;
   system: SystemInfo;
-  /** Les sous-groupes de « Autres » ne sont détaillés que quand « Autres » ou l'un d'eux est suivi (sinon liste vide). */
+  /** Les sous-groupes de « Autres » ne sont détaillés que quand « Autres » est déplié, ou lui ou l'un d'eux suivi (sinon liste vide). */
   groups: GroupSummary[];
   /** Ids de tous les groupes, sous-groupes de « Autres » compris */
   groupIds: string[];
@@ -93,6 +103,8 @@ export interface Snapshot {
   watched: string | null;
   /** Arbre du groupe suivi (`Watch.groupId`), null si aucun ou s'il n'existe plus */
   detail: { groupId: string; roots: ProcNode[] } | null;
+  /** Mémoire affichée : 'pss' → les rssKB des processus et des groupes sont des PSS (repli RSS signalé par pssDenied). */
+  memMetric: MemoryMetric;
 }
 
 export interface RecorderConfig {
@@ -106,11 +118,18 @@ export interface RecorderConfig {
   groupMinMemMB: number;
   leakMinMinutes: number;
   leakMinGrowthMB: number;
+  /** Alerte « fichiers en mémoire » quand Shmem dépasse ce seuil (Mo). */
+  tmpfsAlertMB: number;
 }
+
+/** Mémoire affichée en direct : RSS (rapide) ou PSS (mémoire partagée répartie, lue dans smaps_rollup). */
+export type MemoryMetric = 'rss' | 'pss';
 
 export interface UiConfig {
   /** « Effets visuels réduits » : pas de flou, animations minimales */
   reducedEffects: boolean;
+  /** Absent d'une config existante → 'rss'. L'historique reste toujours en RSS. */
+  memoryMetric: MemoryMetric;
 }
 
 export type { Category } from './classify/categories';
@@ -170,7 +189,13 @@ export interface KillResult {
 
 export type RangePreset = '1h' | '6h' | '24h' | '7d' | '30d';
 export interface TimeRange { from: number; to: number }
-export interface SystemSeries { ts: number[]; memUsedKB: number[]; swapUsedKB: number[]; memTotalKB: number; swapTotalKB: number; psi: (number | null)[]; cpu: number[]; load: number[] }
+export interface SystemSeries {
+  ts: number[]; memUsedKB: number[]; swapUsedKB: number[]; memTotalKB: number; swapTotalKB: number; psi: (number | null)[]; cpu: number[]; load: number[];
+  /** Fichiers en mémoire (Shmem) au pic du bucket ; null avant v4 (base non migrée ou données antérieures). */
+  shmemKB: (number | null)[];
+  /** Somme des pics de tous les groupes par bucket ; null si aucun groupe enregistré dans le bucket. */
+  groupsKB: (number | null)[];
+}
 export interface GroupSeries { key: string; label: string; kind: GroupKind; memKB: (number | null)[] }
 export interface GroupsHistory { ts: number[]; series: GroupSeries[] }
 export interface GroupHistory { ts: number[]; rssKB: (number | null)[]; swapKB: (number | null)[]; cpu: (number | null)[] }
@@ -182,6 +207,18 @@ export interface TopOptions { limit?: number; peakLimit?: number }
 export interface TopConsumer { key: string; label: string; kind: GroupKind; avgKB: number; maxKB: number; spark: number[] }
 /** Les deux classements, calculés en un seul parcours. */
 export interface TopResult { byAvg: TopConsumer[]; byMax: TopConsumer[] }
+export interface TmpDirUsage { path: string; sizeKB: number }
+/** Occupation actuelle de /tmp (tmpfs, en RAM), calculée à la demande par le main, en lecture seule. */
+export interface TmpUsage {
+  /** Plus gros dossiers de premier niveau, décroissants */
+  dirs: TmpDirUsage[];
+  /** Fichiers posés directement dans /tmp (cumul) */
+  rootFilesKB: number;
+  /** Dossiers illisibles ignorés */
+  skipped: number;
+  /** Arrêt au plafond d'entrées ou de durée : tailles « au moins » */
+  truncated: boolean;
+}
 export interface HistoryEvent { ts: number; type: string; groupKey: string | null; groupLabel: string | null; detail: Record<string, unknown> }
 export interface RecorderState {
   available: boolean; // systemd utilisateur disponible

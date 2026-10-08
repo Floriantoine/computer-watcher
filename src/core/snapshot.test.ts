@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import type { GroupClassification } from './classify/classify';
 import type { Group, InstanceSummary, ProcInfo, SystemInfo } from './types';
-import { buildSnapshot, findFullGroup, followsOthers, groupMatches, groupProcs, instanceTargets, isWatch, summarizeGroup } from './snapshot';
+import { buildSnapshot, findFullGroup, followsOthers, groupMatches, groupProcs, instanceTargets, isWatch, othersFollowed, summarizeGroup } from './snapshot';
 
 const proc = (pid: number, name: string, extra: Partial<ProcInfo> = {}): ProcInfo => ({
   pid, ppid: 1, name, cmdline: name, uid: 1000, startTicks: pid * 10, ageSec: 10, cpuTicks: 0, cpuPercent: 0,
@@ -15,7 +15,7 @@ const group = (id: string, procs: ProcInfo[], extra: Partial<Group> = {}): Group
   protected: false, killable: true, subgroups: [], ...extra,
 });
 
-const system: SystemInfo = { memTotalKB: 100, memAvailableKB: 50, swapTotalKB: 0, swapFreeKB: 0, load1: 0, psiSome10: null };
+const system: SystemInfo = { memTotalKB: 100, memAvailableKB: 50, swapTotalKB: 0, swapFreeKB: 0, load1: 0, psiSome10: null, shmemKB: 0 };
 
 const inner = group('c', [proc(3, 'cron', { cmdline: '/usr/sbin/cron -f' })]);
 const groups = [
@@ -87,6 +87,40 @@ describe('buildSnapshot', () => {
     expect(buildSnapshot(base, { groupId: null, query: '' }).groupIds).toEqual(['a', 'b', 'others', 'c']);
   });
 
+  test('« Autres » déplié (othersOpen) : sous-groupes résumés sans suivi ; replié et rien de suivi : aucun', () => {
+    const others = (othersOpen: boolean) => buildSnapshot(base, { groupId: null, query: '', othersOpen }).groups.find((g) => g.id === 'others')!;
+    expect(others(true).subgroups.map((g) => g.id)).toEqual(['c']);
+    expect(others(true).subgroups[0]).toMatchObject({ categories: ['system'] });
+    expect(others(true).subgroups[0]).not.toHaveProperty('roots');
+    expect(others(false).subgroups).toEqual([]);
+    // déplié : pas d'arbre envoyé pour autant
+    expect(buildSnapshot(base, { groupId: null, query: '', othersOpen: true }).detail).toBeNull();
+  });
+
+  test('PSS : pssFallback = processus encore en RSS (illisibles ou pas encore lus), sous-groupes compris ; absent en RSS', () => {
+    const mixed = [
+      group('m', [proc(10, 'a', { pssDenied: true }), proc(11, 'b', { pssPending: true }), proc(12, 'c')]),
+      group('ok', [proc(13, 'd')]),
+      group('others', [], { kind: 'others', subgroups: [group('s', [proc(14, 'e', { pssDenied: true })])] }),
+    ];
+    const pss = buildSnapshot({ ...base, groups: mixed, memMetric: 'pss' }, { groupId: null, query: '', othersOpen: true });
+    expect(pss.groups[0]!.pssFallback).toBe(2);
+    expect(pss.groups[1]!.pssFallback).toBeUndefined();
+    expect(pss.groups[2]!.pssFallback).toBe(1);
+    expect(pss.groups[2]!.subgroups[0]!.pssFallback).toBe(1);
+    // « Autres » replié : sous-groupes non envoyés, mais le compte porte sur le groupe complet (« PSS* » sur la carte)
+    const folded = buildSnapshot({ ...base, groups: mixed, memMetric: 'pss' }, { groupId: null, query: '' });
+    expect(folded.groups[2]!.subgroups).toEqual([]);
+    expect(folded.groups[2]!.pssFallback).toBe(1);
+    const rss = buildSnapshot({ ...base, groups: mixed }, { groupId: null, query: '' });
+    expect(rss.groups[0]!.pssFallback).toBeUndefined();
+  });
+
+  test('memMetric recopié du snapshot complet (rss par défaut)', () => {
+    expect(buildSnapshot({ ...base, memMetric: 'pss' }, { groupId: null, query: '' }).memMetric).toBe('pss');
+    expect(buildSnapshot(base, { groupId: null, query: '' }).memMetric).toBe('rss');
+  });
+
   test('groupe suivi : son arbre seulement, y compris un sous-groupe d\'« Autres »', () => {
     expect(buildSnapshot(base, { groupId: 'a', query: '' }).detail).toEqual({ groupId: 'a', roots: groups[0]!.roots });
     expect(buildSnapshot(base, { groupId: 'c', query: '' }).detail).toEqual({ groupId: 'c', roots: inner.roots });
@@ -107,6 +141,15 @@ test('followsOthers : vrai seulement si « Autres » ou l\'un de ses sous-groupe
   expect(followsOthers(groups, 'a')).toBe(false);
   expect(followsOthers(groups, 'x')).toBe(false);
   expect(followsOthers(groups, null)).toBe(false);
+});
+
+test('othersFollowed : « Autres » déplié, ou « Autres » / l\'un de ses sous-groupes suivi', () => {
+  expect(othersFollowed(groups, { groupId: null, query: '', othersOpen: true })).toBe(true);
+  expect(othersFollowed(groups, { groupId: null, query: '', othersOpen: false })).toBe(false);
+  expect(othersFollowed(groups, { groupId: null, query: '' })).toBe(false);
+  expect(othersFollowed(groups, { groupId: 'c', query: '' })).toBe(true);
+  expect(othersFollowed(groups, { groupId: 'others', query: '', othersOpen: false })).toBe(true);
+  expect(othersFollowed(groups, { groupId: 'a', query: '' })).toBe(false);
 });
 
 test('findFullGroup et groupProcs : tous les processus du groupe, sous-groupes compris', () => {
@@ -155,4 +198,9 @@ test('isWatch valide ce qui vient du renderer', () => {
   expect(isWatch({ groupId: null })).toBe(false);
   expect(isWatch({ groupId: null, query: 'x'.repeat(1001) })).toBe(false);
   expect(isWatch(null)).toBe(false);
+  // othersOpen : absent ou booléen
+  expect(isWatch({ groupId: null, query: '', othersOpen: true })).toBe(true);
+  expect(isWatch({ groupId: null, query: '', othersOpen: false })).toBe(true);
+  expect(isWatch({ groupId: null, query: '', othersOpen: 'yes' })).toBe(false);
+  expect(isWatch({ groupId: null, query: '', othersOpen: 1 })).toBe(false);
 });

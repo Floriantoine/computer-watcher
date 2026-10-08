@@ -13,6 +13,7 @@ export const RECORDER_BOUNDS: Record<RecorderNumField, Bound> = {
   groupMinMemMB: { int: false, min: 0, max: 1024 },
   leakMinMinutes: { int: true, min: 5, max: 24 * 60 },
   leakMinGrowthMB: { int: false, min: 0 },
+  tmpfsAlertMB: { int: true, min: 100, max: 1_048_576 },
 };
 
 export function inBounds(v: unknown, b: Bound): v is number {

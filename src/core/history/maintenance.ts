@@ -14,9 +14,10 @@ export function rollupHours(db: DatabaseSync, range?: { from: number; to: number
   const args = range ? [range.from, range.to] : [];
   db.prepare(
     `INSERT OR REPLACE INTO system_hour
-       (ts, mem_used_kb_avg, mem_used_kb_max, mem_total_kb, swap_used_kb_avg, swap_used_kb_max, swap_total_kb, psi_avg, psi_max, load1_avg, cpu_avg)
+       (ts, mem_used_kb_avg, mem_used_kb_max, mem_total_kb, swap_used_kb_avg, swap_used_kb_max, swap_total_kb, psi_avg, psi_max, load1_avg, cpu_avg,
+        shmem_kb_avg, shmem_kb_max)
      SELECT (ts / ${H}) * ${H} AS h, AVG(mem_used_kb_avg), MAX(mem_used_kb_max), MAX(mem_total_kb), AVG(swap_used_kb_avg), MAX(swap_used_kb_max),
-            MAX(swap_total_kb), AVG(psi_avg), MAX(psi_max), AVG(load1_avg), AVG(cpu_avg)
+            MAX(swap_total_kb), AVG(psi_avg), MAX(psi_max), AVG(load1_avg), AVG(cpu_avg), AVG(shmem_kb_avg), MAX(shmem_kb_max)
      FROM system_minute ${where} GROUP BY h`,
   ).run(...args);
   db.prepare(
@@ -44,9 +45,10 @@ export function aggregateMinute(db: DatabaseSync, minuteStart: number): void {
   try {
     db.prepare(
       `INSERT OR REPLACE INTO system_minute
-         (ts, mem_used_kb_avg, mem_used_kb_max, mem_total_kb, swap_used_kb_avg, swap_used_kb_max, swap_total_kb, psi_avg, psi_max, load1_avg, cpu_avg)
+         (ts, mem_used_kb_avg, mem_used_kb_max, mem_total_kb, swap_used_kb_avg, swap_used_kb_max, swap_total_kb, psi_avg, psi_max, load1_avg, cpu_avg,
+          shmem_kb_avg, shmem_kb_max)
        SELECT ?, AVG(mem_used_kb), MAX(mem_used_kb), MAX(mem_total_kb), AVG(swap_used_kb), MAX(swap_used_kb), MAX(swap_total_kb),
-              AVG(psi_some10), MAX(psi_some10), AVG(load1), AVG(cpu_percent)
+              AVG(psi_some10), MAX(psi_some10), AVG(load1), AVG(cpu_percent), AVG(shmem_kb), MAX(shmem_kb)
        FROM system_samples WHERE ts >= ? AND ts < ? HAVING COUNT(*) > 0`,
     ).run(minuteStart, minuteStart, end);
     db.prepare(

@@ -1,16 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { ArrowLeft, ChartLine, ChevronRight, Lock, Shield, ShieldOff, X } from 'lucide-react';
-import type { Category, GroupSummary as Group, InstanceSummary, ProcNode, RangePreset } from '../../../core/types';
+import { ArrowLeft, ChartLine, ChevronRight, Lock, PenLine, Shield, ShieldOff, X } from 'lucide-react';
+import type { Category, GroupSummary as Group, InstanceSummary, MemoryMetric, ProcNode, RangePreset } from '../../../core/types';
 import { formatAge, formatKB } from '../format';
 import { procSparkMap, useHistory } from '../history';
-import { ticksIndex } from '../instances';
+import { showRevertToAuto, ticksIndex } from '../instances';
+import { fallbackTitle, memTileLabel } from '../memMetric';
+import { headerReclassTarget } from '../reclassHeader';
 import { useChartZoom, ZoomChip } from '../chartZoom';
 import { PRESET_MS, refreshMsFor } from '../metrics';
 import { groupChartSeries } from './charts/chartData';
 import { TimeChart } from './charts/TimeChart';
 import { KB_FORMAT, PERCENT_FORMAT } from './charts/uplotTheme';
+import { CategoryTag } from './CategoryTag';
 import { InstancesPanel } from './InstancesPanel';
+import { ReclassMenu } from './ReclassMenu';
 import { ProcTree } from './ProcTree';
 import { RangeSelector } from './RangeSelector';
 import { AnimatedNumber, ForceButton, GroupIcon } from './ui';
@@ -35,6 +39,8 @@ interface Props {
   onKillInstance: (inst: InstanceSummary) => void;
   /** Dialogue de confirmation groupée (BulkKillDialog) pré-filtré ; absent : boutons d'en-tête de « Instances » désactivés. */
   onKillInstances?: (instances: InstanceSummary[], launchersOf?: string) => void;
+  /** Mémoire affichée en direct (RSS ou PSS) ; l'historique reste en RSS (« RAM »). */
+  memMetric?: MemoryMetric;
 }
 
 function BackButton({ onBack }: { onBack: () => void }) {
@@ -98,7 +104,7 @@ function GroupHistoryPanel({ groupId }: { groupId: string }) {
 }
 
 export function DetailView(props: Props) {
-  const { group, onBack } = props;
+  const { group, onBack, memMetric = 'rss' } = props;
   const groupId = group?.id;
   const others = group?.kind === 'others';
   const procs = useHistory(
@@ -110,6 +116,8 @@ export function DetailView(props: Props) {
   // Index pid → startTicks : même objet tant que l'arbre a les mêmes processus (lignes d'instances mémoïsées).
   const ticksRef = useRef<Map<number, number> | undefined>(undefined);
   const ticksOf = useMemo(() => (ticksRef.current = ticksIndex(props.roots, ticksRef.current)), [props.roots]);
+  // Menu « Reclasser » de l'en-tête : ouvert pour un groupe précis, donc fermé dès que le groupe affiché change.
+  const [reclassOpenFor, setReclassOpenFor] = useState<string | null>(null);
   if (!group && props.pending) return <p className="empty">Chargement…</p>;
   if (!group) {
     return (
@@ -121,6 +129,8 @@ export function DetailView(props: Props) {
   }
   const stuck = group.pids.filter((pid) => props.stuckPids.has(pid));
   const pending = group.pids.some((pid) => props.pendingPids.has(pid));
+  // Groupes hors projet (app, commande, Claude) : leur instance unique se reclasse depuis l'en-tête (étiquette seulement).
+  const reclass = headerReclassTarget(group);
   return (
     <>
       <div className="page-head">
@@ -135,6 +145,26 @@ export function DetailView(props: Props) {
           )}
         </h2>
         <span className="spacer" />
+        {reclass && (
+          <span className="head-reclass" data-testid="header-reclass">
+            <CategoryTag category={reclass.category} />
+            {reclass.source === 'manual' && (
+              <span className="inst-manual" title="Classé à la main" aria-label="Classé à la main" role="img">
+                <PenLine size={11} strokeWidth={2.4} />
+              </span>
+            )}
+            <ReclassMenu
+              current={reclass.category}
+              revert={showRevertToAuto(reclass)}
+              open={reclassOpenFor === group.id}
+              onOpen={(open) => setReclassOpenFor(open ? group.id : null)}
+              onPick={(c) => {
+                setReclassOpenFor(null);
+                props.onReclassify(reclass, c);
+              }}
+            />
+          </span>
+        )}
         {group.kind !== 'others' && (
           <button onClick={() => props.onToggleProtect(group)}>
             {props.rootProtectedByName ? <ShieldOff size={14} strokeWidth={2} /> : <Shield size={14} strokeWidth={2} />}
@@ -158,7 +188,7 @@ export function DetailView(props: Props) {
       </div>
       <div className="summary">
         <div className="tile"><small>Processus</small><b>{group.procCount}</b></div>
-        <div className="tile"><small>RAM</small><b><AnimatedNumber value={group.rssKB} /></b></div>
+        <div className="tile" title={fallbackTitle(memMetric, group)}><small data-testid="mem-tile-label">{memTileLabel(memMetric, group)}</small><b><AnimatedNumber value={group.rssKB} /></b></div>
         <div className="tile"><small>Swap</small><b><AnimatedNumber value={group.swapKB} /></b></div>
         <div className="tile"><small>Plus ancien</small><b className={group.oldestAgeSec > 86400 ? 'old' : ''}>{formatAge(group.oldestAgeSec)}</b></div>
       </div>
@@ -173,6 +203,7 @@ export function DetailView(props: Props) {
           onKillInstance={props.onKillInstance}
           onForce={props.onForce}
           onKillInstances={props.onKillInstances}
+          memMetric={memMetric}
         />
       )}
       {!others && <GroupHistoryPanel key={group.id} groupId={group.id} />}
@@ -198,6 +229,7 @@ export function DetailView(props: Props) {
           sparkOf={sparkOf}
           onKill={props.onKillProc}
           onForce={(pid) => props.onForce([pid])}
+          memMetric={memMetric}
         />
       )}
     </>

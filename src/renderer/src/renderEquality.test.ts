@@ -24,6 +24,10 @@ describe('cardDisplayEqual : une carte dont l\'affichage ne change pas ne se re-
   ])('%s changé → différent', (_, extra) => {
     expect(cardDisplayEqual(g(), g(extra), MEM, MEM)).toBe(false);
   });
+  test('nombre de processus en RSS (mode PSS, infobulle) différent → différent', () => {
+    expect(cardDisplayEqual(g(), g({ pssFallback: 2 }), MEM, MEM)).toBe(false);
+    expect(cardDisplayEqual(g({ pssFallback: 2 }), g({ pssFallback: 2 }), MEM, MEM)).toBe(true);
+  });
   test('RAM totale du système différente (largeur de jauge) → différent', () => {
     expect(cardDisplayEqual(g(), g(), MEM, MEM / 2)).toBe(false);
   });
@@ -64,6 +68,12 @@ describe('procRowDisplayEqual (arbre du détail)', () => {
     expect(procRowDisplayEqual(p(), p({ cwd: '/q' }))).toBe(false);
     expect(procRowDisplayEqual(p(), p({ uid: 0 }))).toBe(false);
     expect(procRowDisplayEqual(p(), p({ name: 'zsh' }))).toBe(false); // la protection se décide sur le nom
+  });
+  test('repli PSS (pssDenied) différent → différent (infobulle « RSS (PSS illisible) »)', () => {
+    expect(procRowDisplayEqual(p(), p({ pssDenied: true }))).toBe(false);
+    expect(procRowDisplayEqual(p({ pssDenied: true }), p({ pssDenied: true }))).toBe(true);
+    expect(procRowDisplayEqual(p(), p({ pssDenied: false }))).toBe(true);
+    expect(procRowDisplayEqual(p(), p({ pssPending: true }))).toBe(false); // « PSS pas encore lu »
   });
 });
 

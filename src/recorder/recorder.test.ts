@@ -227,12 +227,57 @@ test('migration sans copie de sécurité possible : avertissement dans le statut
   const w = new DatabaseSync(join(data, 'metrics.db'));
   w.exec('DROP TABLE group_hour; DROP TABLE system_hour; PRAGMA user_version = 2;');
   w.close();
-  mkdirSync(join(data, 'metrics.db.pre-v3-19700101T001640')); // la copie ne peut pas être écrite à cet endroit
+  mkdirSync(join(data, 'metrics.db.pre-v4-19700101T001640')); // la copie ne peut pas être écrite à cet endroit
   rec.start();
   rec.tick();
   const status = JSON.parse(readFileSync(join(data, 'recorder-status.json'), 'utf8'));
   expect(status.warning).toMatch(/copie de sécurité/i);
   expect(status.lastError).toBeNull();
-  expect(db().prepare('PRAGMA user_version').get()).toEqual({ user_version: 3 });
+  expect(db().prepare('PRAGMA user_version').get()).toEqual({ user_version: 4 });
+  rec.stop();
+});
+
+test('Shmem au-delà du seuil (2048 Mo par défaut) : un seul événement tmpfs, même après redémarrage du service', () => {
+  const { rec, procRoot, advance, db } = setup();
+  writeFileSync(join(procRoot, 'meminfo'), 'MemTotal: 32000000 kB\nMemAvailable: 16000000 kB\nSwapTotal: 2000000 kB\nSwapFree: 1000000 kB\nShmem: 3000000 kB\n');
+  rec.start();
+  rec.tick();
+  const tmpfs = () => db().prepare("SELECT detail FROM events WHERE type = 'tmpfs'").all();
+  expect(tmpfs()).toEqual([{ detail: JSON.stringify({ shmemKB: 3000000, thresholdKB: 2097152 }) }]);
+  expect(db().prepare('SELECT shmem_kb FROM system_samples').all()).toEqual([{ shmem_kb: 3000000 }]);
+  advance(5000);
+  rec.tick();
+  expect(tmpfs()).toHaveLength(1);
+  rec.stop();
+  advance(5000);
+  rec.start();
+  rec.tick();
+  expect(tmpfs()).toHaveLength(1);
+  rec.stop();
+});
+
+test('alerte tmpfs dont l’écriture échoue : retentée au tick suivant (pas réduite au silence 1 h)', () => {
+  const { rec, procRoot, advance, db, base } = setup();
+  writeFileSync(join(procRoot, 'meminfo'), 'MemTotal: 32000000 kB\nMemAvailable: 16000000 kB\nSwapTotal: 2000000 kB\nSwapFree: 1000000 kB\nShmem: 3000000 kB\n');
+  rec.start();
+  const w = new DatabaseSync(join(base, 'data', 'metrics.db'));
+  w.exec("CREATE TRIGGER no_tmpfs BEFORE INSERT ON events WHEN NEW.type = 'tmpfs' BEGIN SELECT RAISE(FAIL, 'écriture refusée'); END");
+  rec.tick();
+  const tmpfs = () => db().prepare("SELECT COUNT(*) n FROM events WHERE type = 'tmpfs'").get();
+  expect(tmpfs()).toEqual({ n: 0 });
+  w.exec('DROP TRIGGER no_tmpfs');
+  w.close();
+  advance(5000);
+  rec.tick();
+  expect(tmpfs()).toEqual({ n: 1 });
+  rec.stop();
+});
+
+test('meminfo sans ligne Shmem : shmem_kb NULL (trou dans la courbe), aucune alerte', () => {
+  const { rec, db } = setup();
+  rec.start();
+  rec.tick();
+  expect(db().prepare('SELECT shmem_kb FROM system_samples').all()).toEqual([{ shmem_kb: null }]);
+  expect(db().prepare("SELECT COUNT(*) n FROM events WHERE type = 'tmpfs'").get()).toEqual({ n: 0 });
   rec.stop();
 });

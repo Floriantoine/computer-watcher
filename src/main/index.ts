@@ -6,22 +6,25 @@ import { classifyGroups, type InstanceDecision } from '../core/classify/classify
 import { readPackageHints } from '../core/classify/packageJson';
 import { CpuTracker } from '../core/collector/cpuTracker';
 import { readListeningPorts } from '../core/collector/ports';
+import { applyPss, PssCache, pssTargets } from '../core/collector/pss';
 import { readProcesses, type CwdEntry, type StatusEntry } from '../core/collector/readProcesses';
 import { readSystem } from '../core/collector/readSystem';
 import { configDir, loadConfig, saveConfig, validateConfig } from '../core/config';
 import { buildGroups, isOverThreshold } from '../core/grouping/buildGroups';
+import { claudeDirs } from '../core/grouping/claudeDirs';
 import { createProjectRootCache } from '../core/grouping/projectRootCache';
 import { recordSeparate, stickyIds } from '../core/grouping/stickyCards';
 import { killRequest, planKill, sendSignals } from '../core/kill';
 import { compileProtection } from '../core/protection';
 import { formatAppEvent } from '../core/history/events';
 import { appEventsPath, dataDir } from '../core/paths';
-import { buildSnapshot, flattenGroup, followsOthers, groupProcs, instanceTargets, isWatch, type Classification, type FullSnapshot } from '../core/snapshot';
-import type { ConfigState, Group, KillResult, RecorderState, Watch } from '../core/types';
+import { buildSnapshot, flattenGroup, groupProcs, instanceTargets, isWatch, othersFollowed, type Classification, type FullSnapshot } from '../core/snapshot';
+import type { ConfigState, Group, KillResult, ProcInfo, RecorderState, Watch } from '../core/types';
 import { installDesktopEntry } from './desktopEntry';
 import { createEarlyoomApplier, earlyoomStatus } from './earlyoom';
 import { clearHistory, createHistoryReader } from './history';
 import { pollDelay, type WindowActivity } from './pollPolicy';
+import { sharedScan } from './tmpUsage';
 import {
   applyOverride, classifySetKey, isGroupKeys, isInstanceKeys, isRange, isSinceMs, isTopOptions, recorderState as computeRecorderState,
 } from './historyIpc';
@@ -39,6 +42,8 @@ const tracker = new CpuTracker();
 const uid = process.getuid!();
 
 const projectRootOf = createProjectRootCache();
+/** Dossiers de config de Claude : les processus qui y travaillent (outils détachés) rejoignent le groupe Claude. */
+const claudeConfigDirs = claudeDirs();
 
 const data = dataDir();
 const history = createHistoryReader(data, () => config.recorder);
@@ -140,9 +145,31 @@ function classify(groups: Group[], now: number): Classification {
     isProtected: protection.isProtected,
     memo: decisions,
     // Les centaines de sous-groupes de « Autres » ne sont classés que s'ils sont affichés (≈ 80 % du coût du classement).
-    skipOthersSubgroups: !followsOthers(groups, watch.groupId),
+    skipOthersSubgroups: !othersFollowed(groups, watch),
   });
   return lastClassification;
+}
+
+// Option PSS : smaps_rollup des processus des groupes affichés (d'après le snapshot précédent), au plus toutes les 10 s.
+const pssCache = new PssCache();
+
+/** Mode PSS : remplace le RSS par le PSS des processus affichés ; sinon aucun accès à smaps_rollup. */
+function withPss(procs: ProcInfo[], now: number): ProcInfo[] {
+  if (config.ui.memoryMetric !== 'pss') {
+    pssCache.clear();
+    return procs;
+  }
+  if (!last) return applyPss(procs, new Map(), true); // premier tick : tout reste en RSS, signalé
+  // Sous-groupes de « Autres » au-dessus du seuil en RSS : ils n'y sont que grâce à leur PSS, qu'il faut donc garder à jour.
+  let rss: Map<number, number> | undefined;
+  const overInRss = (sub: Group) => {
+    rss ??= new Map(procs.map((p) => [p.pid, p.rssKB]));
+    let kb = 0;
+    for (const p of flattenGroup(sub)) kb += (rss.get(p.pid) ?? p.rssKB) + p.swapKB;
+    return kb >= config.othersThreshold.memMB * 1024;
+  };
+  const targets = pssTargets(last.groups, othersFollowed(last.groups, watch), overInRss);
+  return applyPss(procs, pssCache.update(targets, now), true);
 }
 
 function takeSnapshot(): FullSnapshot {
@@ -152,7 +179,7 @@ function takeSnapshot(): FullSnapshot {
     cwdCache: { entries: cwdEntries, now, maxAgeMs: CWD_MAX_AGE_MS },
     statusCache: { entries: statusEntries, now, maxAgeMs: STATUS_MAX_AGE_MS },
   });
-  const procs = tracker.update(samples, now);
+  const procs = withPss(tracker.update(samples, now), now);
   const sticky = stickyIds(separateSeen, now, CARD_HOLD_MS);
   const groups = buildGroups(procs, {
     home: homedir(),
@@ -161,11 +188,12 @@ function takeSnapshot(): FullSnapshot {
     othersThreshold: config.othersThreshold,
     projectRootOf,
     keepSeparate: (id) => sticky.has(id),
+    claudeDirs: claudeConfigDirs,
   });
   recordSeparate(separateSeen, groups, now, (g) => isOverThreshold(g, config.othersThreshold));
   refreshPorts(groups, now);
   const classification = classify(groups, now);
-  return { takenAt: Date.now(), currentUid: uid, system: readSystem(), groups, classification };
+  return { takenAt: Date.now(), currentUid: uid, system: readSystem(), groups, classification, memMetric: config.ui.memoryMetric };
 }
 
 /** Dernier snapshot complet (arbres compris) : sert au kill de groupe et aux réponses immédiates à `watch`. */
@@ -285,11 +313,11 @@ ipcMain.handle('config:get', () => configState());
 // Le renderer dit ce qu'il suit ; on renvoie tout de suite le dernier snapshot recalculé (sans relire /proc).
 ipcMain.handle('watch', (_e, w: unknown) => {
   if (!isWatch(w)) return;
-  watch = { groupId: w.groupId, query: w.query };
-  // Ouverture de « Autres » ou d'un de ses sous-groupes : leur classement est calculé tout de suite (reclassify envoie).
+  watch = { groupId: w.groupId, query: w.query, othersOpen: w.othersOpen === true };
+  // « Autres » déplié, ou ouverture de « Autres » / d'un de ses sous-groupes : leur classement est calculé tout de suite (reclassify envoie).
   const others = last?.groups.find((g) => g.kind === 'others');
   const unclassified = !!others && others.subgroups.length > 0 && !last!.classification.has(others.subgroups[0].id);
-  if (unclassified && followsOthers(last!.groups, w.groupId)) reclassify();
+  if (unclassified && othersFollowed(last!.groups, watch)) reclassify();
   else send();
 });
 ipcMain.handle('group:procs', (_e, id: unknown) => (typeof id === 'string' && last ? groupProcs(last.groups, id) : []));
@@ -357,6 +385,8 @@ ipcMain.handle('history:procs', (_e, key: unknown, r: unknown) => (typeof key ==
 ipcMain.handle('history:culprits', (_e, ts: unknown) => (Number.isFinite(ts) ? history.culprits(ts as number) : []));
 ipcMain.handle('history:top', (_e, r: unknown, o: unknown) => (isRange(r) && isTopOptions(o) ? history.top(r, o) : { byAvg: [], byMax: [] }));
 ipcMain.handle('history:events', (_e, r: unknown) => (isRange(r) ? history.events(r) : []));
+const tmpTopDirs = sharedScan();
+ipcMain.handle('tmp:topDirs', () => tmpTopDirs());
 ipcMain.handle('recorder:status', () => recorderState());
 ipcMain.handle('recorder:setEnabled', async (_e, enabled: unknown) => {
   if (typeof enabled !== 'boolean') throw new Error('Valeur invalide');

@@ -151,3 +151,9 @@ describe('parseSelection (localStorage)', () => {
     expect(parseSelection('{"a":1}').size).toBe(0);
   });
 });
+
+test('groupe hors projet reclassé « Back » depuis l\'en-tête : reste hors du kill groupé', () => {
+  const gitstatusd = grp('command:gitstatusd', [inst('back', { source: 'manual', groupId: 'command:gitstatusd', project: null })], { kind: 'command' });
+  expect(selectionCandidates([gitstatusd], new Set<Category>(['back']))).toEqual([]);
+  expect(selectionCandidates([shop, gitstatusd], new Set<Category>(['back'])).every((i) => i.groupId !== 'command:gitstatusd')).toBe(true);
+});

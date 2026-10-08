@@ -22,7 +22,7 @@ test('performance : 24 h x 100 groupes à 5 s', () => {
   db.exec('BEGIN');
   const g = db.prepare('INSERT INTO groups(id,key,label,kind) VALUES (?,?,?,?)');
   for (let i = 1; i <= 100; i++) g.run(i, `app:g${i}`, `g${i}`, 'app');
-  const sys = db.prepare('INSERT INTO system_samples VALUES (?,?,?,?,?,?,?,?)');
+  const sys = db.prepare('INSERT INTO system_samples(ts, mem_used_kb, mem_total_kb, swap_used_kb, swap_total_kb, psi_some10, load1, cpu_percent) VALUES (?,?,?,?,?,?,?,?)');
   const gs = db.prepare('INSERT INTO group_samples VALUES (?,?,?,?,?,?)');
   for (let ts = start; ts < now; ts += 5000) {
     sys.run(ts, 8_000_000, 32_000_000, 100, 20_000_000, 2, 1, 10);

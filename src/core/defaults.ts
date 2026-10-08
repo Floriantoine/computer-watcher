@@ -10,9 +10,10 @@ export const DEFAULT_RECORDER: RecorderConfig = {
   groupMinMemMB: 20,
   leakMinMinutes: 60,
   leakMinGrowthMB: 300,
+  tmpfsAlertMB: 2048,
 };
 
-export const DEFAULT_UI: UiConfig = { reducedEffects: false };
+export const DEFAULT_UI: UiConfig = { reducedEffects: false, memoryMetric: 'rss' };
 
 export const DEFAULT_CLASSIFY: ClassifyConfig = { detectPorts: true, overrides: {} };
 
