@@ -5,6 +5,7 @@ import { expect, test } from 'vitest';
 import { openHistoryDb } from './db';
 import {
   detectGap, formatAppEvent, takeAppEvents, insertEvent, lastEventTs, lastSampleTs, parseAppEvents, parseEarlyoom, parseJournalLine, shouldRecordPressure,
+  shouldRecordTmpfs, type TmpfsAlertState,
 } from './events';
 
 test('parseEarlyoom : format récent avec uid', () => {
@@ -127,6 +128,57 @@ test('insertEvent résout le groupe ; lastSampleTs / lastEventTs', () => {
   expect(lastEventTs(db, 'pressure')).toBe(20);
   expect(lastEventTs(db, 'leak')).toBeNull();
   expect(lastSampleTs(db)).toBeNull();
-  db.exec('INSERT INTO system_samples VALUES (99,1,1,1,1,NULL,0,0)');
+  db.exec('INSERT INTO system_samples(ts, mem_used_kb, mem_total_kb, swap_used_kb, swap_total_kb, psi_some10, load1, cpu_percent) VALUES (99,1,1,1,1,NULL,0,0)');
   expect(lastSampleTs(db)).toBe(99);
+});
+
+const GB = 1_048_576;
+const TMIN = 60_000;
+const T = 2_097_152; // 2048 Mo
+const fresh = (): TmpfsAlertState => ({ lastTs: null, armed: false, belowSince: null });
+
+test('shouldRecordTmpfs : strictement au-dessus, au plus une fois par heure tant que ça dure', () => {
+  const a = shouldRecordTmpfs(T + 1, T, fresh(), 0);
+  expect(a).toEqual({ record: true, state: { lastTs: 0, armed: false, belowSince: null } });
+  expect(shouldRecordTmpfs(T, T, fresh(), 0).record).toBe(false); // égal : pas « dépasse »
+  expect(shouldRecordTmpfs(T + 1, T, a.state, 30 * TMIN).record).toBe(false);
+  expect(shouldRecordTmpfs(T + 1, T, a.state, 61 * TMIN)).toMatchObject({ record: true, state: { lastTs: 61 * TMIN } });
+  // redémarrage du service (dernier événement il y a 20 min, pas réarmée) : rien
+  expect(shouldRecordTmpfs(T + 1, T, { lastTs: 100 * TMIN, armed: false, belowSince: null }, 120 * TMIN).record).toBe(false);
+});
+
+test('shouldRecordTmpfs : oscillation 1,93 ↔ 2,3 Go toutes les 5 s pendant 50 min → un seul événement', () => {
+  let st = fresh();
+  let n = 0;
+  for (let t = 0, i = 0; t < 50 * TMIN; t += 5000, i++) {
+    const r = shouldRecordTmpfs(i % 2 === 0 ? 2.3 * GB : 1.93 * GB, T, st, t);
+    st = r.state;
+    if (r.record) n++;
+  }
+  expect(n).toBe(1);
+});
+
+test('shouldRecordTmpfs : réarmée seulement après 5 min continues sous 90 % du seuil', () => {
+  const fired = shouldRecordTmpfs(T + 1, T, fresh(), 0).state;
+  const low = 0.85 * T;
+  // 4 min sous 90 %, puis au-dessus : pas réarmée
+  let st = fired;
+  for (let t = TMIN; t <= 5 * TMIN; t += 5000) st = shouldRecordTmpfs(low, T, st, t).state;
+  expect(shouldRecordTmpfs(T + 1, T, st, 5 * TMIN + 5000).record).toBe(false);
+  // une remontée entre 90 % et le seuil remet le compteur à zéro
+  st = fired;
+  st = shouldRecordTmpfs(low, T, st, TMIN).state;
+  st = shouldRecordTmpfs(0.95 * T, T, st, 3 * TMIN).state;
+  st = shouldRecordTmpfs(low, T, st, 4 * TMIN).state;
+  expect(shouldRecordTmpfs(T + 1, T, st, 7 * TMIN).record).toBe(false);
+  // 5 min continues sous 90 % : réarmée, l'alerte repart dès le retour au-dessus
+  st = fired;
+  for (let t = TMIN; t <= 6 * TMIN; t += 5000) st = shouldRecordTmpfs(low, T, st, t).state;
+  expect(st.armed).toBe(true);
+  expect(shouldRecordTmpfs(T + 1, T, st, 6 * TMIN + 5000)).toMatchObject({ record: true, state: { armed: false } });
+});
+
+test('shouldRecordTmpfs : Shmem inconnu (null) → rien, état inchangé', () => {
+  const st = { lastTs: 5, armed: true, belowSince: 3 };
+  expect(shouldRecordTmpfs(null, T, st, 10)).toEqual({ record: false, state: st });
 });

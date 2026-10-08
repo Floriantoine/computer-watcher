@@ -340,6 +340,27 @@ describe('classifyGroups', () => {
     expect(run([d, c])).toEqual([8003]);
   });
 
+  it('« Reclasser » depuis l\'en-tête : override command:gitstatusd|<signature> = back → back (manual)', () => {
+    const gs = proc('gitstatusd', '/home/u/.cache/gitstatus/gitstatusd-linux-x86_64 -G v1.5.4 -s -1 -u -1');
+    const g = group('command:gitstatusd', 'command', [node(gs)]);
+    const auto = classifyGroups([g], ctx()).get(g.id)!.instances[0];
+    expect(auto.source).not.toBe('manual');
+    const r = classifyGroups([g], ctx({ overrides: { [`command:gitstatusd|${auto.signature}`]: 'back' } })).get(g.id)!;
+    expect(r.instances[0]).toMatchObject({ category: 'back', source: 'manual', signature: auto.signature });
+    expect(r.categories).toEqual(['back']);
+  });
+
+  it('groupe claude dont la seule racine est un outil détaché (node server.cjs) → IA ; correction manuelle prioritaire', () => {
+    const srv = proc('node', 'node server.cjs', { cwd: '/home/u/.claude/plugins/cache/superpowers/6.4.1' });
+    const g = group('claude', 'claude', [node(srv)]);
+    const auto = classifyGroups([g], ctx()).get(g.id)!;
+    expect(auto.instances[0]).toMatchObject({ category: 'ai' });
+    expect(auto.categories).toEqual(['ai']);
+    const sig = auto.instances[0].signature;
+    const r = classifyGroups([g], ctx({ overrides: { [`claude|${sig}`]: 'back' } })).get(g.id)!;
+    expect(r.instances[0]).toMatchObject({ category: 'back', source: 'manual' });
+  });
+
   it('groupes non-projet : launcherPids vide', () => {
     const c = proc('chrome', '/opt/google/chrome/chrome');
     const g = group('app:chrome', 'app', [node(c)]);

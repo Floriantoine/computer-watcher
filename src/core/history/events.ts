@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
 
-export type EventType = 'earlyoom_kill' | 'pressure' | 'gap' | 'app_kill' | 'leak';
+export type EventType = 'earlyoom_kill' | 'pressure' | 'gap' | 'app_kill' | 'leak' | 'tmpfs';
 
 const EARLYOOM = /sending (SIGTERM|SIGKILL) to process (\d+)(?: uid (\d+))? "([^"]*)"/;
 
@@ -31,6 +31,36 @@ export function detectGap(lastTs: number | null, now: number, intervalSec: numbe
 export function shouldRecordPressure(psi: number | null, lastPressureTs: number | null, now: number): boolean {
   if (psi === null || psi < 25) return false;
   return lastPressureTs === null || now - lastPressureTs >= 60_000;
+}
+
+/** `belowSince` : début de la période continue sous le seuil de réarmement (null si au-dessus). */
+export interface TmpfsAlertState { lastTs: number | null; armed: boolean; belowSince: number | null }
+
+const TMPFS_REPEAT_MS = 3600_000;
+/** Hystérésis : réarmée seulement sous 90 % du seuil, pendant 5 min continues (évite le battement autour du seuil). */
+const TMPFS_REARM_RATIO = 0.9;
+const TMPFS_REARM_MS = 5 * 60_000;
+
+/**
+ * Alerte « fichiers en mémoire » : Shmem strictement au-dessus du seuil, et (réarmée, ou jamais émise, ou dernière
+ * il y a au moins 1 h). Réarmement après 5 min continues sous 90 % du seuil. Shmem inconnu (null) : rien.
+ */
+export function shouldRecordTmpfs(
+  shmemKB: number | null,
+  thresholdKB: number,
+  state: TmpfsAlertState,
+  now: number,
+): { record: boolean; state: TmpfsAlertState } {
+  if (shmemKB === null) return { record: false, state };
+  if (shmemKB > thresholdKB) {
+    if (state.armed || state.lastTs === null || now - state.lastTs >= TMPFS_REPEAT_MS) {
+      return { record: true, state: { lastTs: now, armed: false, belowSince: null } };
+    }
+    return { record: false, state: { ...state, belowSince: null } };
+  }
+  if (shmemKB >= thresholdKB * TMPFS_REARM_RATIO) return { record: false, state: { ...state, belowSince: null } };
+  const belowSince = state.belowSince ?? now;
+  return { record: false, state: { lastTs: state.lastTs, armed: state.armed || now - belowSince >= TMPFS_REARM_MS, belowSince } };
 }
 
 export interface AppEvent {

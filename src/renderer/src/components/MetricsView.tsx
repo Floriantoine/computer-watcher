@@ -5,7 +5,9 @@ import type { Culprit, RangePreset, TimeRange } from '../../../core/types';
 import { formatKB } from '../format';
 import { useHistory } from '../history';
 import { ipcErrorMessage } from '../viewModel';
-import { eventMarkers, fetchMetrics, formatInstant, INVESTIGATION_LAYERS, investigationSeries, PRESET_MS, refreshMsFor } from '../metrics';
+import {
+  breakdownAt, eventMarkers, fetchMetrics, formatInstant, INVESTIGATION_LAYERS, investigationSeries, PRESET_MS, refreshMsFor, REST_HINTS, REST_KEYS, REST_TONES,
+} from '../metrics';
 import { useChartZoom, ZoomChip } from '../chartZoom';
 import { AlertsPanel } from './AlertsPanel';
 import { CulpritsPanel } from './CulpritsPanel';
@@ -22,9 +24,14 @@ interface Props {
   onOpenGroup: (key: string) => void;
 }
 
-/** Teintes des couches de l'enquête (de la plus grosse à la 8e), puis « Reste » en gris. */
+/** Teintes des couches de l'enquête (de la plus grosse à la 8e) ; les trois couches du Reste ont les leurs, en pointillés. */
 const LAYER_TONES: ChartTone[] = ['#7c5cff', '#ff5c8a', '#22d3a6', '#ffb547', '#3dd6ff', '#ff8a3d', '#c084fc', '#a3e635'];
-const REST_TONE: ChartTone = '#6b7180';
+const REST_HINT_BY_KEY = new Map<string, string>([
+  [REST_KEYS.others, REST_HINTS.others], [REST_KEYS.shmem, REST_HINTS.shmem], [REST_KEYS.kernel, REST_HINTS.kernel],
+]);
+const REST_TONE_BY_KEY = new Map<string, ChartTone>([
+  [REST_KEYS.others, REST_TONES.others], [REST_KEYS.shmem, REST_TONES.shmem], [REST_KEYS.kernel, REST_TONES.kernel],
+]);
 const KB = { left: KB_FORMAT };
 const PCT = { left: PERCENT_FORMAT };
 const H = 3_600_000;
@@ -119,17 +126,22 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
   const inv = useMemo(() => {
     const g = data?.groups;
     if (!g || !system || g.ts.length < 2) return null;
-    const totalAt = new Map(system.ts.map((t, i) => [t, system.memUsedKB[i] + system.swapUsedKB[i]]));
-    const r = investigationSeries(g, INVESTIGATION_LAYERS, g.ts.map((t) => totalAt.get(t) ?? null));
-    const series: ChartSeries[] = r.layers.map((l, i) => ({
-      label: l.label,
-      values: l.values,
-      tone: l.key === '__rest' ? REST_TONE : LAYER_TONES[i % LAYER_TONES.length],
-      fill: false,
-      emphasis: true,
-      dash: l.key === '__rest' ? [4, 4] : undefined,
-    }));
-    return { ts: r.ts, series, keys: r.layers.map((l) => l.key) };
+    // totaux du système alignés sur les horodatages des groupes (mêmes buckets)
+    const at = new Map(system.ts.map((t, i) => [t, i]));
+    const align = (f: (i: number) => number | null) => g.ts.map((t) => {
+      const i = at.get(t);
+      return i === undefined ? null : f(i);
+    });
+    const r = investigationSeries(g, INVESTIGATION_LAYERS, {
+      usedKB: align((i) => system.memUsedKB[i] + system.swapUsedKB[i]),
+      shmemKB: align((i) => system.shmemKB?.[i] ?? null),
+      groupsKB: align((i) => system.groupsKB?.[i] ?? null),
+    });
+    const series: ChartSeries[] = r.layers.map((l, i) => {
+      const rest = REST_TONE_BY_KEY.get(l.key);
+      return { label: l.label, values: l.values, tone: rest ?? LAYER_TONES[i % LAYER_TONES.length], fill: false, emphasis: true, dash: rest ? [4, 4] : undefined };
+    });
+    return { ts: r.ts, series, keys: r.layers.map((l) => l.key), raw: r };
   }, [data?.groups, system]);
 
   // Survol d'un groupe (Top, légende) ou d'une alerte : mise en avant dans les graphes.
@@ -203,7 +215,7 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
             <>
               <div className="inv-legend" onMouseLeave={() => setHoverKey(null)}>
                 {inv.series.map((s, i) => (
-                  <span key={i} className={focusSeries !== null && focusSeries !== i ? 'dim' : ''} onMouseEnter={() => setHoverKey(inv.keys[i])}>
+                  <span key={i} className={focusSeries !== null && focusSeries !== i ? 'dim' : ''} title={REST_HINT_BY_KEY.get(inv.keys[i])} onMouseEnter={() => setHoverKey(inv.keys[i])}>
                     <i style={{ background: s.tone }} />{s.label}
                   </span>
                 ))}
@@ -231,6 +243,7 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
               >
                 <CulpritsPanel
                   ts={cursor}
+                  breakdown={inv ? breakdownAt(inv.raw, cursor) : null}
                   culprits={culprits && culprits.ts === cursor ? culprits.list : undefined}
                   canOpen={canOpen}
                   onOpenGroup={onOpenGroup}

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { AnimatePresence, motion, useIsPresent } from 'motion/react';
 import { AppWindow, ArrowLeft, HardDrive, Layers, ShieldCheck, Sparkles, Tags, Trash2, TriangleAlert, Wrench, X } from 'lucide-react';
 import { DEFAULT_CONFIG } from '../../../core/defaults';
-import type { Config, ConfigState, RecorderState } from '../../../core/types';
+import type { Config, ConfigState, MemoryMetric, RecorderState } from '../../../core/types';
 import { CATEGORY_META } from '../categories';
 import { overrideRows, withDetectPorts, withoutOverride } from '../classifySettings';
 import { useFocusTrap } from '../focusTrap';
@@ -18,6 +18,8 @@ interface Props {
   /** La config a été modifiée côté main (interrupteur) : le parent la recharge. */
   onConfigChanged: () => void;
 }
+
+const MEM_METRICS: [MemoryMetric, string][] = [['rss', 'RSS (rapide)'], ['pss', 'PSS (précis)']];
 
 export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast, onConfigChanged }: Props) {
   const { config, warning, invalid } = state;
@@ -104,6 +106,7 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
     { f: 'groupMinMemMB', label: 'Seuil mémoire groupe', unit: 'Mo' },
     { f: 'leakMinMinutes', label: 'Fuite : durée', unit: 'min' },
     { f: 'leakMinGrowthMB', label: 'Fuite : hausse', unit: 'Mo' },
+    { f: 'tmpfsAlertMB', label: 'Alerte fichiers en mémoire (/tmp, shm)', unit: 'Mo' },
   ];
 
   const add = () => {
@@ -166,7 +169,27 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
         </section>
 
         <section data-testid="effects-panel">
-          <h3><Sparkles size={15} strokeWidth={2} />Apparence</h3>
+          <h3><Sparkles size={15} strokeWidth={2} />Affichage</h3>
+          <div className="mem-metric-row">
+            <span>Mémoire :</span>
+            <div className="range-selector mem-metric" role="radiogroup" aria-label="Mémoire affichée" data-testid="mem-metric">
+              {MEM_METRICS.map(([m, label]) => (
+                <button
+                  key={m}
+                  type="button"
+                  role="radio"
+                  aria-checked={config.ui.memoryMetric === m}
+                  data-testid={`mem-metric-${m}`}
+                  className={config.ui.memoryMetric === m ? 'active' : ''}
+                  onClick={() => config.ui.memoryMetric !== m && onSave({ ...config, ui: { ...config.ui, memoryMetric: m } })}
+                >
+                  {config.ui.memoryMetric === m && <span className="range-indicator" />}
+                  <span>{label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <p className="hint">PSS répartit la mémoire partagée entre les processus ; l'historique reste en RSS.</p>
           <p className="hint">Sans flou ni animations superflues : moins de travail pour la carte graphique et le processeur.</p>
           <div className="rec-switch">
             <button

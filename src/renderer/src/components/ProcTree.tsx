@@ -1,7 +1,8 @@
 import { memo, useCallback, useMemo, useRef, useState, type ReactElement } from 'react';
-import type { ProcNode } from '../../../core/types';
+import type { MemoryMetric, ProcNode } from '../../../core/types';
 import { ChevronRight, ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
 import { formatAge, formatCpu, formatKB } from '../format';
+import { memLabel, procMemTitle } from '../memMetric';
 import { Sparkline } from './charts/Sparkline';
 import { procRowDisplayEqual, sameSeries } from '../renderEquality';
 import { allExpandableKeys, branchTotals, nodeKey, type BranchTotal } from '../tree';
@@ -23,6 +24,8 @@ interface Props {
   sparkOf?: (pid: number, startTicks: number) => (number | null)[] | undefined;
   onKill: (node: ProcNode) => void;
   onForce: (pid: number) => void;
+  /** Mémoire affichée : en PSS, un processus illisible garde son RSS (infobulle « RSS (PSS illisible) »). */
+  memMetric?: MemoryMetric;
 }
 
 interface RowActions {
@@ -40,10 +43,12 @@ interface RowProps {
   stuck: boolean;
   pending: boolean;
   canKill: boolean;
+  memMetric: MemoryMetric;
   actions: RowActions;
 }
 
-function ProcRowImpl({ node: n, depth, open, total, spark: values, stuck, pending, canKill, actions }: RowProps) {
+function ProcRowImpl({ node: n, depth, open, total, spark: values, stuck, pending, canKill, memMetric, actions }: RowProps) {
+  const memTitle = procMemTitle(n.proc, memMetric);
   const p = n.proc;
   const key = nodeKey(n);
   return (
@@ -65,8 +70,8 @@ function ProcRowImpl({ node: n, depth, open, total, spark: values, stuck, pendin
       <td className="spark-cell">{spark(values)}</td>
       <td className="num mono">{formatCpu(p.cpuPercent)}</td>
       <td className="num mono">
-        {formatKB(p.rssKB)}
-        {total && <small className="branch-total" data-testid="branch-total" title="RAM + swap de la branche (ce processus et ses descendants)">Σ {formatKB(total.memKB)} · {total.count} proc</small>}
+        {memTitle ? <span className="pss-denied" title={memTitle}>{formatKB(p.rssKB)}</span> : formatKB(p.rssKB)}
+        {total && <small className="branch-total" data-testid="branch-total" title={`${memLabel(memMetric)} + swap de la branche (ce processus et ses descendants)`}>Σ {formatKB(total.memKB)} · {total.count} proc</small>}
       </td>
       <td className="num mono">{formatKB(p.swapKB)}</td>
       <td className={`num mono ${p.ageSec > DAY ? 'old' : ''}`}>{formatAge(p.ageSec)}</td>
@@ -94,13 +99,14 @@ const ProcRow = memo(
     a.stuck === b.stuck &&
     a.pending === b.pending &&
     a.canKill === b.canKill &&
+    a.memMetric === b.memMetric &&
     (a.node.children.length > 0) === (b.node.children.length > 0) &&
     sameTotal(a.total, b.total) &&
     sameSeries(a.spark, b.spark) &&
     procRowDisplayEqual(a.node.proc, b.node.proc),
 );
 
-export function ProcTree({ roots, stuckPids, pendingPids, currentUid, sparkOf, onKill, onForce }: Props) {
+export function ProcTree({ roots, stuckPids, pendingPids, currentUid, sparkOf, onKill, onForce, memMetric = 'rss' }: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(() =>
     count(roots) > COLLAPSE_ABOVE ? new Set() : new Set(allExpandableKeys(roots)),
   );
@@ -145,6 +151,7 @@ export function ProcTree({ roots, stuckPids, pendingPids, currentUid, sparkOf, o
           stuck={stuckPids.has(n.proc.pid)}
           pending={pendingPids.has(n.proc.pid)}
           canKill={n.proc.uid === currentUid}
+          memMetric={memMetric}
           actions={actions}
         />,
       );
@@ -168,7 +175,7 @@ export function ProcTree({ roots, stuckPids, pendingPids, currentUid, sparkOf, o
       <div className="panel-scroll">
         <table className="tree">
           <thead>
-            <tr><th>PID</th><th>Commande</th><th>Dossier</th><th className="spark-cell">1 h</th><th className="num">CPU</th><th className="num">RAM</th><th className="num">Swap</th><th className="num">Depuis</th><th /></tr>
+            <tr><th>PID</th><th>Commande</th><th>Dossier</th><th className="spark-cell">1 h</th><th className="num">CPU</th><th className="num">{memLabel(memMetric)}</th><th className="num">Swap</th><th className="num">Depuis</th><th /></tr>
           </thead>
           <tbody>{rows}</tbody>
         </table>

@@ -1,13 +1,42 @@
 import type { GroupClassification } from './classify/classify';
-import type { Group, GroupSummary, InstanceTargets, KillTarget, ProcInfo, ProcNode, Snapshot, SystemInfo, Watch } from './types';
+import type { Group, GroupSummary, InstanceTargets, KillTarget, MemoryMetric, ProcInfo, ProcNode, Snapshot, SystemInfo, Watch } from './types';
 
 export type Classification = Map<string, GroupClassification>;
 
 /** Groupe sans arbre : le renderer n'a besoin des processus que pour le groupe ouvert. Catégories et instances d'après `cls`. */
-export function summarizeGroup(g: Group, cls?: Classification): GroupSummary {
+export function summarizeGroup(g: Group, cls?: Classification, pss = false): GroupSummary {
   const { roots: _roots, subgroups, ...rest } = g;
   const c = cls?.get(g.id);
-  return { ...rest, subgroups: subgroups.map((s) => summarizeGroup(s, cls)), categories: c?.categories ?? [], instances: c?.instances ?? [] };
+  const out: GroupSummary = { ...rest, subgroups: subgroups.map((s) => summarizeGroup(s, cls, pss)), categories: c?.categories ?? [], instances: c?.instances ?? [] };
+  if (pss) {
+    const n = rssFallbackCount(g);
+    if (n > 0) out.pssFallback = n;
+  }
+  return out;
+}
+
+/** « Autres » replié : sans ses sous-groupes, mais le compte des processus restés en RSS porte sur le groupe complet. */
+function foldedOthers(g: Group, cls: Classification, pss: boolean): GroupSummary {
+  const out = summarizeGroup({ ...g, subgroups: [] }, cls);
+  if (pss) {
+    const n = rssFallbackCount(g);
+    if (n > 0) out.pssFallback = n;
+  }
+  return out;
+}
+
+/** Processus d'un groupe (sous-groupes compris) dont la mémoire est restée en RSS en mode PSS. */
+function rssFallbackCount(g: Group): number {
+  let n = 0;
+  const walk = (nodes: ProcNode[]) => {
+    for (const node of nodes) {
+      if (node.proc.pssDenied || node.proc.pssPending) n++;
+      walk(node.children);
+    }
+  };
+  walk(g.roots);
+  for (const s of g.subgroups) n += rssFallbackCount(s);
+  return n;
 }
 
 function flattenNodes(nodes: ProcNode[], out: ProcInfo[]): ProcInfo[] {
@@ -45,6 +74,11 @@ export function followsOthers(groups: Group[], id: string | null): boolean {
   return groups.some((g) => g.kind === 'others' && (g.id === id || findFullGroup(g.subgroups, id) !== undefined));
 }
 
+/** Sous-groupes de « Autres » à résumer et à classer : carte « Autres » dépliée, ou « Autres » / l'un d'eux suivi. */
+export function othersFollowed(groups: Group[], watch: Watch): boolean {
+  return watch.othersOpen === true || followsOthers(groups, watch.groupId);
+}
+
 /** Processus du groupe `id` (vide s'il n'existe plus) : sert à préparer un kill de groupe. */
 export function groupProcs(groups: Group[], id: string): ProcInfo[] {
   const g = findFullGroup(groups, id);
@@ -58,28 +92,32 @@ export interface FullSnapshot {
   groups: Group[];
   /** Classement par id de groupe (sous-groupes de « Autres » compris), lanceurs compris. */
   classification: Classification;
+  /** Mémoire des processus et groupes : PSS si 'pss' (absent → 'rss'). */
+  memMetric?: MemoryMetric;
 }
 
 /**
  * Snapshot envoyé au renderer : résumés de groupes, résultat de la recherche et arbre du seul groupe suivi.
- * Les centaines de sous-groupes de « Autres » ne sont résumés que si « Autres » ou l'un d'eux est suivi.
+ * Les centaines de sous-groupes de « Autres » ne sont résumés que si « Autres » est déplié, ou lui ou l'un d'eux suivi.
  */
 export function buildSnapshot(full: FullSnapshot, watch: Watch): Snapshot {
   const query = watch.query.trim();
   const followed = watch.groupId === null ? undefined : findFullGroup(full.groups, watch.groupId);
-  const inOthers = (g: Group) => !!followed && (followed === g || g.subgroups.includes(followed));
+  const pss = full.memMetric === 'pss';
+  const inOthers = (g: Group) => watch.othersOpen === true || (!!followed && (followed === g || g.subgroups.includes(followed)));
   return {
     takenAt: full.takenAt,
     currentUid: full.currentUid,
     system: full.system,
     groups: full.groups.map((g) =>
-      g.kind === 'others' && !inOthers(g) ? summarizeGroup({ ...g, subgroups: [] }, full.classification) : summarizeGroup(g, full.classification),
+      g.kind === 'others' && !inOthers(g) ? foldedOthers(g, full.classification, pss) : summarizeGroup(g, full.classification, pss),
     ),
     groupIds: full.groups.flatMap((g) => [g.id, ...g.subgroups.map((s) => s.id)]),
     query,
     matches: query ? full.groups.filter((g) => groupMatches(g, query)).map((g) => g.id) : null,
     watched: watch.groupId,
     detail: followed ? { groupId: followed.id, roots: followed.roots } : null,
+    memMetric: full.memMetric ?? 'rss',
   };
 }
 
@@ -156,4 +194,5 @@ export const isWatch = (w: unknown): w is Watch =>
   w !== null &&
   ((w as Watch).groupId === null || typeof (w as Watch).groupId === 'string') &&
   typeof (w as Watch).query === 'string' &&
-  (w as Watch).query.length <= MAX_QUERY;
+  (w as Watch).query.length <= MAX_QUERY &&
+  ((w as Watch).othersOpen === undefined || typeof (w as Watch).othersOpen === 'boolean');

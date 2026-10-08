@@ -1,12 +1,14 @@
 import { ChevronRight, X } from 'lucide-react';
 import type { Culprit } from '../../../core/types';
 import { formatKB } from '../format';
-import { formatInstant } from '../metrics';
+import { formatInstant, REST_HINTS, REST_LABELS, REST_TONES, type RestSplit } from '../metrics';
 import { GroupIcon } from './ui';
 
 interface Props {
   ts: number;
   culprits: Culprit[] | undefined;
+  /** Découpage du Reste au même instant (graphe d'enquête) ; absent hors plage. */
+  breakdown?: RestSplit | null;
   canOpen: (key: string) => boolean;
   onOpenGroup: (key: string) => void;
   onClose: () => void;
@@ -20,7 +22,7 @@ function delta(kb: number): string {
 }
 
 /** Colonne « instant cliqué » : groupes triés par hausse de mémoire sur les 5 min avant l'instant choisi. */
-export function CulpritsPanel({ ts, culprits, canOpen, onOpenGroup, onClose }: Props) {
+export function CulpritsPanel({ ts, culprits, breakdown, canOpen, onOpenGroup, onClose }: Props) {
   return (
     <div className="culprits" data-testid="culprits-panel">
       <div className="culprits-head">
@@ -55,6 +57,20 @@ export function CulpritsPanel({ ts, culprits, canOpen, onOpenGroup, onClose }: P
             );
           })}
         </ul>
+      )}
+      {breakdown && (
+        <div className="rest-breakdown" data-testid="rest-breakdown">
+          <h4>Hors groupes listés</h4>
+          <ul>
+            {(['others', 'shmem', 'kernel'] as const).map((k) => (
+              <li key={k} title={REST_HINTS[k]}>
+                <i style={{ background: REST_TONES[k] }} />
+                <span className="name">{REST_LABELS[k]}</span>
+                <span className="mono total">{breakdown[k] === null ? '—' : formatKB(breakdown[k])}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   );

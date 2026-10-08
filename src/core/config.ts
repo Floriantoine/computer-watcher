@@ -18,7 +18,11 @@ function validateRecorder(raw: unknown): RecorderConfig | null {
   if (raw === undefined) return { ...DEFAULT_RECORDER };
   if (typeof raw !== 'object' || raw === null) return null;
   // champ ajouté après coup : absent d'une config existante → valeur par défaut (pas de réinitialisation)
-  const r: Record<string, unknown> = { groupMinMemMB: DEFAULT_RECORDER.groupMinMemMB, ...(raw as Record<string, unknown>) };
+  const r: Record<string, unknown> = {
+    groupMinMemMB: DEFAULT_RECORDER.groupMinMemMB,
+    tmpfsAlertMB: DEFAULT_RECORDER.tmpfsAlertMB,
+    ...(raw as Record<string, unknown>),
+  };
   if (typeof r.enabled !== 'boolean') return null;
   for (const f of Object.keys(RECORDER_BOUNDS) as RecorderNumField[]) if (!inBounds(r[f], RECORDER_BOUNDS[f])) return null;
   return {
@@ -31,6 +35,7 @@ function validateRecorder(raw: unknown): RecorderConfig | null {
     groupMinMemMB: r.groupMinMemMB as number,
     leakMinMinutes: r.leakMinMinutes as number,
     leakMinGrowthMB: r.leakMinGrowthMB as number,
+    tmpfsAlertMB: r.tmpfsAlertMB as number,
   };
 }
 
@@ -39,7 +44,9 @@ function validateUi(raw: unknown): UiConfig | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const r = raw as Record<string, unknown>;
   if (typeof r.reducedEffects !== 'boolean') return null;
-  return { reducedEffects: r.reducedEffects };
+  const memoryMetric = r.memoryMetric === undefined ? 'rss' : r.memoryMetric;
+  if (memoryMetric !== 'rss' && memoryMetric !== 'pss') return null;
+  return { reducedEffects: r.reducedEffects, memoryMetric };
 }
 
 export const MAX_OVERRIDES = 500;

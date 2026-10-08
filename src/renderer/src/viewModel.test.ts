@@ -60,7 +60,7 @@ test('findGroup cherche aussi dans les sous-groupes', () => {
 
 describe('pressureLevel', () => {
   const sys = (swapUsedPct: number, psi: number | null): SystemInfo => ({
-    memTotalKB: 100, memAvailableKB: 50, swapTotalKB: 100, swapFreeKB: 100 - swapUsedPct, load1: 1, psiSome10: psi,
+    memTotalKB: 100, memAvailableKB: 50, swapTotalKB: 100, swapFreeKB: 100 - swapUsedPct, load1: 1, psiSome10: psi, shmemKB: 0,
   });
   test.each([
     [10, 0, 'ok'], [50, 0, 'warn'], [70, 0, 'bad'], [0, 10, 'warn'], [0, 25, 'bad'], [0, null, 'ok'],

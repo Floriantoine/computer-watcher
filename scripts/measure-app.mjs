@@ -9,7 +9,7 @@
 // la fenêtre est réellement affichée et active quel que soit l'état du bureau (écran verrouillé, autre bureau…), et
 // rien n'apparaît à l'écran. MEASURE_KWIN=0 : utiliser la session courante.
 // Variables : MEASURE_SETTLE_S (20), MEASURE_SAMPLE_S (60), MEASURE_SCENARIOS (« visible,minimized »),
-// MEASURE_MAXIMIZE (1 : fenêtre agrandie, plus de cartes à l'écran).
+// MEASURE_MAXIMIZE (1 : fenêtre agrandie, plus de cartes à l'écran), MEASURE_OTHERS_OPEN (1 : carte « Autres » dépliée).
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -152,13 +152,14 @@ async function startKwin(n) {
   };
 }
 
-/** Lance une app (`dossier` ou `dossier:reduced` pour « Effets visuels réduits ») et se connecte à l'inspecteur de son main. */
+/** Lance une app (`dossier`, `dossier:reduced` pour « Effets visuels réduits », `dossier:pss` pour « Mémoire : PSS ») et se connecte à l'inspecteur de son main. */
 async function launch(spec, kwin) {
   const [dir, variant] = spec.split(':');
   const cfg = mkdtempSync(join(tmpdir(), 'pw-measure-'));
-  if (variant === 'reduced') {
+  if (variant === 'reduced' || variant === 'pss') {
     mkdirSync(join(cfg, 'proc-watch'));
-    const config = { version: 1, protected: [], othersThreshold: { memMB: 100, cpuPercent: 1 }, ui: { reducedEffects: true } };
+    const ui = variant === 'pss' ? { reducedEffects: false, memoryMetric: 'pss' } : { reducedEffects: true };
+    const config = { version: 1, protected: [], othersThreshold: { memMB: 100, cpuPercent: 1 }, ui };
     writeFileSync(join(cfg, 'proc-watch', 'config.json'), JSON.stringify(config));
   }
   // PROC_WATCH_NO_RECORDER_SYNC : l'app mesurée ne touche pas au service systemd réel de l'utilisateur.
@@ -207,7 +208,7 @@ async function launch(spec, kwin) {
   return { dir: spec, cfg, child, ws, evaluate };
 }
 
-// Dossiers d'app à mesurer (défaut : celui-ci ; suffixe :reduced = effets réduits). Plusieurs : mesurés en même temps (A/B).
+// Dossiers d'app à mesurer (défaut : celui-ci ; suffixe :reduced = effets réduits, :pss = mémoire en PSS). Plusieurs : mesurés en même temps (A/B).
 const dirs = process.argv.slice(2).length ? process.argv.slice(2) : ['.'];
 const apps = [];
 // Un KWin par app : chaque fenêtre est entièrement visible (des fenêtres superposées ne seraient pas toutes redessinées).
@@ -222,6 +223,9 @@ try {
   console.log(`apps ${apps.map((a, i) => `${a.dir} (PID ${roots[i]}, ${tree(roots[i]).length} processus)`).join(', ')} ; stabilisation ${SETTLE_S} s, échantillonnage ${SAMPLE_S} s`);
   const onAll = (expr) => Promise.all(apps.map((a) => a.evaluate(expr)));
   if (process.env.MEASURE_MAXIMIZE) await onAll('win.maximize()');
+  // « Autres » dépliée : état mémorisé du renderer, pris en compte au rechargement.
+  if (process.env.MEASURE_OTHERS_OPEN === '1')
+    await onAll("win.webContents.executeJavaScript(\"localStorage.setItem('pw.othersOpen','1'); location.reload()\")");
   await sleep(SETTLE_S * 1000);
   for (const sc of SCENARIOS) {
     if (sc === 'minimized') await onAll('win.minimize()');

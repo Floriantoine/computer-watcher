@@ -585,7 +585,7 @@ table.tree td.spark-cell .spark { width: 64px; }
 .investigation { margin: 0 var(--gutter) 10px; }
 .investigation .inv-chart { min-width: 0; margin: 0; }
 .inv-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0 2px 6px; color: var(--label); font-size: 11px; }
-.inv-legend span { display: inline-flex; align-items: center; gap: 5px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inv-legend span { display: inline-flex; align-items: center; gap: 5px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .inv-legend i { flex: none; width: 9px; height: 9px; border-radius: 3px; }
 .inv-legend span { cursor: default; transition: opacity 0.12s; }
 .inv-legend span.dim { opacity: 0.4; }
@@ -610,6 +610,13 @@ table.tree td.spark-cell .spark { width: 64px; }
 .culprits-list .total { flex: none; width: 58px; text-align: right; white-space: nowrap; }
 .culprits-list svg.hidden { visibility: hidden; }
 .culprits-list li > svg { flex: none; color: var(--muted); }
+.rest-breakdown { flex: none; margin-top: 6px; padding: 8px 6px 2px; border-top: 1px solid var(--border); }
+.rest-breakdown h4 { margin: 0 0 4px; font-size: 11.5px; font-weight: 600; color: var(--label); text-transform: uppercase; letter-spacing: 0.04em; }
+.rest-breakdown ul { list-style: none; margin: 0; padding: 0; }
+.rest-breakdown li { display: flex; align-items: center; gap: 8px; padding: 3px 0; min-width: 0; }
+.rest-breakdown li i { flex: none; width: 9px; height: 9px; border-radius: 3px; opacity: 0.85; }
+.rest-breakdown .name { flex: 1; min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rest-breakdown .total { flex: none; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 
 .metrics-bottom { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: 340px; gap: 10px; margin: 0 var(--gutter); align-items: stretch; }
 .metrics-bottom .chart-panel { margin: 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
@@ -618,6 +625,16 @@ table.tree td.spark-cell .spark { width: 64px; }
 .metrics-list .row-spark { flex: none; width: 64px; }
 .metrics-list .num { flex: none; width: 62px; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .metrics-list .num.muted { color: var(--muted); }
+.metrics-list .tmpfs-toggle { flex: none; padding: 2px 8px; font-size: 11px; }
+.metrics-list .tmpfs-toggle.on { background: rgba(232, 121, 249, 0.14); border-color: rgba(232, 121, 249, 0.4); }
+.metrics-list li.tmp-dirs-row { display: block; padding: 0 6px 8px 36px; }
+.tmp-dirs { display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; }
+.tmp-dirs ul { list-style: none; margin: 0 0 2px; padding: 0; }
+.metrics-list .tmp-dirs li { display: flex; gap: 8px; padding: 2px 0; border-radius: 0; }
+.tmp-dirs .path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.tmp-dirs .size { flex: none; text-align: right; font-variant-numeric: tabular-nums; }
+.tmp-dirs .note { color: var(--label); font-style: italic; }
+.tmp-dirs .partial { color: #ffb547; }
 .metrics-list .list-cols { display: inline-flex; color: var(--label); font-size: 11px; padding-right: 6px; }
 .metrics-list .list-cols span { width: 62px; text-align: right; }
 .metrics-list .mono { white-space: nowrap; }
@@ -792,3 +809,55 @@ table.replay-tree td.state { color: var(--label); }
 table.replay-tree tr.dead td { opacity: 0.45; }
 table.replay-tree tr.dead td.state { opacity: 1; color: var(--muted); }
 table.replay-tree tr.omitted td { color: var(--muted); font-style: italic; }
+/* Page Processus → carte et ligne « Autres » dépliables */
+.others-toggle { padding: 4px 9px 4px 7px; font-size: 11.5px; border-radius: var(--r-sm); gap: 4px; color: var(--label); }
+.card.others-open { grid-column: 1 / -1; }
+.others-fold { display: flex; flex-direction: column; gap: 6px; }
+.others-preview {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 4px 10px;
+}
+.others-preview button {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto 3.4em;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px 4px 4px;
+  font-size: 12px;
+  text-align: left;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+.others-preview .ico { width: 22px; height: 22px; border-radius: 7px; }
+.others-preview .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.others-preview .mono { font-family: var(--font-mono); font-size: 11px; font-variant-numeric: tabular-nums; text-align: right; }
+.others-preview .mem { color: var(--text-2); }
+.others-preview .cpu { color: var(--muted); }
+.others-see-all { align-self: flex-start; padding: 4px 10px; font-size: 11.5px; color: var(--label); border-radius: var(--r-sm); }
+.others-loading { margin: 0; font-size: 12px; color: var(--muted); }
+table.group-list tr.others-sub td { padding-top: 5px; padding-bottom: 5px; font-size: 12px; color: var(--text-2); }
+table.group-list tr.others-sub td.name { padding-left: 34px; }
+table.group-list tr.others-sub .name-cell .ico { width: 18px; height: 18px; border-radius: 6px; }
+table.group-list tr.others-sub .name-cell .label { font-weight: 400; }
+table.group-list tr.others-see-all-row, table.group-list tr.others-loading-row { cursor: default; }
+table.group-list tr.others-see-all-row:hover, table.group-list tr.others-loading-row:hover { background: none; }
+table.group-list tr.others-see-all-row td { padding-left: 34px; }
+table.group-list tr.others-loading-row td { padding-left: 34px; color: var(--muted); }
+
+/* Détail → « Reclasser » dans l'en-tête des groupes hors projet */
+.head-reclass { display: inline-flex; align-items: center; gap: 8px; }
+.head-reclass .cat-tag { font-size: 11.5px; }
+.page-head .reclass-btn { padding: 7px 12px; font-size: inherit; border-radius: var(--r-md); }
+
+/* Réglages → Affichage : « Mémoire : RSS | PSS » */
+.mem-metric-row { display: flex; align-items: center; gap: 10px; color: var(--text-2); margin-bottom: 8px; }
+.mem-metric button { padding: 4px 12px; font-size: 12px; }
+table.tree .pss-denied { text-decoration: underline dotted var(--muted); text-underline-offset: 3px; cursor: help; }
+.big-row { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.mem-flag { font-size: 11px; color: var(--muted); cursor: help; }

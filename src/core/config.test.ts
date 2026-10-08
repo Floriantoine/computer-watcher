@@ -130,15 +130,21 @@ test('recorder.groupMinMemMB : 20 Mo par défaut, ajouté si absent (config d\'u
 });
 
 describe('section ui', () => {
-  test('par défaut : effets visuels complets', () => {
-    expect(DEFAULT_CONFIG.ui).toEqual({ reducedEffects: false });
+  test('par défaut : effets visuels complets, mémoire en RSS', () => {
+    expect(DEFAULT_CONFIG.ui).toEqual({ reducedEffects: false, memoryMetric: 'rss' });
   });
   test('config sans section ui : valide, défaut ajouté', () => {
     const { ui: _u, ...old } = DEFAULT_CONFIG;
-    expect(validateConfig(old)?.ui).toEqual({ reducedEffects: false });
+    expect(validateConfig(old)?.ui).toEqual({ reducedEffects: false, memoryMetric: 'rss' });
   });
-  test('reducedEffects conservé', () => {
-    expect(validateConfig({ ...DEFAULT_CONFIG, ui: { reducedEffects: true } })?.ui).toEqual({ reducedEffects: true });
+  test('reducedEffects conservé ; ui sans memoryMetric (config existante) → rss', () => {
+    expect(validateConfig({ ...DEFAULT_CONFIG, ui: { reducedEffects: true } })?.ui).toEqual({ reducedEffects: true, memoryMetric: 'rss' });
+  });
+  test('memoryMetric « pss » conservé', () => {
+    expect(validateConfig({ ...DEFAULT_CONFIG, ui: { reducedEffects: false, memoryMetric: 'pss' } })?.ui).toEqual({ reducedEffects: false, memoryMetric: 'pss' });
+  });
+  test.each([['PSS'], [1], [null], ['']])('memoryMetric = %j → config invalide', (memoryMetric) => {
+    expect(validateConfig({ ...DEFAULT_CONFIG, ui: { reducedEffects: false, memoryMetric } })).toBeNull();
   });
   test.each([[null], ['oui'], [{}], [{ reducedEffects: 'true' }]])('ui = %j → config invalide', (ui) => {
     expect(validateConfig({ ...DEFAULT_CONFIG, ui })).toBeNull();
@@ -163,4 +169,15 @@ test.each<[string, unknown]>([
   ['overrides absent', { detectPorts: true }],
 ])('classify invalide (%s) → config invalide', (_n, classify) => {
   expect(validateConfig({ ...DEFAULT_CONFIG, classify })).toBeNull();
+});
+
+test('recorder.tmpfsAlertMB : 2048 Mo par défaut, ajouté si absent, bornes 100 à 1 048 576, entier', () => {
+  expect(DEFAULT_RECORDER.tmpfsAlertMB).toBe(2048);
+  const { tmpfsAlertMB: _t, ...old } = DEFAULT_RECORDER;
+  expect(validateConfig({ ...DEFAULT_CONFIG, recorder: old })?.recorder.tmpfsAlertMB).toBe(2048);
+  expect(validateConfig({ ...DEFAULT_CONFIG, recorder: { ...DEFAULT_RECORDER, tmpfsAlertMB: 100 } })?.recorder.tmpfsAlertMB).toBe(100);
+  expect(validateConfig({ ...DEFAULT_CONFIG, recorder: { ...DEFAULT_RECORDER, tmpfsAlertMB: 1_048_576 } })?.recorder.tmpfsAlertMB).toBe(1_048_576);
+  for (const bad of [99, 1_048_577, 2.5, 'x']) {
+    expect(validateConfig({ ...DEFAULT_CONFIG, recorder: { ...DEFAULT_RECORDER, tmpfsAlertMB: bad } }), String(bad)).toBeNull();
+  }
 });

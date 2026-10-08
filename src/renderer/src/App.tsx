@@ -14,6 +14,8 @@ import { SystemBar, type SystemSparks } from './components/SystemBar';
 import { TopNav } from './components/TopNav';
 import { LiveBuffer, setLive, useHistory } from './history';
 import { instanceKillPlan, projectName, reclassifyMessage, reclassifyScope, skipInstanceKill } from './instances';
+import { leakMemOf } from './memMetric';
+import { readOthersOpen, writeOthersOpen } from './othersFold';
 import { leakTimes } from './recorderForm';
 import { findGroup, visibleGroups, ipcErrorMessage, killResultMessages, killRequestForGroup, killRequestForProc, trackKills, type KillRequest, type ViewFilter } from './viewModel';
 
@@ -24,6 +26,8 @@ export function App() {
   const [configState, setConfigState] = useState<ConfigState | null>(null);
   const [route, setRoute] = useState<Route>({ view: 'main' });
   const [filter, setFilter] = useState<ViewFilter>({ query: '', sort: 'mem', minAgeSec: 0 });
+  // Carte « Autres » dépliée (mémorisée) : le main n'en résume les sous-groupes que sur la page Processus.
+  const [othersOpen, setOthersOpen] = useState(readOthersOpen);
   const [stuckPids, setStuckPids] = useState<Set<number>>(new Set());
   // Miroir d'affichage de `pending` (SIGTERM envoyé, processus encore là) : fait pulser les boutons kill.
   const [pendingPids, setPendingPids] = useState<Set<number>>(new Set());
@@ -63,9 +67,10 @@ export function App() {
 
   // Le main n'envoie l'arbre que du groupe ouvert, et fait la recherche plein texte (commandes, dossiers).
   const detailId = route.view === 'detail' ? route.groupId : null;
+  const othersShown = othersOpen && route.view === 'main';
   useEffect(() => {
-    window.procWatch.watch({ groupId: detailId, query: filter.query }).catch(() => {});
-  }, [detailId, filter.query]);
+    window.procWatch.watch({ groupId: detailId, query: filter.query, othersOpen: othersShown }).catch(() => {});
+  }, [detailId, filter.query, othersShown]);
   // Résultat de recherche valable seulement pour la requête en cours ; en attente de la réponse du main : pas de filtre.
   const query = filter.query.trim();
   const matches = useMemo(
@@ -93,7 +98,8 @@ export function App() {
   const events24h = useHistory(() => window.procWatch.history.events('24h'), [], 60_000);
   const leakAt = useMemo(() => {
     const mem = new Map((snapshot?.groups ?? []).map((g) => [g.id, g.rssKB + g.swapKB]));
-    return leakTimes(events24h, snapshot?.takenAt ?? Date.now(), (k) => mem.get(k));
+    // En PSS, la mémoire affichée n'est pas comparable à celle enregistrée (RSS) : pas de filtre sur la baisse.
+    return leakTimes(events24h, snapshot?.takenAt ?? Date.now(), leakMemOf(snapshot?.memMetric ?? 'rss', mem));
   }, [events24h, snapshot]);
 
   const groupIds = useMemo(() => new Set(snapshot?.groupIds ?? []), [snapshot]);
@@ -289,6 +295,12 @@ export function App() {
                 leakAt={leakAt}
                 onLeak={(ts) => setRoute({ view: 'metrics', at: ts })}
                 onKillInstances={killInstances}
+                othersOpen={othersOpen}
+                memMetric={snapshot.memMetric}
+                onToggleOthers={(open) => {
+                  writeOthersOpen(open);
+                  setOthersOpen(open);
+                }}
               />
             )}
             {route.view === 'detail' && (
@@ -312,6 +324,7 @@ export function App() {
                 onReclassify={reclassify}
                 onKillInstance={killInstance}
                 onKillInstances={killInstances}
+                memMetric={snapshot.memMetric}
               />
             )}
             {route.view === 'metrics' && (
