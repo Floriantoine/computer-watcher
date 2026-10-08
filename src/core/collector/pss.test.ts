@@ -39,7 +39,7 @@ describe('PssCache', () => {
     expect(new PssCache(root).update([{ pid: 42, startTicks: 500 }], 0)).toEqual(new Map([[42, 45678]]));
   });
 
-  test('relu au plus toutes les 10 s par pid:startTicks ; PID réutilisé → relu ; pid non demandé → purgé', () => {
+  test('relu au plus toutes les 10 s par pid:startTicks ; PID réutilisé → relu ; pid non demandé gardé 10 s puis purgé', () => {
     const paths: string[] = [];
     const cache = new PssCache('/p', 10_000, (path) => {
       paths.push(path);
@@ -53,9 +53,36 @@ describe('PssCache', () => {
     expect(paths.length).toBe(2);
     cache.update([{ pid: 7, startTicks: 999 }], 12_000); // même pid, autre processus
     expect(paths.length).toBe(3);
-    cache.update([{ pid: 8, startTicks: 1 }], 13_000); // 7 n'est plus demandé : purgé
-    cache.update([{ pid: 7, startTicks: 999 }], 14_000); // donc relu, bien que lu il y a 2 s
-    expect(paths.length).toBe(5);
+    // 7 n'est plus demandé (page quittée, « Autres » replié) : gardé, pas relu à son retour
+    cache.update([{ pid: 8, startTicks: 1 }], 13_000);
+    expect(paths.length).toBe(4);
+    expect(cache.update([{ pid: 7, startTicks: 999 }], 14_000).get(7)).toBe(45678);
+    expect(paths.length).toBe(4);
+    // non demandé pendant 10 s : purgé, donc relu
+    cache.update([{ pid: 8, startTicks: 1 }], 15_000);
+    cache.update([{ pid: 8, startTicks: 1 }], 24_000);
+    cache.update([{ pid: 7, startTicks: 999 }], 24_500);
+    // lectures de /p/7 : 1 s et 11 s (7:100), 12 s et 24,5 s (7:999)
+    expect(paths.filter((p) => p === '/p/7/smaps_rollup').length).toBe(4);
+  });
+
+  test('premières lectures limitées à newBudgetMs par passe ; les suivantes restent en RSS (absentes) jusqu\'à la passe suivante', () => {
+    let clock = 0;
+    const reads: number[] = [];
+    const cache = new PssCache('/p', 10_000, (path) => {
+      reads.push(Number(path.split('/')[2]));
+      clock += 20;
+      return ROLLUP;
+    }, { newBudgetMs: 15, clock: () => clock });
+    const t = [1, 2, 3].map((pid) => ({ pid, startTicks: 1 }));
+    const r1 = cache.update(t, 0);
+    expect(reads).toEqual([1]);
+    expect([...r1.keys()]).toEqual([1]); // 2 et 3 : pas encore lus
+    cache.update(t, 3_000);
+    cache.update(t, 6_000);
+    expect(reads).toEqual([1, 2, 3]);
+    expect(cache.update(t, 7_000).size).toBe(3);
+    expect(reads.length).toBe(3);
   });
 
   test.each(['EACCES', 'EPERM'])('%s (autre utilisateur, hidepid) → « denied », sans exception', (code) => {
@@ -72,9 +99,10 @@ describe('PssCache', () => {
     expect(cache.update([{ pid: 1, startTicks: 1 }], 0)).toEqual(new Map());
   });
 
-  test('contenu sans « Pss: » (thread noyau, fichier vide) → « denied »', () => {
-    const cache = new PssCache('/p', 10_000, () => '');
-    expect(cache.update([{ pid: 2, startTicks: 1 }], 0).get(2)).toBe('denied');
+  test('fichier vide (thread noyau) → PSS 0 ; contenu lisible sans « Pss: » → « denied »', () => {
+    expect(new PssCache('/p', 10_000, () => '').update([{ pid: 2, startTicks: 1 }], 0).get(2)).toBe(0);
+    expect(new PssCache('/p', 10_000, () => '  \n').update([{ pid: 2, startTicks: 1 }], 0).get(2)).toBe(0);
+    expect(new PssCache('/p', 10_000, () => 'Rss: 4 kB\n').update([{ pid: 2, startTicks: 1 }], 0).get(2)).toBe('denied');
   });
 
   test('relectures (entrées périmées) limitées à refreshBudgetMs par passe, les plus anciennes d\'abord ; nouveaux processus toujours lus', () => {
@@ -135,6 +163,14 @@ describe('PssCache', () => {
 const proc = (pid: number, extra: Partial<ProcInfo> = {}): ProcInfo => ({
   pid, ppid: 1, name: 'x', cmdline: 'x', uid: 1000, startTicks: pid * 10, ageSec: 10, cpuTicks: 0, cpuPercent: 0,
   rssKB: 1000, swapKB: 50, cwd: null, cwdDeleted: false, ...extra,
+});
+
+test('applyPss : processus ciblé pas encore lu → pssPending (rssKB reste le RSS) ; non ciblé → même objet', () => {
+  const a = proc(1);
+  const b = proc(2);
+  const out = applyPss([a, b], new Map(), new Set([1]));
+  expect(out[0]).toEqual({ ...a, pssPending: true });
+  expect(out[1]).toBe(b);
 });
 
 test('applyPss : nombre → rssKB remplacé (swap inchangé) ; denied → pssDenied ; absent → même objet', () => {

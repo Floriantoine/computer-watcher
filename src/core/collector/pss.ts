@@ -19,17 +19,29 @@ export type PssValue = number | 'denied';
 const defaultRead = (path: string) => readFileSync(path, 'utf8');
 
 export interface PssCacheOptions {
-  /**
-   * Temps de lecture au plus par passe pour les entrées périmées (les plus anciennes d'abord ; les autres gardent leur
-   * valeur jusqu'à la passe suivante). Les processus sans valeur sont toujours lus. Défaut : 25 ms.
-   */
+  /** Temps de lecture au plus par passe pour les entrées périmées (les plus anciennes d'abord). Défaut : 25 ms. */
   refreshBudgetMs?: number;
+  /**
+   * Temps de lecture au plus par passe pour les processus sans valeur (premier passage en PSS, « Autres » déplié,
+   * rafale de nouveaux processus) : les suivants restent en RSS jusqu'à la passe suivante. Défaut : 25 ms.
+   */
+  newBudgetMs?: number;
   clock?: () => number;
 }
 
+interface Entry {
+  value: PssValue;
+  /** Dernière lecture */
+  at: number;
+  /** Dernière passe qui l'a demandé : une entrée non demandée est gardée maxAgeMs (retour sur la page, « Autres » replié puis déplié). */
+  seenAt: number;
+}
+
+/** Le budget est vérifié avant chaque lecture : une passe peut le dépasser d'une lecture (~10 ms pour un gros processus). */
 export class PssCache {
-  private readonly entries = new Map<string, { value: PssValue; at: number }>();
+  private readonly entries = new Map<string, Entry>();
   private readonly refreshBudgetMs: number;
+  private readonly newBudgetMs: number;
   private readonly clock: () => number;
 
   constructor(
@@ -39,18 +51,21 @@ export class PssCache {
     opts: PssCacheOptions = {},
   ) {
     this.refreshBudgetMs = opts.refreshBudgetMs ?? 25;
+    this.newBudgetMs = opts.newBudgetMs ?? 25;
     this.clock = opts.clock ?? (() => performance.now());
   }
 
   /**
    * PSS par pid ; relu au plus toutes les maxAgeMs par `${pid}:${startTicks}` ; EACCES/EPERM/Pss absent → 'denied' ;
-   * ENOENT (processus mort entre deux lectures) → absent ; purge des clés non demandées.
-   * Lire smaps_rollup coûte ~10 ms pour un gros processus (Chrome, Electron) : les relectures sont étalées sur plusieurs
-   * passes (refreshBudgetMs), une valeur peut donc avoir un peu plus de maxAgeMs.
+   * fichier vide (thread noyau) → 0 ; ENOENT (processus mort entre deux lectures) → absent.
+   * Lire smaps_rollup coûte ~10 ms pour un gros processus (Chrome, Electron) : premières lectures et relectures sont
+   * étalées sur plusieurs passes (newBudgetMs, refreshBudgetMs) ; un processus pas encore lu est absent du résultat.
+   * Entrées non demandées depuis maxAgeMs : purgées.
    */
   update(targets: readonly { pid: number; startTicks: number }[], now: number): Map<number, PssValue> {
     const out = new Map<number, PssValue>();
     const keep = new Set<string>();
+    const fresh: { key: string; pid: number }[] = [];
     const stale: { key: string; pid: number; at: number }[] = [];
     for (const { pid, startTicks } of targets) {
       const key = `${pid}:${startTicks}`;
@@ -58,33 +73,34 @@ export class PssCache {
       keep.add(key);
       const cached = this.entries.get(key);
       if (cached) {
+        cached.seenAt = now;
         out.set(pid, cached.value);
         if (!(now - cached.at >= 0 && now - cached.at < this.maxAgeMs)) stale.push({ key, pid, at: cached.at });
-        continue;
-      }
-      this.refresh(key, pid, now, out);
+      } else fresh.push({ key, pid });
     }
-    for (const key of this.entries.keys()) if (!keep.has(key)) this.entries.delete(key);
+    for (const [key, e] of this.entries)
+      if (!keep.has(key) && !(now - e.seenAt >= 0 && now - e.seenAt < this.maxAgeMs)) this.entries.delete(key);
+    this.readWithin(fresh, this.newBudgetMs, now, out);
     if (stale.length) {
       stale.sort((a, b) => a.at - b.at);
-      const start = this.clock();
-      for (const s of stale) {
-        if (this.clock() - start >= this.refreshBudgetMs) break;
-        this.refresh(s.key, s.pid, now, out);
-      }
+      this.readWithin(stale, this.refreshBudgetMs, now, out);
     }
     return out;
   }
 
-  private refresh(key: string, pid: number, now: number, out: Map<number, PssValue>): void {
-    const value = this.readOne(pid);
-    if (value === null) {
-      this.entries.delete(key);
-      out.delete(pid);
-      return;
+  private readWithin(list: readonly { key: string; pid: number }[], budgetMs: number, now: number, out: Map<number, PssValue>): void {
+    const start = this.clock();
+    for (const { key, pid } of list) {
+      if (this.clock() - start >= budgetMs) break;
+      const value = this.readOne(pid);
+      if (value === null) {
+        this.entries.delete(key);
+        out.delete(pid);
+        continue;
+      }
+      this.entries.set(key, { value, at: now, seenAt: now });
+      out.set(pid, value);
     }
-    this.entries.set(key, { value, at: now });
-    out.set(pid, value);
   }
 
   clear(): void {
@@ -94,7 +110,9 @@ export class PssCache {
   /** null : le processus n'existe plus. */
   private readOne(pid: number): PssValue | null {
     try {
-      return parsePss(this.read(`${this.procRoot}/${pid}/smaps_rollup`)) ?? 'denied';
+      const content = this.read(`${this.procRoot}/${pid}/smaps_rollup`);
+      if (content.trim() === '') return 0; // thread noyau : aucune zone mémoire, lisible
+      return parsePss(content) ?? 'denied';
     } catch (e) {
       const code = (e as NodeJS.ErrnoException).code;
       if (code === 'ENOENT' || code === 'ESRCH') return null;
@@ -103,12 +121,15 @@ export class PssCache {
   }
 }
 
-/** number → rssKB = PSS ; 'denied' → pssDenied: true (rssKB inchangé) ; absent → inchangé (même objet). */
-export function applyPss(procs: ProcInfo[], pss: ReadonlyMap<number, PssValue>): ProcInfo[] {
-  if (pss.size === 0) return procs;
+/**
+ * number → rssKB = PSS ; 'denied' → pssDenied: true (rssKB inchangé) ; absent → inchangé (même objet), ou
+ * pssPending: true si le processus fait partie des cibles (`targets`) mais n'a pas encore été lu.
+ */
+export function applyPss(procs: ProcInfo[], pss: ReadonlyMap<number, PssValue>, targets?: ReadonlySet<number>): ProcInfo[] {
+  if (pss.size === 0 && !targets?.size) return procs;
   return procs.map((p) => {
     const v = pss.get(p.pid);
-    if (v === undefined) return p;
+    if (v === undefined) return targets?.has(p.pid) ? { ...p, pssPending: true } : p;
     return v === 'denied' ? { ...p, pssDenied: true } : { ...p, rssKB: v };
   });
 }

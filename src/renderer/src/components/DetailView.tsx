@@ -5,7 +5,7 @@ import type { Category, GroupSummary as Group, InstanceSummary, MemoryMetric, Pr
 import { formatAge, formatKB } from '../format';
 import { procSparkMap, useHistory } from '../history';
 import { showRevertToAuto, ticksIndex } from '../instances';
-import { memLabel } from '../memMetric';
+import { fallbackTitle, memTileLabel } from '../memMetric';
 import { headerReclassTarget } from '../reclassHeader';
 import { useChartZoom, ZoomChip } from '../chartZoom';
 import { PRESET_MS, refreshMsFor } from '../metrics';
@@ -116,7 +116,8 @@ export function DetailView(props: Props) {
   // Index pid → startTicks : même objet tant que l'arbre a les mêmes processus (lignes d'instances mémoïsées).
   const ticksRef = useRef<Map<number, number> | undefined>(undefined);
   const ticksOf = useMemo(() => (ticksRef.current = ticksIndex(props.roots, ticksRef.current)), [props.roots]);
-  const [reclassOpen, setReclassOpen] = useState(false);
+  // Menu « Reclasser » de l'en-tête : ouvert pour un groupe précis, donc fermé dès que le groupe affiché change.
+  const [reclassOpenFor, setReclassOpenFor] = useState<string | null>(null);
   if (!group && props.pending) return <p className="empty">Chargement…</p>;
   if (!group) {
     return (
@@ -155,10 +156,10 @@ export function DetailView(props: Props) {
             <ReclassMenu
               current={reclass.category}
               revert={showRevertToAuto(reclass)}
-              open={reclassOpen}
-              onOpen={setReclassOpen}
+              open={reclassOpenFor === group.id}
+              onOpen={(open) => setReclassOpenFor(open ? group.id : null)}
               onPick={(c) => {
-                setReclassOpen(false);
+                setReclassOpenFor(null);
                 props.onReclassify(reclass, c);
               }}
             />
@@ -187,7 +188,7 @@ export function DetailView(props: Props) {
       </div>
       <div className="summary">
         <div className="tile"><small>Processus</small><b>{group.procCount}</b></div>
-        <div className="tile"><small>{memLabel(memMetric)}</small><b><AnimatedNumber value={group.rssKB} /></b></div>
+        <div className="tile" title={fallbackTitle(memMetric, group)}><small data-testid="mem-tile-label">{memTileLabel(memMetric, group)}</small><b><AnimatedNumber value={group.rssKB} /></b></div>
         <div className="tile"><small>Swap</small><b><AnimatedNumber value={group.swapKB} /></b></div>
         <div className="tile"><small>Plus ancien</small><b className={group.oldestAgeSec > 86400 ? 'old' : ''}>{formatAge(group.oldestAgeSec)}</b></div>
       </div>

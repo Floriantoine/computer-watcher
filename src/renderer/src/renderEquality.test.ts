@@ -24,6 +24,10 @@ describe('cardDisplayEqual : une carte dont l\'affichage ne change pas ne se re-
   ])('%s changé → différent', (_, extra) => {
     expect(cardDisplayEqual(g(), g(extra), MEM, MEM)).toBe(false);
   });
+  test('nombre de processus en RSS (mode PSS, infobulle) différent → différent', () => {
+    expect(cardDisplayEqual(g(), g({ pssFallback: 2 }), MEM, MEM)).toBe(false);
+    expect(cardDisplayEqual(g({ pssFallback: 2 }), g({ pssFallback: 2 }), MEM, MEM)).toBe(true);
+  });
   test('RAM totale du système différente (largeur de jauge) → différent', () => {
     expect(cardDisplayEqual(g(), g(), MEM, MEM / 2)).toBe(false);
   });

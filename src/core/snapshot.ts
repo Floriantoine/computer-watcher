@@ -4,10 +4,29 @@ import type { Group, GroupSummary, InstanceTargets, KillTarget, MemoryMetric, Pr
 export type Classification = Map<string, GroupClassification>;
 
 /** Groupe sans arbre : le renderer n'a besoin des processus que pour le groupe ouvert. Catégories et instances d'après `cls`. */
-export function summarizeGroup(g: Group, cls?: Classification): GroupSummary {
+export function summarizeGroup(g: Group, cls?: Classification, pss = false): GroupSummary {
   const { roots: _roots, subgroups, ...rest } = g;
   const c = cls?.get(g.id);
-  return { ...rest, subgroups: subgroups.map((s) => summarizeGroup(s, cls)), categories: c?.categories ?? [], instances: c?.instances ?? [] };
+  const out: GroupSummary = { ...rest, subgroups: subgroups.map((s) => summarizeGroup(s, cls, pss)), categories: c?.categories ?? [], instances: c?.instances ?? [] };
+  if (pss) {
+    const n = rssFallbackCount(g);
+    if (n > 0) out.pssFallback = n;
+  }
+  return out;
+}
+
+/** Processus d'un groupe (sous-groupes compris) dont la mémoire est restée en RSS en mode PSS. */
+function rssFallbackCount(g: Group): number {
+  let n = 0;
+  const walk = (nodes: ProcNode[]) => {
+    for (const node of nodes) {
+      if (node.proc.pssDenied || node.proc.pssPending) n++;
+      walk(node.children);
+    }
+  };
+  walk(g.roots);
+  for (const s of g.subgroups) n += rssFallbackCount(s);
+  return n;
 }
 
 function flattenNodes(nodes: ProcNode[], out: ProcInfo[]): ProcInfo[] {
@@ -74,13 +93,14 @@ export interface FullSnapshot {
 export function buildSnapshot(full: FullSnapshot, watch: Watch): Snapshot {
   const query = watch.query.trim();
   const followed = watch.groupId === null ? undefined : findFullGroup(full.groups, watch.groupId);
+  const pss = full.memMetric === 'pss';
   const inOthers = (g: Group) => watch.othersOpen === true || (!!followed && (followed === g || g.subgroups.includes(followed)));
   return {
     takenAt: full.takenAt,
     currentUid: full.currentUid,
     system: full.system,
     groups: full.groups.map((g) =>
-      g.kind === 'others' && !inOthers(g) ? summarizeGroup({ ...g, subgroups: [] }, full.classification) : summarizeGroup(g, full.classification),
+      g.kind === 'others' && !inOthers(g) ? summarizeGroup({ ...g, subgroups: [] }, full.classification, pss) : summarizeGroup(g, full.classification, pss),
     ),
     groupIds: full.groups.flatMap((g) => [g.id, ...g.subgroups.map((s) => s.id)]),
     query,

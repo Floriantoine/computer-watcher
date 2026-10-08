@@ -23,6 +23,8 @@ export interface ProcInfo extends ProcSample {
   cpuPercent: number;
   /** Mode PSS : PSS demandé mais illisible (autre utilisateur, hidepid…) ; rssKB reste alors le RSS. */
   pssDenied?: boolean;
+  /** Mode PSS : processus affiché pas encore lu (lectures étalées sur plusieurs passes) ; rssKB reste le RSS. */
+  pssPending?: boolean;
 }
 
 export interface SystemInfo {
@@ -66,6 +68,8 @@ export interface Group {
 /** Groupe sans son arbre de processus : ce que reçoit le renderer à chaque snapshot. */
 export interface GroupSummary extends Omit<Group, 'roots' | 'subgroups'> {
   subgroups: GroupSummary[];
+  /** Mode PSS : processus du groupe comptés en RSS (PSS illisible ou pas encore lu) ; absent si aucun ou en RSS. */
+  pssFallback?: number;
   categories: Category[];
   instances: InstanceSummary[];
 }

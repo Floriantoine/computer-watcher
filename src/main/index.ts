@@ -166,7 +166,8 @@ function withPss(procs: ProcInfo[], now: number): ProcInfo[] {
     for (const p of flattenGroup(sub)) kb += (rss.get(p.pid) ?? p.rssKB) + p.swapKB;
     return kb >= config.othersThreshold.memMB * 1024;
   };
-  return applyPss(procs, pssCache.update(pssTargets(last.groups, othersFollowed(last.groups, watch), overInRss), now));
+  const targets = pssTargets(last.groups, othersFollowed(last.groups, watch), overInRss);
+  return applyPss(procs, pssCache.update(targets, now), new Set(targets.map((p) => p.pid)));
 }
 
 function takeSnapshot(): FullSnapshot {

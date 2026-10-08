@@ -97,6 +97,21 @@ describe('buildSnapshot', () => {
     expect(buildSnapshot(base, { groupId: null, query: '', othersOpen: true }).detail).toBeNull();
   });
 
+  test('PSS : pssFallback = processus encore en RSS (illisibles ou pas encore lus), sous-groupes compris ; absent en RSS', () => {
+    const mixed = [
+      group('m', [proc(10, 'a', { pssDenied: true }), proc(11, 'b', { pssPending: true }), proc(12, 'c')]),
+      group('ok', [proc(13, 'd')]),
+      group('others', [], { kind: 'others', subgroups: [group('s', [proc(14, 'e', { pssDenied: true })])] }),
+    ];
+    const pss = buildSnapshot({ ...base, groups: mixed, memMetric: 'pss' }, { groupId: null, query: '', othersOpen: true });
+    expect(pss.groups[0]!.pssFallback).toBe(2);
+    expect(pss.groups[1]!.pssFallback).toBeUndefined();
+    expect(pss.groups[2]!.pssFallback).toBe(1);
+    expect(pss.groups[2]!.subgroups[0]!.pssFallback).toBe(1);
+    const rss = buildSnapshot({ ...base, groups: mixed }, { groupId: null, query: '' });
+    expect(rss.groups[0]!.pssFallback).toBeUndefined();
+  });
+
   test('memMetric recopié du snapshot complet (rss par défaut)', () => {
     expect(buildSnapshot({ ...base, memMetric: 'pss' }, { groupId: null, query: '' }).memMetric).toBe('pss');
     expect(buildSnapshot(base, { groupId: null, query: '' }).memMetric).toBe('rss');

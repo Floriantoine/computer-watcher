@@ -4,7 +4,7 @@ import { ChevronDown, ChevronUp, Lock } from 'lucide-react';
 import type { GroupSummary as Group, MemoryMetric } from '../../../core/types';
 import { hasDuplicate, instancesLine, primaryTag } from '../categoryFilter';
 import { formatAge, formatCpu, formatKB } from '../format';
-import { memLabel } from '../memMetric';
+import { fallbackTitle, memLabel } from '../memMetric';
 import { othersPreview, othersPreviewEqual } from '../othersFold';
 import { CategoryTag, DuplicateBadge } from './CategoryTag';
 import { barWidth } from '../motionBudget';
@@ -125,7 +125,7 @@ function GroupCardImpl({ group, memTotalKB, spark, stuck, pending, leak, layoutK
           <div className="sub" title={sub}>{sub}</div>
         </div>
       </div>
-      <AnimatedNumber className="big" value={total} title={`${memLabel(memMetric)} + swap`} />
+      <AnimatedNumber className="big" value={total} title={[`${memLabel(memMetric)} + swap`, fallbackTitle(memMetric, group)].filter(Boolean).join('\n')} />
       {line && (
         <div className="instances-row">
           <span className="instances-line mono" data-testid="instances-line" title={line}>{line}</span>

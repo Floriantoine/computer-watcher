@@ -36,7 +36,7 @@ function baseEqual(a: GroupSummary, b: GroupSummary): boolean {
 
 /** Carte : badges et jauge (largeur arrondie, teinte) en plus. */
 export function cardDisplayEqual(a: GroupSummary, b: GroupSummary, memTotalA: number, memTotalB: number): boolean {
-  if (!baseEqual(a, b) || !sameStrings(a.tags, b.tags)) return false;
+  if (!baseEqual(a, b) || !sameStrings(a.tags, b.tags) || (a.pssFallback ?? 0) !== (b.pssFallback ?? 0)) return false;
   const pa = ((a.rssKB + a.swapKB) / memTotalA) * 100;
   const pb = ((b.rssKB + b.swapKB) / memTotalB) * 100;
   return barWidth(pa) === barWidth(pb) && cardTone(pa) === cardTone(pb);
