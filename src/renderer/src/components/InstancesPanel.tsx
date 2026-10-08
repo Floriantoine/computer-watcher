@@ -1,9 +1,10 @@
 import { memo, useCallback, useRef, useState, type CSSProperties } from 'react';
-import { Boxes, PenLine, Zap } from 'lucide-react';
+import { Boxes, PenLine, Unplug, Zap } from 'lucide-react';
 import type { Category, GroupSummary, InstanceSummary, MemoryMetric } from '../../../core/types';
 import { CATEGORY_META } from '../categories';
 import { formatAge, formatCpu, formatKB } from '../format';
 import { memLabel } from '../memMetric';
+import { freePortLabel } from '../ports';
 import { headerKillActions, instanceRowEqual, instanceSpark, showRevertToAuto, sortInstances } from '../instances';
 import { ClaudeLaunchedBadge, DuplicateBadge } from './CategoryTag';
 import { ReclassMenu } from './ReclassMenu';
@@ -158,7 +159,24 @@ function InstanceRowImpl({ inst: i, spark, stuck, pending, canKill, menuOpen, me
         {stuck.length ? (
           <ForceButton onClick={() => actions.force(stuck)} />
         ) : (
-          <KillButton size="sm" pending={pending} disabled={!canKill} onClick={() => actions.kill(i)} />
+          <>
+            {i.ports.length > 0 && (
+              // Même chemin que le bouton kill de l'instance (confirmation habituelle, protégée → confirmation explicite).
+              <button
+                type="button"
+                className={`danger free-port${pending ? ' is-pending' : ''}`}
+                data-testid="instance-free-port"
+                disabled={!canKill}
+                aria-busy={pending || undefined}
+                title={`Tuer l'instance pour libérer ${i.ports.map((p) => `:${p}`).join(' ')}`}
+                onClick={() => actions.kill(i)}
+              >
+                <Unplug size={12} strokeWidth={2.4} />
+                {freePortLabel(i.ports[0]!)}
+              </button>
+            )}
+            <KillButton size="sm" pending={pending} disabled={!canKill} onClick={() => actions.kill(i)} />
+          </>
         )}
       </span>
     </div>

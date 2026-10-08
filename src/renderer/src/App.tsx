@@ -17,6 +17,9 @@ import { LiveBuffer, setLive, useHistory } from './history';
 import { instanceKillPlan, projectName, reclassifyMessage, reclassifyScope, skipInstanceKill } from './instances';
 import { leakMemOf } from './memMetric';
 import { readOthersOpen, writeOthersOpen } from './othersFold';
+import type { OpenPort } from '../../core/openPorts';
+import { parsePortQuery } from '../../core/portQuery';
+import { freePortAction, freePortRequest } from './ports';
 import type { SettingsSection } from './settingsNav';
 import { leakTimes } from './recorderForm';
 import { findGroup, visibleGroups, ipcErrorMessage, killResultMessages, killRequestForGroup, killRequestForProc, trackKills, type KillRequest, type ViewFilter } from './viewModel';
@@ -75,9 +78,11 @@ export function App() {
   // Le main n'envoie l'arbre que du groupe ouvert, et fait la recherche plein texte (commandes, dossiers).
   const detailId = route.view === 'detail' ? route.groupId : null;
   const othersShown = othersOpen && route.view === 'main';
+  // Panneau « Ports ouverts » (onglet Métriques) : le main lit alors les ports de tous les processus de l'utilisateur.
+  const portsShown = route.view === 'metrics';
   useEffect(() => {
-    window.procWatch.watch({ groupId: detailId, query: filter.query, othersOpen: othersShown }).catch(() => {});
-  }, [detailId, filter.query, othersShown]);
+    window.procWatch.watch({ groupId: detailId, query: filter.query, othersOpen: othersShown, ports: portsShown }).catch(() => {});
+  }, [detailId, filter.query, othersShown, portsShown]);
   // Résultat de recherche valable seulement pour la requête en cours ; en attente de la réponse du main : pas de filtre.
   const query = filter.query.trim();
   const matches = useMemo(
@@ -120,6 +125,19 @@ export function App() {
     const walk = (gs: readonly GroupSummary[]) => {
       for (const g of gs) {
         for (const i of g.instances) out.add(i.key);
+        walk(g.subgroups);
+      }
+    };
+    walk(snapshot?.groups ?? []);
+    return out;
+  }, [snapshot]);
+
+  // Instances du dernier snapshot par clé (sous-groupes compris) : « Libérer :port » vise l'instance quand elle est connue.
+  const instancesByKey = useMemo(() => {
+    const out = new Map<string, InstanceSummary>();
+    const walk = (gs: readonly GroupSummary[]) => {
+      for (const g of gs) {
+        for (const i of g.instances) out.set(i.key, i);
         walk(g.subgroups);
       }
     };
@@ -225,6 +243,23 @@ export function App() {
       )
       .finally(() => instKillsInFlight.current.delete(inst.key));
   };
+  // « Libérer :port » : instance → kill de l'instance (chemin habituel) ; sinon le seul processus, même pid et startTicks, avec confirmation.
+  const freePort = (row: OpenPort) => {
+    const a = freePortAction(row, instancesByKey);
+    if (a.kind === 'instance') {
+      killInstance(a.inst);
+      return;
+    }
+    window.procWatch.groupProcs(a.groupId).then(
+      (procs) => {
+        const req = freePortRequest(row.port, a, procs, isProtected, currentUid);
+        if (req) requestKill(req);
+        else pushToast(`Le processus ${a.pid} n'écoute plus :${row.port}`);
+      },
+      (e: unknown) => pushToast(ipcErrorMessage(e)),
+    );
+  };
+  const portQuery = parsePortQuery(filter.query);
   const groupLabel = (id: string) => findGroup(snapshot.groups, id)?.label ?? id;
   const nameOf = (inst: InstanceSummary) => projectName(inst, groupLabel(inst.groupId));
   // Kill groupé : ouvre le dialogue (ignoré pendant un envoi groupé en cours).
@@ -308,6 +343,8 @@ export function App() {
                 onKillInstances={killInstances}
                 othersOpen={othersOpen}
                 memMetric={snapshot.memMetric}
+                openPorts={portQuery !== null && snapshot.query === query ? snapshot.openPorts : null}
+                onFreePort={freePort}
                 onToggleOthers={(open) => {
                   writeOthersOpen(open);
                   setOthersOpen(open);
@@ -344,6 +381,9 @@ export function App() {
                 canOpen={(key) => groupIds.has(key)}
                 onOpenGroup={(key) => groupIds.has(key) && setRoute({ view: 'detail', groupId: key })}
                 onOpenSettings={(section) => setRoute({ view: 'settings', section })}
+                openPorts={snapshot.openPorts}
+                pendingPids={pendingPids}
+                onFreePort={freePort}
               />
             )}
             {route.view === 'settings' && (

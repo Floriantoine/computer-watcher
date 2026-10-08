@@ -9,7 +9,9 @@
 // la fenêtre est réellement affichée et active quel que soit l'état du bureau (écran verrouillé, autre bureau…), et
 // rien n'apparaît à l'écran. MEASURE_KWIN=0 : utiliser la session courante.
 // Variables : MEASURE_SETTLE_S (20), MEASURE_SAMPLE_S (60), MEASURE_SCENARIOS (« visible,minimized »),
-// MEASURE_MAXIMIZE (1 : fenêtre agrandie, plus de cartes à l'écran), MEASURE_OTHERS_OPEN (1 : carte « Autres » dépliée).
+// MEASURE_MAXIMIZE (1 : fenêtre agrandie, plus de cartes à l'écran), MEASURE_OTHERS_OPEN (1 : carte « Autres » dépliée),
+// MEASURE_ROUTE (metrics : onglet Métriques ouvert après la stabilisation, panneau « Ports ouverts » compris),
+// MEASURE_QUERY (texte tapé dans la recherche de la page Processus après la stabilisation, ex. « :3000 »).
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -227,6 +229,18 @@ try {
   if (process.env.MEASURE_OTHERS_OPEN === '1')
     await onAll("win.webContents.executeJavaScript(\"localStorage.setItem('pw.othersOpen','1'); location.reload()\")");
   await sleep(SETTLE_S * 1000);
+  const ROUTE = process.env.MEASURE_ROUTE ?? 'main';
+  if (process.env.MEASURE_QUERY) {
+    // Champ contrôlé par React : setter natif puis événement input.
+    const js = `(() => { const i = document.querySelector('.search input'); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(i, ${JSON.stringify(process.env.MEASURE_QUERY)}); i.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`;
+    await onAll(`win.webContents.executeJavaScript(${JSON.stringify(js)})`);
+  }
+  if (ROUTE === 'metrics') {
+    const js = `(() => { const b = [...document.querySelectorAll('button, a, [role=tab]')].find((e) => e.textContent.trim().startsWith('Métriques')); b?.click(); return !!b; })()`;
+    await onAll(`win.webContents.executeJavaScript(${JSON.stringify(js)})`);
+  }
+  if (ROUTE !== 'main' || process.env.MEASURE_QUERY) await sleep(5000);
+  const page = ROUTE === 'metrics' ? 'onglet Métriques' : process.env.MEASURE_QUERY ? `page Processus, recherche « ${process.env.MEASURE_QUERY} »` : 'page Processus';
   for (const sc of SCENARIOS) {
     if (sc === 'minimized') await onAll('win.minimize()');
     if (sc === 'hidden') await onAll('win.hide()');
@@ -243,7 +257,7 @@ try {
     const label = { visible: 'visible', background: 'visible sans focus', minimized: 'réduite', hidden: 'cachée' }[sc] ?? sc;
     const results = await sample(roots, SAMPLE_S);
     if (keepFocus) clearInterval(keepFocus);
-    results.forEach((rows, i) => print(`Fenêtre ${label} (page Processus)${apps.length > 1 ? ` — ${apps[i].dir}` : ''}`, rows));
+    results.forEach((rows, i) => print(`Fenêtre ${label} (${page})${apps.length > 1 ? ` — ${apps[i].dir}` : ''}`, rows));
   }
 } finally {
   for (const { child, ws, cfg } of apps) {

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Activity, CircleAlert, Cpu, Gauge, HardDrive, MemoryStick, MousePointerClick, Power, RefreshCw, Search } from 'lucide-react';
+import type { OpenPort, OpenPortsInfo } from '../../../core/openPorts';
 import type { Culprit, RangePreset, TimeRange } from '../../../core/types';
 import { formatKB } from '../format';
 import { useHistory } from '../history';
@@ -12,6 +13,7 @@ import { useChartZoom, ZoomChip } from '../chartZoom';
 import { AlertsPanel } from './AlertsPanel';
 import type { SettingsSection } from '../settingsNav';
 import { CulpritsPanel } from './CulpritsPanel';
+import { OpenPortsPanel } from './OpenPortsPanel';
 import { seriesIndexOf, type ChartSeries } from './charts/chartData';
 import { TimeChart, type ChartMarker } from './charts/TimeChart';
 import { KB_FORMAT, PERCENT_FORMAT, type ChartTone, type ValueFormat } from './charts/uplotTheme';
@@ -25,6 +27,10 @@ interface Props {
   onOpenGroup: (key: string) => void;
   /** Lien vers une section des Réglages (ex. Alertes). */
   onOpenSettings?: (section: SettingsSection) => void;
+  /** Panneau « Ports ouverts » (sous les alertes) ; absent sans `onFreePort`. */
+  openPorts?: OpenPortsInfo | null;
+  pendingPids?: Set<number>;
+  onFreePort?: (row: OpenPort) => void;
 }
 
 /** Teintes des couches de l'enquête (de la plus grosse à la 8e) ; les trois couches du Reste ont les leurs, en pointillés. */
@@ -59,7 +65,9 @@ interface SysChart {
   format: { left: ValueFormat };
 }
 
-export function MetricsView({ at, canOpen, onOpenGroup, onOpenSettings }: Props) {
+const NO_PIDS = new Set<number>();
+
+export function MetricsView({ at, canOpen, onOpenGroup, onOpenSettings, openPorts, pendingPids = NO_PIDS, onFreePort }: Props) {
   const [preset, setPreset] = useState<RangePreset>(() => presetFor(at));
   const z = useChartZoom(PRESET_MS[preset]);
   const { zoom, view, setZoom } = z;
@@ -271,6 +279,7 @@ export function MetricsView({ at, canOpen, onOpenGroup, onOpenSettings }: Props)
         <TopConsumers top={data?.top} canOpen={canOpen} onOpenGroup={onOpenGroup} onHover={setHoverKey} />
         <AlertsPanel events={events} onPick={setCursor} onHover={setHoverTs} onSettings={onOpenSettings && (() => onOpenSettings('alerts'))} />
       </div>
+      {onFreePort && <OpenPortsPanel info={openPorts ?? null} pendingPids={pendingPids} onFree={onFreePort} />}
     </div>
   );
 }
