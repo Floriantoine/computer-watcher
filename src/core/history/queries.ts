@@ -51,19 +51,24 @@ function plan(db: DatabaseSync, range: TimeRange, o: QueryOpts) {
 const SYSTEM_TABLE: Record<Source, string> = { detail: 'system_samples', minute: 'system_minute', hour: 'system_hour' };
 const GROUP_TABLE: Record<Source, string> = { detail: 'group_samples', minute: 'group_minute', hour: 'group_hour' };
 
+const SHMEM_COLUMN: Record<Source, string> = { detail: 'shmem_kb', minute: 'shmem_kb_max', hour: 'shmem_kb_max' };
+
 export function querySystem(db: DatabaseSync, range: TimeRange, o: QueryOpts): SystemSeries {
   const { source, bucket } = plan(db, range, o);
+  // base v3 (lecture seule, pas encore migrée par le service) : pas de colonnes shmem → null
+  const shmem = hasColumn(db, SYSTEM_TABLE[source], SHMEM_COLUMN[source]) ? `MAX(${SHMEM_COLUMN[source]})` : 'NULL';
   const sql =
     source === 'detail'
       ? `SELECT (CAST(? AS INTEGER) + ((ts - CAST(? AS INTEGER)) / CAST(? AS INTEGER)) * CAST(? AS INTEGER)) AS t, MAX(mem_used_kb) mem, MAX(swap_used_kb) swap, MAX(mem_total_kb) mt, MAX(swap_total_kb) st,
-                MAX(psi_some10) psi, MAX(cpu_percent) cpu, MAX(load1) load
+                MAX(psi_some10) psi, MAX(cpu_percent) cpu, MAX(load1) load, ${shmem} shmem
          FROM system_samples WHERE ts >= ? AND ts < ? GROUP BY t ORDER BY t`
       : `SELECT (CAST(? AS INTEGER) + ((ts - CAST(? AS INTEGER)) / CAST(? AS INTEGER)) * CAST(? AS INTEGER)) AS t, MAX(mem_used_kb_max) mem, MAX(swap_used_kb_max) swap, MAX(mem_total_kb) mt, MAX(swap_total_kb) st,
-                MAX(psi_max) psi, AVG(cpu_avg) cpu, AVG(load1_avg) load
+                MAX(psi_max) psi, AVG(cpu_avg) cpu, AVG(load1_avg) load, ${shmem} shmem
          FROM ${SYSTEM_TABLE[source]} WHERE ts >= ? AND ts < ? GROUP BY t ORDER BY t`;
   const rows = db.prepare(sql).all(range.from, range.from, bucket, bucket, range.from, range.to) as {
-    t: number; mem: number; swap: number; mt: number; st: number; psi: number | null; cpu: number; load: number;
+    t: number; mem: number; swap: number; mt: number; st: number; psi: number | null; cpu: number; load: number; shmem: number | null;
   }[];
+  const groups = groupsTotal(db, source, bucket, range);
   return {
     ts: rows.map((r) => r.t),
     memUsedKB: rows.map((r) => r.mem),
@@ -73,7 +78,40 @@ export function querySystem(db: DatabaseSync, range: TimeRange, o: QueryOpts): S
     psi: rows.map((r) => r.psi),
     cpu: rows.map((r) => r.cpu),
     load: rows.map((r) => r.load),
+    shmemKB: rows.map((r) => r.shmem),
+    groupsKB: rows.map((r) => groups.get(r.t) ?? null),
   };
+}
+
+/** Pas natif des tables agrégées : un bucket au moins aussi long contient au plus une ligne par groupe et par pas. */
+const NATIVE_STEP: Record<Source, number> = { detail: 0, minute: M, hour: H };
+
+/**
+ * Somme, par bucket, du pic de chaque groupe (même valeur que les courbes de groupes), indexée par début de bucket.
+ * - détail : pic par (groupe, bucket) puis somme ;
+ * - bucket égal au pas de la table (30 j sur les heures) : une ligne par groupe et par bucket, la somme directe suffit ;
+ *   sur les heures, `+ts` parcourt la table dans l'ordre de la clé (comme queryTop) au lieu d'une recherche par ligne ;
+ * - sinon : un parcours de clé primaire par groupe (`groupRows`), somme en JS.
+ */
+function groupsTotal(db: DatabaseSync, source: Source, bucket: number, range: TimeRange): Map<number, number> {
+  const out = new Map<number, number>();
+  const t = `(${I} + ((ts - ${I}) / ${I}) * ${I})`;
+  let sql: string;
+  if (source === 'detail') {
+    sql = `SELECT t, SUM(v) AS v FROM (
+             SELECT ${t} AS t, MAX(rss_kb + swap_kb) AS v FROM group_samples WHERE ts >= ? AND ts < ? GROUP BY group_id, t
+           ) GROUP BY t`;
+  } else if (bucket === NATIVE_STEP[source]) {
+    const tsCol = source === 'hour' ? '+ts' : 'ts';
+    sql = `SELECT ${t} AS t, SUM(mem_kb_max) AS v FROM ${GROUP_TABLE[source]} WHERE ${tsCol} >= ? AND ${tsCol} < ? GROUP BY t`;
+  } else {
+    for (const r of groupRows(db, source, bucket, range, null)) out.set(r.t, (out.get(r.t) ?? 0) + r.v);
+    return out;
+  }
+  const st = db.prepare(sql);
+  st.setReturnArrays(true);
+  for (const [k, v] of st.all(range.from, range.from, bucket, bucket, range.from, range.to) as unknown as [number, number][]) out.set(k, v);
+  return out;
 }
 
 interface GroupMeta { id: number; key: string; label: string; kind: GroupKind }

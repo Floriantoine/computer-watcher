@@ -2,28 +2,63 @@ import { topKeysByMax } from '../../core/history/series';
 import type { GroupsHistory, HistoryEvent, RangePreset, SystemSeries, TimeRange, TopOptions, TopResult } from '../../core/types';
 import { formatKB } from './format';
 
+/** Couches du « Reste » (tout ce qui n'est pas dans le top n), dans l'ordre d'affichage. */
+export const REST_KEYS = { others: '__others', shmem: '__shmem', kernel: '__kernel' } as const;
+export const REST_LABELS = { others: 'Autres groupes', shmem: 'Fichiers en mémoire (/tmp, shm)', kernel: 'Noyau et caches' } as const;
+/** Teintes des trois couches (courbes en pointillés, pastilles du panneau de l'instant). */
+export const REST_TONES = { others: '#6b7180', shmem: '#e879f9', kernel: '#94a3b8' } as const;
+
+/** Totaux système alignés sur les horodatages de l'enquête. */
+export interface RestTotals { usedKB: (number | null)[]; shmemKB: (number | null)[]; groupsKB: (number | null)[] }
+export interface RestSplit { others: number | null; shmem: number | null; kernel: number | null }
+
+const pos = (v: number) => Math.max(0, v);
+
 /**
- * Courbes de l'enquête : les `n` plus gros groupes (par max) + « Reste », en valeurs brutes (une courbe par groupe,
- * pas d'empilement : empilées, la hausse d'une couche du bas soulevait toutes les autres et faisait croire que tout montait).
- * Sans `totalKB`, le Reste est la somme des autres séries de `h`. Avec `totalKB` (mémoire utilisée du système,
- * alignée sur `h.ts`), le Reste vaut `total − top n` (borné à 0) : on peut alors ne charger que les plus gros groupes.
+ * Découpe le Reste : total = RAM + swap utilisées ; kernel = max(0, total − groupes − shmem) ;
+ * others = max(0, total − top − shmem − kernel). Une valeur inconnue donne une couche nulle (jamais inventée) ;
+ * jamais de valeur négative ni NaN (Shmem et RSS se recouvrent : pages shm mappées comptées dans le RSS).
  */
-export function investigationSeries(h: GroupsHistory, n = 8, totalKB?: (number | null)[]) {
+export function splitRest(totalKB: number | null, topKB: number, groupsKB: number | null, shmemKB: number | null): RestSplit {
+  if (totalKB === null) return { others: null, shmem: shmemKB, kernel: null };
+  if (shmemKB === null) {
+    const kernel = groupsKB === null ? null : pos(totalKB - groupsKB);
+    return { others: pos(totalKB - topKB - (kernel ?? 0)), shmem: null, kernel };
+  }
+  if (groupsKB === null) return { others: pos(totalKB - topKB - shmemKB), shmem: shmemKB, kernel: null };
+  const kernel = pos(totalKB - groupsKB - shmemKB);
+  return { others: pos(totalKB - topKB - shmemKB - kernel), shmem: shmemKB, kernel };
+}
+
+/**
+ * Courbes de l'enquête : les `n` plus gros groupes (par max), puis le Reste découpé en trois couches (autres groupes,
+ * fichiers en mémoire, noyau et caches), en valeurs brutes (une courbe par couche, pas d'empilement : empilées, la hausse
+ * d'une couche du bas soulevait toutes les autres et faisait croire que tout montait). `totals` est aligné sur `h.ts` :
+ * on peut ne charger que les plus gros groupes, le reste est déduit des totaux du système.
+ */
+export function investigationSeries(h: GroupsHistory, n: number, totals: RestTotals) {
   const byKey = new Map(h.series.map((s) => [s.key, s.memKB]));
   const top = topKeysByMax(byKey, n);
-  const topSet = new Set(top);
-  const rest = h.ts.map((_, i) => {
-    if (totalKB) {
-      const total = totalKB[i];
-      if (total == null) return 0;
-      return Math.max(0, top.reduce((left, k) => left - (byKey.get(k)![i] ?? 0), total));
-    }
-    return h.series.filter((s) => !topSet.has(s.key)).reduce((sum, s) => sum + (s.memKB[i] ?? 0), 0);
-  });
-  const raw = [...top.map((k) => byKey.get(k)!), rest];
-  const labels = [...top.map((k) => h.series.find((s) => s.key === k)!.label), 'Reste'];
-  const keys = [...top, '__rest'];
-  return { ts: h.ts, layers: raw.map((values, i) => ({ key: keys[i], label: labels[i], values })) };
+  const split = h.ts.map((_, i) =>
+    splitRest(totals.usedKB[i] ?? null, top.reduce((sum, k) => sum + (byKey.get(k)![i] ?? 0), 0), totals.groupsKB[i] ?? null, totals.shmemKB[i] ?? null),
+  );
+  const rest = (['others', 'shmem', 'kernel'] as const).map((k) => ({ key: REST_KEYS[k], label: REST_LABELS[k], values: split.map((s) => s[k]) }));
+  return {
+    ts: h.ts,
+    layers: [...top.map((k) => ({ key: k, label: h.series.find((s) => s.key === k)!.label, values: byKey.get(k)! })), ...rest],
+  };
+}
+
+/** Valeurs des trois couches du Reste au point le plus proche de `ts` (null hors plage, à un pas près). */
+export function breakdownAt(inv: { ts: number[]; layers: { key: string; values: (number | null)[] }[] }, ts: number): RestSplit | null {
+  const n = inv.ts.length;
+  if (n === 0) return null;
+  const step = n > 1 ? inv.ts[1] - inv.ts[0] : 0;
+  if (ts < inv.ts[0] - step || ts > inv.ts[n - 1] + step) return null;
+  let best = 0;
+  for (let i = 1; i < n; i++) if (Math.abs(inv.ts[i] - ts) < Math.abs(inv.ts[best] - ts)) best = i;
+  const at = (key: string) => inv.layers.find((l) => l.key === key)?.values[best] ?? null;
+  return { others: at(REST_KEYS.others), shmem: at(REST_KEYS.shmem), kernel: at(REST_KEYS.kernel) };
 }
 
 const COLORS: Record<string, string> = { earlyoom_kill: '#ff5c8a', pressure: '#ffb547', gap: '#8b91a0', app_kill: '#a07cff', leak: '#ff8a3d' };
@@ -64,7 +99,7 @@ export function formatInstant(ts: number, now = Date.now()): string {
   return d.toDateString() === new Date(now).toDateString() ? hms : `${p2(d.getDate())}/${p2(d.getMonth() + 1)} ${hms}`;
 }
 
-/** Nombre de groupes nommés dans l'enquête (le reste forme la couche « Reste »). */
+/** Nombre de groupes nommés dans l'enquête (le reste forme les trois couches du Reste). */
 export const INVESTIGATION_LAYERS = 8;
 
 interface MetricsApi {

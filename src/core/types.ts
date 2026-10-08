@@ -172,7 +172,13 @@ export interface KillResult {
 
 export type RangePreset = '1h' | '6h' | '24h' | '7d' | '30d';
 export interface TimeRange { from: number; to: number }
-export interface SystemSeries { ts: number[]; memUsedKB: number[]; swapUsedKB: number[]; memTotalKB: number; swapTotalKB: number; psi: (number | null)[]; cpu: number[]; load: number[] }
+export interface SystemSeries {
+  ts: number[]; memUsedKB: number[]; swapUsedKB: number[]; memTotalKB: number; swapTotalKB: number; psi: (number | null)[]; cpu: number[]; load: number[];
+  /** Fichiers en mémoire (Shmem) au pic du bucket ; null avant v4 (base non migrée ou données antérieures). */
+  shmemKB: (number | null)[];
+  /** Somme des pics de tous les groupes par bucket ; null si aucun groupe enregistré dans le bucket. */
+  groupsKB: (number | null)[];
+}
 export interface GroupSeries { key: string; label: string; kind: GroupKind; memKB: (number | null)[] }
 export interface GroupsHistory { ts: number[]; series: GroupSeries[] }
 export interface GroupHistory { ts: number[]; rssKB: (number | null)[]; swapKB: (number | null)[]; cpu: (number | null)[] }
