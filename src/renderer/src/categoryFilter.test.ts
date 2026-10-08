@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { Category, GroupSummary, InstanceSummary } from '../../core/types';
-import { categoryDisplayKey, countByCategory, filterGroups, instancesLine, killableInstances, parseSelection, primaryTag } from './categoryFilter';
+import { categoryDisplayKey, countByCategory, filterGroups, instancesLine, killCount, parseSelection, pillCategories, pillLabel, primaryTag, selectionCandidates, showKillSelection } from './categoryFilter';
 
 let n = 0;
 const inst = (category: Category, extra: Partial<InstanceSummary> = {}): InstanceSummary => {
@@ -48,14 +48,44 @@ describe('filterGroups', () => {
   });
 });
 
-describe('killableInstances', () => {
-  test('instances des catégories sélectionnées, hors protégées', () => {
-    expect(killableInstances(all, new Set<Category>(['front', 'db'])).map((i) => i.ports[0])).toEqual([5173, 5174]);
+describe('selectionCandidates (« Tuer la sélection »)', () => {
+  test('instances des catégories sélectionnées des groupes projet et dossier supprimé, protégées comprises (le dialogue les décoche)', () => {
+    const c = selectionCandidates(all, new Set<Category>(['front', 'db']));
+    expect(c.map((i) => [i.ports[0], i.protected])).toEqual([[5173, false], [5174, false], [5432, true]]);
+    expect(killCount(c)).toBe(2);
+  });
+  test('autres sortes de groupes (appli, Claude, commande) : visibles sous le filtre mais jamais visées', () => {
+    const sel = new Set<Category>(['browser', 'system', 'ai']);
+    const claude = grp('claude', [inst('ai')], { kind: 'claude' });
+    const sys = grp('command:pipewire', [inst('system')], { kind: 'command' });
+    expect(filterGroups([chrome, claude, sys], sel).map((g) => g.id)).toEqual(['chrome', 'claude', 'command:pipewire']);
+    expect(selectionCandidates([chrome, claude, sys], sel)).toEqual([]);
+    const gone = grp('deleted', [inst('front', { ports: [5173] })], { kind: 'deleted' });
+    expect(selectionCandidates([gone, chrome], new Set<Category>(['front', 'browser'])).map((i) => i.ports[0])).toEqual([5173]);
   });
   test('sélection vide → aucune ; groupes sans processus du user et « Autres » ignorés', () => {
-    expect(killableInstances(all, new Set())).toEqual([]);
+    expect(selectionCandidates(all, new Set())).toEqual([]);
     const foreign = grp('root', [inst('db')], { killable: false });
-    expect(killableInstances([foreign, others], new Set<Category>(['db', 'front']))).toEqual([]);
+    expect(selectionCandidates([foreign, others], new Set<Category>(['db', 'front']))).toEqual([]);
+  });
+});
+
+describe('règles d\'affichage de la barre', () => {
+  test('bouton « Tuer la sélection » : seulement avec un filtre actif et au moins une cible non protégée', () => {
+    expect(showKillSelection(new Set(), 3)).toBe(false);
+    expect(showKillSelection(new Set<Category>(['front']), 0)).toBe(false);
+    expect(showKillSelection(new Set<Category>(['front']), 1)).toBe(true);
+  });
+  test('pastilles : catégories présentes, plus une catégorie sélectionnée tombée à 0 (pour pouvoir la retirer), dans l\'ordre', () => {
+    const counts = new Map<Category, number>([['db', 1], ['front', 2]]);
+    expect(pillCategories(counts, new Set())).toEqual(['front', 'db']);
+    expect(pillCategories(counts, new Set<Category>(['test']))).toEqual(['front', 'db', 'test']);
+    expect(pillCategories(new Map(), new Set())).toEqual([]);
+  });
+  test('nom accessible d\'une pastille', () => {
+    expect(pillLabel('front', 1)).toBe('Front, 1 instance');
+    expect(pillLabel('db', 0)).toBe('BDD, 0 instance');
+    expect(pillLabel('test', 3)).toBe('Tests, 3 instances');
   });
 });
 

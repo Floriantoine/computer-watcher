@@ -1,10 +1,9 @@
 import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
-export interface PackageHints { front: boolean; back: boolean; scripts: Record<string, string> }
+/** Scripts du package.json : seuls `dev`/`start*` servent, quand leur commande lance l'instance (les dépendances ne classent rien). */
+export interface PackageHints { scripts: Record<string, string> }
 
-const FRONT_DEPS = ['react', 'vue', 'svelte', '@angular/core', 'solid-js'];
-const BACK_DEPS = ['express', 'fastify', '@nestjs/core', 'koa', '@hapi/hapi'];
 const TTL_MS = 60_000;
 const MAX_CACHE = 500;
 const MAX_BYTES = 1024 * 1024;
@@ -23,19 +22,12 @@ function parse(text: string | null): PackageHints | null {
   try {
     const j = JSON.parse(text) as Record<string, unknown>;
     if (!j || typeof j !== 'object') return null;
-    const deps = new Set<string>();
-    for (const k of ['dependencies', 'devDependencies', 'peerDependencies']) {
-      const d = j[k];
-      if (d && typeof d === 'object') for (const n of Object.keys(d)) deps.add(n);
-    }
-    const back = BACK_DEPS.some((d) => deps.has(d));
-    const front = !back && FRONT_DEPS.some((d) => deps.has(d));
     const scripts: Record<string, string> = {};
     const s = j.scripts;
     if (s && typeof s === 'object' && !Array.isArray(s)) {
       for (const [k, v] of Object.entries(s)) if (typeof v === 'string') scripts[k] = v;
     }
-    return { front, back, scripts };
+    return { scripts };
   } catch { return null; }
 }
 

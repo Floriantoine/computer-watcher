@@ -31,8 +31,6 @@ export function decide(input: DecideInput): { category: Category; source: Instan
         if (m) return { category: m.category, source: 'package' };
       }
     }
-    if (pkg.front) return { category: 'front', source: 'package' };
-    if (pkg.back) return { category: 'back', source: 'package' };
   }
   return { category: 'unknown', source: 'unknown' };
 }

@@ -133,6 +133,17 @@ describe('carte « Autres »', () => {
     expect(byId(groups, 'others').subgroups.map((g) => g.id)).toEqual(['command:tiny2', 'command:tiny3']);
   });
 
+  test('un projet ou un dossier supprimé n\'est jamais rangé dans « Autres », même petit et inactif', () => {
+    const groups = buildGroups([
+      proc({ pid: 1, name: 'node', rssKB: 5 * 1024, cwd: '/home/u/proj', cmdline: 'node server.js' }),
+      proc({ pid: 2, name: 'node', rssKB: 3 * 1024, cwd: '/gone', cwdDeleted: true }),
+      proc({ pid: 3, name: 'tiny1', rssKB: 1024 }),
+      proc({ pid: 4, name: 'tiny2', rssKB: 2048 }),
+    ], opts());
+    expect(groups.map((g) => g.id)).toEqual(['project:/home/u/proj', 'deleted', 'others']);
+    expect(byId(groups, 'others').subgroups.map((g) => g.id)).toEqual(['command:tiny2', 'command:tiny1']);
+  });
+
   test('un seul petit groupe → pas de carte Autres', () => {
     const groups = buildGroups([proc({ pid: 1, name: 'big', rssKB: 500 * 1024 }), proc({ pid: 2, name: 'tiny', rssKB: 1 })], opts());
     expect(groups.find((g) => g.id === 'others')).toBeUndefined();

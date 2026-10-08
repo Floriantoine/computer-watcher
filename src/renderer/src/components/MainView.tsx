@@ -2,7 +2,7 @@ import { AnimatePresence } from 'motion/react';
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, Search } from 'lucide-react';
 import type { Category, GroupSummary as Group, InstanceSummary } from '../../../core/types';
-import { countByCategory, filterGroups, killableInstances, parseSelection } from '../categoryFilter';
+import { countByCategory, filterGroups, killCount, parseSelection, selectionCandidates } from '../categoryFilter';
 import { CategoryFilter } from './CategoryFilter';
 import type { SortKey, ViewFilter } from '../viewModel';
 import { visibleGroups } from '../viewModel';
@@ -26,7 +26,10 @@ interface Props {
   /** Groupes en fuite -> horodatage du dernier événement (Map stable, renouvelée au plus toutes les 60 s). */
   leakAt?: Map<string, number>;
   onLeak?: (ts: number) => void;
-  /** Dialogue de kill groupé (Task 9) ; absent → bouton « Tuer la sélection » désactivé. */
+  /**
+   * Dialogue de kill groupé (Task 9) ; absent → bouton « Tuer la sélection » désactivé. Reçoit toutes les instances candidates
+   * (groupes projet / dossier supprimé des catégories choisies), protégées comprises avec leur drapeau : le dialogue les décoche.
+   */
   onKillInstances?: (instances: InstanceSummary[]) => void;
 }
 
@@ -59,7 +62,7 @@ export function MainView(props: Props) {
     setCategories(next);
   }, []);
   const counts = useMemo(() => countByCategory(groups), [groups]);
-  const killable = useMemo(() => killableInstances(groups, categories), [groups, categories]);
+  const candidates = useMemo(() => selectionCandidates(groups, categories), [groups, categories]);
   const filtered = useMemo(() => filterGroups(groups, categories), [groups, categories]);
   // Actions stables (par id, résolues sur les dernières props) : une carte inchangée n'a pas à se re-rendre.
   const latest = useRef(props);
@@ -85,9 +88,10 @@ export function MainView(props: Props) {
       },
     };
   }, []);
-  const killSelection = useCallback(() => latest.current.onKillInstances?.(killableInstances(latest.current.groups, categoriesRef.current)), []);
   const categoriesRef = useRef(categories);
   categoriesRef.current = categories;
+  // Recalculé au clic sur le dernier snapshot, pas sur celui du rendu.
+  const killSelection = useCallback(() => latest.current.onKillInstances?.(selectionCandidates(latest.current.groups, categoriesRef.current)), []);
   // Ordre affiché au rendu précédent (même tri) : tri mémoire/CPU avec tolérance, les cartes ne permutent pas sans cesse.
   const order = useRef<{ sort: SortKey; ids: string[] }>({ sort: filter.sort, ids: [] });
   const shown = visibleGroups(filtered, filter, matches, order.current.sort === filter.sort ? order.current.ids : []);
@@ -123,7 +127,7 @@ export function MainView(props: Props) {
         counts={counts}
         selected={categories}
         onChange={pickCategories}
-        killCount={killable.length}
+        killCount={killCount(candidates)}
         onKillSelection={props.onKillInstances ? killSelection : undefined}
       />
       {shown.length === 0 ? (

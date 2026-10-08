@@ -263,7 +263,7 @@ select option { background: var(--surface-solid); color: var(--text); }
 .lock { flex: none; display: inline-flex; color: var(--muted); }
 .card-titles .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .big { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15; font-variant-numeric: tabular-nums; }
-.card-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 28px; }
+.card-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 28px; margin-top: auto; }
 .card-foot .mono { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* Bouton kill : carré icône rose translucide */

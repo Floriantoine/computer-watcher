@@ -1,40 +1,44 @@
 import { describe, expect, it } from 'vitest';
 import { classifyGroups, decide, type ClassifyContext } from './classify';
+import { buildGroups } from '../grouping/buildGroups';
 import { group, node, proc } from './testFixtures';
-import type { PackageHints } from './packageJson';
+import { readPackageHints, type PackageHints } from './packageJson';
 
-const pkg: PackageHints = { front: true, back: false, scripts: { dev: 'vite --port 1', build: 'tsc' } };
+const pkg: PackageHints = { scripts: { dev: 'vite --port 1', build: 'tsc' } };
+const viteRule = () => ({ category: 'front' as const, label: 'Vite' });
 const base = { overrideKey: 'k', overrides: {}, match: null, ports: [], chainText: 'vite', pkg: null };
 
 describe('decide', () => {
   it('override > commande > port > package > unknown', () => {
     const match = { category: 'worker' as const, label: 'w' };
-    const all = { ...base, overrides: { k: 'ai' as const }, match, ports: [5432], pkg };
+    const all = { ...base, overrides: { k: 'ai' as const }, match, ports: [5432], pkg, matchScript: viteRule };
     expect(decide(all)).toEqual({ category: 'ai', source: 'manual' });
     expect(decide({ ...all, overrides: {} })).toEqual({ category: 'worker', source: 'command' });
     expect(decide({ ...all, overrides: {}, match: null })).toEqual({ category: 'db', source: 'port' });
     expect(decide({ ...all, overrides: {}, match: null, ports: [] })).toEqual({ category: 'front', source: 'package' });
     expect(decide(base)).toEqual({ category: 'unknown', source: 'unknown' });
   });
-  it('package back', () => {
-    expect(decide({ ...base, pkg: { front: false, back: true, scripts: {} } })).toEqual({ category: 'back', source: 'package' });
+  it('package.json sans script dev/start correspondant -> unknown (les dépendances seules ne classent rien)', () => {
+    expect(decide({ ...base, pkg: { scripts: {} }, matchScript: viteRule })).toEqual({ category: 'unknown', source: 'unknown' });
+    expect(decide({ ...base, chainText: 'electron .', pkg: { scripts: { dev: 'vite' } }, matchScript: viteRule })).toEqual({ category: 'unknown', source: 'unknown' });
+    expect(decide({ ...base, pkg })).toEqual({ category: 'unknown', source: 'unknown' }); // sans matchScript
   });
   it('script dev contenant la chaîne -> catégorie de la règle du script', () => {
-    const r = decide({ ...base, pkg: { front: false, back: true, scripts: { dev: 'vite --port 1' } }, matchScript: () => ({ category: 'front', label: 'Vite' }) });
+    const r = decide({ ...base, pkg: { scripts: { dev: 'vite --port 1' } }, matchScript: viteRule });
     expect(r).toEqual({ category: 'front', source: 'package' });
   });
   it('script non dev/start ignoré, chaîne vide ignorée', () => {
-    const p = { front: false, back: true, scripts: { build: 'vite build' } };
+    const p = { scripts: { build: 'vite build' } };
     const ms = () => ({ category: 'build' as const, label: 'x' });
-    expect(decide({ ...base, pkg: p, matchScript: ms }).category).toBe('back');
-    expect(decide({ ...base, chainText: '', pkg: { ...p, scripts: { dev: 'vite' } }, matchScript: ms }).category).toBe('back');
+    expect(decide({ ...base, pkg: p, matchScript: ms }).category).toBe('unknown');
+    expect(decide({ ...base, chainText: '', pkg: { scripts: { dev: 'vite' } }, matchScript: ms }).category).toBe('unknown');
   });
   it('clé override héritée du prototype ignorée', () => {
     expect(decide({ ...base, overrideKey: 'toString' }).source).toBe('unknown');
   });
   it('chaîne < 3 caractères ne matche jamais un script', () => {
-    const r = decide({ ...base, chainText: 'v', pkg: { front: false, back: true, scripts: { dev: 'vite' } }, matchScript: () => ({ category: 'front', label: 'x' }) });
-    expect(r.category).toBe('back');
+    const r = decide({ ...base, chainText: 'v', pkg: { scripts: { dev: 'vite' } }, matchScript: viteRule });
+    expect(r.category).toBe('unknown');
   });
 });
 
@@ -176,15 +180,24 @@ describe('classifyGroups', () => {
     expect(r.instances[0]).toMatchObject({ category: 'db', source: 'port', ports: [5432, 8080] });
   });
 
-  it('package.json : front/back et script dev', () => {
+  it('package.json : seulement via un script dev/start qui lance l\'instance', () => {
     const srv = proc('node', 'node server.js');
     const g = group('project:/x', 'project', [node(srv)]);
     const seen: string[] = [];
-    const r = classifyGroups([g], ctx({ pkg: (root) => { seen.push(root); return { front: false, back: true, scripts: {} }; } })).get(g.id)!;
+    const r = classifyGroups([g], ctx({ pkg: (root) => { seen.push(root); return { scripts: { build: 'node server.js && celery -A x worker' } }; } })).get(g.id)!;
     expect(seen).toEqual(['/x']);
-    expect(r.instances[0]).toMatchObject({ category: 'back', source: 'package' });
-    const r2 = classifyGroups([g], ctx({ pkg: () => ({ front: false, back: false, scripts: { dev: 'node server.js && celery -A x worker' } }) })).get(g.id)!;
+    expect(r.instances[0]).toMatchObject({ category: 'unknown', source: 'unknown' });
+    const r2 = classifyGroups([g], ctx({ pkg: () => ({ scripts: { dev: 'node server.js && celery -A x worker' } }) })).get(g.id)!;
     expect(r2.instances[0]).toMatchObject({ category: 'worker', source: 'package' });
+  });
+
+  it('projet React (cas proc-watch) : npm exec electron n\'est pas « Front » (dépendances React ignorées)', () => {
+    const json = JSON.stringify({ dependencies: { react: '19', 'lucide-react': '1' }, devDependencies: { electron: '38' }, scripts: { dev: 'electron-vite dev', start: 'electron-vite preview' } });
+    const hints = (root: string) => readPackageHints(root, () => json);
+    const npm = proc('npm exec electr', 'npm exec electron .');
+    const el = proc('electron', '/x/node_modules/electron/dist/electron .');
+    const g = group('project:/pw-react', 'project', [node(npm, node(el))]);
+    expect(classifyGroups([g], ctx({ pkg: hints })).get(g.id)!.instances.map((i) => [i.category, i.source])).toEqual([['unknown', 'unknown']]);
   });
 
   it('groupe « dossier supprimé » : pas de projet, pas de package.json', () => {
@@ -205,13 +218,27 @@ describe('classifyGroups', () => {
     expect(m.get('app:chrome')!.categories).toEqual(['browser']);
   });
 
+  it('projet de 5 Mo inactif (seuils par défaut) : sa propre carte, avec son instance', () => {
+    const npm = proc('npm run dev', 'npm run dev', { rssKB: 2 * 1024, cpuPercent: 0 });
+    const vite = proc('node', 'node /home/u/acme/node_modules/.bin/vite', { ppid: npm.pid, rssKB: 3 * 1024, cpuPercent: 0 });
+    const tiny1 = proc('foo', 'foo', { cwd: '/', rssKB: 1024, cpuPercent: 0 });
+    const tiny2 = proc('bar', 'bar', { cwd: '/', rssKB: 1024, cpuPercent: 0 });
+    const groups = buildGroups([npm, vite, tiny1, tiny2], {
+      home: '/home/u', currentUid: 1000, isProtected: () => false, othersThreshold: { memMB: 100, cpuPercent: 1 },
+      projectRootOf: (cwd) => (cwd.startsWith('/home/u/acme') ? '/home/u/acme' : null),
+    });
+    expect(groups.map((g) => g.id)).toEqual(['project:/home/u/acme', 'others']);
+    const r = classifyGroups(groups, ctx()).get('project:/home/u/acme')!;
+    expect(r.instances.map((i) => [i.category, i.label])).toEqual([['front', 'vite']]);
+  });
+
   it('nom inconnu : unknown', () => {
     const p = proc('foo', '/usr/bin/foo --bar');
     const g = group('command:foo', 'command', [node(p)]);
     expect(classifyGroups([g], ctx()).get(g.id)!).toMatchObject({ categories: ['unknown'], instances: [{ category: 'unknown', source: 'unknown' }] });
   });
 
-  const frontBackPkg = () => ({ front: true, back: true, scripts: { dev: 'concurrently vite "nest start"' } });
+  const frontBackPkg = () => ({ scripts: { dev: 'concurrently vite "nest start"' } });
 
   it('wrappers sh -c dans le groupe projet : exactement front + back, sans doublon', () => {
     const npm = proc('npm run dev', 'npm run dev', { ageSec: 900 });
@@ -234,7 +261,8 @@ describe('classifyGroups', () => {
     const nest = proc('node', 'node /x/node_modules/.bin/nest start', { ageSec: 899 });
     const vite = proc('node', 'node /x/node_modules/.bin/vite', { ageSec: 899 });
     const g = group('project:/x', 'project', [node(conc, node(script), node(nest), node(vite))]);
-    const r = classifyGroups([g], ctx({ pkg: () => ({ front: false, back: true, scripts: {} }) })).get(g.id)!;
+    // script annexe classé « back » par son script start:x (qui lance aussi nest) : source package
+    const r = classifyGroups([g], ctx({ pkg: () => ({ scripts: { 'start:x': 'node scripts/x.js && nest start' } }) })).get(g.id)!;
     const byLabel = new Map(r.instances.map((i) => [i.rootPid, i]));
     expect(byLabel.get(script.pid)!.source).toBe('package');
     expect(r.instances.every((i) => !i.duplicate)).toBe(true);

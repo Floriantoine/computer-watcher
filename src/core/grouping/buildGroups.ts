@@ -157,7 +157,9 @@ export function isOverThreshold(g: { rssKB: number; swapKB: number; cpuPercent: 
 }
 
 function applyOthers(groups: Group[], t: { memMB: number; cpuPercent: number }, keepSeparate?: (id: string) => boolean): Group[] {
-  const isSmall = (g: Group) => !isOverThreshold(g, t) && !keepSeparate?.(g.id);
+  // Projets et dossiers supprimés gardent toujours leur carte : leurs instances (serveurs de dev oubliés, souvent petits et
+  // inactifs) doivent rester visibles pour le filtre par catégorie et « Tuer la sélection ».
+  const isSmall = (g: Group) => g.kind !== 'project' && g.kind !== 'deleted' && !isOverThreshold(g, t) && !keepSeparate?.(g.id);
   const small = groups.filter(isSmall).sort(byMemDesc);
   if (small.length < 2) return groups.sort(byMemDesc);
   const big = groups.filter((g) => !isSmall(g)).sort(byMemDesc);

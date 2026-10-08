@@ -1,7 +1,6 @@
 import type { Category } from './categories';
 import type { CommandMatch } from './match';
 import { baseName, programIndex, splitArgs } from './argv';
-import { DEFAULT_CONFIG } from '../defaults';
 
 export type { CommandMatch } from './match';
 
@@ -131,13 +130,15 @@ export function matchCommand(chain: { name: string; cmdline: string }[]): Comman
   return null;
 }
 
+// Bureau et services seulement. Les shells et terminaux de la liste protégée (bash, zsh, warp, konsole…) ne sont pas
+// « Système » : ce sont des applications de l'utilisateur, sans catégorie (ils restent protégés, avec leur cadenas).
 const SYSTEM_EXACT = new Set<string>([
-  ...DEFAULT_CONFIG.protected.filter((x) => !x.startsWith('/')),
+  'kwin_wayland', 'kwin_x11', 'plasmashell', 'gnome-shell', 'Xwayland', 'Xorg', 'sddm', 'gdm',
   'baloorunner', 'wireplumber', 'pipewire', 'pipewire-pulse', 'pulseaudio', 'polkitd', 'dbus-daemon', 'dbus-broker',
   'kded5', 'kded6', 'kglobalaccel5', 'kglobalacceld', 'ksmserver', 'kwalletd5', 'kwalletd6', 'xdg-desktop-portal',
   'upowerd', 'udisksd', 'NetworkManager', 'ibus-daemon', 'gnome-session-binary', 'gsd-', 'login', 'agetty',
 ]);
-const SYSTEM_RE = [/^systemd/, /^at-spi/, /^xdg-/, /^kwin/, /^plasma/, /^gnome-/, /^ksecretd?/, /^kscreen/, /^org\.(kde|freedesktop|gnome)\./, /^\(sd-pam\)$/, /^gsd-/, /^dbus-/];
+const SYSTEM_RE = [/^systemd/, /^at-spi/, /^xdg-/, /^kwin/, /^plasma/, /^gnome-(?!terminal)/, /^ksecretd?/, /^kscreen/, /^org\.(kde|freedesktop|gnome)\./, /^\(sd-pam\)$/, /^gsd-/, /^dbus-/];
 
 /** Classement par nom de racine pour les groupes non-projet. */
 export function classifyByName(name: string, cmdline: string): CommandMatch | null {

@@ -1,13 +1,14 @@
 import { memo, type CSSProperties } from 'react';
 import { Layers, Zap } from 'lucide-react';
 import type { Category } from '../../../core/types';
-import { CATEGORIES, CATEGORY_META } from '../categories';
+import { CATEGORY_META } from '../categories';
+import { pillCategories, pillLabel, showKillSelection } from '../categoryFilter';
 
 interface Props {
   counts: Map<Category, number>;
   selected: ReadonlySet<Category>;
   onChange: (next: Set<Category>) => void;
-  /** Instances que « Tuer la sélection » viserait */
+  /** Instances que « Tuer la sélection » cocherait par défaut (hors protégées) */
   killCount: number;
   /** Absent tant que le dialogue groupé n'existe pas : bouton désactivé */
   onKillSelection?: () => void;
@@ -15,7 +16,7 @@ interface Props {
 
 /** Pastilles de catégories sous la barre d'outils : multi-sélection, « Toutes » remet à zéro. */
 function CategoryFilterImpl({ counts, selected, onChange, killCount, onKillSelection }: Props) {
-  const shown = CATEGORIES.filter((c) => counts.has(c) || selected.has(c));
+  const shown = pillCategories(counts, selected);
   if (shown.length === 0) return null;
   const toggle = (c: Category) => {
     const next = new Set(selected);
@@ -40,6 +41,7 @@ function CategoryFilterImpl({ counts, selected, onChange, killCount, onKillSelec
             className={`cat-pill${on ? ' active' : ''}`}
             data-testid={`category-pill-${c}`}
             aria-pressed={on}
+            aria-label={pillLabel(c, counts.get(c) ?? 0)}
             style={{ '--cat': m.color } as CSSProperties}
             onClick={() => toggle(c)}
           >
@@ -49,13 +51,13 @@ function CategoryFilterImpl({ counts, selected, onChange, killCount, onKillSelec
           </button>
         );
       })}
-      {selected.size > 0 && killCount > 0 && (
+      {showKillSelection(selected, killCount) && (
         <button
           type="button"
           className="danger cat-kill"
           data-testid="kill-selection"
           disabled={!onKillSelection}
-          title={onKillSelection ? undefined : 'Bientôt disponible'}
+          title={onKillSelection ? 'Arrêter les instances des catégories choisies (projets seulement)' : 'Bientôt disponible'}
           onClick={onKillSelection}
         >
           <Zap size={13} strokeWidth={2.4} />

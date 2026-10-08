@@ -77,11 +77,18 @@ describe('classifyByName', () => {
     ['dockerd', '/usr/bin/dockerd -H fd://', 'container'],
     ['kwin_wayland', '/usr/bin/kwin_wayland', 'system'],
     ['systemd', '/usr/lib/systemd/systemd --user', 'system'],
-    ['bash', '-bash', 'system'],
     ['pipewire', '/usr/bin/pipewire', 'system'],
-    ['gnome-terminal-', 'gnome-terminal-server', 'system'],
+    ['plasmashell', '/usr/bin/plasmashell', 'system'],
+    ['Xwayland', '/usr/bin/Xwayland :0', 'system'],
+    ['xdg-desktop-por', '/usr/lib/xdg-desktop-portal-kde', 'system'],
+    ['sddm', '/usr/bin/sddm', 'system'],
   ])('%s', (name, cmd, cat) => {
     expect(classifyByName(name, cmd)?.category).toBe(cat);
   });
   test('inconnu', () => expect(classifyByName('foobar', '/opt/foobar')).toBeNull());
+  // Shells et terminaux : applications de l'utilisateur, pas « Système » (ils restent protégés, sans catégorie).
+  test.each([['bash', '-bash'], ['zsh', '/usr/bin/zsh'], ['sh', 'sh'], ['fish', 'fish'], ['warp', '/opt/warpdotdev/warp-terminal/warp'],
+    ['konsole', '/usr/bin/konsole'], ['gnome-terminal-', 'gnome-terminal-server'], ['kitty', 'kitty'], ['tmux: server', 'tmux'], ['ghostty', 'ghostty']])(
+    'shell/terminal %s -> aucune catégorie', (name, cmd) => expect(classifyByName(name, cmd)).toBeNull(),
+  );
 });

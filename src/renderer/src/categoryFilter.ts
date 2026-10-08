@@ -22,18 +22,33 @@ export function filterGroups(groups: GroupSummary[], selected: ReadonlySet<Categ
 }
 
 /**
- * Instances visées par « Tuer la sélection » : catégories sélectionnées, non protégées, dans un groupe qui contient des
- * processus de l'utilisateur (`killable`). Les pids réels et les garde-fous (uid, startTicks) restent côté main.
+ * Instances proposées par « Tuer la sélection » : catégories sélectionnées, dans les groupes projet et « dossier supprimé »
+ * seulement (applis, Claude, commandes et services restent visibles sous le filtre mais ne sont jamais visés), qui contiennent
+ * des processus de l'utilisateur (`killable`). Les protégées sont incluses : le dialogue les liste décochées. Les pids réels
+ * et les garde-fous (uid, startTicks) restent côté main.
  */
-export function killableInstances(groups: readonly GroupSummary[], selected: ReadonlySet<Category>): InstanceSummary[] {
+export function selectionCandidates(groups: readonly GroupSummary[], selected: ReadonlySet<Category>): InstanceSummary[] {
   if (selected.size === 0) return [];
   const out: InstanceSummary[] = [];
   for (const g of groups) {
-    if (g.kind === 'others' || !g.killable) continue;
-    for (const i of g.instances) if (selected.has(i.category) && !i.protected) out.push(i);
+    if ((g.kind !== 'project' && g.kind !== 'deleted') || !g.killable) continue;
+    for (const i of g.instances) if (selected.has(i.category)) out.push(i);
   }
   return out;
 }
+
+/** n du bouton : instances cochées par défaut, donc hors protégées. */
+export const killCount = (candidates: readonly InstanceSummary[]): number => candidates.reduce((n, i) => n + (i.protected ? 0 : 1), 0);
+
+/** Le bouton « Tuer la sélection » n'apparaît qu'avec un filtre actif et au moins une cible. */
+export const showKillSelection = (selected: ReadonlySet<Category>, n: number): boolean => selected.size > 0 && n > 0;
+
+/** Pastilles affichées : catégories présentes, plus les sélectionnées tombées à 0 (sinon impossible de les retirer). */
+export const pillCategories = (counts: ReadonlyMap<Category, number>, selected: ReadonlySet<Category>): Category[] =>
+  CATEGORIES.filter((c) => counts.has(c) || selected.has(c));
+
+/** Nom accessible d'une pastille : « Front, 1 instance ». */
+export const pillLabel = (c: Category, n: number): string => `${CATEGORY_META[c].label}, ${n} instance${n > 1 ? 's' : ''}`;
 
 /** Port principal d'une instance : le plus petit port en écoute (3000 plutôt que 9229 de l'inspecteur). */
 const mainPort = (i: InstanceSummary): number | null => (i.ports.length ? Math.min(...i.ports) : null);
