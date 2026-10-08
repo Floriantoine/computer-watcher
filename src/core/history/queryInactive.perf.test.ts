@@ -6,6 +6,10 @@ import { openHistoryDb } from './db';
 import { aggregateMinute } from './maintenance';
 import { queryInactive } from './queries';
 
+// Objectif < 20 ms, borne stricte 60 ms vérifiée avec PROC_WATCH_PERF=1 (`npm run test:recorder`, machine au repos).
+// Dans `npm test` (suite parallèle, parfois à côté d'un build), borne 10 fois plus large : une vraie régression
+// (index perdu, balayage complet de proc_samples) reste attrapée sans faux échec sous charge.
+const SLACK = process.env.PROC_WATCH_PERF === '1' ? 1 : 10;
 const H = 3600_000;
 const M = 60_000;
 
@@ -31,6 +35,6 @@ test('performance : queryInactive, 200 processus inactifs sur 24 h à 5 s', () =
     expect(queryInactive(db, targets, since, o).size).toBe(0);
     const ms = performance.now() - t0;
     console.info(`queryInactive ${name} (${N} procs): ${ms.toFixed(1)} ms`);
-    expect(ms).toBeLessThan(60); // objectif < 20 ms ; borne large pour les machines chargées
+    expect(ms).toBeLessThan(60 * SLACK);
   }
 }, 120_000);
