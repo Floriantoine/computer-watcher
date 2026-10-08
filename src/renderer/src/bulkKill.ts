@@ -45,7 +45,9 @@ export function presetSelection(list: readonly InstanceSummary[], preset: Preset
   if (preset === 'duplicates') return new Set(open.filter((i) => i.duplicate).map((i) => i.key));
   const set = inactiveOf(preset, inactive);
   if (!set || set === 'error') return null;
-  return new Set(open.filter((i) => set.has(i.key)).map((i) => i.key));
+  // Une instance sans échantillon compte comme inactive : on exige en plus qu'elle tourne depuis au moins T.
+  const minAgeMs = INACTIVE_SINCE_MS[preset];
+  return new Set(open.filter((i) => set.has(i.key) && i.ageSec * 1000 >= minAgeMs).map((i) => i.key));
 }
 
 export function presetState(preset: Preset, inactive: InactiveState): { enabled: boolean; reason?: string } {

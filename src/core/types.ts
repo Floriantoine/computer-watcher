@@ -120,7 +120,9 @@ export interface InstanceSummary {
   key: string; groupId: string; project: string | null; category: Category;
   source: 'manual' | 'command' | 'port' | 'package' | 'name' | 'unknown';
   signature: string; label: string; rootPid: number; rootStartTicks: number; pids: number[]; ports: number[];
-  ageSec: number; rssKB: number; swapKB: number; cpuPercent: number; duplicate: boolean; protected: boolean;
+  ageSec: number; rssKB: number; swapKB: number; cpuPercent: number;
+  /** En double : même projet, même catégorie et même signature qu'une instance plus ancienne (instances reconnues seulement). */
+  duplicate: boolean; protected: boolean;
 }
 
 export interface Config {

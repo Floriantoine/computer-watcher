@@ -59,8 +59,8 @@ describe('sélection', () => {
 
 describe('raccourcis', () => {
   const a = inst('front', { duplicate: true });
-  const b = inst('front');
-  const p = inst('back', { protected: true, duplicate: true });
+  const b = inst('front', { ageSec: 7200 });
+  const p = inst('back', { protected: true, duplicate: true, ageSec: 7200 });
   const list = [a, b, p];
   test('« Toutes » = toutes sauf protégées', () => {
     expect(keys(presetSelection(list, 'all', {})!)).toEqual(keys([a.key, b.key]));
@@ -72,6 +72,13 @@ describe('raccourcis', () => {
     const inactive = { h1: new Set([b.key, p.key]), d1: new Set<string>() };
     expect([...presetSelection(list, 'inactive1h', inactive)!]).toEqual([b.key]);
     expect([...presetSelection(list, 'inactive1d', inactive)!]).toEqual([]);
+  });
+  test('« Inactives > T » ne coche jamais une instance plus jeune que T (sans échantillon = inactive, mais trop récente)', () => {
+    const young = inst('front', { ageSec: 300 });
+    const old = inst('front', { ageSec: 2 * 86400 });
+    const inactive = { h1: new Set([young.key, old.key]), d1: new Set([young.key, old.key]) };
+    expect([...presetSelection([young, old], 'inactive1h', inactive)!]).toEqual([old.key]);
+    expect([...presetSelection([young, old], 'inactive1d', inactive)!]).toEqual([old.key]);
   });
   test('erreur IPC de classify:inactive : « Historique indisponible (erreur) », pas « pas d\'historique »', () => {
     expect(presetSelection(list, 'inactive1h', { h1: 'error' })).toBeNull();

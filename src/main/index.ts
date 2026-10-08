@@ -82,7 +82,8 @@ const separateSeen = new Map<string, number>();
 const CARD_HOLD_MS = 30_000;
 
 // Classement : ports en écoute relus au plus toutes les 10 s (groupes projet / dossier supprimé + instances db) ;
-// décisions en cache par (groupe, racine, nombre de processus), cache vidé quand les corrections ou les ports changent,
+// décisions en cache par instance (racine + empreinte des pid:startTicks de ses processus), cache vidé quand les corrections
+// ou les ports changent,
 // et toutes les 60 s (durée du cache de package.json).
 const PORTS_EVERY_MS = 10_000;
 const DECISIONS_MAX_AGE_MS = 60_000;
@@ -270,7 +271,7 @@ ipcMain.handle('kill', (_e, raw: unknown, rawSignal: unknown): KillResult[] => {
   if (killed.length) {
     try {
       mkdirSync(data, { recursive: true });
-      appendFileSync(appEventsPath(data), formatAppEvent({ ts: Date.now(), type: 'app_kill', groupKey: null, detail: { pids: killed, signal: signal } }));
+      appendFileSync(appEventsPath(data), formatAppEvent({ ts: Date.now(), type: 'app_kill', groupKey: null, detail: { pids: killed, signal } }));
     } catch (e) {
       console.error('app event:', e);
     }
@@ -299,7 +300,7 @@ ipcMain.handle('config:set', (_e, next: unknown) => {
   if (valid.classify.detectPorts !== config.classify.detectPorts) portsAt = 0;
   const overridesChanged = JSON.stringify(valid.classify.overrides) !== JSON.stringify(config.classify.overrides);
   config = valid;
-  overridesVersion++;
+  if (overridesChanged) overridesVersion++; // autre réglage : le cache de classement reste valable
   protection = compileProtection(config.protected);
   warning = null;
   saveConfig(dir, config);

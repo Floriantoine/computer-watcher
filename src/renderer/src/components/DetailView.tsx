@@ -37,7 +37,6 @@ interface Props {
   onKillInstances?: (instances: InstanceSummary[], launchersOf?: string) => void;
 }
 
-
 function BackButton({ onBack }: { onBack: () => void }) {
   return (
     <button className="back" title="Retour" aria-label="Retour" onClick={onBack}>
