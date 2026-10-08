@@ -112,11 +112,30 @@ export interface KillUnit {
 
 export interface SummaryExtra {
   protectedKept?: number;
-  launchersSkipped?: boolean;
+  launchersSkipped?: LaunchersSkipped;
   /** Instances non envoyées (échec IPC au milieu des lots) */
   notSent?: number;
   /** Erreur IPC qui a interrompu l'envoi */
   error?: string;
+}
+
+/**
+ * Requête construite par le dialogue à « Tuer (n) » : clés cochées encore présentes ; protégées autorisées = celles montrées
+ * 🔒 et cochées à la main ; lanceurs demandés seulement pour « Tout arrêter » quand toutes les instances présentes sont cochées.
+ */
+export function bulkRequest(
+  list: readonly InstanceSummary[],
+  sel: ReadonlySet<string>,
+  live: ReadonlySet<string>,
+  launchersOf: string | undefined,
+): BulkRequest {
+  const checked = checkedLive(list, sel, live);
+  const isChecked = new Set(checked);
+  return {
+    checked,
+    launchersOf: includeLaunchers(launchersOf, list, sel, live) ? launchersOf : undefined,
+    protectedChecked: new Set(list.filter((i) => i.protected && isChecked.has(i.key)).map((i) => i.key)),
+  };
 }
 
 /** Lots d'au plus 2 000 cibles, dans l'ordre reçu (kill de groupe, « Forcer »…). */
@@ -131,6 +150,8 @@ export interface BulkRequest {
   protectedChecked: ReadonlySet<string>;
 }
 
+export type LaunchersSkipped = false | 'unchecked' | 'protected';
+
 export interface BulkPlan {
   instances: KillUnit[];
   launchers: KillTarget[];
@@ -138,8 +159,11 @@ export interface BulkPlan {
   gone: string[];
   /** Processus protégés retirés (instance non montrée protégée, ou lanceur). */
   protectedKept: number;
-  /** Lanceurs demandés mais retenus : une instance qu'ils couvrent (snapshot frais) n'est pas cochée. */
-  launchersSkipped: boolean;
+  /**
+   * Lanceurs demandés mais retenus : une instance qu'ils couvrent (snapshot frais) n'est pas cochée ('unchecked'), ou un
+   * processus protégé a été retiré d'une instance couverte ('protected' : SIGTERM se propage aux enfants du lanceur).
+   */
+  launchersSkipped: LaunchersSkipped;
 }
 
 /**
@@ -151,10 +175,15 @@ export interface BulkPlan {
 export function planBulk(req: BulkRequest, entries: readonly FreshEntry[], isProtected: (name: string) => boolean): BulkPlan {
   const byKey = new Map(entries.map((e) => [e.key, e]));
   let protectedKept = 0;
+  // Instances dont un processus protégé a été retiré (les lanceurs qui les couvrent restent alors en place).
+  const trimmed = new Set<string>();
+  // Un nom manquant compte comme protégé : la cible est exclue (on ne devine pas).
   const keep = (e: FreshEntry, allowProtected: boolean): KillTarget[] =>
     e.targets.filter((_, i) => {
-      if (allowProtected || !isProtected(e.names[i] ?? '')) return true;
+      const name = e.names[i];
+      if (allowProtected || (name !== undefined && !isProtected(name))) return true;
       protectedKept++;
+      trimmed.add(e.key);
       return false;
     });
   const instances: KillUnit[] = [];
@@ -169,12 +198,14 @@ export function planBulk(req: BulkRequest, entries: readonly FreshEntry[], isPro
     if (targets.length) instances.push({ key, targets });
   }
   let launchers: KillTarget[] = [];
-  let launchersSkipped = false;
+  let launchersSkipped: LaunchersSkipped = false;
   const g = req.launchersOf ? byKey.get(req.launchersOf) : undefined;
   if (g?.targets.length) {
     const checked = new Set(req.checked);
-    if ((g.covers ?? []).every((k) => checked.has(k))) launchers = keep(g, false);
-    else launchersSkipped = true;
+    const covers = g.covers ?? [];
+    if (!covers.every((k) => checked.has(k))) launchersSkipped = 'unchecked';
+    else if (covers.some((k) => trimmed.has(k))) launchersSkipped = 'protected';
+    else launchers = keep(g, false);
   }
   return { instances, launchers, gone, protectedKept, launchersSkipped };
 }
@@ -292,7 +323,8 @@ export function summarizeResults(
   }
   const notes = [message];
   if (extra.protectedKept) notes.push(plural(extra.protectedKept, 'processus protégé conservé', 'processus protégés conservés'));
-  if (extra.launchersSkipped) notes.push('Lanceurs conservés : une instance non cochée en dépend');
+  if (extra.launchersSkipped === 'unchecked') notes.push('Lanceurs conservés : une instance non cochée en dépend');
+  if (extra.launchersSkipped === 'protected') notes.push('Lanceurs conservés : un processus protégé en dépend');
   if (extra.error) notes.push(`Envoi interrompu : ${extra.error}`);
   return { message: notes.join('. '), kind: errors.length || extra.error ? 'error' : 'info' };
 }

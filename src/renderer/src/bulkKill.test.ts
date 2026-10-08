@@ -13,6 +13,7 @@ import {
   presetSelection,
   planBulk,
   presetState,
+  bulkRequest,
   runBulkKill,
   chunkTargets,
   summarizeResults,
@@ -213,7 +214,7 @@ describe('planBulk (au moment de confirmer, sur les cibles fraîches)', () => {
   test('instance apparue pendant que le dialogue était ouvert : lanceurs conservés', () => {
     const r = planBulk({ checked: ['a', 'b'], launchersOf: 'g', protectedChecked: new Set() }, [entry('a', [1]), entry('b', [2]), entry('g', [9], ['npm'], ['a', 'b', 'new'])], notProtected);
     expect(r.launchers).toEqual([]);
-    expect(r.launchersSkipped).toBe(true);
+    expect(r.launchersSkipped).toBe('unchecked');
     expect(r.instances.map((i) => i.key)).toEqual(['a', 'b']);
   });
   test('sans « Tout arrêter », la clé de groupe est ignorée', () => {
@@ -224,11 +225,41 @@ describe('planBulk (au moment de confirmer, sur les cibles fraîches)', () => {
   test('protection revérifiée : processus protégé d\'une instance non montrée protégée, ou lanceur protégé → exclus et comptés', () => {
     const r = planBulk(
       { checked: ['a', 'p'], launchersOf: 'g', protectedChecked: new Set(['p']) },
-      [entry('a', [1, 2], ['node', 'zsh']), entry('p', [3, 4], ['zsh', 'node']), entry('g', [9, 8], ['npm-guard', 'npm'], ['a', 'p'])],
+      [entry('a', [1, 2], ['node', 'zsh']), entry('p', [3, 4], ['zsh', 'node']), entry('g', [9, 8], ['npm-guard', 'npm'], ['p'])],
       notProtected,
     );
     expect(r.instances).toEqual([{ key: 'a', targets: [T(1)] }, { key: 'p', targets: [T(3), T(4)] }]);
     expect(r.launchers).toEqual([T(8)]);
+    expect(r.protectedKept).toBe(2);
+  });
+  test('processus protégé retiré d\'une instance couverte : lanceurs conservés (SIGTERM propagé aux enfants)', () => {
+    const r = planBulk(
+      { checked: ['a', 'b'], launchersOf: 'g', protectedChecked: new Set() },
+      [entry('a', [1, 2], ['node', 'zsh']), entry('b', [3]), entry('g', [9], ['npm'], ['a', 'b'])],
+      notProtected,
+    );
+    expect(r.instances).toEqual([{ key: 'a', targets: [T(1)] }, { key: 'b', targets: [T(3)] }]);
+    expect(r.launchers).toEqual([]);
+    expect(r.launchersSkipped).toBe('protected');
+    expect(r.protectedKept).toBe(1);
+  });
+  test('protégé retiré d\'une instance non couverte : lanceurs envoyés', () => {
+    const r = planBulk(
+      { checked: ['a', 'b'], launchersOf: 'g', protectedChecked: new Set() },
+      [entry('a', [1, 2], ['node', 'zsh']), entry('b', [3]), entry('g', [9], ['npm'], ['b'])],
+      notProtected,
+    );
+    expect(r.launchers).toEqual([T(9)]);
+    expect(r.launchersSkipped).toBe(false);
+  });
+  test('nom manquant dans `names` : traité comme protégé (cible exclue), jamais comme \'\'', () => {
+    const r = planBulk(
+      { checked: ['a', 'p'], launchersOf: 'g', protectedChecked: new Set(['p']) },
+      [{ key: 'a', targets: [T(1), T(2)], names: ['node'] }, { key: 'p', targets: [T(3)], names: [] }, { key: 'g', targets: [T(9)], names: [], covers: [] }],
+      () => false,
+    );
+    expect(r.instances).toEqual([{ key: 'a', targets: [T(1)] }, { key: 'p', targets: [T(3)] }]);
+    expect(r.launchers).toEqual([]);
     expect(r.protectedKept).toBe(2);
   });
   test('instance dont tous les processus sont devenus protégés : ni envoyée ni « disparue »', () => {
@@ -241,7 +272,7 @@ describe('planBulk (au moment de confirmer, sur les cibles fraîches)', () => {
 
 describe('summarizeResults : compléments', () => {
   test('protégés conservés, lanceurs conservés, envoi interrompu', () => {
-    expect(summarizeResults([{ key: 'a', pids: [1] }], [{ pid: 1, ok: true }], 0, { protectedKept: 2, launchersSkipped: true })).toEqual({
+    expect(summarizeResults([{ key: 'a', pids: [1] }], [{ pid: 1, ok: true }], 0, { protectedKept: 2, launchersSkipped: 'unchecked' })).toEqual({
       message: '1 instance arrêtée. 2 processus protégés conservés. Lanceurs conservés : une instance non cochée en dépend',
       kind: 'info',
     });
@@ -297,5 +328,36 @@ describe('runBulkKill (orchestration de « Tuer (n) »)', () => {
     const { d, sent } = deps({ targets: async () => { throw new Error('Requête invalide'); } });
     expect(await runBulkKill({ checked: ['a'], protectedChecked: new Set() }, d)).toEqual({ message: 'Requête invalide', kind: 'error' });
     expect(sent).toEqual([]);
+  });
+});
+
+describe('summarizeResults : lanceurs retenus à cause d\'un protégé', () => {
+  test('raison dans le toast', () => {
+    expect(summarizeResults([{ key: 'a', pids: [1] }], [{ pid: 1, ok: true }], 0, { protectedKept: 1, launchersSkipped: 'protected' }).message).toBe(
+      '1 instance arrêtée. 1 processus protégé conservé. Lanceurs conservés : un processus protégé en dépend',
+    );
+  });
+});
+
+describe('bulkRequest (requête construite par le dialogue)', () => {
+  const a = inst('front');
+  const p = inst('back', { protected: true });
+  const q = inst('back', { protected: true });
+  const gone = inst('worker');
+  const list = [a, p, q, gone];
+  const live = new Set([a.key, p.key, q.key]);
+  test('protégées autorisées : seulement celles montrées 🔒 et cochées à la main ; disparues ignorées', () => {
+    const r = bulkRequest(list, new Set([a.key, p.key, gone.key]), live, undefined);
+    expect(r.checked).toEqual([a.key, p.key]);
+    expect([...r.protectedChecked]).toEqual([p.key]);
+    expect(r.launchersOf).toBeUndefined();
+  });
+  test('lanceurs demandés seulement avec « Tout arrêter » et toutes les instances présentes cochées', () => {
+    expect(bulkRequest(list, new Set([a.key, p.key, q.key]), live, 'g').launchersOf).toBe('g');
+    expect(bulkRequest(list, new Set([a.key, p.key]), live, 'g').launchersOf).toBeUndefined();
+    expect(bulkRequest(list, new Set([a.key, p.key, q.key]), live, undefined).launchersOf).toBeUndefined();
+  });
+  test('une instance non protégée cochée n\'autorise pas les protégés', () => {
+    expect([...bulkRequest(list, new Set([a.key]), live, undefined).protectedChecked]).toEqual([]);
   });
 });

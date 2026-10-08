@@ -4,6 +4,7 @@ import { Info, Lock, Skull } from 'lucide-react';
 import type { InstanceSummary } from '../../../core/types';
 import {
   INACTIVE_SINCE_MS,
+  bulkRequest,
   PRESETS,
   checkedLive,
   defaultSelection,
@@ -217,13 +218,7 @@ export function BulkKillDialog({ title, instances, launchersOf, liveKeys, pendin
             className="danger"
             data-testid="bulk-confirm"
             disabled={checked.length === 0}
-            onClick={guard(() =>
-              onConfirm({
-                checked,
-                launchersOf: withLaunchers ? launchersOf : undefined,
-                protectedChecked: new Set(list.filter((i) => i.protected && checked.includes(i.key)).map((i) => i.key)),
-              }),
-            )}
+            onClick={guard(() => onConfirm(bulkRequest(list, selected, liveKeys, launchersOf)))}
           >
             Tuer ({checked.length})
           </button>
