@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { Category, GroupSummary, InstanceSummary } from '../../core/types';
-import { categoryDisplayKey, countByCategory, filterGroups, instancesLine, killCount, parseSelection, pillCategories, pillLabel, primaryTag, selectionCandidates, showKillSelection, showProjectsOnlyHint } from './categoryFilter';
+import { categoryDisplayKey, countByCategory, hasClaudeLaunched, filterGroups, instancesLine, killCount, parseSelection, pillCategories, pillLabel, primaryTag, selectionCandidates, showKillSelection, showProjectsOnlyHint } from './categoryFilter';
 
 let n = 0;
 const inst = (category: Category, extra: Partial<InstanceSummary> = {}): InstanceSummary => {
@@ -156,4 +156,15 @@ test('groupe hors projet reclassé « Back » depuis l\'en-tête : reste hors du
   const gitstatusd = grp('command:gitstatusd', [inst('back', { source: 'manual', groupId: 'command:gitstatusd', project: null })], { kind: 'command' });
   expect(selectionCandidates([gitstatusd], new Set<Category>(['back']))).toEqual([]);
   expect(selectionCandidates([shop, gitstatusd], new Set<Category>(['back'])).every((i) => i.groupId !== 'command:gitstatusd')).toBe(true);
+});
+
+describe('lancé par Claude', () => {
+  test('hasClaudeLaunched : vrai dès qu’une instance du groupe est lancée par Claude', () => {
+    expect(hasClaudeLaunched(shop)).toBe(false);
+    expect(hasClaudeLaunched(grp('acme', [inst('front'), inst('test', { launchedBy: 'claude' })]))).toBe(true);
+  });
+  test('categoryDisplayKey change avec l’étiquette (la carte se re-rend)', () => {
+    const a = inst('test');
+    expect(categoryDisplayKey(grp('acme', [a]))).not.toBe(categoryDisplayKey(grp('acme', [{ ...a, launchedBy: 'claude' }])));
+  });
 });

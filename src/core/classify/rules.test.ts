@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { classifyByName, matchCommand } from './rules';
+import { classifyByName, isMcpServer, matchCommand } from './rules';
 
 const P = '/home/u/acme/node_modules/.bin';
 type C = { name: string; cmdline: string };
@@ -91,4 +91,21 @@ describe('classifyByName', () => {
     ['konsole', '/usr/bin/konsole'], ['gnome-terminal-', 'gnome-terminal-server'], ['kitty', 'kitty'], ['tmux: server', 'tmux'], ['ghostty', 'ghostty']])(
     'shell/terminal %s -> aucune catégorie', (name, cmd) => expect(classifyByName(name, cmd)).toBeNull(),
   );
+});
+
+describe('isMcpServer', () => {
+  test.each([
+    ['node', 'node /home/u/.npm/_npx/a/node_modules/.bin/mcp-server-fs /home/u/acme', true],
+    ['node', 'node /home/u/.npm/_npx/b/node_modules/.bin/context7-mcp', true],
+    ['node', 'node /home/u/.npm/_npx/c/node_modules/@playwright/mcp/cli.js', true],
+    ['npm exec @upst', 'npm exec @upstash/context7-mcp', true],
+    ['npm exec @upst', 'npm exec -y @upstash/context7-mcp@latest', true],
+    ['npm exec @mode', 'npm exec @modelcontextprotocol/server-filesystem /home/u/acme', true],
+    ['uv', 'uv tool uvx mcp-server-fetch', true],
+    ['node', 'node /home/u/my-mcp/node_modules/.bin/vite', false],
+    ['node', 'node /home/u/acme/node_modules/.bin/jest', false],
+    ['npm exec jest', 'npm exec jest', false],
+  ])('%s %s → %s', (name, cmdline, want) => {
+    expect(isMcpServer(name, cmdline)).toBe(want);
+  });
 });

@@ -1,5 +1,6 @@
 // src/core/grouping/buildGroups.ts
 import type { Group, GroupKind, ProcInfo, ProcNode } from '../types';
+import { isMcpServer } from '../classify/rules';
 import { isUnderAny } from './claudeDirs';
 import { projectLabel } from './projectRoot';
 import { APP_NAMES, CLAUDE_NAME, DEV_TOOL, appLabel } from './rules';
@@ -59,11 +60,49 @@ export function buildGroups(procs: ProcInfo[], opts: GroupingOptions): Group[] {
     }
   };
 
-  // 1. Sessions Claude : chaque claude de premier niveau et tous ses descendants
+  const dirs = opts.claudeDirs ?? [];
+  const homeDir = trimSlash(opts.home);
+  /** Dossier de projet réel (ni `/`, ni le dossier personnel, ni la config de Claude) ; dossier supprimé compris. */
+  const inRealProject = (p: ProcInfo): boolean => {
+    if (p.cwd === null || isUnderAny(p.cwd, dirs)) return false;
+    const root = p.cwdDeleted ? p.cwd : opts.projectRootOf(p.cwd);
+    if (root === null) return false;
+    const r = trimSlash(root);
+    return r !== '/' && r !== homeDir && !isUnderAny(r, dirs);
+  };
+  /** Outil Claude : serveur MCP, ou programme pris dans ~/.claude (hook, outil de plugin). */
+  const isClaudeTool = (p: ProcInfo): boolean =>
+    isMcpServer(p.name, p.cmdline) || (dirs.length > 0 && p.cmdline.split(/\s+/).some((a) => isUnderAny(a, dirs)));
+  const claudeLaunched = new Set<number>();
+
+  // 1. Sessions Claude : chaque claude de premier niveau et ses descendants, sauf les outils de dev lancés dans un vrai
+  // projet (jest, vite, npm run dev…) : eux et leurs descendants sortent de la carte Claude et sont rangés par les règles
+  // suivantes comme s'ils avaient été lancés à la main, marqués « lancés par Claude ». Un serveur MCP ou un outil de
+  // ~/.claude garde tout son sous-arbre dans Claude.
   for (const p of procs) {
-    if (p.name === CLAUDE_NAME && !hasAncestor(p, (a) => a.name === CLAUDE_NAME)) {
-      meta.set('claude', { kind: 'claude', label: 'Claude' });
-      assignTree(p, 'claude', () => false);
+    if (p.name !== CLAUDE_NAME || hasAncestor(p, (a) => a.name === CLAUDE_NAME)) continue;
+    meta.set('claude', { kind: 'claude', label: 'Claude' });
+    const stack: { p: ProcInfo; tool: boolean }[] = [{ p, tool: false }];
+    while (stack.length) {
+      const { p: c, tool } = stack.pop()!;
+      if (keyOf.has(c.pid) || claudeLaunched.has(c.pid)) continue;
+      const inTool = tool || isClaudeTool(c);
+      if (c !== p && !inTool && DEV_TOOL.test(c.name) && inRealProject(c)) {
+        markSubtree(c);
+        continue;
+      }
+      keyOf.set(c.pid, 'claude');
+      for (const k of children.get(c.pid) ?? []) stack.push({ p: k, tool: inTool });
+    }
+  }
+
+  function markSubtree(root: ProcInfo) {
+    const stack = [root];
+    while (stack.length) {
+      const c = stack.pop()!;
+      if (claudeLaunched.has(c.pid) || keyOf.has(c.pid)) continue;
+      claudeLaunched.add(c.pid);
+      stack.push(...(children.get(c.pid) ?? []));
     }
   }
 
@@ -78,7 +117,6 @@ export function buildGroups(procs: ProcInfo[], opts: GroupingOptions): Group[] {
   // 2 bis. Outils Claude détachés (serveur du compagnon visuel, MCP, outils de plugins lancés à part) : dossier de
   // travail sous ~/.claude (ou $CLAUDE_CONFIG_DIR), même sans session claude parmi leurs ancêtres. Après les applis :
   // un shell de terminal ou d'éditeur ouvert dans ~/.claude reste dans son appli (seuls les non-affectés sont pris).
-  const dirs = opts.claudeDirs ?? [];
   if (dirs.length) {
     for (const p of procs) {
       if (keyOf.has(p.pid) || p.cwdDeleted || !isUnderAny(p.cwd, dirs)) continue;
@@ -121,7 +159,14 @@ export function buildGroups(procs: ProcInfo[], opts: GroupingOptions): Group[] {
     members.set(key, list);
   }
 
-  const groups = [...members].map(([key, list]) => makeGroup(key, meta.get(key)!, list, opts));
+  const groups = [...members].map(([key, list]) => {
+    const g = makeGroup(key, meta.get(key)!, list, opts);
+    if (claudeLaunched.size) {
+      const launched = list.filter((p) => claudeLaunched.has(p.pid)).map((p) => p.pid);
+      if (launched.length) g.launchedByClaude = launched;
+    }
+    return g;
+  });
   return applyOthers(groups, opts.othersThreshold, opts.keepSeparate, opts.home);
 }
 

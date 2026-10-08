@@ -24,3 +24,12 @@ export function DuplicateBadge() {
     </span>
   );
 }
+
+/** Instance lancée par une session Claude : rangée dans son projet, sortie de la carte Claude. Étiquette discrète, sans animation. */
+export function ClaudeLaunchedBadge() {
+  return (
+    <span className="claude-badge" data-testid="claude-launched-badge" title="Outil de dev lancé par une session Claude dans ce projet (compté ici, plus dans la carte Claude)">
+      lancé par Claude
+    </span>
+  );
+}

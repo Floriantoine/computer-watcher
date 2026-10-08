@@ -5,7 +5,7 @@ import { CATEGORY_META } from '../categories';
 import { formatAge, formatCpu, formatKB } from '../format';
 import { memLabel } from '../memMetric';
 import { headerKillActions, instanceRowEqual, instanceSpark, showRevertToAuto, sortInstances } from '../instances';
-import { DuplicateBadge } from './CategoryTag';
+import { ClaudeLaunchedBadge, DuplicateBadge } from './CategoryTag';
 import { ReclassMenu } from './ReclassMenu';
 import { Sparkline } from './charts/Sparkline';
 import { ForceButton, KillButton } from './ui';
@@ -138,6 +138,7 @@ function InstanceRowImpl({ inst: i, spark, stuck, pending, canKill, menuOpen, me
       <span className="inst-label mono" role="cell" title={i.label}>
         <span className="inst-label-text">{i.label}</span>
         {i.duplicate && <DuplicateBadge />}
+        {i.launchedBy === 'claude' && <ClaudeLaunchedBadge />}
       </span>
       <span className="inst-ports mono" role="cell">{i.ports.length ? i.ports.map((p) => `:${p}`).join(' ') : '—'}</span>
       <span className="inst-spark" role="cell" title="RAM sur 1 h">

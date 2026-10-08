@@ -68,10 +68,12 @@ export interface Group {
   killable: boolean;
   /** Seulement pour la carte « Autres » */
   subgroups: Group[];
+  /** Pids sortis d'une session Claude (outil de dev lancé par Claude dans un projet, et ses descendants) ; absent si aucun. */
+  launchedByClaude?: number[];
 }
 
 /** Groupe sans son arbre de processus : ce que reçoit le renderer à chaque snapshot. */
-export interface GroupSummary extends Omit<Group, 'roots' | 'subgroups'> {
+export interface GroupSummary extends Omit<Group, 'roots' | 'subgroups' | 'launchedByClaude'> {
   subgroups: GroupSummary[];
   /** Mode PSS : processus du groupe comptés en RSS (PSS illisible ou pas encore lu) ; absent si aucun ou en RSS. */
   pssFallback?: number;
@@ -145,6 +147,8 @@ export interface InstanceSummary {
   ageSec: number; rssKB: number; swapKB: number; cpuPercent: number;
   /** En double : même projet, même catégorie et même signature qu'une instance plus ancienne (instances reconnues seulement). */
   duplicate: boolean; protected: boolean;
+  /** Instance lancée par une session Claude (sa racine sortie de la carte Claude vers son projet). */
+  launchedBy?: 'claude';
 }
 
 export interface Config {

@@ -762,6 +762,7 @@ table.tree small.branch-total { display: block; white-space: nowrap; color: var(
 }
 .cat-port { font-family: var(--font-mono); font-size: 10px; opacity: 0.85; }
 .dup-badge { flex: none; display: inline-flex; align-items: center; gap: 3px; padding: 0 6px; height: 18px; border-radius: 99px; font-size: 10.5px; font-weight: 500; color: var(--amber); background: rgba(255, 181, 71, 0.1); border: 1px solid rgba(255, 181, 71, 0.28); }
+.claude-badge { flex: none; display: inline-flex; align-items: center; padding: 0 6px; height: 18px; border-radius: 99px; font-size: 10.5px; font-weight: 500; white-space: nowrap; color: var(--muted); background: var(--surface-2); border: 1px solid var(--border-2); }
 .instances-line { font-size: 11px; color: var(--label); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: -4px; }
 /* Titre étroit : le nom garde au moins deux caractères. */
 .card-title .label, .name-cell .label { min-width: 2.2em; }

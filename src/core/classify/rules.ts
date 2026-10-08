@@ -35,12 +35,27 @@ const viteSub = (c: Ctx): string | undefined => {
   }
   return undefined;
 };
+const MCP_NAME = /^(.+-mcp|mcp-server-.+)$/;
+const MCP_CLI = /(^|\/)@[^/]+\/mcp\/cli(\.[cm]?js)?$/;
+/** Paquet MCP passé à un lanceur (`npx -y @upstash/context7-mcp@latest`, `uvx mcp-server-fetch`), version comprise. */
+const MCP_PACKAGE = /^(@modelcontextprotocol\/.+|(@[^/]+\/)?(.+-mcp|mcp-server-.+|mcp)(@[^/]*)?)$/;
+
+/**
+ * Serveur MCP : programme significatif `*-mcp`, `mcp-server-*` ou `@x/mcp/cli`, ou paquet MCP en argument d'un lanceur
+ * (`npm exec @upstash/context7-mcp`, `uvx mcp-server-fetch`, `npx @modelcontextprotocol/server-…`). Mêmes motifs que la règle « ai » du classement.
+ */
+export function isMcpServer(name: string, cmdline: string): boolean {
+  const c = ctxOf(name, cmdline);
+  if (MCP_NAME.test(c.cmd) || MCP_CLI.test(c.rawCmd)) return true;
+  return c.raw.some((a) => !a.startsWith('-') && MCP_PACKAGE.test(a.includes('/') && !a.startsWith('@') ? baseName(a) : a));
+}
+
 const BROWSER = /^(chrome|chromium|chromium-browser|google-chrome|firefox|brave|msedge)([-_].*)?$/;
 
 export const COMMAND_RULES: Rule[] = [
   // ai d'abord : « claude » et serveurs MCP
   { category: 'ai', label: 'claude', test: (c) => is(c, 'claude', 'claude-desktop') || c.name === 'claude' || c.name === 'claude-desktop' },
-  { category: 'ai', label: (c) => (c.cmd === 'cli' ? c.rawCmd.split('/').slice(-3, -1).join('/') : stripExt(c.cmd)), test: (c) => /^(.+-mcp|mcp-server-.+)$/.test(c.cmd) || /(^|\/)@[^/]+\/mcp\/cli(\.[cm]?js)?$/.test(c.rawCmd) },
+  { category: 'ai', label: (c) => (c.cmd === 'cli' ? c.rawCmd.split('/').slice(-3, -1).join('/') : stripExt(c.cmd)), test: (c) => MCP_NAME.test(c.cmd) || MCP_CLI.test(c.rawCmd) },
   // test avant front (vitest) et build
   { category: 'test', label: (c) => c.cmd, test: (c) => is(c, 'vitest', 'jest', 'cypress', 'pytest', 'mocha', 'karma') },
   { category: 'test', label: 'playwright test', test: (c) => (c.cmd === 'playwright' || /(^|\/)playwright(-core)?\/cli(\.[cm]?js)?$/.test(c.rawCmd)) && c.rest[0] === 'test' },

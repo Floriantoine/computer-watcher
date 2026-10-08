@@ -53,6 +53,35 @@ describe('classifyGroups', () => {
     return { npm, vite, esb, tree: node(npm, node(vite, node(esb))) };
   };
 
+  it('lancé par Claude : claude → zsh -c → npx jest dans acme/backend → instance Tests du projet, marquée ; lanceur npx hors instance', () => {
+    const P = '/home/u/acme/backend';
+    const procs = [
+      proc('claude', 'claude', { pid: 9001, cwd: P }),
+      proc('zsh', '/usr/bin/zsh -c npx jest', { pid: 9002, ppid: 9001, cwd: P }),
+      proc('npm exec jest', 'npm exec jest', { pid: 9003, ppid: 9002, cwd: P }),
+      proc('node', `node ${P}/node_modules/.bin/jest`, { pid: 9004, ppid: 9003, cwd: P }),
+      proc('node', `node ${P}/node_modules/jest-worker/build/processChild.js`, { pid: 9005, ppid: 9004, cwd: P }),
+    ];
+    const groups = buildGroups(procs, {
+      home: '/home/u', currentUid: 1000, isProtected: () => false, othersThreshold: { memMB: 0, cpuPercent: 0 },
+      projectRootOf: (cwd) => (cwd.startsWith(P) ? P : null), claudeDirs: ['/home/u/.claude'],
+    });
+    const cls = classifyGroups(groups, ctx());
+    const project = cls.get(`project:${P}`)!;
+    expect(project.instances).toHaveLength(1);
+    expect(project.instances[0]).toMatchObject({ category: 'test', label: 'jest', rootPid: 9004, launchedBy: 'claude' });
+    expect(project.launcherPids).toEqual([9003]);
+    expect(cls.get('claude')!.instances[0]!.launchedBy).toBeUndefined();
+    expect(cls.get('claude')!.instances[0]!.pids.sort()).toEqual([9001, 9002]);
+  });
+
+  it('serveur de dev lancé à la main : instance non marquée', () => {
+    const { tree } = npmVite();
+    const inst = classifyGroups([group('project:/home/u/acme', 'project', [tree])], ctx()).get('project:/home/u/acme')!.instances[0]!;
+    expect(inst.launchedBy).toBeUndefined();
+    expect('launchedBy' in inst).toBe(false);
+  });
+
   it('cache des décisions : même résultat, réutilisé tant que l\'appelant ne le vide pas, entrées disparues retirées', () => {
     const { tree } = npmVite(42);
     const g = group('project:/home/u/acme', 'project', [tree]);

@@ -137,7 +137,7 @@ export function instanceRowEqual(a: InstanceRowView, b: InstanceRowView): boolea
   const x = a.inst;
   const y = b.inst;
   return (
-    x.key === y.key && x.category === y.category && x.source === y.source && x.label === y.label && x.duplicate === y.duplicate &&
+    x.key === y.key && x.category === y.category && x.source === y.source && x.label === y.label && x.duplicate === y.duplicate && x.launchedBy === y.launchedBy &&
     x.ageSec === y.ageSec && x.rssKB === y.rssKB && x.swapKB === y.swapKB && x.cpuPercent === y.cpuPercent && x.signature === y.signature &&
     x.protected === y.protected && x.project === y.project && x.groupId === y.groupId &&
     sameNums(x.ports, y.ports) && sameNums(x.pids, y.pids) &&

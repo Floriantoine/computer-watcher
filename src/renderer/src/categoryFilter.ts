@@ -94,10 +94,13 @@ export function instancesLine(g: GroupSummary): string {
 
 export const hasDuplicate = (g: GroupSummary): boolean => g.instances.some((i) => i.duplicate);
 
+/** Au moins une instance lancée par une session Claude (étiquette « lancé par Claude » de la carte). */
+export const hasClaudeLaunched = (g: GroupSummary): boolean => g.instances.some((i) => i.launchedBy === 'claude');
+
 /** Ce que les étiquettes affichent, pour les comparateurs de rendu (RAM et CPU des instances n'y entrent pas). */
 export function categoryDisplayKey(g: GroupSummary): string {
   let s = g.categories.join(',');
-  for (const i of g.instances) s += `|${i.category}:${i.ports.join(',')}:${i.duplicate ? 1 : 0}`;
+  for (const i of g.instances) s += `|${i.category}:${i.ports.join(',')}:${i.duplicate ? 1 : 0}${i.launchedBy ? 'c' : ''}`;
   return s;
 }
 

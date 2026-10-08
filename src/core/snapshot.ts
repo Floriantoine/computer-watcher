@@ -5,7 +5,7 @@ export type Classification = Map<string, GroupClassification>;
 
 /** Groupe sans arbre : le renderer n'a besoin des processus que pour le groupe ouvert. Catégories et instances d'après `cls`. */
 export function summarizeGroup(g: Group, cls?: Classification, pss = false): GroupSummary {
-  const { roots: _roots, subgroups, ...rest } = g;
+  const { roots: _roots, subgroups, launchedByClaude: _launched, ...rest } = g;
   const c = cls?.get(g.id);
   const out: GroupSummary = { ...rest, subgroups: subgroups.map((s) => summarizeGroup(s, cls, pss)), categories: c?.categories ?? [], instances: c?.instances ?? [] };
   if (pss) {
