@@ -114,6 +114,11 @@ describe('sectionAttention', () => {
   test('tout va bien → aucun point', () => {
     expect(sectionAttention(calm)).toEqual({});
   });
+  test('Affichage : seuil du swap modifié ou invalide → point', () => {
+    expect(sectionAttention({ ...calm, display: { dirty: true, invalid: false } }).display).toEqual({ tone: 'dirty', reasons: ['Modifications non enregistrées'] });
+    expect(sectionAttention({ ...calm, display: { dirty: true, invalid: true } }).display?.tone).toBe('error');
+    expect(sectionAttention({ ...calm, display: { dirty: false, invalid: false } }).display).toBeUndefined();
+  });
   test('earlyoom absent ou inactif → point d’avertissement', () => {
     expect(sectionAttention({ ...calm, earlyoom: { ...calm.earlyoom, status: { installed: false, active: 'unknown' } } }).earlyoom).toEqual({
       tone: 'warn',

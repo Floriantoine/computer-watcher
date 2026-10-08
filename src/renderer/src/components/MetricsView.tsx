@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Activity, CircleAlert, Cpu, Gauge, HardDrive, MemoryStick, MousePointerClick, Power, RefreshCw, Search } from 'lucide-react';
 import type { OpenPort, OpenPortsInfo } from '../../../core/openPorts';
-import type { Culprit, RangePreset, TimeRange } from '../../../core/types';
+import type { SwapRow } from '../../../core/swap';
+import type { Culprit, GroupSummary, InstanceSummary, RangePreset, TimeRange } from '../../../core/types';
 import { formatKB } from '../format';
 import { useHistory } from '../history';
 import { ipcErrorMessage } from '../viewModel';
@@ -14,6 +15,7 @@ import { AlertsPanel } from './AlertsPanel';
 import type { SettingsSection } from '../settingsNav';
 import { CulpritsPanel } from './CulpritsPanel';
 import { OpenPortsPanel } from './OpenPortsPanel';
+import { SwapPanel } from './SwapPanel';
 import { seriesIndexOf, type ChartSeries } from './charts/chartData';
 import { TimeChart, type ChartMarker } from './charts/TimeChart';
 import { KB_FORMAT, PERCENT_FORMAT, type ChartTone, type ValueFormat } from './charts/uplotTheme';
@@ -32,6 +34,13 @@ interface Props {
   pendingPids?: Set<number>;
   onFreePort?: (row: OpenPort) => void;
   onOpenPortGroup?: (groupId: string) => void;
+  /** Panneau « Swap » (sous les alertes) ; absent sans `swap`. */
+  swap?: {
+    groups: readonly GroupSummary[];
+    minMB: number;
+    onStopSleeping: (instances: InstanceSummary[]) => void;
+    onStopOne: (row: SwapRow) => void;
+  };
 }
 
 /** Teintes des couches de l'enquête (de la plus grosse à la 8e) ; les trois couches du Reste ont les leurs, en pointillés. */
@@ -68,7 +77,7 @@ interface SysChart {
 
 const NO_PIDS = new Set<number>();
 
-export function MetricsView({ at, canOpen, onOpenGroup, onOpenSettings, openPorts, pendingPids = NO_PIDS, onFreePort, onOpenPortGroup }: Props) {
+export function MetricsView({ at, canOpen, onOpenGroup, onOpenSettings, openPorts, pendingPids = NO_PIDS, onFreePort, onOpenPortGroup, swap }: Props) {
   const [preset, setPreset] = useState<RangePreset>(() => presetFor(at));
   const z = useChartZoom(PRESET_MS[preset]);
   const { zoom, view, setZoom } = z;
@@ -281,6 +290,16 @@ export function MetricsView({ at, canOpen, onOpenGroup, onOpenSettings, openPort
         <AlertsPanel events={events} onPick={setCursor} onHover={setHoverTs} onSettings={onOpenSettings && (() => onOpenSettings('alerts'))} />
       </div>
       {onFreePort && onOpenPortGroup && <OpenPortsPanel info={openPorts ?? null} pendingPids={pendingPids} onFree={onFreePort} onOpenGroup={onOpenPortGroup} />}
+      {swap && (
+        <SwapPanel
+          groups={swap.groups}
+          minMB={swap.minMB}
+          swapSeries={system && system.ts.length >= 2 ? system.swapUsedKB : undefined}
+          onStopSleeping={swap.onStopSleeping}
+          onStopOne={swap.onStopOne}
+          onSettings={onOpenSettings && (() => onOpenSettings('display'))}
+        />
+      )}
     </div>
   );
 }

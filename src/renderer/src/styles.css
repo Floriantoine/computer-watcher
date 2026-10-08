@@ -1046,3 +1046,38 @@ button.primary:hover:not(:disabled) { background: rgba(124, 92, 255, 0.32); bord
   .port-rows { grid-template-columns: 56px minmax(0, 1fr) auto; }
   .port-row > :nth-child(3), .port-row > :nth-child(4), .port-row > :nth-child(5) { display: none; }
 }
+
+/* Panneau « Swap » (onglet Métriques) : jauge (graphe 8 px au-dessus de la barre), lignes groupe / instance, état. */
+.swap-panel .chart-panel-head button { padding: 4px 10px; font-size: 11.5px; }
+.swap-gauge { margin: 2px 0 8px; }
+.swap-gauge .spark { display: block; width: 100%; margin: 0 0 8px; }
+.swap-gauge .bar { height: 8px; }
+.swap-rule { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; font-size: 11px; color: var(--muted); }
+.swap-panel button.link { padding: 1px 6px; font-size: 11px; background: none; border-color: transparent; color: var(--label); }
+.swap-panel button.link:hover:not(:disabled) { color: var(--text); border-color: var(--border-2); }
+.swap-rows { display: flex; flex-direction: column; max-height: 420px; overflow-y: auto; }
+.swap-row { display: grid; grid-template-columns: 22px minmax(0, 1fr) 72px 220px 76px; align-items: center; gap: 10px; padding: 4px 6px; border-radius: var(--r-md); min-height: 30px; }
+.swap-row:hover { background: var(--surface-2); }
+.swap-row .ico { width: 22px; height: 22px; }
+.swap-row.child { padding-left: 22px; }
+.swap-row .tree-gap { width: 22px; height: 1px; border-top: 1px solid var(--border-2); }
+.swap-row .name { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.swap-row .name .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.swap-row .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.swap-row .state { color: var(--muted); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.swap-row .state.sleeping { color: var(--amber); }
+.swap-row .state.unknown { font-style: italic; }
+.swap-row .act { display: flex; justify-content: flex-end; }
+.swap-row .act button { padding: 2px 9px; font-size: 11px; }
+.swap-row.shmem { border-bottom: 1px solid var(--border); border-radius: var(--r-md) var(--r-md) 0 0; margin-bottom: 2px; }
+.swap-row .shmem-ico { display: grid; place-items: center; border-radius: 6px; background: rgba(232, 121, 249, 0.16); color: #e879f9; }
+.swap-row .tmpfs-toggle.on { background: rgba(232, 121, 249, 0.14); border-color: rgba(232, 121, 249, 0.4); }
+.swap-tmp { padding: 2px 6px 8px 38px; }
+.swap-tmp .tmp-dirs ul { list-style: none; margin: 0; padding: 0; }
+.swap-tmp .tmp-dirs li { display: flex; gap: 8px; padding: 2px 0; }
+.swap-tmp .tmp-dirs .path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.swap-badge { flex: none; font-size: 10.5px; padding: 0 6px; height: 18px; display: inline-flex; align-items: center; border-radius: 99px; color: var(--amber); background: rgba(255, 181, 71, 0.1); border: 1px solid rgba(255, 181, 71, 0.3); }
+.swap-more { align-self: flex-start; margin: 4px 0 2px 6px; }
+@media (max-width: 900px) {
+  .swap-row { grid-template-columns: 22px minmax(0, 1fr) 64px 140px 70px; }
+}

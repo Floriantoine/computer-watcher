@@ -11,6 +11,8 @@ import { SettingsView } from './components/SettingsView';
 import { Toasts, type Toast } from './components/Toasts';
 import { MainView } from './components/MainView';
 import { MetricsView } from './components/MetricsView';
+import type { SwapRow } from '../../core/swap';
+import { stopOneCheck } from './swapPanel';
 import { SystemBar, type SystemSparks } from './components/SystemBar';
 import { TopNav } from './components/TopNav';
 import { LiveBuffer, setLive, useHistory } from './history';
@@ -325,6 +327,30 @@ export function App() {
       bulkInFlight.current = false;
     }
   };
+  // Vue swap, « Arrêter les endormis » : le kill groupé habituel (instances de projets seulement, cibles fraîches, « Tuer (n) »).
+  const stopSleeping = (instances: InstanceSummary[]) => {
+    if (bulkInFlight.current || bulk || instances.length === 0) return;
+    setBulk({ instances, title: 'Arrêter les endormis' });
+  };
+  // Vue swap, « Arrêter » d'une appli endormie : kill de groupe avec confirmation ; refusé si le groupe a changé ou
+  // contient un processus protégé (jamais Claude : garde de stopOneCheck).
+  const stopSwapRow = (row: SwapRow) => {
+    const g = findGroup(snapshot.groups, row.groupId);
+    const check = stopOneCheck(row, g ?? (groupIds.has(row.groupId) ? row : undefined));
+    if (!check.ok) {
+      pushToast(check.message);
+      return;
+    }
+    window.procWatch.groupProcs(row.groupId).then(
+      (procs) => {
+        if (procs.length === 0) return pushToast(`« ${row.label} » a disparu`);
+        const req = killRequestForGroup(g ?? { label: row.label }, procs, isProtected, currentUid);
+        if (req.protectedProcs.length > 0) pushToast(`« ${row.label} » contient un processus protégé : à arrêter depuis son détail`);
+        else requestKill(req);
+      },
+      (e: unknown) => pushToast(ipcErrorMessage(e)),
+    );
+  };
   const reclassify = (inst: InstanceSummary, category: Category | null) => {
     const name = projectName(inst, findGroup(snapshot.groups, inst.groupId)?.label ?? inst.groupId);
     window.procWatch.classify.set(reclassifyScope(inst), inst.signature, category).then(
@@ -426,6 +452,7 @@ export function App() {
                 pendingPids={pendingPids}
                 onFreePort={onFreePort}
                 onOpenPortGroup={onOpenPortGroup}
+                swap={{ groups: snapshot.groups, minMB: configState.config.ui.swapSleepMinMB, onStopSleeping: stopSleeping, onStopOne: stopSwapRow }}
               />
             )}
             {route.view === 'settings' && (

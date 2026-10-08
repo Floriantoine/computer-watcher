@@ -7,6 +7,7 @@ import {
   Clock,
   HardDrive,
   Layers,
+  Moon,
   ShieldCheck,
   Sparkles,
   Tags,
@@ -26,6 +27,7 @@ import { pollWhileLive } from '../history';
 import { EarlyoomPanel, type EarlyoomAttention } from './EarlyoomPanel';
 import { SettingsConfirm } from './SettingsConfirm';
 import { Card, NumberField, Row, SaveBar, Switch } from './settingsUi';
+import { parseSwapSleepMB } from '../swapPanel';
 import { recorderToForm, validateRecorderForm, type RecorderErrors, type RecorderForm } from '../recorderForm';
 import {
   SETTINGS_SECTIONS,
@@ -114,6 +116,7 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
   const [entry, setEntry] = useState('');
   const [memMB, setMemMB] = useState(String(config.othersThreshold.memMB));
   const [cpu, setCpu] = useState(String(config.othersThreshold.cpuPercent));
+  const [sleepMB, setSleepMB] = useState(String(config.ui.swapSleepMinMB));
 
   const [rec, setRec] = useState<RecorderState | null>(null);
   const [form, setForm] = useState<RecorderForm>(() => recorderToForm(config.recorder));
@@ -219,6 +222,11 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
     dirty: numbersDirty({ memMB, cpu }, { memMB: config.othersThreshold.memMB, cpu: config.othersThreshold.cpuPercent }),
     invalid: !othersValid(memMB) || !othersValid(cpu),
   };
+  const sleepParsed = parseSwapSleepMB(sleepMB);
+  const saveSleep = () => {
+    if (sleepParsed !== null) onSave({ ...config, ui: { ...config.ui, swapSleepMinMB: sleepParsed } });
+  };
+  const displayState: FormState = { dirty: numbersDirty({ sleepMB }, { sleepMB: config.ui.swapSleepMinMB }), invalid: sleepParsed === null };
   const recorderState: FormState = {
     dirty: numbersDirty(form, config.recorder as unknown as Record<string, number>),
     invalid: Object.keys(validateRecorderForm(form, config.recorder.enabled).errors).length > 0,
@@ -227,6 +235,7 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
     protectedEntry: entry,
     protectedList: config.protected,
     others: othersState,
+    display: displayState,
     alerts: alertsForm,
     recorder: { ...recorderState, status: rec ? { available: rec.available, enabled: rec.enabled, running: rec.running } : null },
     earlyoom: eo,
@@ -384,71 +393,85 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
           {panel(
             'display',
             'effects-panel',
-            <Card title="Affichage" icon={<Sparkles size={14} strokeWidth={2} />}>
-              <Row label="Mémoire affichée" help="PSS répartit la mémoire partagée entre les processus ; l'historique reste en RSS.">
-                {() => (
-                  <div className="range-selector mem-metric" role="radiogroup" aria-label="Mémoire affichée" data-testid="mem-metric">
-                    {MEM_METRICS.map(([m, label]) => (
-                      <button
-                        key={m}
-                        type="button"
-                        role="radio"
-                        aria-checked={config.ui.memoryMetric === m}
-                        data-testid={`mem-metric-${m}`}
-                        className={config.ui.memoryMetric === m ? 'active' : ''}
-                        onClick={() => config.ui.memoryMetric !== m && onSave({ ...config, ui: { ...config.ui, memoryMetric: m } })}
-                      >
-                        {config.ui.memoryMetric === m && <span className="range-indicator" />}
-                        <span>{label}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </Row>
-              <Row label="Effets visuels réduits" help="Sans flou ni animations superflues : moins de travail pour la carte graphique et le processeur.">
-                {(id) => (
-                  <Switch
-                    id={id}
-                    checked={config.ui.reducedEffects}
-                    label="Effets visuels réduits"
-                    onToggle={() => onSave({ ...config, ui: { ...config.ui, reducedEffects: !config.ui.reducedEffects } })}
-                  />
-                )}
-              </Row>
-              <Row label="Icône dans la barre des tâches" help="Anneau de la RAM utilisée, coloré selon la pression ; menu avec la mémoire, « Libérer de la mémoire… » et « Quitter ».">
-                {(id) => (
-                  <span data-testid="tray-icon">
+            <>
+              <Card title="Affichage" icon={<Sparkles size={14} strokeWidth={2} />}>
+                <Row label="Mémoire affichée" help="PSS répartit la mémoire partagée entre les processus ; l'historique reste en RSS.">
+                  {() => (
+                    <div className="range-selector mem-metric" role="radiogroup" aria-label="Mémoire affichée" data-testid="mem-metric">
+                      {MEM_METRICS.map(([m, label]) => (
+                        <button
+                          key={m}
+                          type="button"
+                          role="radio"
+                          aria-checked={config.ui.memoryMetric === m}
+                          data-testid={`mem-metric-${m}`}
+                          className={config.ui.memoryMetric === m ? 'active' : ''}
+                          onClick={() => config.ui.memoryMetric !== m && onSave({ ...config, ui: { ...config.ui, memoryMetric: m } })}
+                        >
+                          {config.ui.memoryMetric === m && <span className="range-indicator" />}
+                          <span>{label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </Row>
+                <Row label="Effets visuels réduits" help="Sans flou ni animations superflues : moins de travail pour la carte graphique et le processeur.">
+                  {(id) => (
                     <Switch
                       id={id}
-                      checked={config.ui.trayIcon}
-                      label="Icône dans la barre des tâches"
-                      onToggle={() => onSave({ ...config, ui: { ...config.ui, trayIcon: !config.ui.trayIcon } })}
+                      checked={config.ui.reducedEffects}
+                      label="Effets visuels réduits"
+                      onToggle={() => onSave({ ...config, ui: { ...config.ui, reducedEffects: !config.ui.reducedEffects } })}
                     />
-                  </span>
-                )}
-              </Row>
-              <Row
-                label="Fermer la fenêtre la garde dans la barre des tâches"
-                help={
-                  trayOk === false
-                    ? "Pas de zone de notification sur ce bureau : fermer la fenêtre quitte l'app."
-                    : "Fenêtre cachée : la collecte est suspendue comme fenêtre réduite. « Quitter » dans le menu de l'icône ferme vraiment."
-                }
-              >
-                {(id) => (
-                  <span data-testid="close-to-tray">
-                    <Switch
-                      id={id}
-                      checked={config.ui.closeToTray && config.ui.trayIcon && trayOk !== false}
-                      label="Fermer la fenêtre la garde dans la barre des tâches"
-                      disabled={!config.ui.trayIcon || trayOk === false}
-                      onToggle={() => onSave({ ...config, ui: { ...config.ui, closeToTray: !config.ui.closeToTray } })}
-                    />
-                  </span>
-                )}
-              </Row>
-              <p className="hint s-auto">Enregistré dès le changement.</p>
-            </Card>,
+                  )}
+                </Row>
+                <Row label="Icône dans la barre des tâches" help="Anneau de la RAM utilisée, coloré selon la pression ; menu avec la mémoire, « Libérer de la mémoire… » et « Quitter ».">
+                  {(id) => (
+                    <span data-testid="tray-icon">
+                      <Switch
+                        id={id}
+                        checked={config.ui.trayIcon}
+                        label="Icône dans la barre des tâches"
+                        onToggle={() => onSave({ ...config, ui: { ...config.ui, trayIcon: !config.ui.trayIcon } })}
+                      />
+                    </span>
+                  )}
+                </Row>
+                <Row
+                  label="Fermer la fenêtre la garde dans la barre des tâches"
+                  help={
+                    trayOk === false
+                      ? "Pas de zone de notification sur ce bureau : fermer la fenêtre quitte l'app."
+                      : "Fenêtre cachée : la collecte est suspendue comme fenêtre réduite. « Quitter » dans le menu de l'icône ferme vraiment."
+                  }
+                >
+                  {(id) => (
+                    <span data-testid="close-to-tray">
+                      <Switch
+                        id={id}
+                        checked={config.ui.closeToTray && config.ui.trayIcon && trayOk !== false}
+                        label="Fermer la fenêtre la garde dans la barre des tâches"
+                        disabled={!config.ui.trayIcon || trayOk === false}
+                        onToggle={() => onSave({ ...config, ui: { ...config.ui, closeToTray: !config.ui.closeToTray } })}
+                      />
+                    </span>
+                  )}
+                </Row>
+                <p className="hint s-auto">Enregistré dès le changement.</p>
+              </Card>
+              <Card title="Vue swap" icon={<Moon size={14} strokeWidth={2} />}>
+                <Row
+                  label="Endormi au-delà de"
+                  error={sleepParsed === null ? 'Un entier de 1 à 65 536 est attendu' : null}
+                  help="Onglet Métriques › Swap : un groupe ou une instance est « endormi » si son swap cumulé dépasse ce seuil et qu'il n'a eu aucun CPU ≥ 1 % depuis 1 jour (d'après l'historique)."
+                >
+                  {(id) => (
+                    <NumberField id={id} value={sleepMB} unit="Mo" ariaLabel="Seuil de swap" min="1" max={65_536} invalid={sleepParsed === null} testid="swap-sleep-mb" onChange={setSleepMB} onEnter={saveSleep} />
+                  )}
+                </Row>
+                <SaveBar dirty={displayState.dirty} onSave={saveSleep} disabled={sleepParsed === null || !displayState.dirty} testid="swap-sleep-save" />
+              </Card>
+            </>,
           )}
 
           {panel(
