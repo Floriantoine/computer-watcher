@@ -7,11 +7,16 @@ test('wantsFree : --free exact seulement', () => {
   expect(wantsFree([])).toBe(false);
 });
 
-test('createFreeOpener : envoie tout de suite et garde la demande jusqu’à ce que le renderer la prenne', () => {
+test('createFreeOpener : envoi différé et protégé, demande gardée jusqu’à ce que le renderer la prenne', async () => {
   const sent: number[] = [];
-  const o = createFreeOpener(() => sent.push(1));
+  const o = createFreeOpener(() => {
+    sent.push(1);
+    throw new ReferenceError("Cannot access 'mainWin' before initialization");
+  });
   expect(o.take()).toBe(false);
-  o.open();
+  expect(() => o.open()).not.toThrow();
+  expect(sent).toHaveLength(0); // jamais synchrone (démarrage à froid)
+  await Promise.resolve();
   expect(sent).toHaveLength(1);
   expect(o.take()).toBe(true);
   expect(o.take()).toBe(false);
