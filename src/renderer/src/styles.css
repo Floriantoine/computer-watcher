@@ -669,7 +669,8 @@ table.tree small.branch-total { display: block; white-space: nowrap; color: var(
   display: inline-flex; align-items: center; gap: 6px;
   padding: 4px 6px 4px 10px; font-size: 12px; border-radius: 99px;
   background: var(--surface-3); border: 1px solid var(--border-2); color: var(--text-2);
-  backdrop-filter: blur(10px);
+  /* Pas de backdrop-filter : chaque pastille floutée devenait une surface de rendu composée, recalculée à chaque image
+     (8 surfaces au lieu d'une, ~+0,6 point de CPU du processus GPU mesuré). Le fond translucide suffit sur la barre. */
 }
 .cat-pill svg { color: var(--cat); }
 .cat-pill:first-child { padding-right: 10px; }
