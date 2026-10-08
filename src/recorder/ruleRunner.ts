@@ -147,7 +147,9 @@ export function createRuleRunner(deps: RuleRunnerDeps): { run(decisions: readonl
       for (const d of decisions) {
         try {
           if (d.outcome === 'skip') {
-            if (d.reason === 'guard') {
+            if (d.reason === 'culprit-protected') {
+              deps.log(`règles: « ${d.ruleName} » : le principal responsable est protégé : rien à arrêter`);
+            } else if (d.reason === 'guard') {
               deps.log(`règles: « ${d.ruleName} » : rien à arrêter${d.target?.excluded ? ` (${d.target.excluded} processus exclus par les garde-fous)` : ''}`);
             } else if (d.reason === 'hourly-quota') {
               const m = mono();

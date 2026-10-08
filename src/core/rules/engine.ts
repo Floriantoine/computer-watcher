@@ -94,7 +94,8 @@ export interface EvalInput {
   selfPid: number;
 }
 
-export type SkipReason = 'cooldown' | 'hourly-quota' | 'guard';
+/** `culprit-protected` : (c) le plus gros responsable de la croissance est intouchable, rien n'est visé. */
+export type SkipReason = 'cooldown' | 'hourly-quota' | 'guard' | 'culprit-protected';
 export type RuleDecision =
   | { ruleId: string; ruleName: string; mode: RuleMode; outcome: 'fire'; target: RuleTarget; condition: RuleCondition; revision: string }
   | { ruleId: string; ruleName: string; mode: RuleMode; outcome: 'skip'; reason: SkipReason; target: RuleTarget | null };
@@ -181,6 +182,16 @@ export function evaluateRules(input: EvalInput, state: RuleState): RuleDecision[
     }
     const ready = candidatesFor(rule, input, groups, state);
     if (ready.length === 0) continue;
+    // (c) : si le principal responsable de la croissance (processus ou instance) est refusé (Claude, protégé, jamais
+    // tuer), arrêter un plus petit ne libérerait pas assez : rien, signalé au plus une fois par RULE_COOLDOWN_MS.
+    if (rule.condition.kind === 'forecast' && topGrowerRefused(input, procs(), guard())) {
+      const lastGuard = state.lastGuard.get(rule.id);
+      if (lastGuard === undefined || now - lastGuard >= RULE_COOLDOWN_MS) {
+        state.lastGuard.set(rule.id, now);
+        out.push({ ruleId: rule.id, ruleName: rule.name, mode: rule.mode, outcome: 'skip', reason: 'culprit-protected', target: null });
+      }
+      continue;
+    }
     // la plus forte croissance (prévision), puis la plus grosse cible, qui reste non vide après la liste « jamais tuer »
     ready.sort((a, b) => (b.growthKB ?? 0) - (a.growthKB ?? 0) || b.sizeKB - a.sizeKB);
     let target: RuleTarget | null = null;
@@ -220,6 +231,36 @@ export function evaluateRules(input: EvalInput, state: RuleState): RuleDecision[
     out.push({ ...base, outcome: 'fire', target, condition: rule.condition, revision: ruleRevision(rule) });
   }
   return out;
+}
+
+/** Le processus, ou l'instance, qui a le plus grossi sur 5 min (tous groupes) contient-il un processus refusé ? */
+function topGrowerRefused(input: EvalInput, byPid: ReadonlyMap<number, ProcInfo>, guard: GuardContext): boolean {
+  const growth = input.procGrowthKB;
+  if (!growth) return false;
+  const g = (p: ProcInfo | undefined) => (p ? growth.get(`${p.pid}:${p.startTicks}`) ?? 0 : 0);
+  let topPid: number | null = null;
+  let topKB = -Infinity;
+  for (const p of byPid.values()) {
+    const kb = g(p);
+    if (kb > topKB) {
+      topKB = kb;
+      topPid = p.pid;
+    }
+  }
+  let topInst: readonly number[] | null = null;
+  let instKB = -Infinity;
+  for (const c of input.classification?.values() ?? []) {
+    for (const i of c.instances) {
+      const kb = i.pids.reduce((s, pid) => s + g(byPid.get(pid)), 0);
+      if (kb > instKB) {
+        instKB = kb;
+        topInst = i.pids;
+      }
+    }
+  }
+  if (topPid !== null && topKB > 0 && filterTargets([topPid], guard).refused.size > 0) return true;
+  if (topInst && instKB > 0 && filterTargets(topInst, guard).refused.size > 0) return true;
+  return false;
 }
 
 const eqName = (value: string) => {

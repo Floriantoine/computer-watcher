@@ -342,7 +342,8 @@ describe('prévision (c)', () => {
     };
     const groups = [
       mk('project:/a', 'project', 1001, 3, 2 * GB), mk('project:/b', 'project', 1002, 6, 0.5 * GB), mk('project:/c', 'project', 1003, 9, -GB),
-      mk('command:postgres', 'command', 1004, 10, 3 * GB, 'postgres'), mk('app:firefox', 'app', 1005, 12, 2.5 * GB, 'firefox'), mk('claude', 'claude', 1006, 20, 5 * GB, 'claude'),
+      // le plus gros responsable (firefox) n'est pas refusé : sinon rien n'est visé (n-2, voir engine.safety2)
+      mk('command:postgres', 'command', 1004, 10, 1.5 * GB, 'postgres'), mk('app:firefox', 'app', 1005, 12, 2.5 * GB, 'firefox'), mk('claude', 'claude', 1006, 20, GB, 'claude'),
     ];
     return { groups, classification: cls(entries), procGrowthKB };
   }

@@ -82,7 +82,8 @@ describe('I-6 : (c) attribue la croissance par instance', () => {
   });
   test('le vite de l’utilisateur grossit lui-même de 200 Mo → c’est lui qui est visé (croissance attribuable)', () => {
     const a = acmeWithClaude();
-    const out = evalTwice({ groups: a.groups, classification: a.classification, procGrowthKB: new Map([[key(a.vitest), 3 * GB], [key(a.vite), 200 * MB]]) });
+    // (le vitest de Claude grossit moins : sinon n-2, rien n'est visé)
+    const out = evalTwice({ groups: a.groups, classification: a.classification, procGrowthKB: new Map([[key(a.vitest), 120 * MB], [key(a.vite), 200 * MB]]) });
     expect(fires(out).map((d) => d.outcome === 'fire' && d.target.targets.map((t) => t.pid))).toEqual([[620]]);
   });
   test('instance contenant un processus refusé (protégé) → écartée entière, même si une autre partie grossit', () => {
@@ -159,5 +160,25 @@ describe('m-2 : un ralentissement (horloges qui avancent ensemble) tolère 4 × 
     for (let s = 60_000; s < 30_000 + 5 * MIN; s += 30_000) n += ev(s, s + 10 * MIN);
     expect(n).toBe(0); // 5 min pas encore observées depuis le saut
     expect(ev(30_000 + 5 * MIN, 30_000 + 15 * MIN)).toBe(1);
+  });
+});
+
+describe('n-2 : le principal responsable de la croissance est protégé → rien', () => {
+  test('C-att bis : vitest lancé par Claude +3 Go, vite de l’utilisateur +150 Mio → aucune cible, décision « culprit-protected »', () => {
+    const a = acmeWithClaude();
+    const out = evalTwice({ groups: a.groups, classification: a.classification, procGrowthKB: new Map([[key(a.vitest), 3 * GB], [key(a.vite), 150 * MB]]) });
+    expect(fires(out)).toEqual([]);
+    expect(out).toEqual([expect.objectContaining({ outcome: 'skip', reason: 'culprit-protected' })]);
+  });
+  test('processus protégé hors de toute instance (groupe Claude) qui grossit le plus → rien', () => {
+    const a = acmeWithClaude();
+    const claude = a.groups.find((g) => g.id === 'claude')!.roots[0]!.proc;
+    const out = evalTwice({ groups: a.groups, classification: a.classification, procGrowthKB: new Map([[key(claude), 2 * GB], [key(a.vitest), 0], [key(a.vite), 300 * MB]]) });
+    expect(fires(out)).toEqual([]);
+  });
+  test('le plus gros responsable est attribuable → visé (cas témoin)', () => {
+    const a = acmeWithClaude();
+    const out = evalTwice({ groups: a.groups, classification: a.classification, procGrowthKB: new Map([[key(a.vitest), 100 * MB], [key(a.vite), 900 * MB]]) });
+    expect(fires(out).map((d) => d.outcome === 'fire' && d.target.targets.map((t) => t.pid))).toEqual([[620]]);
   });
 });

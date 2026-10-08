@@ -128,3 +128,10 @@ describe('M-6 : une seule notification « quota atteint » par heure pour toutes
     expect(s.notify).toHaveBeenCalledTimes(2);
   });
 });
+
+test('n-2 : décision « culprit-protected » → journal « le principal responsable est protégé : rien à arrêter », aucun signal', () => {
+  const s = setup([...base, P(777, 500, 'node')]);
+  s.runner.run([{ ruleId: 'r', ruleName: 'prévision', mode: 'active', outcome: 'skip', reason: 'culprit-protected', target: null }]);
+  expect(s.kill).not.toHaveBeenCalled();
+  expect(s.logs).toEqual([expect.stringMatching(/« prévision » : le principal responsable est protégé : rien à arrêter/)]);
+});
