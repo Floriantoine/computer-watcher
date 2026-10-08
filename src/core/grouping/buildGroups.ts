@@ -82,10 +82,28 @@ export function buildGroups(procs: ProcInfo[], opts: GroupingOptions): Group[] {
     return isUnderAny(raw[Math.max(0, programIndex(raw.map(baseName)))] ?? null, dirs);
   };
   const claudeLaunched = new Set<number>();
+  const movedRoots: ProcInfo[] = [];
+
+  /** Groupe d'un outil de dev d'après son dossier de travail : projet, dossier supprimé, ou sa commande sans cwd. */
+  const devToolKey = (p: ProcInfo): string => {
+    if (p.cwdDeleted) {
+      meta.set('deleted', { kind: 'deleted', label: '(dossier supprimé)' });
+      return 'deleted';
+    }
+    if (p.cwd === null) {
+      const key = `command:${p.name}`;
+      meta.set(key, { kind: 'command', label: p.name });
+      return key;
+    }
+    const root = opts.projectRootOf(p.cwd) ?? p.cwd;
+    const key = `project:${root}`;
+    meta.set(key, { kind: 'project', label: projectLabel(root, opts.home) });
+    return key;
+  };
 
   // 1. Sessions Claude : chaque claude de premier niveau et ses descendants, sauf les outils de dev lancés dans un vrai
-  // projet (jest, vite, npm run dev…) : eux et leurs descendants sortent de la carte Claude et sont rangés par les règles
-  // suivantes comme s'ils avaient été lancés à la main, marqués « lancés par Claude ». Un serveur MCP ou un outil de
+  // projet (jest, vite, npm run dev…) : eux et tout leur sous-arbre sortent de la carte Claude vers leur projet (1 bis),
+  // marqués « lancés par Claude ». Un serveur MCP ou un outil de
   // ~/.claude garde tout son sous-arbre dans Claude.
   for (const p of procs) {
     if (p.name !== CLAUDE_NAME || hasAncestor(p, (a) => a.name === CLAUDE_NAME)) continue;
@@ -96,7 +114,7 @@ export function buildGroups(procs: ProcInfo[], opts: GroupingOptions): Group[] {
       if (keyOf.has(c.pid) || claudeLaunched.has(c.pid)) continue;
       const inTool = tool || isClaudeTool(c);
       if (c !== p && !inTool && DEV_TOOL.test(c.name) && inRealProject(c)) {
-        markSubtree(c);
+        movedRoots.push(c);
         continue;
       }
       keyOf.set(c.pid, 'claude');
@@ -104,11 +122,19 @@ export function buildGroups(procs: ProcInfo[], opts: GroupingOptions): Group[] {
     }
   }
 
-  function markSubtree(root: ProcInfo) {
+
+  // 1 bis. Chaque outil sorti de Claude emmène tout son sous-arbre dans son projet, tel qu'il était sous Claude
+  // (navigateur de Playwright, `sh -c` intermédiaires, workers) : avant les applis, pour qu'un chromium de test ne
+  // rejoigne pas la carte Chrome de l'utilisateur (ni son kill). Instances et lanceurs s'y calculent comme d'habitude.
+  for (const root of movedRoots) {
+    const key = devToolKey(root);
+    const before = keyOf.size;
+    assignTree(root, key, () => false);
+    if (keyOf.size === before) continue;
     const stack = [root];
     while (stack.length) {
       const c = stack.pop()!;
-      if (claudeLaunched.has(c.pid) || keyOf.has(c.pid)) continue;
+      if (keyOf.get(c.pid) !== key || claudeLaunched.has(c.pid)) continue;
       claudeLaunched.add(c.pid);
       stack.push(...(children.get(c.pid) ?? []));
     }
@@ -136,19 +162,7 @@ export function buildGroups(procs: ProcInfo[], opts: GroupingOptions): Group[] {
   // 3. Outils de dev : par projet
   for (const p of procs) {
     if (keyOf.has(p.pid) || !DEV_TOOL.test(p.name)) continue;
-    let key: string;
-    if (p.cwdDeleted) {
-      key = 'deleted';
-      meta.set(key, { kind: 'deleted', label: '(dossier supprimé)' });
-    } else if (p.cwd === null) {
-      key = `command:${p.name}`;
-      meta.set(key, { kind: 'command', label: p.name });
-    } else {
-      const root = opts.projectRootOf(p.cwd) ?? p.cwd;
-      key = `project:${root}`;
-      meta.set(key, { kind: 'project', label: projectLabel(root, opts.home) });
-    }
-    keyOf.set(p.pid, key);
+    keyOf.set(p.pid, devToolKey(p));
   }
 
   // 4. Le reste : par nom

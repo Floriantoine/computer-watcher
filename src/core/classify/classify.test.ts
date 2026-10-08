@@ -75,6 +75,27 @@ describe('classifyGroups', () => {
     expect(cls.get('claude')!.instances[0]!.pids.sort()).toEqual([9001, 9002]);
   });
 
+  it('lancé par Claude : npx jest → sh -c → jest → worker, sous-arbre entier dans le projet ; npx et sh lanceurs, une instance Tests', () => {
+    const P = '/home/u/acme/backend';
+    const procs = [
+      proc('claude', 'claude', { pid: 9101, cwd: P }),
+      proc('zsh', '/usr/bin/zsh -c npx jest', { pid: 9102, ppid: 9101, cwd: P }),
+      proc('npm exec jest', 'npm exec jest', { pid: 9103, ppid: 9102, cwd: P }),
+      proc('sh', 'sh -c jest', { pid: 9104, ppid: 9103, cwd: P }),
+      proc('node', `node ${P}/node_modules/.bin/jest`, { pid: 9105, ppid: 9104, cwd: P }),
+      proc('node', `node ${P}/node_modules/jest-worker/build/processChild.js`, { pid: 9106, ppid: 9105, cwd: P }),
+    ];
+    const groups = buildGroups(procs, {
+      home: '/home/u', currentUid: 1000, isProtected: () => false, othersThreshold: { memMB: 0, cpuPercent: 0 },
+      projectRootOf: (cwd) => (cwd.startsWith(P) ? P : null), claudeDirs: ['/home/u/.claude'],
+    });
+    const project = classifyGroups(groups, ctx()).get(`project:${P}`)!;
+    expect(project.instances).toHaveLength(1);
+    expect(project.instances[0]).toMatchObject({ category: 'test', rootPid: 9105, launchedBy: 'claude' });
+    expect(project.instances[0]!.pids.sort()).toEqual([9105, 9106]);
+    expect(project.launcherPids.sort()).toEqual([9103, 9104]);
+  });
+
   it('serveur de dev lancé à la main : instance non marquée', () => {
     const { tree } = npmVite();
     const inst = classifyGroups([group('project:/home/u/acme', 'project', [tree])], ctx()).get('project:/home/u/acme')!.instances[0]!;

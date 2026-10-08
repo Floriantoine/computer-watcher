@@ -313,6 +313,37 @@ describe('règle 1 ter : outils de dev lancés par Claude dans un projet', () =>
     expect(byId(groups, 'deleted').launchedByClaude).toEqual([30]);
   });
 
+  test('claude → zsh → node playwright test → chromium et ses renderers : tout le sous-arbre dans le projet, pas dans Chrome', () => {
+    const B = '/home/u/beta';
+    const groups = buildGroups(session(
+      proc({ pid: 30, name: 'zsh', ppid: 20, cwd: B }),
+      proc({ pid: 31, name: 'node', ppid: 30, cwd: B, cmdline: `node ${B}/node_modules/.bin/playwright test` }),
+      proc({ pid: 32, name: 'chrome', ppid: 31, cwd: B, cmdline: '/home/u/.cache/ms-playwright/chromium-1/chrome-linux/chrome --headless' }),
+      proc({ pid: 33, name: 'chrome', ppid: 32, cwd: B, cmdline: '/home/u/.cache/ms-playwright/chromium-1/chrome-linux/chrome --type=renderer' }),
+      proc({ pid: 34, name: 'chrome', ppid: 32, cwd: B, cmdline: '/home/u/.cache/ms-playwright/chromium-1/chrome-linux/chrome --type=gpu-process' }),
+      proc({ pid: 40, name: 'chrome', ppid: 1, cmdline: '/opt/google/chrome/chrome' }),
+    ), o);
+    const project = byId(groups, `project:${B}`);
+    expect(project.pids.sort()).toEqual([31, 32, 33, 34]);
+    expect(project.launchedByClaude?.sort()).toEqual([31, 32, 33, 34]);
+    expect(byId(groups, 'app:chrome').pids).toEqual([40]);
+    expect(byId(groups, 'claude').pids.sort()).toEqual([20, 30]);
+  });
+
+  test('claude → zsh → npx jest → sh -c → node worker : tout dans le projet, rien dans command:sh', () => {
+    const A = '/home/u/acme/backend';
+    const groups = buildGroups(session(
+      proc({ pid: 30, name: 'zsh', ppid: 20, cwd: A }),
+      proc({ pid: 31, name: 'npm exec jest', ppid: 30, cwd: A, cmdline: 'npm exec jest' }),
+      proc({ pid: 32, name: 'sh', ppid: 31, cwd: A, cmdline: 'sh -c jest' }),
+      proc({ pid: 33, name: 'node', ppid: 32, cwd: A, cmdline: `node ${A}/node_modules/.bin/jest` }),
+      proc({ pid: 34, name: 'node', ppid: 33, cwd: A, cmdline: `node ${A}/node_modules/jest-worker/build/processChild.js` }),
+    ), o);
+    expect(byId(groups, `project:${A}`).pids.sort()).toEqual([31, 32, 33, 34]);
+    expect(groups.find((g) => g.id === 'command:sh')).toBeUndefined();
+    expect(byId(groups, 'claude').pids.sort()).toEqual([20, 30]);
+  });
+
   test('serveur de dev lancé à la main (Warp → zsh → npm run dev) : pas marqué', () => {
     const groups = buildGroups([
       proc({ pid: 10, name: 'warp' }),
