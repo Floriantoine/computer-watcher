@@ -35,6 +35,8 @@ export interface SystemInfo {
   load1: number;
   /** /proc/pressure/memory "some avg10", null si PSI indisponible */
   psiSome10: number | null;
+  /** Champ Shmem de /proc/meminfo : fichiers en mémoire (/tmp, /dev/shm) et mémoire partagée */
+  shmemKB: number | null;
 }
 
 export interface ProcNode {
@@ -114,6 +116,8 @@ export interface RecorderConfig {
   groupMinMemMB: number;
   leakMinMinutes: number;
   leakMinGrowthMB: number;
+  /** Alerte « fichiers en mémoire » quand Shmem dépasse ce seuil (Mo). */
+  tmpfsAlertMB: number;
 }
 
 /** Mémoire affichée en direct : RSS (rapide) ou PSS (mémoire partagée répartie, lue dans smaps_rollup). */
@@ -183,7 +187,13 @@ export interface KillResult {
 
 export type RangePreset = '1h' | '6h' | '24h' | '7d' | '30d';
 export interface TimeRange { from: number; to: number }
-export interface SystemSeries { ts: number[]; memUsedKB: number[]; swapUsedKB: number[]; memTotalKB: number; swapTotalKB: number; psi: (number | null)[]; cpu: number[]; load: number[] }
+export interface SystemSeries {
+  ts: number[]; memUsedKB: number[]; swapUsedKB: number[]; memTotalKB: number; swapTotalKB: number; psi: (number | null)[]; cpu: number[]; load: number[];
+  /** Fichiers en mémoire (Shmem) au pic du bucket ; null avant v4 (base non migrée ou données antérieures). */
+  shmemKB: (number | null)[];
+  /** Somme des pics de tous les groupes par bucket ; null si aucun groupe enregistré dans le bucket. */
+  groupsKB: (number | null)[];
+}
 export interface GroupSeries { key: string; label: string; kind: GroupKind; memKB: (number | null)[] }
 export interface GroupsHistory { ts: number[]; series: GroupSeries[] }
 export interface GroupHistory { ts: number[]; rssKB: (number | null)[]; swapKB: (number | null)[]; cpu: (number | null)[] }
@@ -195,6 +205,18 @@ export interface TopOptions { limit?: number; peakLimit?: number }
 export interface TopConsumer { key: string; label: string; kind: GroupKind; avgKB: number; maxKB: number; spark: number[] }
 /** Les deux classements, calculés en un seul parcours. */
 export interface TopResult { byAvg: TopConsumer[]; byMax: TopConsumer[] }
+export interface TmpDirUsage { path: string; sizeKB: number }
+/** Occupation actuelle de /tmp (tmpfs, en RAM), calculée à la demande par le main, en lecture seule. */
+export interface TmpUsage {
+  /** Plus gros dossiers de premier niveau, décroissants */
+  dirs: TmpDirUsage[];
+  /** Fichiers posés directement dans /tmp (cumul) */
+  rootFilesKB: number;
+  /** Dossiers illisibles ignorés */
+  skipped: number;
+  /** Arrêt au plafond d'entrées ou de durée : tailles « au moins » */
+  truncated: boolean;
+}
 export interface HistoryEvent { ts: number; type: string; groupKey: string | null; groupLabel: string | null; detail: Record<string, unknown> }
 export interface RecorderState {
   available: boolean; // systemd utilisateur disponible

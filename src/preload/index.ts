@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import type {
   Category, Config, ConfigState, Culprit, InstanceTargets, ProcInfo, Watch, GroupHistory, GroupsHistory, HistoryEvent, KillResult, KillTarget, KillSignal, ProcsHistory, RangePreset,
-  RecorderState, Snapshot, SystemSeries, TimeRange, TopOptions, TopResult,
+  RecorderState, Snapshot, SystemSeries, TimeRange, TmpUsage, TopOptions, TopResult,
 } from '../core/types';
 
 const api = {
@@ -47,6 +47,10 @@ const api = {
     culprits: (ts: number): Promise<Culprit[]> => ipcRenderer.invoke('history:culprits', ts),
     top: (r: RangePreset | TimeRange, o?: TopOptions): Promise<TopResult> => ipcRenderer.invoke('history:top', r, o),
     events: (r: RangePreset | TimeRange): Promise<HistoryEvent[]> => ipcRenderer.invoke('history:events', r),
+  },
+  tmp: {
+    /** Plus gros dossiers de /tmp à cet instant (lecture seule, au plus 100 000 entrées ou 2 s). */
+    topDirs: (): Promise<TmpUsage> => ipcRenderer.invoke('tmp:topDirs'),
   },
   recorder: {
     status: (): Promise<RecorderState> => ipcRenderer.invoke('recorder:status'),

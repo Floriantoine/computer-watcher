@@ -74,6 +74,7 @@ describe('metricLevels', () => {
     swapFreeKB: 20_000_000,
     load1: 1,
     psiSome10: 0,
+    shmemKB: 0,
     ...over,
   });
 

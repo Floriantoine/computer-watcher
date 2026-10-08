@@ -41,7 +41,12 @@ describe('parseCmdline', () => {
 describe('métriques système', () => {
   test('parseMeminfo', () => {
     const m = 'MemTotal:       32563200 kB\nMemFree:  1000 kB\nMemAvailable:   11534336 kB\nSwapTotal:      21495804 kB\nSwapFree:        1363148 kB\n';
-    expect(parseMeminfo(m)).toEqual({ memTotalKB: 32563200, memAvailableKB: 11534336, swapTotalKB: 21495804, swapFreeKB: 1363148 });
+    expect(parseMeminfo(m)).toEqual({ memTotalKB: 32563200, memAvailableKB: 11534336, swapTotalKB: 21495804, swapFreeKB: 1363148, shmemKB: null }); // ligne Shmem absente : inconnu, pas 0
+  });
+  test('parseMeminfo : Shmem (fichiers en mémoire : /tmp, /dev/shm)', () => {
+    const m = 'MemTotal:       32563200 kB\nMemAvailable:   11534336 kB\nBuffers:  100 kB\nSwapTotal:      21495804 kB\nSwapFree:        1363148 kB\n'
+      + 'Shmem:           7812345 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\n';
+    expect(parseMeminfo(m).shmemKB).toBe(7812345);
   });
   test('parseLoadavg', () => {
     expect(parseLoadavg('84.40 127.58 77.53 3/2100 3528380\n')).toBe(84.4);

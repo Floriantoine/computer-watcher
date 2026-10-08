@@ -22,7 +22,9 @@ export class HistoryWriter {
 
   constructor(private db: DatabaseSync) {
     this.s = {
-      system: db.prepare('INSERT OR REPLACE INTO system_samples VALUES (?,?,?,?,?,?,?,?)'),
+      system: db.prepare(
+        'INSERT OR REPLACE INTO system_samples(ts, mem_used_kb, mem_total_kb, swap_used_kb, swap_total_kb, psi_some10, load1, cpu_percent, shmem_kb) VALUES (?,?,?,?,?,?,?,?,?)',
+      ),
       group: db.prepare(
         'INSERT INTO groups(key,label,kind) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET label=excluded.label, kind=excluded.kind RETURNING id',
       ),
@@ -54,7 +56,7 @@ export class HistoryWriter {
     this.db.exec('BEGIN');
     try {
       const s = t.system;
-      this.s.system.run(t.ts, s.memTotalKB - s.memAvailableKB, s.memTotalKB, s.swapTotalKB - s.swapFreeKB, s.swapTotalKB, s.psiSome10, s.load1, t.cpuPercent);
+      this.s.system.run(t.ts, s.memTotalKB - s.memAvailableKB, s.memTotalKB, s.swapTotalKB - s.swapFreeKB, s.swapTotalKB, s.psiSome10, s.load1, t.cpuPercent, s.shmemKB);
       const small = { groups: 0, rssKB: 0, swapKB: 0, cpuPercent: 0, procCount: 0, pids: [] as number[] };
       for (const g of t.groups) {
         if (g.rssKB + g.swapKB < groupMinKB && g.cpuPercent < thresholds.procMinCpuPercent) {

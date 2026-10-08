@@ -3,15 +3,16 @@ import { basename, dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { rollupHours } from './maintenance';
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
-/** Tables horaires (v3) : sources des plages > 48 h, alimentées depuis les tables minute. */
+/** Tables horaires (v3) : sources des plages > 48 h, alimentées depuis les tables minute. Colonnes shmem : v4. */
 const HOUR_SCHEMA = `
 CREATE TABLE IF NOT EXISTS system_hour (
   ts INTEGER PRIMARY KEY,
   mem_used_kb_avg REAL NOT NULL, mem_used_kb_max INTEGER NOT NULL, mem_total_kb INTEGER NOT NULL,
   swap_used_kb_avg REAL NOT NULL, swap_used_kb_max INTEGER NOT NULL, swap_total_kb INTEGER NOT NULL,
-  psi_avg REAL, psi_max REAL, load1_avg REAL NOT NULL, cpu_avg REAL NOT NULL
+  psi_avg REAL, psi_max REAL, load1_avg REAL NOT NULL, cpu_avg REAL NOT NULL,
+  shmem_kb_avg REAL, shmem_kb_max INTEGER
 );
 CREATE TABLE IF NOT EXISTS group_hour (
   ts INTEGER NOT NULL, group_id INTEGER NOT NULL,
@@ -26,7 +27,8 @@ CREATE TABLE system_samples (
   ts INTEGER PRIMARY KEY,
   mem_used_kb INTEGER NOT NULL, mem_total_kb INTEGER NOT NULL,
   swap_used_kb INTEGER NOT NULL, swap_total_kb INTEGER NOT NULL,
-  psi_some10 REAL, load1 REAL NOT NULL, cpu_percent REAL NOT NULL
+  psi_some10 REAL, load1 REAL NOT NULL, cpu_percent REAL NOT NULL,
+  shmem_kb INTEGER
 );
 CREATE TABLE groups (id INTEGER PRIMARY KEY, key TEXT NOT NULL UNIQUE, label TEXT NOT NULL, kind TEXT NOT NULL);
 CREATE TABLE group_samples (
@@ -51,7 +53,8 @@ CREATE TABLE system_minute (
   ts INTEGER PRIMARY KEY,
   mem_used_kb_avg REAL NOT NULL, mem_used_kb_max INTEGER NOT NULL, mem_total_kb INTEGER NOT NULL,
   swap_used_kb_avg REAL NOT NULL, swap_used_kb_max INTEGER NOT NULL, swap_total_kb INTEGER NOT NULL,
-  psi_avg REAL, psi_max REAL, load1_avg REAL NOT NULL, cpu_avg REAL NOT NULL
+  psi_avg REAL, psi_max REAL, load1_avg REAL NOT NULL, cpu_avg REAL NOT NULL,
+  shmem_kb_avg REAL, shmem_kb_max INTEGER
 );
 CREATE TABLE group_minute (
   ts INTEGER NOT NULL, group_id INTEGER NOT NULL,
@@ -146,19 +149,37 @@ function backupBeforeMigration(db: DatabaseSync, path: string, now: number, back
   return null;
 }
 
-/** v1 -> v2 : procs.ppid (NULL pour l'historique existant) ; v2 -> v3 : tables horaires remplies depuis les minutes. Idempotent, atomique. */
+/** Colonnes v4 (Shmem de /proc/meminfo, NULL avant leur ajout), dans l'ordre d'ajout. */
+const SHMEM_COLUMNS: [table: string, column: string, type: string][] = [
+  ['system_samples', 'shmem_kb', 'INTEGER'],
+  ['system_minute', 'shmem_kb_avg', 'REAL'], ['system_minute', 'shmem_kb_max', 'INTEGER'],
+  ['system_hour', 'shmem_kb_avg', 'REAL'], ['system_hour', 'shmem_kb_max', 'INTEGER'],
+];
+
+/**
+ * v1 -> v2 : procs.ppid (NULL pour l'historique existant) ; v2 -> v3 : tables horaires remplies depuis les minutes ;
+ * v3 -> v4 : colonnes shmem (ALTER TABLE ADD COLUMN, sans réécriture des tables). Idempotent, atomique.
+ */
 function migrate(db: DatabaseSync): void {
   db.exec('BEGIN IMMEDIATE');
   try {
     if (!hasColumn(db, 'procs', 'ppid')) db.exec('ALTER TABLE procs ADD COLUMN ppid INTEGER');
+    const hadHours = tableExists(db, 'system_hour') && tableExists(db, 'group_hour');
     db.exec(HOUR_SCHEMA);
-    rollupHours(db);
+    for (const [t, c, type] of SHMEM_COLUMNS) {
+      if (!hasColumn(db, t, c)) db.exec(`ALTER TABLE ${t} ADD COLUMN ${c} ${type}`);
+    }
+    if (!hadHours) rollupHours(db); // v1/v2 seulement : une base v3 a déjà ses heures
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec('COMMIT');
   } catch (e) {
     db.exec('ROLLBACK');
     throw e;
   }
+}
+
+function tableExists(db: DatabaseSync, name: string): boolean {
+  return db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !== undefined;
 }
 
 export function hasColumn(db: DatabaseSync, table: string, column: string): boolean {
@@ -193,8 +214,8 @@ export function openHistoryDb(
       // base créée par une version plus récente : jamais écartée ni modifiée (retour arrière possible)
       throw Object.assign(new Error('HISTORY_DB_NEWER'), { code: 'HISTORY_DB_NEWER', version: v });
     }
-    // v1/v2 reconnues (table procs présente) : migration en place ; sinon traitée comme inconnue (.bak)
-    const migratable = (v === 1 || v === 2) && hasColumn(db, 'procs', 'id');
+    // v1/v2/v3 reconnues (table procs présente) : migration en place ; sinon traitée comme inconnue (.bak)
+    const migratable = (v === 1 || v === 2 || v === 3) && hasColumn(db, 'procs', 'id');
     let warning: string | null = null;
     if (migratable) {
       db.exec(WRITER_PRAGMAS);

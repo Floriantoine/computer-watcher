@@ -15,7 +15,7 @@ const group = (id: string, procs: ProcInfo[], extra: Partial<Group> = {}): Group
   protected: false, killable: true, subgroups: [], ...extra,
 });
 
-const system: SystemInfo = { memTotalKB: 100, memAvailableKB: 50, swapTotalKB: 0, swapFreeKB: 0, load1: 0, psiSome10: null };
+const system: SystemInfo = { memTotalKB: 100, memAvailableKB: 50, swapTotalKB: 0, swapFreeKB: 0, load1: 0, psiSome10: null, shmemKB: 0 };
 
 const inner = group('c', [proc(3, 'cron', { cmdline: '/usr/sbin/cron -f' })]);
 const groups = [

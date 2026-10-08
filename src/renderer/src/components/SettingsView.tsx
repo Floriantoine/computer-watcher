@@ -106,6 +106,7 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
     { f: 'groupMinMemMB', label: 'Seuil mémoire groupe', unit: 'Mo' },
     { f: 'leakMinMinutes', label: 'Fuite : durée', unit: 'min' },
     { f: 'leakMinGrowthMB', label: 'Fuite : hausse', unit: 'Mo' },
+    { f: 'tmpfsAlertMB', label: 'Alerte fichiers en mémoire (/tmp, shm)', unit: 'Mo' },
   ];
 
   const add = () => {

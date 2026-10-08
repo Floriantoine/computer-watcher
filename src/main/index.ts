@@ -23,6 +23,7 @@ import type { ConfigState, Group, KillResult, ProcInfo, RecorderState, Watch } f
 import { installDesktopEntry } from './desktopEntry';
 import { clearHistory, createHistoryReader } from './history';
 import { pollDelay, type WindowActivity } from './pollPolicy';
+import { sharedScan } from './tmpUsage';
 import {
   applyOverride, classifySetKey, isGroupKeys, isInstanceKeys, isRange, isSinceMs, isTopOptions, recorderState as computeRecorderState,
 } from './historyIpc';
@@ -383,6 +384,8 @@ ipcMain.handle('history:procs', (_e, key: unknown, r: unknown) => (typeof key ==
 ipcMain.handle('history:culprits', (_e, ts: unknown) => (Number.isFinite(ts) ? history.culprits(ts as number) : []));
 ipcMain.handle('history:top', (_e, r: unknown, o: unknown) => (isRange(r) && isTopOptions(o) ? history.top(r, o) : { byAvg: [], byMax: [] }));
 ipcMain.handle('history:events', (_e, r: unknown) => (isRange(r) ? history.events(r) : []));
+const tmpTopDirs = sharedScan();
+ipcMain.handle('tmp:topDirs', () => tmpTopDirs());
 ipcMain.handle('recorder:status', () => recorderState());
 ipcMain.handle('recorder:setEnabled', async (_e, enabled: unknown) => {
   if (typeof enabled !== 'boolean') throw new Error('Valeur invalide');

@@ -9,7 +9,7 @@ import { clearRequestPath, dbPath, statusPath } from '../core/paths';
 import type { Group, ProcInfo, SystemInfo } from '../core/types';
 import { clearHistory, createHistoryReader, recorderProcessAlive } from './history';
 
-const sys: SystemInfo = { memTotalKB: 1000, memAvailableKB: 400, swapTotalKB: 2000, swapFreeKB: 500, load1: 1.5, psiSome10: 3 };
+const sys: SystemInfo = { memTotalKB: 1000, memAvailableKB: 400, swapTotalKB: 2000, swapFreeKB: 500, load1: 1.5, psiSome10: 3, shmemKB: 0 };
 const p: ProcInfo = {
   pid: 10, ppid: 1, name: 'node', cmdline: 'node x', uid: 1000, startTicks: 100, ageSec: 1, cpuTicks: 0, cpuPercent: 0,
   rssKB: 60 * 1024, swapKB: 0, cwd: null, cwdDeleted: false,
