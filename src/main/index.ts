@@ -510,8 +510,9 @@ ipcMain.handle('alerts:takePending', () => alertOpener.take());
 ipcMain.handle('free:takePending', () => freeOpener.take());
 // « Ignorer 30 min » du pop-up de prévision : fichier d'état lu par le service avant toute alerte de prévision.
 ipcMain.handle('forecast:snooze', () => {
-  const until = Date.now() + SNOOZE_MS;
-  writeSnooze(forecastSnoozePath(data), until);
+  const at = Date.now();
+  const until = at + SNOOZE_MS;
+  writeSnooze(forecastSnoozePath(data), until, at);
   return until;
 });
 

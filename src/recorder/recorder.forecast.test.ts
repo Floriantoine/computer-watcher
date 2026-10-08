@@ -167,11 +167,21 @@ test('« Ignorer 30 min » survit à un redémarrage du service (fichier d’ét
   rec2.stop();
 });
 
+test('fichier « Ignorer » forgé (fin en 2099) : la prévision n\'est pas coupée (pas de pause perpétuelle)', async () => {
+  const s = setup({ memTotalGo: 128 });
+  const rec = s.make();
+  rec.start();
+  writeFileSync(forecastSnoozePath(s.dataDir), JSON.stringify({ snoozedUntil: 4_070_908_800_000 }));
+  run(s, rec, SLOW.from, SLOW.perMin, 21);
+  expect(s.forecasts()).toHaveLength(1);
+  rec.stop();
+});
+
 test('« Ignorer 30 min » depuis le pop-up de l’app (fichier écrit par le main) : respecté par le service', async () => {
   const s = setup({ memTotalGo: 128 });
   const rec = s.make();
   rec.start();
-  writeSnooze(forecastSnoozePath(s.dataDir), s.now() + 20 * MIN);
+  writeSnooze(forecastSnoozePath(s.dataDir), s.now() + 20 * MIN, s.now());
   let avail = run(s, rec, SLOW.from, SLOW.perMin, 19);
   expect(s.forecasts()).toHaveLength(0);
   avail = run(s, rec, avail, SLOW.perMin, 2);

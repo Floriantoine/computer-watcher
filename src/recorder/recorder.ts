@@ -194,7 +194,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
   const snooze = (until: number) => {
     forecastState = { ...forecastState, snoozedUntil: Math.max(forecastState.snoozedUntil ?? 0, until) };
     try {
-      writeSnooze(snoozeFile(), forecastState.snoozedUntil!);
+      writeSnooze(snoozeFile(), forecastState.snoozedUntil!, now());
     } catch (e) {
       log(`prévision: « Ignorer » non enregistré : ${(e as Error).message}`);
     }
