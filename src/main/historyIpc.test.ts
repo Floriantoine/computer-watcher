@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { DEFAULT_CONFIG } from '../core/config';
 import type { RecorderStatus } from '../core/types';
-import { applyOverride, checkConfigSet, noKill, clampToDetail, classifySetKey, isGroupKeys, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState } from './historyIpc';
+import { swapSettingsChanged, applyOverride, checkConfigSet, noKill, clampToDetail, classifySetKey, isGroupKeys, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState } from './historyIpc';
 
 test('isRange : préréglages et plages valides uniquement', () => {
   for (const ok of ['1h', '6h', '24h', '7d', '30d', { from: 0, to: 10 }]) expect(isRange(ok)).toBe(true);
@@ -144,4 +144,23 @@ describe('m-3 : Active seulement avec le crédit de Simulation enregistré par l
     const other = { 'r-a': { condition: JSON.stringify({ ...rule.condition, overMB: 200 }), simulatedMs: 3600_000, evaluations: 50 } };
     expect(() => checkConfigSet(cfg({ ...rule, mode: 'active' }), cfg(rule), other)).toThrow(/Au moins 10 min/);
   });
+});
+
+test('vue swap : swap:view ne prend aucun argument, isWatch inchangé (aucun champ « swap »)', async () => {
+  const { isWatch } = await import('../core/snapshot');
+  expect(isWatch({ groupId: null, query: '' })).toBe(true);
+  expect(isWatch({ groupId: 'app:x', query: 'vite', othersOpen: true, ports: true })).toBe(true);
+  expect(isWatch({ groupId: null, query: '', othersOpen: 'oui' })).toBe(false);
+  expect(isWatch({ groupId: null, query: '', ports: 'oui' })).toBe(false);
+  expect(isWatch({ groupId: 3, query: '' })).toBe(false);
+  expect(isWatch(null)).toBe(false);
+});
+
+test('swapSettingsChanged : seuil CPU d\'enregistrement ou seuil « endormi » modifié → cache de la vue swap à vider', async () => {
+  const { DEFAULT_CONFIG } = await import('../core/defaults');
+  const c = DEFAULT_CONFIG;
+  expect(swapSettingsChanged(c, c)).toBe(false);
+  expect(swapSettingsChanged(c, { ...c, recorder: { ...c.recorder, procMinCpuPercent: 2 } })).toBe(true);
+  expect(swapSettingsChanged(c, { ...c, ui: { ...c.ui, swapSleepMinMB: 250 } })).toBe(true);
+  expect(swapSettingsChanged(c, { ...c, ui: { ...c.ui, reducedEffects: true } })).toBe(false);
 });

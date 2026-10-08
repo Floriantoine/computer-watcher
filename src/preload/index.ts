@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import type { AlertEvent } from '../core/alerts';
 import type { EarlyoomSettings } from '../core/earlyoom';
 import type { RuleStats } from '../core/rules/types';
+import type { SwapView } from '../core/swap';
 import type {
   ApplyResult, Category, EarlyoomStatus, Config, ConfigState, Culprit, InstanceTargets, ProcInfo, Watch, GroupHistory, GroupsHistory, HistoryEvent, KillResult, KillTarget, KillSignal, ProcsHistory, ProcTreeAt, RangePreset,
   RecorderState, Snapshot, SystemSeries, TimeRange, TmpUsage, TopOptions, TopResult,
@@ -37,6 +38,10 @@ const api = {
       ipcRenderer.invoke('classify:set', scope, signature, category),
     /** Clés (≤ 200) des instances sans CPU ≥ 1 % depuis `sinceMs` ; null si l'historique est absent. */
     inactive: (keys: string[], sinceMs: number): Promise<string[] | null> => ipcRenderer.invoke('classify:inactive', keys, sinceMs),
+  },
+  swap: {
+    /** Vue swap (onglet Métriques) d'après le dernier snapshot ; null avant le premier snapshot. */
+    view: (): Promise<SwapView | null> => ipcRenderer.invoke('swap:view'),
   },
   instances: {
     /** Cibles de kill (≤ 200 clés) du dernier snapshot : processus d'une instance, ou lanceurs (et instances couvertes) pour une clé de groupe. */

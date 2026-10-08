@@ -71,7 +71,7 @@ export function childrenFirst(procs: readonly ProcInfo[]): ProcInfo[] {
 }
 
 /** `all` : processus du groupe au dernier snapshot (`window.procWatch.groupProcs`). */
-export function killRequestForGroup(g: GroupSummary, all: ProcInfo[], isProtected: (n: string) => boolean, currentUid: number): KillRequest {
+export function killRequestForGroup(g: Pick<GroupSummary, 'label'>, all: ProcInfo[], isProtected: (n: string) => boolean, currentUid: number): KillRequest {
   const procs = childrenFirst(all.filter((p) => p.uid === currentUid));
   return {
     targets: procs.map(targetOf),

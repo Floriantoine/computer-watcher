@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { addProc, addSocketFd, makeProcRoot, writeNetTcp } from './fakeProc';
-import { parseNetTcp, readListeningPorts } from './ports';
+import { parseNetTcp, parseNetTcpListen, readAllListenSockets, readListenSockets, readListeningPorts, readListeningPortsSlice } from './ports';
 
 const HEADER = '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n';
 const LISTEN = '   0: 0100007F:1435 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 12345 1 0000000000000000 100 0 0 10 0';
@@ -53,5 +53,73 @@ describe('readListeningPorts', () => {
     const root = makeProcRoot();
     addProc(root, { pid: 10, comm: 'node' });
     expect(readListeningPorts([10], root)).toEqual(new Map());
+  });
+});
+
+const PG = '   2: 00000000:1538 00000000:0000 0A 00000000:00000000 00:00000000 00000000   965        0 4242 1 0000000000000000 100 0 0 10 0';
+
+describe('parseNetTcpListen', () => {
+  it('LISTEN seulement, avec l\'uid (8e colonne)', () => {
+    expect(parseNetTcpListen(HEADER + LISTEN + '\n' + ESTAB + '\n' + PG + '\n')).toEqual([
+      { inode: 12345, port: 5173, uid: 1000 },
+      { inode: 4242, port: 5432, uid: 965 },
+    ]);
+  });
+  it('ligne tronquée ou uid illisible : ignorée', () => {
+    expect(parseNetTcpListen(HEADER + '   0: 0100007F:1435 00000000:0000 0A\n' + PG.replace('  965 ', '  abc ') + '\n')).toEqual([]);
+  });
+  it('parseNetTcp reste la vue inode → port', () => {
+    expect(parseNetTcp(HEADER + PG + '\n')).toEqual(new Map([[4242, 5432]]));
+  });
+});
+
+describe('readListenSockets', () => {
+  it('tcp + tcp6, dédoublonné par (port, uid), trié par port', () => {
+    const root = makeProcRoot();
+    writeNetTcp(root, [LISTEN, PG]);
+    writeNetTcp(root, [
+      '   0: 00000000000000000000000000000000:0BB8 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 777 1 0 100 0 0 10 0',
+      '   1: 00000000000000000000000000000000:1538 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000   965        0 778 1 0 100 0 0 10 0',
+    ], 'tcp6');
+    expect(readListenSockets(root)).toEqual([
+      { inode: 777, port: 3000, uid: 1000 },
+      { inode: 12345, port: 5173, uid: 1000 },
+      { inode: 4242, port: 5432, uid: 965 },
+    ]);
+  });
+  it('sans /proc/net : vide', () => {
+    expect(readListenSockets(makeProcRoot())).toEqual([]);
+  });
+});
+
+describe('readListeningPortsSlice', () => {
+  const setup = () => {
+    const root = makeProcRoot();
+    writeNetTcp(root, [LISTEN, PG]);
+    addProc(root, { pid: 10, comm: 'a' });
+    for (let fd = 0; fd < 3; fd++) addSocketFd(root, 10, fd, 1000 + fd);
+    addSocketFd(root, 10, 3, 12345);
+    addProc(root, { pid: 11, comm: 'b' });
+    addSocketFd(root, 11, 3, 4242);
+    addProc(root, { pid: 12, comm: 'c' });
+    addSocketFd(root, 12, 3, 7);
+    return root;
+  };
+  it('s\'arrête avant de dépasser le budget de fd et reprend au bon pid', () => {
+    const root = setup();
+    const sockets = readAllListenSockets(root);
+    const first = readListeningPortsSlice([10, 11, 12], 0, sockets, 5, root);
+    expect(first).toEqual({ ports: new Map([[10, [5173]], [11, [5432]]]), next: 2, tooBig: [] });
+    const second = readListeningPortsSlice([10, 11, 12], first.next, sockets, 5, root);
+    expect(second).toEqual({ ports: new Map(), next: 3, tooBig: [] });
+  });
+  it('pid illisible sauté ; pid à plus de fd que le budget : jamais lu, signalé (tooBig)', () => {
+    const root = setup();
+    const sockets = readAllListenSockets(root);
+    expect(readListeningPortsSlice([99, 10, 11], 0, sockets, 2, root)).toEqual({ ports: new Map([[11, [5432]]]), next: 3, tooBig: [10] });
+  });
+  it('fin de liste : next = longueur', () => {
+    const root = setup();
+    expect(readListeningPortsSlice([10], 1, readAllListenSockets(root), 5, root)).toEqual({ ports: new Map(), next: 1, tooBig: [] });
   });
 });

@@ -1,6 +1,8 @@
 import { AnimatePresence } from 'motion/react';
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, Search } from 'lucide-react';
+import type { OpenPort, OpenPortsInfo } from '../../../core/openPorts';
+import { parsePortQuery } from '../../../core/portQuery';
 import type { Category, GroupSummary as Group, InstanceSummary, MemoryMetric } from '../../../core/types';
 import { countByCategory, filterGroups, killCount, parseSelection, selectionCandidates, showProjectsOnlyHint } from '../categoryFilter';
 import { CategoryFilter } from './CategoryFilter';
@@ -8,6 +10,7 @@ import type { SortKey, ViewFilter } from '../viewModel';
 import { findGroup, visibleGroups } from '../viewModel';
 import { GroupCard, type GroupActions } from './GroupCard';
 import { GroupList } from './GroupList';
+import { PortResults } from './PortResults';
 import { ViewToggle, loadView, type ViewMode } from './ViewToggle';
 
 interface Props {
@@ -36,6 +39,10 @@ interface Props {
   onToggleOthers: (open: boolean) => void;
   /** Mémoire affichée (RSS ou PSS) : libellés. */
   memMetric?: MemoryMetric;
+  /** Recherche `:port` : ports ouverts calculés par le main pour la recherche en cours (null en attente). */
+  openPorts?: OpenPortsInfo | null;
+  onFreePort?: (row: OpenPort) => void;
+  onOpenPortGroup?: (groupId: string) => void;
 }
 
 const CATEGORIES_KEY = 'pw.categories';
@@ -106,12 +113,13 @@ export function MainView(props: Props) {
     order.current = { sort: filter.sort, ids: shown.map((g) => g.id) };
   });
   const layoutKey = shown.map((g) => g.id).join('\n');
+  const port = parsePortQuery(filter.query);
   return (
     <>
       <div className="toolbar">
         <div className="search">
           <Search size={15} strokeWidth={2} />
-          <input placeholder="Rechercher (nom, commande, dossier)…" value={filter.query} onChange={(e) => onFilter({ ...filter, query: e.target.value })} />
+          <input placeholder="Rechercher (nom, commande, dossier, :port)…" value={filter.query} onChange={(e) => onFilter({ ...filter, query: e.target.value })} />
         </div>
         <label className="chip-select">
           <select aria-label="Tri" value={filter.sort} onChange={(e) => onFilter({ ...filter, sort: e.target.value as SortKey })}>
@@ -138,8 +146,11 @@ export function MainView(props: Props) {
         projectsOnlyHint={showProjectsOnlyHint(categories, candidates)}
         onKillSelection={props.onKillInstances ? killSelection : undefined}
       />
+      {port !== null && props.onFreePort && props.onOpenPortGroup && (
+        <PortResults port={port} info={props.openPorts ?? null} pendingPids={pendingPids} onFree={props.onFreePort} onOpenGroup={props.onOpenPortGroup} />
+      )}
       {shown.length === 0 ? (
-        <p className="empty">Aucun groupe ne correspond.</p>
+        port !== null ? null : <p className="empty">Aucun groupe ne correspond.</p>
       ) : view === 'list' ? (
         <GroupList groups={shown} sparkOf={sparkOf} stuckPids={stuckPids} pendingPids={pendingPids} actions={actions} leakAt={leakAt} othersOpen={othersOpen} memMetric={memMetric} />
       ) : (

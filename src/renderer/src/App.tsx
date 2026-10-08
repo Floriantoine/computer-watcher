@@ -11,12 +11,17 @@ import { SettingsView } from './components/SettingsView';
 import { Toasts, type Toast } from './components/Toasts';
 import { MainView } from './components/MainView';
 import { MetricsView } from './components/MetricsView';
+import type { SwapRow } from '../../core/swap';
+import { freshSleepingKeys, sessionServiceIn, sleepingInstances, sleepLabel, stillAsleep, stopOneCheck } from './swapPanel';
 import { SystemBar, type SystemSparks } from './components/SystemBar';
 import { TopNav } from './components/TopNav';
 import { LiveBuffer, setLive, useHistory } from './history';
 import { instanceKillPlan, projectName, reclassifyMessage, reclassifyScope, skipInstanceKill } from './instances';
 import { leakMemOf } from './memMetric';
 import { readOthersOpen, writeOthersOpen } from './othersFold';
+import type { OpenPort } from '../../core/openPorts';
+import { parsePortQuery } from '../../core/portQuery';
+import { freePortCheck } from './ports';
 import type { SettingsSection } from './settingsNav';
 import { leakTimes } from './recorderForm';
 import { findGroup, visibleGroups, ipcErrorMessage, killResultMessages, killRequestForGroup, killRequestForProc, trackKills, type KillRequest, type ViewFilter } from './viewModel';
@@ -80,9 +85,26 @@ export function App() {
   // Le main n'envoie l'arbre que du groupe ouvert, et fait la recherche plein texte (commandes, dossiers).
   const detailId = route.view === 'detail' ? route.groupId : null;
   const othersShown = othersOpen && route.view === 'main';
+  // Panneau « Ports ouverts » (onglet Métriques) : le main lit alors les ports de tous les processus de l'utilisateur.
+  const portsShown = route.view === 'metrics';
+  // Une recherche `:port` ne compte que sur la page Processus (ailleurs, pas de lecture des ports de tous les processus).
+  const sentQuery = route.view === 'main' || parsePortQuery(filter.query) === null ? filter.query : '';
   useEffect(() => {
-    window.procWatch.watch({ groupId: detailId, query: filter.query, othersOpen: othersShown }).catch(() => {});
-  }, [detailId, filter.query, othersShown]);
+    window.procWatch.watch({ groupId: detailId, query: sentQuery, othersOpen: othersShown, ports: portsShown }).catch(() => {});
+  }, [detailId, sentQuery, othersShown, portsShown]);
+  // Actions stables pour les lignes de ports mémoïsées (elles appellent la version du dernier rendu).
+  const freePortRef = useRef<(row: OpenPort) => void>(() => {});
+  const onFreePort = useCallback((row: OpenPort) => freePortRef.current(row), []);
+  const onOpenPortGroup = useCallback((groupId: string) => setRoute({ view: 'detail', groupId }), []);
+  // Actions stables du panneau « Swap » (mémoïsé : il ne se redessine pas à chaque snapshot).
+  const swapActions = useRef({ stopSleeping: (_keys: readonly string[]) => {}, stopOne: (_row: SwapRow) => {}, setMinMB: (_mb: number) => {} });
+  const onStopSleeping = useCallback((keys: readonly string[]) => swapActions.current.stopSleeping(keys), []);
+  const onStopSwapRow = useCallback((row: SwapRow) => swapActions.current.stopOne(row), []);
+  const onSetSwapMinMB = useCallback((mb: number) => swapActions.current.setMinMB(mb), []);
+  // Dernier snapshot, pour les actions qui reprennent après une relecture asynchrone (vue swap relue au clic).
+  const snapshotRef = useRef(snapshot);
+  snapshotRef.current = snapshot;
+  const openSettings = useCallback((section: SettingsSection) => setRoute({ view: 'settings', section }), []);
   // Résultat de recherche valable seulement pour la requête en cours ; en attente de la réponse du main : pas de filtre.
   const query = filter.query.trim();
   const matches = useMemo(
@@ -125,6 +147,19 @@ export function App() {
     const walk = (gs: readonly GroupSummary[]) => {
       for (const g of gs) {
         for (const i of g.instances) out.add(i.key);
+        walk(g.subgroups);
+      }
+    };
+    walk(snapshot?.groups ?? []);
+    return out;
+  }, [snapshot]);
+
+  // Instances du dernier snapshot par clé (sous-groupes compris) : « Libérer :port » vise l'instance quand elle est connue.
+  const instancesByKey = useMemo(() => {
+    const out = new Map<string, InstanceSummary>();
+    const walk = (gs: readonly GroupSummary[]) => {
+      for (const g of gs) {
+        for (const i of g.instances) out.set(i.key, i);
         walk(g.subgroups);
       }
     };
@@ -268,6 +303,14 @@ export function App() {
       )
       .finally(() => instKillsInFlight.current.delete(inst.key));
   };
+  // « Libérer :port » : seulement une instance non protégée d'un projet qui tient toujours ce port (garde en plus du rendu),
+  // puis le chemin habituel du kill d'instance.
+  freePortRef.current = (row: OpenPort) => {
+    const r = freePortCheck(row, snapshot.openPorts, instancesByKey, (id) => findGroup(snapshot.groups, id)?.kind);
+    if (r.ok) killInstance(r.inst);
+    else pushToast(r.message);
+  };
+  const portQuery = parsePortQuery(filter.query);
   const groupLabel = (id: string) => findGroup(snapshot.groups, id)?.label ?? id;
   const nameOf = (inst: InstanceSummary) => projectName(inst, groupLabel(inst.groupId));
   // Kill groupé : ouvre le dialogue (ignoré pendant un envoi groupé en cours).
@@ -292,6 +335,49 @@ export function App() {
     } finally {
       bulkInFlight.current = false;
     }
+  };
+  // Vue swap, « Arrêter les endormis » : le kill groupé habituel (instances de projets du dernier snapshot seulement, cibles
+  // fraîches, « Tuer (n) »).
+  // Au clic, la vue swap est relue : une instance ou une appli réveillée entre-temps n'est plus visée.
+  swapActions.current.stopSleeping = (keys) => {
+    if (bulkInFlight.current || bulk) return;
+    window.procWatch.swap.view().then(
+      (fresh) => {
+        if (bulkInFlight.current || bulkRef.current) return;
+        const latest = snapshotRef.current?.groups ?? [];
+        const instances = sleepingInstances({ sleepingKeys: freshSleepingKeys(fresh, keys) }, latest);
+        if (instances.length === 0) pushToast('Plus aucune instance endormie à arrêter', 'info');
+        else setBulk({ instances, title: 'Arrêter les endormis' });
+      },
+      (e: unknown) => pushToast(ipcErrorMessage(e)),
+    );
+  };
+  // « Arrêter » d'une appli endormie : kill de groupe avec confirmation ; refusé si le groupe a changé, s'est réveillé,
+  // contient un processus protégé ou un service de session (jamais Claude : garde de stopOneCheck).
+  swapActions.current.stopOne = (row: SwapRow) => {
+    const g = findGroup(snapshot.groups, row.groupId);
+    const check = stopOneCheck(row, g ?? (groupIds.has(row.groupId) ? row : undefined));
+    if (!check.ok) {
+      pushToast(check.message);
+      return;
+    }
+    Promise.all([window.procWatch.swap.view(), window.procWatch.groupProcs(row.groupId)]).then(
+      ([fresh, procs]) => {
+        if (procs.length === 0) return pushToast(`« ${row.label} » a disparu`);
+        if (!stillAsleep(fresh, row)) return pushToast(`« ${row.label} » n'est plus endormi : rien n'est arrêté`, 'info');
+        const svc = sessionServiceIn(procs);
+        if (svc) return pushToast(`« ${row.label} » contient un service de session (${svc}) : non arrêtable depuis la vue swap`);
+        const freshRow = fresh!.rows.find((x) => x.key === row.key)!;
+        const req = killRequestForGroup(g ?? { label: row.label }, procs, isProtected, currentUid);
+        if (req.protectedProcs.length > 0) pushToast(`« ${row.label} » contient un processus protégé : à arrêter depuis son détail`);
+        else requestKill({ ...req, title: `${req.title} (${sleepLabel(freshRow.state, Date.now(), fresh!.coveredFrom)})` });
+      },
+      (e: unknown) => pushToast(ipcErrorMessage(e)),
+    );
+  };
+  swapActions.current.setMinMB = (mb) => {
+    const cfg = configState.config;
+    if (cfg.ui.swapSleepMinMB !== mb) void saveConfig({ ...cfg, ui: { ...cfg.ui, swapSleepMinMB: mb } });
   };
   const reclassify = (inst: InstanceSummary, category: Category | null) => {
     const name = projectName(inst, findGroup(snapshot.groups, inst.groupId)?.label ?? inst.groupId);
@@ -351,6 +437,9 @@ export function App() {
                 onKillInstances={killInstances}
                 othersOpen={othersOpen}
                 memMetric={snapshot.memMetric}
+                openPorts={portQuery !== null && snapshot.query === query ? snapshot.openPorts : null}
+                onFreePort={onFreePort}
+                onOpenPortGroup={onOpenPortGroup}
                 onToggleOthers={(open) => {
                   writeOthersOpen(open);
                   setOthersOpen(open);
@@ -386,7 +475,15 @@ export function App() {
                 at={route.at}
                 canOpen={(key) => groupIds.has(key)}
                 onOpenGroup={(key) => groupIds.has(key) && setRoute({ view: 'detail', groupId: key })}
-                onOpenSettings={(section) => setRoute({ view: 'settings', section })}
+                onOpenSettings={openSettings}
+                openPorts={snapshot.openPorts}
+                pendingPids={pendingPids}
+                onFreePort={onFreePort}
+                onOpenPortGroup={onOpenPortGroup}
+                swapMinMB={configState.config.ui.swapSleepMinMB}
+                onStopSleeping={onStopSleeping}
+                onStopSwapRow={onStopSwapRow}
+                onSetSwapMinMB={onSetSwapMinMB}
               />
             )}
             {route.view === 'settings' && (

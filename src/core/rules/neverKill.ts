@@ -1,18 +1,15 @@
 // src/core/rules/neverKill.ts — liste « jamais tuer » des règles automatiques, codée en dur (indépendante de la liste
 // protégée modifiable). Appliquée par le moteur ET de nouveau juste avant chaque signal (ruleRunner).
 
+/** Longueur maximale du nom d'un processus (comm, TASK_COMM_LEN − 1) : au-delà, le noyau tronque. */
+export const COMM_MAX = 15;
+
 /**
+ * Services de la session de bureau et du système (KWin, Plasma, X, portails, KWallet, PipeWire, D-Bus, systemd, earlyoom…) :
+ * source unique, partagée par les règles automatiques (liste « jamais tuer ») et la vue swap (jamais d'« Arrêter »).
  * Noms exacts (champ Name de /proc/<pid>/status, 15 caractères au plus, casse comprise, comme earlyoom) ou regex.
- * Claude, terminaux et shells, bureau (KWin, Plasma, X, gestionnaire de connexion), systemd, D-Bus, son, earlyoom, proc-watch.
  */
-export const NEVER_KILL: readonly (string | RegExp)[] = [
-  // Claude
-  'claude', 'claude-desktop',
-  // terminaux
-  'warp', 'warp-terminal', 'konsole', 'yakuake', 'gnome-terminal-', 'gnome-terminal', 'gnome-terminal-server', 'kitty', 'alacritty', 'wezterm',
-  'wezterm-gui', 'ghostty', 'foot', 'xterm', 'tilix', 'terminator', 'tmux: server', 'tmux', 'screen',
-  // shells
-  'bash', 'zsh', 'fish', 'sh', 'dash', 'ksh', 'tcsh', 'csh', 'nu',
+export const SESSION_SERVICES: readonly (string | RegExp)[] = [
   // bureau et session (KDE, GNOME, X), démons de session
   'kwin_wayland', 'kwin_wayland_wr', 'kwin_wayland_wrapper', 'kwin_x11', 'plasmashell', 'ksmserver', 'Xwayland', 'Xorg', 'sddm', 'gdm', 'gnome-shell',
   'kactivitymanagerd', 'dconf-service', 'xembedsniproxy', 'gmenudbusmenuproxy', 'kaccess', 'gpg-agent', 'ssh-agent',
@@ -21,12 +18,29 @@ export const NEVER_KILL: readonly (string | RegExp)[] = [
   // système
   'init', 'login', 'sshd', 'agetty', 'earlyoom', 'polkitd', 'wireplumber', 'pulseaudio',
   /^systemd/, /^dbus/, /^pipewire/,
+];
+
+/** Liste « jamais tuer » des règles : services de session, plus Claude, terminaux, shells et proc-watch. */
+export const NEVER_KILL: readonly (string | RegExp)[] = [
+  // Claude
+  'claude', 'claude-desktop',
+  // terminaux
+  'warp', 'warp-terminal', 'konsole', 'yakuake', 'gnome-terminal-', 'gnome-terminal', 'gnome-terminal-server', 'kitty', 'alacritty', 'wezterm',
+  'wezterm-gui', 'ghostty', 'foot', 'xterm', 'tilix', 'terminator', 'tmux: server', 'tmux', 'screen',
+  // shells
+  'bash', 'zsh', 'fish', 'sh', 'dash', 'ksh', 'tcsh', 'csh', 'nu',
+  ...SESSION_SERVICES,
   // proc-watch
   'proc-watch',
 ];
 
-const EXACT = new Set(NEVER_KILL.filter((e): e is string => typeof e === 'string'));
-const REGEXES = NEVER_KILL.filter((e): e is RegExp => e instanceof RegExp);
+/** Correspondance d'une liste : nom exact, regex, ou nom de 15 caractères (peut-être tronqué) qui commence un nom plus long. */
+function matcher(list: readonly (string | RegExp)[]): (name: string) => boolean {
+  const exact = new Set(list.filter((e): e is string => typeof e === 'string'));
+  const regexes = list.filter((e): e is RegExp => e instanceof RegExp);
+  const long = [...exact].filter((e) => e.length > COMM_MAX);
+  return (name) => exact.has(name) || regexes.some((r) => r.test(name)) || (name.length === COMM_MAX && long.some((e) => e.startsWith(name)));
+}
 
 /** Noms de Claude : leurs descendants sont aussi « jamais tuer » (outils, serveurs MCP, outils de dev lancés par Claude). */
 export const CLAUDE_NAMES: ReadonlySet<string> = new Set(['claude', 'claude-desktop']);
@@ -36,17 +50,20 @@ const PROC_WATCH_PATH = /(^|[\s/=])proc-watch[^\s/]*(\/|\s|$)/;
 const RECORDER_SCRIPT = /(^|[\s/])recorder\.js(\s|$)/;
 const CLAUDE_CMD = /(^|[\s/])(claude|claude-desktop)(\s|$)/;
 
-/** Longueur maximale du nom d'un processus (comm, TASK_COMM_LEN − 1) : au-delà, le noyau tronque. */
-export const COMM_MAX = 15;
+const neverKillName = matcher(NEVER_KILL);
+const sessionServiceName = matcher(SESSION_SERVICES);
 
 /**
  * Nom exact ou regex de la liste ; un nom de 15 caractères (peut-être tronqué) est aussi couvert s'il commence un nom
  * plus long de la liste (« gmenudbusmenupr » → gmenudbusmenuproxy).
  */
 export function isNeverKillName(name: string): boolean {
-  if (EXACT.has(name) || REGEXES.some((r) => r.test(name))) return true;
-  if (name.length === COMM_MAX) for (const e of EXACT) if (e.length > COMM_MAX && e.startsWith(name)) return true;
-  return false;
+  return neverKillName(name);
+}
+
+/** Service de la session de bureau ou du système (vue swap : jamais d'« Arrêter » ; règles : jamais tué). */
+export function isSessionService(name: string): boolean {
+  return sessionServiceName(name);
 }
 
 /**

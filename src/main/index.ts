@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { classifyGroups, type InstanceDecision } from '../core/classify/classify';
 import { readPackageHints } from '../core/classify/packageJson';
 import { CpuTracker } from '../core/collector/cpuTracker';
-import { readListeningPorts } from '../core/collector/ports';
+import { readAllListenSockets, readListeningPorts, readListeningPortsSlice } from '../core/collector/ports';
 import { applyPss, PssCache, pssTargets } from '../core/collector/pss';
 import { readProcesses, type CwdEntry, type StatusEntry } from '../core/collector/readProcesses';
 import { readSystem } from '../core/collector/readSystem';
@@ -20,6 +20,8 @@ import { formatAppEvent } from '../core/history/events';
 import { appEventsPath, dataDir, focusStatePath, forecastSnoozePath, rulesSimulationPath } from '../core/paths';
 import { readSimStatsFile } from '../core/rules/simulationFile';
 import { alertIdFromArgv } from '../core/alerts';
+import { ACTIVE_CPU_PERCENT } from '../core/history/queries';
+import { swapTargets, swapView, SWAP_IDLE_MS, SWAP_LOOKBACK_MS, type SwapView } from '../core/swap';
 import { buildSnapshot, flattenGroup, groupProcs, instanceTargets, isWatch, othersFollowed, type Classification, type FullSnapshot } from '../core/snapshot';
 import type { ConfigState, Group, KillResult, ProcInfo, RecorderState, Watch } from '../core/types';
 import { createFreeOpener, wantsFree } from './launchArgs';
@@ -30,10 +32,12 @@ import { installDesktopEntry } from './desktopEntry';
 import { createEarlyoomApplier, earlyoomStatus } from './earlyoom';
 import { clearHistory, createHistoryReader } from './history';
 import { pollDelay, type WindowActivity } from './pollPolicy';
+import { portModes } from './portModes';
+import { PortSweep } from './portSweep';
 import { sharedScan } from './tmpUsage';
 import { closeAction, confirmTray, createTrayController, defaultRun, statusNotifierAvailable, type TrayController } from './tray';
 import {
-  applyOverride, checkConfigSet, classifySetKey, isGroupKeys, noKill, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState as computeRecorderState,
+  applyOverride, checkConfigSet, classifySetKey, swapSettingsChanged, isGroupKeys, noKill, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState as computeRecorderState,
 } from './historyIpc';
 import { autoManageService, defaultSystemctl, recorderSyncDisabled, ensureRecorderService, recorderExecArgs, systemctlAvailable, unitPath } from './recorderService';
 
@@ -138,6 +142,8 @@ const separateSeen = new Map<string, number>();
 const CARD_HOLD_MS = 30_000;
 
 // Classement : ports en écoute relus au plus toutes les 10 s (groupes projet / dossier supprimé + instances db) ;
+// panneau « Ports ouverts » affiché ou recherche `:port` : ports de tous les processus de l'utilisateur, même cadence, lus
+// par tranches hors du tick (PortSweep) ; le classement garde son périmètre habituel ;
 // décisions en cache par instance (racine + empreinte des pid:startTicks de ses processus), cache vidé quand les corrections
 // ou les ports changent,
 // et toutes les 60 s (durée du cache de package.json).
@@ -152,9 +158,34 @@ const decisions = new Map<string, InstanceDecision>();
 let decisionsFor = '';
 let decisionsAt = 0;
 let lastClassification: Classification = new Map();
+// Mode « tous les ports » : lecture par tranches planifiées, hors du tick (voir PortSweep).
+const portSweep = new PortSweep({
+  readSockets: () => readAllListenSockets(),
+  readSlice: (pids, start, sockets, maxFds) => readListeningPortsSlice(pids, start, sockets, maxFds),
+  pids: () => {
+    if (!last) return [];
+    // Périmètre du classement (projets, dossiers supprimés) en tête, puis les autres processus de l'utilisateur.
+    const all = last.groups.flatMap(flattenGroup).filter((p) => p.uid === uid);
+    const first = new Set<number>();
+    for (const g of last.groups) if (g.kind === 'project' || g.kind === 'deleted') for (const p of flattenGroup(g)) first.add(p.pid);
+    return [...first, ...all.map((p) => p.pid).filter((pid) => !first.has(pid))];
+  },
+  schedule: (fn, ms) => setTimeout(fn, ms),
+  cancel: (h) => clearTimeout(h as NodeJS.Timeout),
+  now: () => Date.now(),
+  onDone: (listen) => {
+    if (!last) return;
+    last = { ...last, listen };
+    send();
+  },
+});
+
+/** Fenêtre cachée, réduite ou fermée : aucune lecture des ports de tous les processus (pause() arrête la passe en cours). */
+let windowHidden = true;
+const sweepWanted = () => portModes({ detectPorts: config.classify.detectPorts, watch, visible: !windowHidden }).sweep;
 
 function refreshPorts(groups: Group[], now: number): void {
-  if (!config.classify.detectPorts) {
+  if (!portModes({ detectPorts: config.classify.detectPorts, watch, visible: !windowHidden }).classify) {
     if (ports.size) {
       ports = new Map();
       portsKey = '';
@@ -243,7 +274,9 @@ function takeSnapshot(): FullSnapshot {
   recordSeparate(separateSeen, groups, now, (g) => isOverThreshold(g, config.othersThreshold));
   refreshPorts(groups, now);
   const classification = classify(groups, now);
-  return { takenAt: Date.now(), currentUid: uid, system: readSystem(), groups, classification, memMetric: config.ui.memoryMetric };
+  portSweep.setMode(sweepWanted());
+  portSweep.tick(); // la passe lit `last` : planifiée, elle s'exécute après ce snapshot
+  return { takenAt: Date.now(), currentUid: uid, system: readSystem(), groups, classification, memMetric: config.ui.memoryMetric, listen: portSweep.listen };
 }
 
 /** Dernier snapshot complet (arbres compris) : sert au kill de groupe et aux réponses immédiates à `watch`. */
@@ -310,12 +343,15 @@ function createWindow(): void {
   };
   const pause = () => {
     activity.hidden = true;
+    windowHidden = true;
+    portSweep.setMode(false);
     schedule();
     setLive(false);
   };
   const resume = () => {
     const wasHidden = activity.hidden;
     activity.hidden = false;
+    windowHidden = false;
     push(); // snapshot frais tout de suite
     schedule();
     if (wasHidden) setLive(true);
@@ -361,11 +397,14 @@ function createWindow(): void {
     if (activity.hidden || slowed) resume();
   });
   win.webContents.on('did-finish-load', () => {
+    windowHidden = activity.hidden;
     push();
     schedule();
   });
   win.on('closed', () => {
     focusWriter.set(false);
+    windowHidden = true;
+    portSweep.setMode(false);
     if (timer) clearTimeout(timer);
     timer = null;
     mainWin = null;
@@ -403,7 +442,11 @@ ipcMain.handle('config:get', () => configState());
 // Le renderer dit ce qu'il suit ; on renvoie tout de suite le dernier snapshot recalculé (sans relire /proc).
 ipcMain.handle('watch', (_e, w: unknown) => {
   if (!isWatch(w)) return;
-  watch = { groupId: w.groupId, query: w.query, othersOpen: w.othersOpen === true };
+  watch = { groupId: w.groupId, query: w.query, othersOpen: w.othersOpen === true, ports: w.ports === true };
+  // Panneau « Ports ouverts » ouvert ou recherche `:port` commencée : passe planifiée tout de suite (jamais ici, en synchrone) ;
+  // sortie du mode : liste effacée.
+  portSweep.setMode(sweepWanted()); // reçu fenêtre cachée : aucune passe lancée
+  if (last && last.listen !== portSweep.listen) last = { ...last, listen: portSweep.listen };
   // « Autres » déplié, ou ouverture de « Autres » / d'un de ses sous-groupes : leur classement est calculé tout de suite (reclassify envoie).
   const others = last?.groups.find((g) => g.kind === 'others');
   const unclassified = !!others && others.subgroups.length > 0 && !last!.classification.has(others.subgroups[0].id);
@@ -420,6 +463,7 @@ ipcMain.handle('config:set', (_e, next: unknown) => {
   const trayChanged = valid.ui.trayIcon !== config.ui.trayIcon;
   if (valid.classify.detectPorts !== config.classify.detectPorts) portsAt = 0;
   const overridesChanged = JSON.stringify(valid.classify.overrides) !== JSON.stringify(config.classify.overrides);
+  if (swapSettingsChanged(config, valid)) history.clearSwapCache();
   config = valid;
   if (overridesChanged) overridesVersion++; // autre réglage : le cache de classement reste valable
   protection = compileProtection(config.protected);
@@ -464,6 +508,25 @@ ipcMain.handle('classify:inactive', (_e, keys: unknown, since: unknown): string[
   const active = history.active(entries.flatMap((e) => e.targets), since);
   if (!active) return null;
   return entries.filter((e) => !e.targets.some((t) => active.has(`${t.pid}:${t.startTicks}`))).map((e) => e.key);
+});
+
+/**
+ * Vue swap (onglet Métriques) d'après le dernier snapshot : swap déjà lu par la collecte (VmSwap), dernière activité CPU lue
+ * dans l'historique seulement pour les processus des groupes au-dessus du seuil, sur au plus 7 jours (lecture par tranches,
+ * jamais un long blocage du main). Seuil d'activité : max(1, procMinCpuPercent) — en dessous, un petit processus peut ne pas
+ * être enregistré du tout. Couverture de l'historique (service arrêté, trous) vérifiée sur la même fenêtre.
+ */
+ipcMain.handle('swap:view', async (): Promise<SwapView | null> => {
+  const full = last;
+  if (!full) return null;
+  const minSwapKB = config.ui.swapSleepMinMB * 1024;
+  const rec = config.recorder;
+  const activeCpu = Math.max(ACTIVE_CPU_PERCENT, rec.procMinCpuPercent);
+  const lookback = Math.min(rec.summaryDays * 86_400_000, SWAP_LOOKBACK_MS);
+  const lastActive = await history.lastActive(swapTargets(full, minSwapKB), lookback, activeCpu);
+  const now = Date.now();
+  const coverage = lastActive ? history.coverage(now - lookback, now) : null;
+  return swapView({ full, lastActive, coverage, now, minSwapKB, idleMs: SWAP_IDLE_MS, intervalMs: rec.intervalSec * 1000, activeCpu });
 });
 
 /** Cibles de kill des instances (ou lanceurs d'un groupe) d'après le dernier snapshot ; instances disparues absentes. */

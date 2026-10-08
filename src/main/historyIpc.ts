@@ -104,3 +104,8 @@ export function checkConfigSet(next: unknown, current: Config, sim: SimStats | n
 
 /** Handler `kill` de l'app : PROC_WATCH_NO_KILL=1 (vérifications visuelles) → aucun signal, chaque cible refusée NOKILL. */
 export const noKill = (env: NodeJS.ProcessEnv = process.env): boolean => env.PROC_WATCH_NO_KILL === '1';
+
+/** Réglage qui invalide le cache de la vue swap : seuil CPU d'enregistrement (seuil d'activité) ou seuil « endormi ». */
+export function swapSettingsChanged(prev: Config, next: Config): boolean {
+  return prev.recorder.procMinCpuPercent !== next.recorder.procMinCpuPercent || prev.ui.swapSleepMinMB !== next.ui.swapSleepMinMB;
+}

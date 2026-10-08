@@ -88,6 +88,46 @@ test('history.active : null sans base, ensemble avec base, null (et erreur journ
   }
 });
 
+test('history.lastActive / coverage / from (vue swap) : null sans base, valeurs avec base, lecture par tranches', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pw-hist-'));
+  const reader = createHistoryReader(dir, () => DEFAULT_RECORDER);
+  const targets = [{ pid: 10, startTicks: 100 }];
+  expect(await reader.lastActive(targets, 86_400_000, 1)).toBeNull();
+  expect(await reader.lastActive([], 86_400_000, 1)).toBeNull();
+  expect(reader.from()).toBeNull();
+  expect(reader.coverage(0, Date.now())).toBeNull();
+  const now = Date.now();
+  makeDb(dir, now);
+  // enregistré mais CPU 0 : jamais actif → null (≠ base absente)
+  expect(await reader.lastActive(targets, 86_400_000, 1)).toEqual(new Map([['10:100', null]]));
+  expect(reader.from()).not.toBeNull();
+  expect(reader.coverage(now - 86_400_000, now)?.latestTs).not.toBeNull();
+  // 60 cibles : trois tranches, toutes présentes dans le résultat
+  const many = Array.from({ length: 60 }, (_, i) => ({ pid: 1000 + i, startTicks: 1 }));
+  const r = await reader.lastActive([...many, ...targets], 86_400_000, 1);
+  expect(r?.size).toBe(61);
+  reader.close();
+  expect(await reader.lastActive(targets, 86_400_000, 1)).toEqual(new Map([['10:100', null]]));
+});
+
+test('history.lastActive : cache vidé quand le seuil d\'activité change (et par clearSwapCache)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pw-hist-'));
+  const now = Date.now();
+  makeDb(dir, now);
+  const { db } = openHistoryDb(dbPath(dir));
+  const id = (db.prepare('SELECT id FROM procs WHERE pid = 10').get() as { id: number }).id;
+  // activité à 0,5 % il y a 2 h (minute seulement) : comptée sous un seuil de 0,4 %, pas sous 1 %
+  db.prepare('INSERT INTO proc_minute VALUES (?,?,?,?,?)').run(Math.floor((now - 2 * 3600_000) / 60_000) * 60_000, id, 1000, 1000, 0.5);
+  db.close();
+  const reader = createHistoryReader(dir, () => DEFAULT_RECORDER);
+  const targets = [{ pid: 10, startTicks: 100 }];
+  expect((await reader.lastActive(targets, 86_400_000, 1))?.get('10:100')).toBeNull();
+  expect((await reader.lastActive(targets, 86_400_000, 0.4))?.get('10:100')).not.toBeNull();
+  expect((await reader.lastActive(targets, 86_400_000, 1))?.get('10:100')).toBeNull();
+  reader.clearSwapCache();
+  expect((await reader.lastActive(targets, 86_400_000, 1))?.get('10:100')).toBeNull();
+});
+
 const backups = ['metrics.db.pre-v2-20261007T094000', 'metrics.db.bak-20261001T000000', 'metrics.db.bak-20261001T000000-wal'];
 
 test('clearHistory, service arrêté : l\'app supprime la base (+wal/shm) et les copies de sécurité', () => {
