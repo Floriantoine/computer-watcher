@@ -59,6 +59,7 @@ const matchScript = (script: string): CommandMatch | null => {
 };
 
 const PROJECT_PREFIX = 'project:';
+const DUPLICATE_SOURCES: ReadonlySet<InstanceSummary['source']> = new Set(['manual', 'command', 'port']);
 
 function classifyGroup(group: Group, ctx: ClassifyContext, hasInstanceBelow: (pid: number) => boolean): GroupClassification {
   const isProject = group.kind === 'project' || group.kind === 'deleted';
@@ -88,10 +89,12 @@ function classifyGroup(group: Group, ctx: ClassifyContext, hasInstanceBelow: (pi
   });
 
   // Doublons : dans un même projet, même catégorie parmi front/back/worker/db → toutes sauf la plus ancienne.
+  // Seules les instances reconnues (correction, commande, port) comptent : une catégorie déduite du package.json
+  // (script annexe, outil inconnu) ne doit jamais faire désigner un vrai serveur comme doublon.
   if (projectRoot !== null) {
     const byCat = new Map<Category, InstanceSummary[]>();
     for (const i of instances) {
-      if (!DUPLICATE_CATEGORIES.has(i.category)) continue;
+      if (!DUPLICATE_CATEGORIES.has(i.category) || !DUPLICATE_SOURCES.has(i.source)) continue;
       const list = byCat.get(i.category) ?? [];
       list.push(i);
       byCat.set(i.category, list);

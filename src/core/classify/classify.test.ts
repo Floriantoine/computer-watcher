@@ -191,6 +191,18 @@ describe('classifyGroups', () => {
     expect(r.launcherPids).toEqual([npm.pid, sh1.pid, conc.pid, sh2.pid, sh3.pid]);
   });
 
+  it('doublons : une instance classée par package.json ne compte pas (script annexe à côté du vrai back)', () => {
+    const conc = proc('node', 'node /x/node_modules/.bin/concurrently', { ageSec: 900 });
+    const script = proc('node', 'node scripts/x.js', { ageSec: 899 });
+    const nest = proc('node', 'node /x/node_modules/.bin/nest start', { ageSec: 899 });
+    const vite = proc('node', 'node /x/node_modules/.bin/vite', { ageSec: 899 });
+    const g = group('project:/x', 'project', [node(conc, node(script), node(nest), node(vite))]);
+    const r = classifyGroups([g], ctx({ pkg: () => ({ front: false, back: true, scripts: {} }) })).get(g.id)!;
+    const byLabel = new Map(r.instances.map((i) => [i.rootPid, i]));
+    expect(byLabel.get(script.pid)!.source).toBe('package');
+    expect(r.instances.every((i) => !i.duplicate)).toBe(true);
+  });
+
   it('forme réelle : sh -c dans command:sh, serveurs racines séparées du groupe projet', () => {
     const npm = proc('npm run dev', 'npm run dev', { ageSec: 900 });
     const conc = proc('node', 'node /x/node_modules/.bin/concurrently vite nest start', { ageSec: 900 });
