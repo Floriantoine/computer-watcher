@@ -4,7 +4,7 @@ import { BellRing, FlaskConical, FolderOpen, Gauge, Hourglass, ShieldAlert, Skul
 import { alertMessage, type AlertEvent, type AlertType, type AlertsConfig } from '../../../core/alerts';
 import type { ConfigState } from '../../../core/types';
 import type { Route } from '../App';
-import { badgeCount, pendingPopups, popupAction, popupStack, sameUnseen, seenAfterClose } from '../alertPopups';
+import { badgeCount, clickTarget, pendingPopups, popupAction, popupStack, sameUnseen, seenAfterClose } from '../alertPopups';
 import { useHistory } from '../history';
 import { eventMarkers, formatInstant } from '../metrics';
 import { TmpDirsList } from './TmpDirsList';
@@ -117,9 +117,9 @@ export const AlertPopups = memo(function AlertPopups({ pending, onClose, onClose
                     className="alert-popup-go"
                     aria-expanded={action.kind === 'tmp' ? open : undefined}
                     onClick={() => {
-                      if (action.kind === 'tmp') setTmpOpen(open ? null : e.id);
-                      else if (action.kind === 'group') onNavigate({ view: 'detail', groupId: action.groupKey });
-                      else onNavigate({ view: 'metrics', at: action.ts });
+                      const target = clickTarget(e, groupPresent);
+                      if (target === 'tmp') setTmpOpen(open ? null : e.id);
+                      else onNavigate(target);
                     }}
                   >
                     {action.label}

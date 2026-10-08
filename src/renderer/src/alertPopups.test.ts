@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { DEFAULT_ALERTS, type AlertEvent, type AlertsConfig } from '../../core/alerts';
-import { badgeCount, MAX_VISIBLE, pendingPopups, popupAction, popupStack, sameUnseen, seenAfterClose } from './alertPopups';
+import { badgeCount, clickTarget, MAX_VISIBLE, pendingPopups, popupAction, popupStack, sameUnseen, seenAfterClose } from './alertPopups';
 
 const ev = (id: number, ts: number, type: AlertEvent['type'] = 'leak', groupKey: string | null = null): AlertEvent =>
   ({ id, ts, type, groupKey, groupLabel: null, detail: {} });
@@ -88,5 +88,15 @@ describe('popupAction', () => {
     expect(popupAction(ev(1, 1, 'leak', 'project:/home/u/acme'), present)).toEqual({ kind: 'group', label: 'Voir le groupe', groupKey: 'project:/home/u/acme' });
     expect(popupAction(ev(1, 5, 'leak', 'project:/home/u/gone'), present)).toEqual({ kind: 'instant', label: 'Voir l’instant', ts: 5 });
     expect(popupAction(ev(1, 7, 'earlyoom_kill'), present)).toEqual({ kind: 'instant', label: 'Voir l’instant', ts: 7 });
+  });
+});
+
+describe('clickTarget (action choisie au clic)', () => {
+  test('groupe présent → détail ; groupe disparu depuis l’affichage → Métriques à l’instant ; tmpfs → liste /tmp', () => {
+    const e = ev(1, 4242, 'leak', 'project:/home/u/acme');
+    expect(clickTarget(e, () => true)).toEqual({ view: 'detail', groupId: 'project:/home/u/acme' });
+    expect(clickTarget(e, () => false)).toEqual({ view: 'metrics', at: 4242 });
+    expect(clickTarget(ev(2, 7, 'tmpfs'), () => true)).toBe('tmp');
+    expect(clickTarget(ev(3, 9, 'earlyoom_kill'), () => true)).toEqual({ view: 'metrics', at: 9 });
   });
 });

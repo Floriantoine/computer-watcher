@@ -1,5 +1,6 @@
 // Pop-ups d'alerte (logique pure) : lesquels montrer, empilement, « vu jusqu'à » après fermeture, action contextuelle.
 import type { AlertEvent, AlertsConfig } from '../../core/alerts';
+import type { Route } from './App';
 
 export const MAX_VISIBLE = 3;
 
@@ -55,4 +56,11 @@ export function popupAction(e: AlertEvent, groupPresent: (key: string) => boolea
   if (e.type === 'tmpfs') return { kind: 'tmp', label: 'Voir /tmp' };
   if (e.groupKey && groupPresent(e.groupKey)) return { kind: 'group', label: 'Voir le groupe', groupKey: e.groupKey };
   return { kind: 'instant', label: 'Voir l’instant', ts: e.ts };
+}
+
+/** Cible du bouton d'action, calculée au clic (le groupe a pu disparaître depuis l'affichage) : sinon Métriques à l'instant. */
+export function clickTarget(e: AlertEvent, groupPresent: (key: string) => boolean): Route | 'tmp' {
+  const a = popupAction(e, groupPresent);
+  if (a.kind === 'tmp') return 'tmp';
+  return a.kind === 'group' ? { view: 'detail', groupId: a.groupKey } : { view: 'metrics', at: e.ts };
 }

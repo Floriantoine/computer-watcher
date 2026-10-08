@@ -13,8 +13,13 @@ test('fichiers du dossier de données', () => {
   expect(clearRequestPath('/d')).toBe('/d/clear-request');
 });
 
-test('état de focus : $XDG_RUNTIME_DIR/proc-watch (tmpfs de session), sinon le dossier de données', () => {
-  expect(focusStatePath('/home/u/.local/share/proc-watch', { XDG_RUNTIME_DIR: '/run/user/1000' })).toBe('/run/user/1000/proc-watch/app-focus.json');
+test('état de focus : $XDG_RUNTIME_DIR/proc-watch/focus-<empreinte du dossier de données>.json, sinon le dossier de données', () => {
+  const real = focusStatePath('/home/u/.local/share/proc-watch', { XDG_RUNTIME_DIR: '/run/user/1000' });
+  expect(real).toMatch(/^\/run\/user\/1000\/proc-watch\/focus-[0-9a-f]{12}\.json$/);
+  // même dossier résolu → même fichier (service et app d'accord) ; autre dossier (test, mesure) → autre fichier
+  expect(focusStatePath('/home/u/.local/share/proc-watch/', { XDG_RUNTIME_DIR: '/run/user/1000' })).toBe(real);
+  expect(focusStatePath('/home/u/.local/share/x/../proc-watch', { XDG_RUNTIME_DIR: '/run/user/1000' })).toBe(real);
+  expect(focusStatePath('/home/u/.cache/pw-measure-data-x/proc-watch', { XDG_RUNTIME_DIR: '/run/user/1000' })).not.toBe(real);
   expect(focusStatePath('/home/u/.local/share/proc-watch', {})).toBe('/home/u/.local/share/proc-watch/app-focus.json');
   expect(focusStatePath('/d', { XDG_RUNTIME_DIR: 'relatif' })).toBe('/d/app-focus.json');
 });
