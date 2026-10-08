@@ -87,7 +87,7 @@ test.skipIf(process.env.PROC_WATCH_PERF !== '1')('requêtes Métriques et taille
   const tSummary = performance.now();
 
   // --- 24 h de détail écrites par le vrai writer (règle de repli du service), puis agrégées comme le service ---
-  const sys: SystemInfo = { memTotalKB: 32e6, memAvailableKB: 12e6, swapTotalKB: 20e6, swapFreeKB: 16e6, load1: 1.5, psiSome10: 2 };
+  const sys: SystemInfo = { memTotalKB: 32e6, memAvailableKB: 12e6, swapTotalKB: 20e6, swapFreeKB: 16e6, load1: 1.5, psiSome10: 2, shmemKB: 0 };
   const writer = new HistoryWriter(db);
   const churnAlive: { id: number; pid: number; until: number }[] = [];
   let maxGroupsPerTick = 0;

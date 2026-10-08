@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
 
-export type EventType = 'earlyoom_kill' | 'pressure' | 'gap' | 'app_kill' | 'leak';
+export type EventType = 'earlyoom_kill' | 'pressure' | 'gap' | 'app_kill' | 'leak' | 'tmpfs';
 
 const EARLYOOM = /sending (SIGTERM|SIGKILL) to process (\d+)(?: uid (\d+))? "([^"]*)"/;
 
@@ -31,6 +31,27 @@ export function detectGap(lastTs: number | null, now: number, intervalSec: numbe
 export function shouldRecordPressure(psi: number | null, lastPressureTs: number | null, now: number): boolean {
   if (psi === null || psi < 25) return false;
   return lastPressureTs === null || now - lastPressureTs >= 60_000;
+}
+
+export interface TmpfsAlertState { lastTs: number | null; armed: boolean }
+
+const TMPFS_REPEAT_MS = 3600_000;
+
+/**
+ * Alerte « fichiers en mémoire » : Shmem strictement au-dessus du seuil, et (réarmée par un passage sous le seuil,
+ * ou jamais émise, ou dernière il y a au moins 1 h). Sous le seuil : réarme.
+ */
+export function shouldRecordTmpfs(
+  shmemKB: number,
+  thresholdKB: number,
+  state: TmpfsAlertState,
+  now: number,
+): { record: boolean; state: TmpfsAlertState } {
+  if (shmemKB <= thresholdKB) return { record: false, state: { lastTs: state.lastTs, armed: true } };
+  if (state.armed || state.lastTs === null || now - state.lastTs >= TMPFS_REPEAT_MS) {
+    return { record: true, state: { lastTs: now, armed: false } };
+  }
+  return { record: false, state };
 }
 
 export interface AppEvent {

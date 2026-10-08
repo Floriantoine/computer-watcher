@@ -5,6 +5,7 @@ import { expect, test } from 'vitest';
 import { openHistoryDb } from './db';
 import {
   detectGap, formatAppEvent, takeAppEvents, insertEvent, lastEventTs, lastSampleTs, parseAppEvents, parseEarlyoom, parseJournalLine, shouldRecordPressure,
+  shouldRecordTmpfs,
 } from './events';
 
 test('parseEarlyoom : format récent avec uid', () => {
@@ -124,4 +125,24 @@ test('insertEvent résout le groupe ; lastSampleTs / lastEventTs', () => {
   expect(lastSampleTs(db)).toBeNull();
   db.exec('INSERT INTO system_samples(ts, mem_used_kb, mem_total_kb, swap_used_kb, swap_total_kb, psi_some10, load1, cpu_percent) VALUES (99,1,1,1,1,NULL,0,0)');
   expect(lastSampleTs(db)).toBe(99);
+});
+
+test('shouldRecordTmpfs : strictement au-dessus du seuil, au plus une fois par heure, réarmée sous le seuil', () => {
+  const T = 2_097_152;
+  const M = 60_000;
+  const fresh = { lastTs: null, armed: false };
+  // première fois au-dessus
+  const a = shouldRecordTmpfs(T + 1, T, fresh, 0);
+  expect(a).toEqual({ record: true, state: { lastTs: 0, armed: false } });
+  // égal au seuil : « dépasse » = strictement
+  expect(shouldRecordTmpfs(T, T, fresh, 0).record).toBe(false);
+  // toujours au-dessus 30 min plus tard : non ; 61 min : oui
+  expect(shouldRecordTmpfs(T + 1, T, a.state, 30 * M).record).toBe(false);
+  expect(shouldRecordTmpfs(T + 1, T, a.state, 61 * M)).toEqual({ record: true, state: { lastTs: 61 * M, armed: false } });
+  // au-dessus à t, sous le seuil à t+10 min (réarmée), au-dessus à t+20 min → oui
+  const below = shouldRecordTmpfs(T - 1, T, a.state, 10 * M);
+  expect(below).toEqual({ record: false, state: { lastTs: 0, armed: true } });
+  expect(shouldRecordTmpfs(T + 1, T, below.state, 20 * M)).toEqual({ record: true, state: { lastTs: 20 * M, armed: false } });
+  // redémarrage du service : état { armed: false, lastTs: il y a 20 min }, toujours au-dessus → non
+  expect(shouldRecordTmpfs(T + 1, T, { lastTs: 100 * M, armed: false }, 120 * M).record).toBe(false);
 });

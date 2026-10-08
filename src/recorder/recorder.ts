@@ -11,7 +11,8 @@ import { createProjectRootCache } from '../core/grouping/projectRootCache';
 import { DEV_TOOL } from '../core/grouping/rules';
 import { historyBackups, openHistoryDb } from '../core/history/db';
 import {
-  detectGap, insertEvent, lastEventTs, lastSampleTs, parseEarlyoom, parseJournalLine, shouldRecordPressure, takeAppEvents,
+  detectGap, insertEvent, lastEventTs, lastSampleTs, parseEarlyoom, parseJournalLine, shouldRecordPressure, shouldRecordTmpfs, takeAppEvents,
+  type TmpfsAlertState,
 } from '../core/history/events';
 import { aggregateHour, aggregateMinute, clearAll, leakCandidates, purge } from '../core/history/maintenance';
 import { HistoryWriter } from '../core/history/writer';
@@ -68,6 +69,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
   let errSeq = 0;
   st.jobErrors = jobErrors;
   let lastPressureTs: number | null = null;
+  let tmpfs: TmpfsAlertState = { lastTs: null, armed: false };
 
   const writeStatus = () => {
     try {
@@ -133,6 +135,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       lastMinute = last === null ? current : Math.max(Math.floor(last / M) * M, current - cfg.detailHours * 3600_000);
       lastHour = Math.floor(lastMinute / H) * H;
       lastPressureTs = lastEventTs(db, 'pressure');
+      tmpfs = { lastTs: lastEventTs(db, 'tmpfs'), armed: false };
       writeStatus();
     },
 
@@ -155,6 +158,10 @@ export function createRecorder(deps: RecorderDeps): Recorder {
           insertEvent(db, ts, 'pressure', null, { psi: system.psiSome10 });
           lastPressureTs = ts;
         }
+        const thresholdKB = cfg.tmpfsAlertMB * 1024;
+        const r = shouldRecordTmpfs(system.shmemKB, thresholdKB, tmpfs, ts);
+        tmpfs = r.state;
+        if (r.record) insertEvent(db, ts, 'tmpfs', null, { shmemKB: system.shmemKB, thresholdKB });
         st.lastSampleAt = ts;
         ok('tick');
         writeStatus();

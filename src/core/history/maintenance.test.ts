@@ -158,3 +158,28 @@ test('leakCandidates : jamais pour « Petits groupes » (somme de groupes variab
   for (let i = 0; i <= 60; i++) db.prepare('INSERT INTO group_minute VALUES (?,?,?,?,?,?)').run(i * M, 1, 1000 + i * 10 * 1024, 0, 0, 0);
   expect(leakCandidates(db, 61 * M, 60, 300)).toEqual([]);
 });
+
+test('Shmem : minute = moyenne/max des échantillons, heure depuis les minutes, NULL d’avant v4 → NULL', () => {
+  const db = open();
+  const ss = db.prepare(
+    'INSERT INTO system_samples(ts, mem_used_kb, mem_total_kb, swap_used_kb, swap_total_kb, psi_some10, load1, cpu_percent, shmem_kb) VALUES (?,1,1,0,0,NULL,0,0,?)',
+  );
+  ss.run(H, 1000);
+  ss.run(H + 5000, 3000);
+  ss.run(H + M, 5000);
+  // minutes d'avant v4 (shmem NULL) sur l'heure précédente
+  ss.run(0, null);
+  ss.run(5000, null);
+  for (const m of [0, H, H + M]) aggregateMinute(db, m);
+  expect(db.prepare('SELECT ts, shmem_kb_avg, shmem_kb_max FROM system_minute ORDER BY ts').all()).toEqual([
+    { ts: 0, shmem_kb_avg: null, shmem_kb_max: null },
+    { ts: H, shmem_kb_avg: 2000, shmem_kb_max: 3000 },
+    { ts: H + M, shmem_kb_avg: 5000, shmem_kb_max: 5000 },
+  ]);
+  aggregateHour(db, 0);
+  aggregateHour(db, H);
+  expect(db.prepare('SELECT ts, shmem_kb_avg, shmem_kb_max FROM system_hour ORDER BY ts').all()).toEqual([
+    { ts: 0, shmem_kb_avg: null, shmem_kb_max: null },
+    { ts: H, shmem_kb_avg: 3500, shmem_kb_max: 5000 },
+  ]);
+});

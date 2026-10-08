@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import { LiveBuffer, onLiveResume, setLive } from './history';
 
-const sys = (mem: number) => ({ memTotalKB: 100, memAvailableKB: 100 - mem, swapTotalKB: 10, swapFreeKB: 10, load1: 1, psiSome10: 0 });
+const sys = (mem: number) => ({ memTotalKB: 100, memAvailableKB: 100 - mem, swapTotalKB: 10, swapFreeKB: 10, load1: 1, psiSome10: 0, shmemKB: 0 });
 
 test('LiveBuffer garde 30 min et les séries par groupe', () => {
   const b = new LiveBuffer(30 * 60_000);

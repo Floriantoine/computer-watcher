@@ -31,6 +31,8 @@ export interface SystemInfo {
   load1: number;
   /** /proc/pressure/memory "some avg10", null si PSI indisponible */
   psiSome10: number | null;
+  /** Champ Shmem de /proc/meminfo : fichiers en mémoire (/tmp, /dev/shm) et mémoire partagée */
+  shmemKB: number;
 }
 
 export interface ProcNode {
@@ -104,6 +106,8 @@ export interface RecorderConfig {
   groupMinMemMB: number;
   leakMinMinutes: number;
   leakMinGrowthMB: number;
+  /** Alerte « fichiers en mémoire » quand Shmem dépasse ce seuil (Mo). */
+  tmpfsAlertMB: number;
 }
 
 export interface UiConfig {

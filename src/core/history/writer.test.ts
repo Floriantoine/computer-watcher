@@ -6,7 +6,7 @@ import type { Group, ProcInfo, SystemInfo } from '../types';
 import { openHistoryDb } from './db';
 import { HistoryWriter, SMALL_GROUPS_KEY } from './writer';
 
-const sys: SystemInfo = { memTotalKB: 1000, memAvailableKB: 400, swapTotalKB: 2000, swapFreeKB: 500, load1: 1.5, psiSome10: 3 };
+const sys: SystemInfo = { memTotalKB: 1000, memAvailableKB: 400, swapTotalKB: 2000, swapFreeKB: 500, load1: 1.5, psiSome10: 3, shmemKB: 77 };
 const proc = (pid: number, extra: Partial<ProcInfo> = {}): ProcInfo => ({
   pid, ppid: 1, name: 'node', cmdline: 'node x', uid: 1000, startTicks: 100, ageSec: 1, cpuTicks: 0, cpuPercent: 0,
   rssKB: 0, swapKB: 0, cwd: null, cwdDeleted: false, ...extra,
@@ -28,7 +28,7 @@ test('écrit système, tous les groupes, et seulement les processus au-dessus de
   const r = w.writeTick({ ts: 1000, system: sys, cpuPercent: 12, groups: [group('command:node', [big, busy, small]), group('command:tiny', [proc(13)])], procs: [big, busy, small, proc(13)] }, T);
   expect(r).toEqual({ groups: 2, procs: 2 });
   expect(db.prepare('SELECT * FROM system_samples').all()).toEqual([
-    { ts: 1000, mem_used_kb: 600, mem_total_kb: 1000, swap_used_kb: 1500, swap_total_kb: 2000, psi_some10: 3, load1: 1.5, cpu_percent: 12, shmem_kb: null },
+    { ts: 1000, mem_used_kb: 600, mem_total_kb: 1000, swap_used_kb: 1500, swap_total_kb: 2000, psi_some10: 3, load1: 1.5, cpu_percent: 12, shmem_kb: 77 },
   ]);
   expect((db.prepare('SELECT key FROM groups ORDER BY key').all() as { key: string }[]).map((g) => g.key)).toEqual(['command:node', 'command:tiny']);
   expect((db.prepare('SELECT pid FROM procs ORDER BY pid').all() as { pid: number }[]).map((p) => p.pid)).toEqual([10, 11]);
