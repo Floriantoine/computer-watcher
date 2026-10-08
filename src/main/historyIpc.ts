@@ -1,7 +1,7 @@
 // src/main/historyIpc.ts — parties pures de l'IPC historique (validation, état du service)
 import { isCategory } from '../core/classify/categories';
 import { MAX_OVERRIDE_KEY, MAX_OVERRIDES } from '../core/config';
-import type { Category, RangePreset, RecorderState, RecorderStatus, TimeRange, TopOptions } from '../core/types';
+import type { Category, Config, RangePreset, RecorderState, RecorderStatus, TimeRange, TopOptions } from '../core/types';
 
 export const isRange = (r: unknown): r is RangePreset | TimeRange =>
   ['1h', '6h', '24h', '7d', '30d'].includes(r as string) ||
@@ -82,4 +82,9 @@ export function applyOverride(overrides: Record<string, Category>, key: string, 
   if (!Object.prototype.hasOwnProperty.call(next, key) && Object.keys(next).length >= MAX_OVERRIDES) return null;
   next[key] = category;
   return next;
+}
+
+/** Réglage qui invalide le cache de la vue swap : seuil CPU d'enregistrement (seuil d'activité) ou seuil « endormi ». */
+export function swapSettingsChanged(prev: Config, next: Config): boolean {
+  return prev.recorder.procMinCpuPercent !== next.recorder.procMinCpuPercent || prev.ui.swapSleepMinMB !== next.ui.swapSleepMinMB;
 }

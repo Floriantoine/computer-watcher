@@ -19,6 +19,8 @@ export function createHistoryReader(dataDir: string, getConfig: () => RecorderCo
   let identity = '';
   /** Vue swap : minutes déjà lues par processus (vidé avec la connexion : base recréée ou vidée). */
   const lastActiveCache: LastActiveCache = new Map();
+  /** Seuil d'activité des entrées du cache : un autre seuil change ce qui compte comme activité, le cache repart de zéro. */
+  let cacheCpu: number | null = null;
   const closeDb = (): void => {
     lastActiveCache.clear();
     try {
@@ -91,6 +93,10 @@ export function createHistoryReader(dataDir: string, getConfig: () => RecorderCo
      */
     lastActive: async (targets: { pid: number; startTicks: number }[], lookbackMs: number, activeCpu: number): Promise<Map<string, number | null> | null> => {
       const out = new Map<string, number | null>();
+      if (cacheCpu !== activeCpu) {
+        lastActiveCache.clear();
+        cacheCpu = activeCpu;
+      }
       for (let i = 0; i < targets.length; i += LAST_ACTIVE_CHUNK) {
         if (i > 0) await new Promise<void>((r) => setImmediate(r));
         const part = run<Map<string, number | null> | null>(
@@ -104,6 +110,8 @@ export function createHistoryReader(dataDir: string, getConfig: () => RecorderCo
       pruneLastActiveCache(lastActiveCache, new Set(targets.map((t) => `${t.pid}:${t.startTicks}`)));
       return out;
     },
+    /** Vide le cache de la vue swap (seuil CPU d'enregistrement ou seuil « endormi » modifié). */
+    clearSwapCache: (): void => lastActiveCache.clear(),
     /** Couverture de l'historique sur [from, now] (dernier échantillon, trous) ; null sans base. */
     coverage: (from: number, now: number): HistoryCoverage | null => run((d) => historyCoverage(d, from, now), null),
     /** Premier instant couvert par l'historique ; null sans base ou base vide. */

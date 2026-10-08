@@ -132,8 +132,13 @@ describe('swapView', () => {
     const v = swapView(input(f, last([[p, NOW - 3 * D]]), { coverage: { ...COVERED, latestTs: NOW - 2 * H } }));
     expect(v.rows[0]!.children[0]!.state).toEqual({ kind: 'unknown', reason: 'stopped' });
     expect(v.sleepingKeys).toEqual([]);
-    // dernier échantillon plus vieux que 2 intervalles (11 s pour 5 s) : déjà « arrêté »
-    expect(swapView(input(f, last([[p, NOW - 3 * D]]), { coverage: { ...COVERED, latestTs: NOW - 11_000 } })).rows[0]!.children[0]!.state.kind).toBe('unknown');
+    // marge max(30 s, 3 intervalles) : 29 s pour 5 s → pas encore arrêté ; 31 s → arrêté ; intervalle 20 s → 60 s de marge
+    const at = (ago: number, intervalMs = 5000) =>
+      swapView(input(f, last([[p, NOW - 3 * D]]), { intervalMs, coverage: { ...COVERED, latestTs: NOW - ago } })).rows[0]!.children[0]!.state.kind;
+    expect(at(29_000)).toBe('sleeping');
+    expect(at(31_000)).toBe('unknown');
+    expect(at(50_000, 20_000)).toBe('sleeping');
+    expect(at(61_000, 20_000)).toBe('unknown');
   });
 
   test('service arrêté 20 h dans le dernier jour (trou > 10 min) → inconnu (trou), rien de proposé', () => {

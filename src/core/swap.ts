@@ -11,7 +11,7 @@ export const SWAP_LOOKBACK_MS = 7 * 86_400_000;
 
 /**
  * Pourquoi l'état est inconnu : pas d'historique (base absente ou vide), service d'enregistrement arrêté (dernier échantillon
- * plus vieux que 2 intervalles), trou de plus de 10 min dans le dernier jour, ou historique plus court qu'un jour.
+ * plus vieux que max(30 s, 3 intervalles)), trou de plus de 10 min dans le dernier jour, ou historique plus court qu'un jour.
  */
 export type UnknownReason = 'none' | 'stopped' | 'gap' | 'short';
 export type SleepState = { kind: 'active' } | { kind: 'sleeping'; sinceTs: number | null } | { kind: 'unknown'; reason: UnknownReason };
@@ -72,7 +72,7 @@ export interface SwapInput {
   now: number;
   minSwapKB: number;
   idleMs: number;
-  /** Intervalle d'enregistrement : au-delà de 2 intervalles sans échantillon, le service est jugé arrêté. */
+  /** Intervalle d'enregistrement : sans échantillon depuis max(30 s, 3 intervalles), le service est jugé arrêté. */
   intervalMs: number;
   /** Seuil d'activité CPU (%), max(1, procMinCpuPercent) : en dessous, un processus peut ne pas être enregistré du tout. */
   activeCpu: number;
@@ -85,11 +85,14 @@ function listedGroups(groups: readonly Group[]): Group[] {
   return groups.flatMap((g) => (g.kind === 'others' ? g.subgroups : [g]));
 }
 
+/** Sans échantillon depuis plus longtemps que ça, le service d'enregistrement est jugé arrêté (marge pour un tick lent). */
+export const stoppedAfterMs = (intervalMs: number): number => Math.max(30_000, 3 * intervalMs);
+
 /** Historique utilisable pour affirmer « aucune activité depuis `idleMs` » ? Sinon la raison de l'état inconnu. */
 function historyProblem(i: SwapInput): UnknownReason | null {
   const c = i.coverage;
   if (i.lastActive === null || !c || c.latestTs === null || c.coveredFrom === null) return 'none';
-  if (i.now - c.latestTs > 2 * i.intervalMs) return 'stopped';
+  if (i.now - c.latestTs > stoppedAfterMs(i.intervalMs)) return 'stopped';
   if (c.coveredFrom > i.now - i.idleMs) return c.gap ? 'gap' : 'short';
   return null;
 }

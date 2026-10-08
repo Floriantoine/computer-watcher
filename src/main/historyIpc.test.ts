@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import type { RecorderStatus } from '../core/types';
-import { applyOverride, clampToDetail, classifySetKey, isGroupKeys, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState } from './historyIpc';
+import { swapSettingsChanged, applyOverride, clampToDetail, classifySetKey, isGroupKeys, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState } from './historyIpc';
 
 test('isRange : préréglages et plages valides uniquement', () => {
   for (const ok of ['1h', '6h', '24h', '7d', '30d', { from: 0, to: 10 }]) expect(isRange(ok)).toBe(true);
@@ -100,4 +100,13 @@ test('vue swap : swap:view ne prend aucun argument, isWatch inchangé (aucun cha
   expect(isWatch({ groupId: null, query: '', ports: 'oui' })).toBe(false);
   expect(isWatch({ groupId: 3, query: '' })).toBe(false);
   expect(isWatch(null)).toBe(false);
+});
+
+test('swapSettingsChanged : seuil CPU d\'enregistrement ou seuil « endormi » modifié → cache de la vue swap à vider', async () => {
+  const { DEFAULT_CONFIG } = await import('../core/defaults');
+  const c = DEFAULT_CONFIG;
+  expect(swapSettingsChanged(c, c)).toBe(false);
+  expect(swapSettingsChanged(c, { ...c, recorder: { ...c.recorder, procMinCpuPercent: 2 } })).toBe(true);
+  expect(swapSettingsChanged(c, { ...c, ui: { ...c.ui, swapSleepMinMB: 250 } })).toBe(true);
+  expect(swapSettingsChanged(c, { ...c, ui: { ...c.ui, reducedEffects: true } })).toBe(false);
 });

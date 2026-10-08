@@ -36,7 +36,7 @@ import { PortSweep } from './portSweep';
 import { sharedScan } from './tmpUsage';
 import { closeAction, confirmTray, createTrayController, defaultRun, statusNotifierAvailable, type TrayController } from './tray';
 import {
-  applyOverride, classifySetKey, isGroupKeys, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState as computeRecorderState,
+  applyOverride, classifySetKey, swapSettingsChanged, isGroupKeys, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState as computeRecorderState,
 } from './historyIpc';
 import { autoManageService, defaultSystemctl, recorderSyncDisabled, ensureRecorderService, recorderExecArgs, systemctlAvailable, unitPath } from './recorderService';
 
@@ -458,6 +458,7 @@ ipcMain.handle('config:set', (_e, next: unknown) => {
   const trayChanged = valid.ui.trayIcon !== config.ui.trayIcon;
   if (valid.classify.detectPorts !== config.classify.detectPorts) portsAt = 0;
   const overridesChanged = JSON.stringify(valid.classify.overrides) !== JSON.stringify(config.classify.overrides);
+  if (swapSettingsChanged(config, valid)) history.clearSwapCache();
   config = valid;
   if (overridesChanged) overridesVersion++; // autre réglage : le cache de classement reste valable
   protection = compileProtection(config.protected);
