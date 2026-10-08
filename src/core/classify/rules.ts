@@ -50,7 +50,8 @@ export const COMMAND_RULES: Rule[] = [
   { category: 'build', label: 'tsc --watch', test: (c) => c.cmd === 'tsc' && has(c, '-w', '--watch') },
   { category: 'build', label: 'esbuild --watch', test: (c) => c.cmd === 'esbuild' && c.rest.some((a) => a === '--watch' || a.startsWith('--watch=')) },
   { category: 'build', label: 'tsserver', test: (c) => /(^|\/)tsserver(\.js)?$/.test(c.rawCmd) || c.cmd === 'tsserver' },
-  { category: 'build', label: (c) => c.cmd, test: (c) => is(c, 'eslint_d', 'prettierd', 'typescript-language-server', 'gopls', 'pyright', 'pyright-langserver', 'rust-analyzer', 'turbo') },
+  { category: 'build', label: (c) => c.cmd, test: (c) => is(c, 'eslint_d', 'prettierd', 'typescript-language-server', 'gopls', 'pyright', 'pyright-langserver', 'rust-analyzer') },
+  { category: 'build', label: 'turbo daemon', test: (c) => c.cmd === 'turbo' && has(c, 'daemon') },
   { category: 'build', label: 'nx daemon', test: (c) => c.cmd === 'nx' && has(c, 'daemon') },
   // front
   { category: 'front', label: 'vite preview', test: (c) => c.cmd === 'vite' && viteSub(c) === 'preview' },
