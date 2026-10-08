@@ -53,7 +53,7 @@ test.skipIf(process.env.PROC_WATCH_PERF !== '1')('requêtes Métriques et taille
   const ins = {
     group: db.prepare('INSERT INTO groups(id,key,label,kind) VALUES (?,?,?,?)'),
     proc: db.prepare('INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id,ppid) VALUES (?,?,?,?,?,?,?)'),
-    sm: db.prepare('INSERT INTO system_minute VALUES (?,?,?,?,?,?,?,?,?,?,?)'),
+    sm: db.prepare('INSERT INTO system_minute(ts, mem_used_kb_avg, mem_used_kb_max, mem_total_kb, swap_used_kb_avg, swap_used_kb_max, swap_total_kb, psi_avg, psi_max, load1_avg, cpu_avg) VALUES (?,?,?,?,?,?,?,?,?,?,?)'),
     gm: db.prepare('INSERT INTO group_minute VALUES (?,?,?,?,?,?)'),
     pm: db.prepare('INSERT INTO proc_minute VALUES (?,?,?,?,?)'),
     ev: db.prepare('INSERT INTO events(ts,type,group_id,detail) VALUES (?,?,?,?)'),

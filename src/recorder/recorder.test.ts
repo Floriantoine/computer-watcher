@@ -227,12 +227,12 @@ test('migration sans copie de sécurité possible : avertissement dans le statut
   const w = new DatabaseSync(join(data, 'metrics.db'));
   w.exec('DROP TABLE group_hour; DROP TABLE system_hour; PRAGMA user_version = 2;');
   w.close();
-  mkdirSync(join(data, 'metrics.db.pre-v3-19700101T001640')); // la copie ne peut pas être écrite à cet endroit
+  mkdirSync(join(data, 'metrics.db.pre-v4-19700101T001640')); // la copie ne peut pas être écrite à cet endroit
   rec.start();
   rec.tick();
   const status = JSON.parse(readFileSync(join(data, 'recorder-status.json'), 'utf8'));
   expect(status.warning).toMatch(/copie de sécurité/i);
   expect(status.lastError).toBeNull();
-  expect(db().prepare('PRAGMA user_version').get()).toEqual({ user_version: 3 });
+  expect(db().prepare('PRAGMA user_version').get()).toEqual({ user_version: 4 });
   rec.stop();
 });

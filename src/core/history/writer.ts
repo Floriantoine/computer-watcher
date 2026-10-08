@@ -22,7 +22,9 @@ export class HistoryWriter {
 
   constructor(private db: DatabaseSync) {
     this.s = {
-      system: db.prepare('INSERT OR REPLACE INTO system_samples VALUES (?,?,?,?,?,?,?,?)'),
+      system: db.prepare(
+        'INSERT OR REPLACE INTO system_samples(ts, mem_used_kb, mem_total_kb, swap_used_kb, swap_total_kb, psi_some10, load1, cpu_percent) VALUES (?,?,?,?,?,?,?,?)',
+      ),
       group: db.prepare(
         'INSERT INTO groups(key,label,kind) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET label=excluded.label, kind=excluded.kind RETURNING id',
       ),

@@ -19,7 +19,7 @@ function seeded() {
   // 10 minutes, un tick toutes les 5 s ; Chrome monte de 1 Mo par tick, a reste à 500 Mo
   for (let ts = 0; ts < 10 * M; ts += 5000) {
     const chrome = 1000 * 1024 + (ts / 5000) * 1024;
-    db.prepare('INSERT INTO system_samples VALUES (?,?,?,?,?,?,?,?)').run(ts, chrome + 500 * 1024, 32_000_000, 100, 20_000_000, 2, 1, 10);
+    db.prepare('INSERT INTO system_samples(ts, mem_used_kb, mem_total_kb, swap_used_kb, swap_total_kb, psi_some10, load1, cpu_percent) VALUES (?,?,?,?,?,?,?,?)').run(ts, chrome + 500 * 1024, 32_000_000, 100, 20_000_000, 2, 1, 10);
     db.prepare('INSERT INTO group_samples VALUES (?,?,?,?,?,?)').run(ts, 1, chrome, 0, 5, 3);
     db.prepare('INSERT INTO group_samples VALUES (?,?,?,?,?,?)').run(ts, 2, 500 * 1024, 0, 1, 1);
     db.prepare('INSERT INTO proc_samples VALUES (?,?,?,?,?)').run(ts, 1, chrome, 0, 5);
@@ -125,7 +125,7 @@ test('queryCulprits : même règle sur la source minute', () => {
   for (let m = 5; m >= 0; m--) rows.push([at - m * M, 1, 500 * 1024]);
   rows.push([at, 2, 10 * 1024 * 1024]); // apparu à la dernière minute
   const db = culpritDb('group_minute', rows);
-  for (let m = 5; m >= 0; m--) db.prepare('INSERT INTO system_minute VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(at - m * M, 1, 1, 100, 0, 0, 100, 0, 0, 1, 1);
+  for (let m = 5; m >= 0; m--) db.prepare('INSERT INTO system_minute(ts, mem_used_kb_avg, mem_used_kb_max, mem_total_kb, swap_used_kb_avg, swap_used_kb_max, swap_total_kb, psi_avg, psi_max, load1_avg, cpu_avg) VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(at - m * M, 1, 1, 100, 0, 0, 100, 0, 0, 1, 1);
   const c = queryCulprits(db, at, opts(now));
   expect(c[0]).toMatchObject({ key: 'app:new', deltaKB: 10 * 1024 * 1024 });
   expect(c[1]).toMatchObject({ key: 'app:flat', deltaKB: 0 });
@@ -145,7 +145,7 @@ test('queryCulprits : trou du recorder au début de la fenêtre (minute)', () =>
   const rows: [number, number, number][] = [];
   for (let m = 2; m >= 0; m--) rows.push([at - m * M, 2, 2 * 1024 * 1024]);
   const db = culpritDb('group_minute', rows);
-  for (let m = 2; m >= 0; m--) db.prepare('INSERT INTO system_minute VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(at - m * M, 1, 1, 100, 0, 0, 100, 0, 0, 1, 1);
+  for (let m = 2; m >= 0; m--) db.prepare('INSERT INTO system_minute(ts, mem_used_kb_avg, mem_used_kb_max, mem_total_kb, swap_used_kb_avg, swap_used_kb_max, swap_total_kb, psi_avg, psi_max, load1_avg, cpu_avg) VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(at - m * M, 1, 1, 100, 0, 0, 100, 0, 0, 1, 1);
   expect(queryCulprits(db, at, opts(now))[0]).toMatchObject({ key: 'app:new', deltaKB: 0 });
 });
 
@@ -186,7 +186,7 @@ test('lecture seule pendant qu\'un écrivain tient une transaction : pas d\'erre
   const { db, path } = seeded();
   const reader = openHistoryDb(path, { readOnly: true }).db;
   db.exec('BEGIN');
-  db.prepare('INSERT INTO system_samples VALUES (?,?,?,?,?,?,?,?)').run(10 * M, 1, 1, 1, 1, null, 0, 0);
+  db.prepare('INSERT INTO system_samples(ts, mem_used_kb, mem_total_kb, swap_used_kb, swap_total_kb, psi_some10, load1, cpu_percent) VALUES (?,?,?,?,?,?,?,?)').run(10 * M, 1, 1, 1, 1, null, 0, 0);
   expect(() => querySystem(reader, { from: 0, to: 11 * M }, opts(11 * M))).not.toThrow();
   db.exec('COMMIT');
   reader.close();
@@ -196,7 +196,7 @@ test('au plus 1000 points même quand from n\'est pas aligné sur le bucket', ()
   const path = join(mkdtempSync(join(tmpdir(), 'pw-q-')), 'm.db');
   const { db } = openHistoryDb(path);
   db.exec('BEGIN');
-  const ins = db.prepare('INSERT INTO system_samples VALUES (?,?,?,?,?,?,?,?)');
+  const ins = db.prepare('INSERT INTO system_samples(ts, mem_used_kb, mem_total_kb, swap_used_kb, swap_total_kb, psi_some10, load1, cpu_percent) VALUES (?,?,?,?,?,?,?,?)');
   for (let ts = 0; ts <= 5_010_000; ts += 1000) ins.run(ts, 1, 1, 1, 1, null, 0, 0);
   db.exec('COMMIT');
   const to = 5_004_000;
@@ -285,7 +285,7 @@ function hourSeeded() {
   for (let h = 0; h < 240; h++) {
     db.prepare('INSERT INTO group_hour VALUES (?,?,?,?,?,?)').run(h * H, 1, 1000 + h, 0, 2000 + h, 5);
     db.prepare('INSERT INTO group_hour VALUES (?,?,?,?,?,?)').run(h * H, 2, 300, 0, 300, 1);
-    db.prepare('INSERT INTO system_hour VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(h * H, 5000, 6000 + h, 8000, 0, 0, 100, 1, 2, 0.5, 10);
+    db.prepare('INSERT INTO system_hour(ts, mem_used_kb_avg, mem_used_kb_max, mem_total_kb, swap_used_kb_avg, swap_used_kb_max, swap_total_kb, psi_avg, psi_max, load1_avg, cpu_avg) VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(h * H, 5000, 6000 + h, 8000, 0, 0, 100, 1, 2, 0.5, 10);
     db.prepare('INSERT INTO proc_minute VALUES (?,?,?,?,?)').run(h * H, 1, 900, 950 + h, 5);
   }
   return db;
@@ -315,7 +315,7 @@ test('base v2 (sans tables horaires, lecture seule) : les plages > 48 h retomben
           INSERT INTO groups(id,key,label,kind) VALUES (1,'app:a','A','app');`);
   for (let m = 0; m < 3; m++) {
     w.prepare('INSERT INTO group_minute VALUES (?,?,?,?,?,?)').run(100 * H + m * M, 1, 10, 0, 10, 0);
-    w.prepare('INSERT INTO system_minute VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(100 * H + m * M, 1, 1, 8, 0, 0, 1, null, null, 0, 0);
+    w.prepare('INSERT INTO system_minute(ts, mem_used_kb_avg, mem_used_kb_max, mem_total_kb, swap_used_kb_avg, swap_used_kb_max, swap_total_kb, psi_avg, psi_max, load1_avg, cpu_avg) VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(100 * H + m * M, 1, 1, 8, 0, 0, 1, null, null, 0, 0);
   }
   w.close();
   const { db } = openHistoryDb(path, { readOnly: true });

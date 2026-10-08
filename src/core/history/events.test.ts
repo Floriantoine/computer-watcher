@@ -122,6 +122,6 @@ test('insertEvent résout le groupe ; lastSampleTs / lastEventTs', () => {
   expect(lastEventTs(db, 'pressure')).toBe(20);
   expect(lastEventTs(db, 'leak')).toBeNull();
   expect(lastSampleTs(db)).toBeNull();
-  db.exec('INSERT INTO system_samples VALUES (99,1,1,1,1,NULL,0,0)');
+  db.exec('INSERT INTO system_samples(ts, mem_used_kb, mem_total_kb, swap_used_kb, swap_total_kb, psi_some10, load1, cpu_percent) VALUES (99,1,1,1,1,NULL,0,0)');
   expect(lastSampleTs(db)).toBe(99);
 });
