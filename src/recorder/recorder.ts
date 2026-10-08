@@ -215,7 +215,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       // pas d'alerte : la condition reste « tenue » (holdingSince), lastAlertAt inchangé
       const holding = { ...forecastState, holdingSince: r.state.holdingSince };
       // « Ignorer 30 min » cliqué dans le pop-up de l'app (fichier écrit par le main)
-      const fileSnooze = readSnooze(snoozeFile());
+      const fileSnooze = readSnooze(snoozeFile(), ts);
       if (fileSnooze !== null && ts < fileSnooze) {
         forecastState = { ...holding, snoozedUntil: Math.max(holding.snoozedUntil ?? 0, fileSnooze) };
         return;
@@ -295,7 +295,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       lastPressureTs = lastEventTs(db, 'pressure');
       tmpfs = { lastTs: lastEventTs(db, 'tmpfs'), armed: false, belowSince: null };
       // pas de nouvelle alerte de prévision juste après un redémarrage du service
-      forecastState = { lastAlertAt: lastEventTs(db, 'forecast'), snoozedUntil: readSnooze(snoozeFile()), holdingSince: null };
+      forecastState = { lastAlertAt: lastEventTs(db, 'forecast'), snoozedUntil: readSnooze(snoozeFile(), now()), holdingSince: null };
       writeStatus();
     },
 

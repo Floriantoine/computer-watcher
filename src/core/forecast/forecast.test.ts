@@ -132,13 +132,41 @@ describe('stepAlert : condition tenue 30 s, anti-répétition, « Ignorer 30 min
     expect(r.state.lastAlertAt).toBe(NOW + 30_000);
   });
 
-  test('condition interrompue entre deux évaluations → le compte repart', () => {
+  test('condition interrompue deux fois de suite → le compte repart', () => {
     let r = stepAlert(f, fresh, NOW);
+    r = stepAlert(calm, r.state, NOW + 15_000);
     r = stepAlert(calm, r.state, NOW + 20_000);
     r = stepAlert(f, r.state, NOW + 35_000);
     expect(r.alert).toBe(false);
     r = stepAlert(f, r.state, NOW + 65_000);
     expect(r.alert).toBe(true);
+  });
+
+  test('épisode coupé en deux par UNE évaluation manquée : la tenue continue (cas réel de la revue)', () => {
+    let r = stepAlert(f, fresh, NOW);
+    r = stepAlert(f, r.state, NOW + 5000);
+    r = stepAlert(calm, r.state, NOW + 10_000); // un seul tick hors condition
+    expect(r.state.holdingSince).toBe(NOW);
+    r = stepAlert(f, r.state, NOW + 15_000);
+    r = stepAlert(f, r.state, NOW + 25_000);
+    expect(r.alert).toBe(false);
+    r = stepAlert(f, r.state, NOW + 30_000);
+    expect(r.alert).toBe(true);
+  });
+
+  test('deux évaluations manquées (consécutives ou non) pendant la tenue → le compte repart', () => {
+    let r = stepAlert(f, fresh, NOW);
+    r = stepAlert(calm, r.state, NOW + 5000);
+    r = stepAlert(calm, r.state, NOW + 10_000);
+    r = stepAlert(f, r.state, NOW + 30_000);
+    expect(r.alert).toBe(false);
+    let q = stepAlert(f, fresh, NOW);
+    q = stepAlert(calm, q.state, NOW + 5000);
+    q = stepAlert(f, q.state, NOW + 10_000);
+    q = stepAlert(calm, q.state, NOW + 15_000);
+    q = stepAlert(f, q.state, NOW + 30_000);
+    expect(q.alert).toBe(false);
+    expect(q.state.holdingSince).toBe(NOW + 30_000);
   });
 
   test('anti-répétition : 30 min entre deux alertes', () => {

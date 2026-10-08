@@ -7,7 +7,8 @@
 //  (a) ETA < 10 min ;
 //  (b) marge sous un plancher absolu = max(2 Gio, 10 % de la RAM) ;
 //  (c) baisse d'au moins 128 Mio entre deux moyennes par minute, sur au moins 3 des 5 dernières minutes ;
-//  (d) condition tenue sur deux évaluations séparées d'au moins 30 s (sans interruption entre elles).
+//  (d) condition tenue sur deux évaluations séparées d'au moins 30 s (une seule évaluation manquée tolérée entre elles).
+// Limite connue : une chute plus rapide que ~30 s ne peut pas être prévue (l'alerte arriverait au fond du creux).
 import type { EarlyoomThresholds } from './earlyoom';
 
 export interface MarginSample { ts: number; memAvailableKB: number; swapFreeKB: number; memTotalKB: number; swapTotalKB: number }
@@ -122,17 +123,25 @@ export function alertCondition(f: Forecast | null): boolean {
   return !!f && f.etaMin !== null && f.etaMin < ALERT_ETA_MIN && f.marginKB < f.floorKB && f.decliningMinutes >= MIN_DECLINING;
 }
 
-/** `holdingSince` : première évaluation d'une suite ininterrompue où la condition tient (null sinon). */
-export interface AlertState { lastAlertAt: number | null; snoozedUntil: number | null; holdingSince: number | null }
+/**
+ * `holdingSince` : première évaluation de l'épisode où la condition tient (null sinon). `missed` : l'épisode a déjà
+ * toléré son unique évaluation hors condition (les épisodes réels sont souvent coupés par un seul tick).
+ */
+export interface AlertState { lastAlertAt: number | null; snoozedUntil: number | null; holdingSince: number | null; missed?: boolean }
 
 /**
  * Une évaluation : (d) condition tenue depuis au moins HOLD_MS, puis anti-répétition (30 min) et « Ignorer 30 min ».
  * `state` est le nouvel état ; en cas d'alerte, `lastAlertAt` y vaut `now` (à ne retenir qu'une fois l'alerte enregistrée).
  */
 export function stepAlert(f: Forecast | null, s: AlertState, now: number): { alert: boolean; state: AlertState } {
-  if (!alertCondition(f)) return { alert: false, state: { ...s, holdingSince: null } };
-  const since = s.holdingSince !== null && s.holdingSince <= now ? s.holdingSince : now;
-  const state = { ...s, holdingSince: since };
+  if (!alertCondition(f)) {
+    // une seule évaluation manquée tolérée pendant la tenue ; la deuxième remet le compte à zéro
+    if (s.holdingSince !== null && !s.missed) return { alert: false, state: { ...s, missed: true } };
+    return { alert: false, state: { ...s, holdingSince: null, missed: false } };
+  }
+  const fresh = s.holdingSince === null || s.holdingSince > now;
+  const since = fresh ? now : s.holdingSince!;
+  const state = { ...s, holdingSince: since, missed: fresh ? false : !!s.missed };
   if (now - since < HOLD_MS) return { alert: false, state };
   if (s.lastAlertAt !== null && now >= s.lastAlertAt && now - s.lastAlertAt < ALERT_EVERY_MS) return { alert: false, state };
   if (s.snoozedUntil !== null && now < s.snoozedUntil) return { alert: false, state };

@@ -81,7 +81,6 @@ export function createFocusWriter(deps: { write: (json: string) => void; now?: (
   };
 }
 
-/** `--alert=<id>` : envoyée au renderer, et gardée pour lui s'il n'écoutait pas encore (premier chargement). */
 /**
  * Envoi différé (microtâche) et protégé : au démarrage à froid, `open()` est appelé pendant l'évaluation du module main,
  * avant que la fenêtre existe (un envoi synchrone lisait `mainWin` dans sa zone morte : ReferenceError, main planté).
@@ -96,6 +95,7 @@ export function deferSend(send: () => void): void {
   });
 }
 
+/** `--alert=<id>` : envoyée au renderer, et gardée pour lui s'il n'écoutait pas encore (premier chargement). */
 export function createAlertOpener(send: (id: number) => void) {
   let pending: number | null = null;
   return {

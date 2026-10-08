@@ -2,12 +2,18 @@
 // (bouton du pop-up de l'app), pour survivre à un redémarrage du service.
 import { readFileSync, renameSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { SNOOZE_MS } from './forecast';
 
-/** Fin de la période ignorée (ms), ou null (absent, illisible). */
-export function readSnooze(path: string): number | null {
+/**
+ * Fin de la période ignorée (ms), ou null (absent, illisible, valeur invalide). Bornée à `now + 30 min` : un fichier
+ * corrompu ou une horloge faussée ne coupe jamais la prévision plus longtemps qu'un « Ignorer 30 min ».
+ */
+export function readSnooze(path: string, now: number = Date.now()): number | null {
   try {
-    const o = JSON.parse(readFileSync(path, 'utf8')) as { snoozedUntil?: unknown };
-    return typeof o.snoozedUntil === 'number' && Number.isFinite(o.snoozedUntil) ? o.snoozedUntil : null;
+    const o = JSON.parse(readFileSync(path, 'utf8')) as { snoozedUntil?: unknown } | null;
+    const v = o && typeof o === 'object' && !Array.isArray(o) ? o.snoozedUntil : undefined;
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) return null;
+    return Math.min(v, now + SNOOZE_MS);
   } catch {
     return null;
   }

@@ -92,3 +92,18 @@ describe('thresholdKB : seuil effectif = le plus strict (le plus bas) des deux f
     expect(thresholdKB(t, { memTotalKB: 32 * GO, swapTotalKB: 0 }).memKB).toBeCloseTo(0.04 * 32 * GO, 0);
   });
 });
+
+describe('lignes écrites à la main', () => {
+  test.each([
+    ['EARLYOOM_ARGS="-m 8 -s 35" # commentaire', 8, 35],
+    ["EARLYOOM_ARGS='-m 6 -s 20'   # -m 50", 6, 20],
+    ['EARLYOOM_ARGS=-m 7 -s 30 # -m 50', 7, 30],
+    ['export EARLYOOM_ARGS="-m 5 -s 25"', 5, 25],
+    ['  export   EARLYOOM_ARGS=-m 4 -s 22', 4, 22],
+    ['EARLYOOM_ARGS="-m 8 --prefer (( -s 30 -r 5"', 8, 30],
+    ['EARLYOOM_ARGS="--ignore ^(a|b -m 9 -s 40"', 9, 40],
+    ['EARLYOOM_ARGS="-m 8 --prefer ^(x -m 50)$ -s 30"', 8, 30],
+  ])('%s → %d / %d', (text, mem, swap) => {
+    expect(parseEarlyoomThresholds(text)).toMatchObject({ memPercent: mem, swapPercent: swap, source: 'file' });
+  });
+});

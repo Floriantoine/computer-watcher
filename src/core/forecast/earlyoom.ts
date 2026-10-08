@@ -55,17 +55,23 @@ const depthAfter = (tok: string, d: number) => {
   return d;
 };
 
+const ASSIGN = /^\s*(?:export\s+)?EARLYOOM_ARGS=/;
+
+/** Valeur de la dernière affectation active (`export` accepté), guillemets retirés, commentaire final `# …` hors guillemets ignoré. */
 function activeLine(text: string): string | null {
   let line: string | null = null;
   for (const raw of text.split('\n')) {
-    const t = raw.trim();
-    if (/^EARLYOOM_ARGS=/.test(t)) line = t;
+    const m = ASSIGN.exec(raw);
+    if (m) line = raw.slice(m[0].length);
   }
   if (line === null) return null;
-  let value = line.slice('EARLYOOM_ARGS='.length);
-  const q = value[0];
-  if ((q === '"' || q === "'") && value.length >= 2 && value.endsWith(q)) value = value.slice(1, -1);
-  return value;
+  const q = line[0];
+  if (q === '"' || q === "'") {
+    const end = line.indexOf(q, 1);
+    return end > 0 ? line.slice(1, end) : line.slice(1);
+  }
+  const hash = line.search(/(^|\s)#/);
+  return (hash >= 0 ? line.slice(0, hash) : line).trim();
 }
 
 export function parseEarlyoomThresholds(text: string | null): EarlyoomThresholds {
@@ -83,7 +89,15 @@ export function parseEarlyoomThresholds(text: string | null): EarlyoomThresholds
       let d = 0;
       if (inline !== undefined) d = depthAfter(inline, 0);
       else if (i + 1 < tokens.length) d = depthAfter(tokens[++i]!, 0);
-      while (REGEX_OPTIONS.has(name) && d > 0 && i + 1 < tokens.length) d = depthAfter(tokens[++i]!, d);
+      if (REGEX_OPTIONS.has(name) && d > 0) {
+        // regex coupée aux espaces : jusqu'à ses parenthèses équilibrées si elles le sont plus loin ;
+        // sinon (regex mal formée), elle s'arrête à la prochaine option « -… » au lieu d'avaler la fin de la ligne
+        let j = i;
+        let dj = d;
+        while (dj > 0 && j + 1 < tokens.length) dj = depthAfter(tokens[++j]!, dj);
+        if (dj === 0) i = j;
+        else while (i + 1 < tokens.length && !tokens[i + 1]!.startsWith('-')) i++;
+      }
       continue;
     }
     const long = LONG[name];
