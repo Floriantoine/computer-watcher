@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain } from 'electron';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -21,6 +21,7 @@ import { appEventsPath, dataDir } from '../core/paths';
 import { buildSnapshot, flattenGroup, groupProcs, instanceTargets, isWatch, othersFollowed, type Classification, type FullSnapshot } from '../core/snapshot';
 import type { ConfigState, Group, KillResult, ProcInfo, RecorderState, Watch } from '../core/types';
 import { installDesktopEntry } from './desktopEntry';
+import { createEarlyoomApplier, earlyoomStatus } from './earlyoom';
 import { clearHistory, createHistoryReader } from './history';
 import { pollDelay, type WindowActivity } from './pollPolicy';
 import { sharedScan } from './tmpUsage';
@@ -400,6 +401,26 @@ ipcMain.handle('recorder:setEnabled', async (_e, enabled: unknown) => {
   return recorderState();
 });
 ipcMain.handle('recorder:clearHistory', () => clearHistory(data, { running: recorderState().running, pid: history.status()?.pid, beforeDelete: history.close }));
+
+ipcMain.handle('earlyoom:status', () => earlyoomStatus());
+/** Confirmation dans le main, avec la ligne exacte que le main a construite, avant tout pkexec. */
+const confirmEarlyoomLine = async (line: string): Promise<boolean> => {
+  const opts: Electron.MessageBoxOptions = {
+    type: 'warning',
+    title: 'earlyoom',
+    message: 'Écrire cette ligne dans /etc/default/earlyoom et redémarrer earlyoom ?',
+    detail: line,
+    buttons: ['Annuler', 'Écrire et redémarrer'],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  };
+  const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+  const r = parent ? await dialog.showMessageBox(parent, opts) : await dialog.showMessageBox(opts);
+  return r.response === 1;
+};
+const applyEarlyoomIpc = createEarlyoomApplier(() => config.protected, confirmEarlyoomLine);
+ipcMain.handle('earlyoom:apply', (_e, s: unknown, expectedLine: unknown) => applyEarlyoomIpc(s, expectedLine));
 
 ipcMain.handle('desktop:install', () => {
   if (!app.isPackaged) throw new Error('Disponible uniquement dans la version installée (AppImage ou .deb)');

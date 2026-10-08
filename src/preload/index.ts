@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
+import type { EarlyoomSettings } from '../core/earlyoom';
 import type {
-  Category, Config, ConfigState, Culprit, InstanceTargets, ProcInfo, Watch, GroupHistory, GroupsHistory, HistoryEvent, KillResult, KillTarget, KillSignal, ProcsHistory, ProcTreeAt, RangePreset,
+  ApplyResult, Category, EarlyoomStatus, Config, ConfigState, Culprit, InstanceTargets, ProcInfo, Watch, GroupHistory, GroupsHistory, HistoryEvent, KillResult, KillTarget, KillSignal, ProcsHistory, ProcTreeAt, RangePreset,
   RecorderState, Snapshot, SystemSeries, TimeRange, TmpUsage, TopOptions, TopResult,
 } from '../core/types';
 
@@ -50,6 +51,14 @@ const api = {
     top: (r: RangePreset | TimeRange, o?: TopOptions): Promise<TopResult> => ipcRenderer.invoke('history:top', r, o),
     /** Événements de la plage ; avec `groupKey`, seulement ceux du groupe et les pressions système. */
     events: (r: RangePreset | TimeRange, groupKey?: string): Promise<HistoryEvent[]> => ipcRenderer.invoke('history:events', r, groupKey),
+  },
+  earlyoom: {
+    status: (): Promise<EarlyoomStatus> => ipcRenderer.invoke('earlyoom:status'),
+    /**
+     * Le main reconstruit la ligne (liste protégée de sa config), refuse si elle diffère de `expectedLine` (l'aperçu),
+     * la montre dans une confirmation native, puis lance pkexec d'un script fixe avec la ligne en argument.
+     */
+    apply: (s: EarlyoomSettings, expectedLine: string): Promise<ApplyResult> => ipcRenderer.invoke('earlyoom:apply', s, expectedLine),
   },
   tmp: {
     /** Plus gros dossiers de /tmp à cet instant (lecture seule, au plus 100 000 entrées ou 2 s). */
