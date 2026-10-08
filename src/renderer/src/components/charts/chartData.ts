@@ -1,6 +1,5 @@
 import type uPlot from 'uplot';
 import type { GroupHistory } from '../../../../core/types';
-import { stackSeries } from '../../../../core/history/series';
 import type { ChartTone } from './uplotTheme';
 
 export type ChartAxis = 'left' | 'right';
@@ -40,12 +39,11 @@ export function stackBands(series: ChartSeries[]): uPlot.Band[] {
   return bands;
 }
 
-/** Graphe du détail d'un groupe : RAM et swap empilés (axe gauche), CPU en ligne (axe droit). */
+/** Graphe du détail d'un groupe : RAM et swap (axe gauche) et CPU (axe droit), chacun en courbe séparée. */
 export function groupChartSeries(h: GroupHistory): ChartSeries[] {
-  const [ram, ramSwap] = stackSeries([h.rssKB, h.swapKB]);
   return [
-    { label: 'RAM', values: ram, raw: h.rssKB, tone: 'mem', stacked: true },
-    { label: 'Swap', values: ramSwap, raw: h.swapKB, tone: 'swap', stacked: true },
+    { label: 'RAM', values: h.rssKB, tone: 'mem', fill: false, emphasis: true },
+    { label: 'Swap', values: h.swapKB, tone: 'swap', fill: false, emphasis: true },
     { label: 'CPU', values: h.cpu, tone: 'cpu', axis: 'right', fill: false },
   ];
 }

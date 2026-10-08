@@ -471,7 +471,8 @@ table.group-list td.act { width: 1%; text-align: right; }
 .chart-panel-head h3 svg { color: var(--muted); }
 .chart-panel-head .spacer { flex: 1; }
 .chart-legend { display: inline-flex; gap: 12px; color: var(--label); font-size: 11px; }
-.chart-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.chart-legend span { display: inline-flex; align-items: center; gap: 5px; cursor: default; transition: opacity 0.12s; }
+.chart-legend span.dim { opacity: 0.4; }
 .chart-legend i { width: 9px; height: 9px; border-radius: 3px; }
 .chart-legend .lg-mem { background: var(--g-mem); }
 .chart-legend .lg-swap { background: var(--g-swap); }
@@ -523,7 +524,9 @@ table.tree td.spark-cell .spark { width: 64px; }
 .metrics-toolbar .spacer { flex: 1; }
 .metrics-toolbar .hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .metrics-toolbar button { padding: 4px 10px; font-size: 11.5px; }
-.zoom-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 99px; background: rgba(124, 92, 255, 0.12); border: 1px solid rgba(124, 92, 255, 0.3); color: var(--text-2); }
+.zoom-chip { white-space: nowrap; flex: none; display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 99px; background: rgba(124, 92, 255, 0.12); border: 1px solid rgba(124, 92, 255, 0.3); color: var(--text-2); }
+.zoom-chip.live { background: rgba(47, 179, 122, 0.12); border-color: rgba(47, 179, 122, 0.35); }
+.live-dot { width: 7px; height: 7px; border-radius: 50%; background: #2fb37a; box-shadow: 0 0 0 3px rgba(47, 179, 122, 0.18); }
 .metrics-banner { display: flex; align-items: center; gap: 9px; margin: 0 var(--gutter) 12px; padding: 9px 12px; border-radius: var(--r-md); background: rgba(255, 181, 71, 0.08); border: 1px solid rgba(255, 181, 71, 0.25); color: #ffd9a0; }
 .metrics-banner svg { flex: none; color: var(--amber); }
 .metrics-banner b { font-weight: 600; }

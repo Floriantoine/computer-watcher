@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Activity, CircleAlert, Cpu, Gauge, HardDrive, MemoryStick, MousePointerClick, Power, RefreshCw, RotateCcw, Search, ZoomIn } from 'lucide-react';
+import { Activity, CircleAlert, Cpu, Gauge, HardDrive, MemoryStick, MousePointerClick, Power, RefreshCw, Search } from 'lucide-react';
 import type { Culprit, RangePreset, TimeRange } from '../../../core/types';
 import { formatKB } from '../format';
 import { useHistory } from '../history';
 import { ipcErrorMessage } from '../viewModel';
-import { eventMarkers, fetchMetrics, formatInstant, INVESTIGATION_LAYERS, investigationSeries, refreshMsFor } from '../metrics';
+import { eventMarkers, fetchMetrics, formatInstant, INVESTIGATION_LAYERS, investigationSeries, PRESET_MS, refreshMsFor } from '../metrics';
+import { useChartZoom, ZoomChip } from '../chartZoom';
 import { AlertsPanel } from './AlertsPanel';
 import { CulpritsPanel } from './CulpritsPanel';
 import { seriesIndexOf, type ChartSeries } from './charts/chartData';
 import { TimeChart, type ChartMarker } from './charts/TimeChart';
-import { formatAxisTime, KB_FORMAT, PERCENT_FORMAT, type ChartTone, type ValueFormat } from './charts/uplotTheme';
+import { KB_FORMAT, PERCENT_FORMAT, type ChartTone, type ValueFormat } from './charts/uplotTheme';
 import { RangeSelector } from './RangeSelector';
 import { TopConsumers } from './TopConsumers';
 
@@ -21,14 +22,13 @@ interface Props {
   onOpenGroup: (key: string) => void;
 }
 
-const H = 3_600_000;
-const PRESET_MS: Record<RangePreset, number> = { '1h': H, '6h': 6 * H, '24h': 24 * H, '7d': 7 * 24 * H, '30d': 30 * 24 * H };
-const MIN_ZOOM_MS = 10 * 60_000;
 /** Teintes des couches de l'enquête (de la plus grosse à la 8e), puis « Reste » en gris. */
 const LAYER_TONES: ChartTone[] = ['#7c5cff', '#ff5c8a', '#22d3a6', '#ffb547', '#3dd6ff', '#ff8a3d', '#c084fc', '#a3e635'];
 const REST_TONE: ChartTone = '#6b7180';
 const KB = { left: KB_FORMAT };
 const PCT = { left: PERCENT_FORMAT };
+const H = 3_600_000;
+
 
 /** Plus petite plage qui montre encore l'instant `at` (24 h au minimum, pour garder du contexte). */
 function presetFor(at: number | undefined): RangePreset {
@@ -51,7 +51,8 @@ interface SysChart {
 
 export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
   const [preset, setPreset] = useState<RangePreset>(() => presetFor(at));
-  const [zoom, setZoom] = useState<TimeRange | null>(null);
+  const z = useChartZoom(PRESET_MS[preset]);
+  const { zoom, view, setZoom } = z;
   const [cursor, setCursor] = useState<number | null>(at ?? null);
   const [statusGen, setStatusGen] = useState(0);
   const [enableError, setEnableError] = useState<string | null>(null);
@@ -69,10 +70,14 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
   // Une seule plage explicite pour toutes les requêtes : mêmes buckets, donc mêmes horodatages pour le système et les groupes.
   const data = useHistory(
     // Enquête : on ne charge que les groupes aux plus hauts pics ; le reste est déduit de la mémoire totale du système.
-    () => fetchMetrics(window.procWatch.history, zoom ?? { from: Date.now() - PRESET_MS[preset], to: Date.now() }),
+    () => fetchMetrics(window.procWatch.history, z.range()),
     [preset, zoom, reloadGen],
-    refreshMsFor(preset, zoom !== null),
+    // Zoom figé : rien ne bouge, pas de rafraîchissement ; zoom en direct : comme la plage complète.
+    refreshMsFor(preset, z.frozen),
   );
+  // En direct, la fenêtre affichée est celle des données fraîches (elle avance à chaque rafraîchissement).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => z.onData(), [data]);
   const system = data?.system;
   const events = data?.events;
 
@@ -138,13 +143,6 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
     return m;
   }, [events, cursor]);
 
-  // Zoom d'au moins 10 min : en deçà, l'axe du temps (HH:mm) répéterait les mêmes graduations.
-  const onSelectRange = (r: { from: number; to: number } | null) => {
-    if (!r) return setZoom(null);
-    const mid = (r.from + r.to) / 2;
-    const half = Math.max(r.to - r.from, MIN_ZOOM_MS) / 2;
-    setZoom({ from: Math.round(mid - half), to: Math.round(mid + half) });
-  };
   const pickPreset = (p: RangePreset) => {
     setZoom(null);
     setPreset(p);
@@ -154,21 +152,14 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
     <div className="metrics" data-testid="metrics-view">
       <div className="toolbar metrics-toolbar">
         <RangeSelector value={preset} onChange={pickPreset} />
-        {zoom && (
-          <>
-            <span className="zoom-chip mono"><ZoomIn size={12} strokeWidth={2} />{formatAxisTime(zoom.from, zoom.to - zoom.from)} → {formatAxisTime(zoom.to, zoom.to - zoom.from)}</span>
-            <button onClick={() => setZoom(null)} data-testid="reset-zoom">
-              <RotateCcw size={13} strokeWidth={2} /> Réinitialiser le zoom
-            </button>
-          </>
-        )}
+        <ZoomChip zoom={zoom} onReset={() => setZoom(null)} />
         {!zoom && refreshMsFor(preset, false) === null && (
           <button onClick={() => setReloadGen((n) => n + 1)} data-testid="metrics-refresh" title="Les plages de 7 et 30 jours ne se rafraîchissent pas toutes seules">
             <RefreshCw size={13} strokeWidth={2} /> Actualiser
           </button>
         )}
         <span className="spacer" />
-        <span className="sub hint">Glisser pour zoomer · double-clic pour revenir · clic pour les coupables</span>
+        <span className="sub hint">Glisser ou Ctrl + molette pour zoomer · clic molette ou Maj + molette pour se déplacer · double-clic pour revenir · clic pour les coupables</span>
       </div>
 
       <StatusBanner
@@ -195,7 +186,7 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
               {'sub' in c && <span className="sub">{c.sub}</span>}
             </div>
             {'series' in c ? (
-              <TimeChart ts={system!.ts} series={c.series} height={96} format={c.format} markers={markers} focusMarker={hoverTs} onCursor={setCursor} onSelectRange={onSelectRange} />
+              <TimeChart ts={system!.ts} series={c.series} height={96} format={c.format} markers={markers} focusMarker={hoverTs} markerLabels={false} xRange={view} onWheel={z.onWheel} onDragPan={z.onDragPan} onCursor={setCursor} onSelectRange={z.onSelectRange} />
             ) : (
               <div className="chart-empty small">{data === undefined ? 'Chargement…' : 'Pas de données'}</div>
             )}
@@ -217,7 +208,7 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
                   </span>
                 ))}
               </div>
-              <TimeChart ts={inv.ts} series={inv.series} height={320} format={KB} markers={markers} focusSeries={focusSeries} focusMarker={hoverTs} onCursor={setCursor} onSelectRange={onSelectRange} />
+              <TimeChart ts={inv.ts} series={inv.series} height={320} format={KB} markers={markers} focusSeries={focusSeries} focusMarker={hoverTs} xRange={view} onWheel={z.onWheel} onDragPan={z.onDragPan} onCursor={setCursor} onSelectRange={z.onSelectRange} />
             </>
           ) : (
             <div className="chart-empty tall">{data === undefined ? 'Chargement…' : 'Pas encore assez de données pour l’enquête'}</div>
