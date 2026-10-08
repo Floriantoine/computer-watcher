@@ -1,8 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { AnimatePresence, motion, useIsPresent } from 'motion/react';
-import { AppWindow, ArrowLeft, HardDrive, Layers, ShieldCheck, Sparkles, Trash2, TriangleAlert, Wrench, X } from 'lucide-react';
+import { AppWindow, ArrowLeft, HardDrive, Layers, ShieldCheck, Sparkles, Tags, Trash2, TriangleAlert, Wrench, X } from 'lucide-react';
 import { DEFAULT_CONFIG } from '../../../core/defaults';
 import type { Config, ConfigState, RecorderState } from '../../../core/types';
+import { CATEGORY_META } from '../categories';
+import { overrideRows, withDetectPorts, withoutOverride } from '../classifySettings';
+import { useFocusTrap } from '../focusTrap';
 import { formatKB } from '../format';
 import { recorderToForm, validateRecorderForm, type RecorderErrors, type RecorderForm } from '../recorderForm';
 
@@ -27,6 +30,8 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
   const [errors, setErrors] = useState<RecorderErrors>({});
   const [busy, setBusy] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [confirmOverrides, setConfirmOverrides] = useState(false);
+  const overrides = overrideRows(config.classify.overrides);
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -178,6 +183,75 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
           </div>
         </section>
 
+        <section data-testid="classify-panel">
+          <h3><Tags size={15} strokeWidth={2} />Classement</h3>
+          <p className="hint">Les instances (front, back, BDD…) sont classées automatiquement. Une correction faite avec « Reclasser » dans le détail d'un projet est retenue pour ce projet et ce motif de commande.</p>
+          <div className="rec-switch">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={config.classify.detectPorts}
+              aria-label="Détecter les ports"
+              className="switch"
+              onClick={() => onSave(withDetectPorts(config, !config.classify.detectPorts))}
+            >
+              <i />
+            </button>
+            <span>Détecter les ports</span>
+          </div>
+          <p className="hint">Ports TCP en écoute des projets et des bases, lus toutes les 10 s. Ceux des processus d'autres utilisateurs ne sont pas lisibles.</p>
+          <h4 className="overrides-title">Corrections manuelles{overrides.length > 0 && <span className="cat-count">{overrides.length}</span>}</h4>
+          {overrides.length === 0 ? (
+            <p className="hint" data-testid="overrides-empty">Aucune correction : tout est classé automatiquement.</p>
+          ) : (
+            <>
+              <ul className="overrides" data-testid="overrides-list">
+                {overrides.map((o) => {
+                  const m = CATEGORY_META[o.category];
+                  const Icon = m.icon;
+                  return (
+                    <li key={o.key} data-testid="override-row">
+                      <span className="ov-project" title={o.scope}>{o.project}</span>
+                      <code className="ov-sig" title={o.signature}>{o.signature || '—'}</code>
+                      <span className="cat-tag" style={{ '--cat': m.color } as CSSProperties}>
+                        <Icon size={11} strokeWidth={2.4} />
+                        {m.label}
+                      </span>
+                      <button
+                        className="ov-remove"
+                        onClick={() => onSave(withoutOverride(config, o.key))}
+                        aria-label={`Retirer la correction ${o.signature} de ${o.project}`}
+                        title="Retirer (revenir à l'automatique)"
+                      >
+                        <X size={13} strokeWidth={2.4} />
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+              <div className="row" style={{ marginTop: 10 }}>
+                <button className="danger" onClick={() => setConfirmOverrides(true)}>Tout effacer</button>
+              </div>
+            </>
+          )}
+          <AnimatePresence>
+            {confirmOverrides && (
+              <SettingsConfirm
+                key="overrides"
+                id="overrides-title"
+                title={`Effacer les ${overrides.length} correction${overrides.length > 1 ? 's' : ''} ?`}
+                text="Toutes les instances reviendront au classement automatique."
+                confirmLabel="Tout effacer"
+                onCancel={() => setConfirmOverrides(false)}
+                onConfirm={() => {
+                  setConfirmOverrides(false);
+                  onSave(withoutOverride(config, null));
+                }}
+              />
+            )}
+          </AnimatePresence>
+        </section>
+
         <section>
           <h3><AppWindow size={15} strokeWidth={2} />Menu des applications</h3>
           <p className="hint">Crée un raccourci proc-watch dans le menu de ton bureau (version AppImage ou .deb).</p>
@@ -231,7 +305,17 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
             <button className="danger" onClick={() => setConfirmClear(true)}>Vider l'historique</button>
           </div>
           <AnimatePresence>
-            {confirmClear && <ClearDialog key="clear" onCancel={() => setConfirmClear(false)} onConfirm={() => void clearHistory()} />}
+            {confirmClear && (
+              <SettingsConfirm
+                key="clear"
+                id="clear-title"
+                title="Vider tout l'historique ?"
+                text="Toutes les mesures et tous les événements enregistrés seront supprimés. Cette action est définitive."
+                confirmLabel="Vider"
+                onCancel={() => setConfirmClear(false)}
+                onConfirm={() => void clearHistory()}
+              />
+            )}
           </AnimatePresence>
         </section>
 
@@ -244,8 +328,19 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
   );
 }
 
-function ClearDialog({ onConfirm, onCancel }: { onConfirm: () => void; onCancel: () => void }) {
+interface ConfirmProps {
+  id: string;
+  title: string;
+  text: string;
+  confirmLabel: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}
+
+function SettingsConfirm({ id, title, text, confirmLabel, onConfirm, onCancel }: ConfirmProps) {
   const isPresent = useIsPresent();
+  const box = useRef<HTMLDivElement>(null);
+  useFocusTrap(box);
   const guard = (fn: () => void) => () => {
     if (isPresent) fn();
   };
@@ -260,10 +355,11 @@ function ClearDialog({ onConfirm, onCancel }: { onConfirm: () => void; onCancel:
       style={{ pointerEvents: isPresent ? undefined : 'none' }}
     >
       <motion.div
+        ref={box}
         className="dialog"
         role="alertdialog"
         aria-modal="true"
-        aria-labelledby="clear-title"
+        aria-labelledby={id}
         onClick={(e) => e.stopPropagation()}
         initial={{ opacity: 0, scale: 0.94, y: 12 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -272,12 +368,12 @@ function ClearDialog({ onConfirm, onCancel }: { onConfirm: () => void; onCancel:
       >
         <div className="dialog-head">
           <span className="ico" aria-hidden><Trash2 size={17} strokeWidth={2} /></span>
-          <h3 id="clear-title">Vider tout l'historique ?</h3>
+          <h3 id={id}>{title}</h3>
         </div>
-        <p className="hint" style={{ margin: 0 }}>Toutes les mesures et tous les événements enregistrés seront supprimés. Cette action est définitive.</p>
+        <p className="hint" style={{ margin: 0 }}>{text}</p>
         <div className="actions">
           <button onClick={guard(onCancel)}>Annuler</button>
-          <button className="danger" onClick={guard(onConfirm)}>Vider</button>
+          <button className="danger" onClick={guard(onConfirm)}>{confirmLabel}</button>
         </div>
       </motion.div>
     </motion.div>

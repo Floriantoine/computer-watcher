@@ -760,3 +760,21 @@ table.tree small.branch-total { display: block; white-space: nowrap; color: var(
 .reclass-menu .reclass-check { color: var(--text) !important; }
 .reclass-menu .reclass-auto { margin-top: 4px; border-top: 1px solid var(--border); border-radius: 0 0 7px 7px; padding-top: 7px; color: var(--label); }
 :root[data-effects='reduced'] .reclass-menu { background: var(--surface-solid); }
+
+/* Réglages → Classement : corrections manuelles */
+.settings .overrides-title { margin: 6px 0 8px; font-size: 12px; font-weight: 600; color: var(--text-2); display: flex; align-items: center; gap: 8px; }
+.overrides { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.overrides li {
+  display: grid;
+  grid-template-columns: minmax(80px, 1fr) minmax(0, 1.6fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 6px 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md, 8px);
+  background: var(--surface-2, rgba(255, 255, 255, 0.03));
+}
+.overrides .ov-project { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.overrides .ov-sig { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; justify-self: start; max-width: 100%; }
+.overrides .ov-remove { width: 24px; height: 24px; padding: 0; justify-content: center; border: none; background: none; border-radius: 99px; color: var(--muted); }
+.overrides .ov-remove:hover:not(:disabled) { background: rgba(255, 255, 255, 0.1); border: none; color: var(--text); }

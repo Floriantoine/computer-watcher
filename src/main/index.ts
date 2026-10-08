@@ -291,12 +291,15 @@ ipcMain.handle('config:set', (_e, next: unknown) => {
   if (!valid) throw new Error('Configuration invalide');
   const recorderChanged = valid.recorder.enabled !== config.recorder.enabled;
   if (valid.classify.detectPorts !== config.classify.detectPorts) portsAt = 0;
+  const overridesChanged = JSON.stringify(valid.classify.overrides) !== JSON.stringify(config.classify.overrides);
   config = valid;
   overridesVersion++;
   protection = compileProtection(config.protected);
   warning = null;
   saveConfig(dir, config);
   if (recorderChanged) void syncRecorder(true);
+  // Correction retirée depuis les Réglages : classement à jour sans attendre le prochain tick (fenêtre réduite comprise).
+  if (overridesChanged) reclassify();
   return configState();
 });
 
