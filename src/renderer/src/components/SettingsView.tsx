@@ -1,12 +1,13 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { AnimatePresence, motion, useIsPresent } from 'motion/react';
-import { AppWindow, ArrowLeft, HardDrive, Layers, ShieldCheck, Sparkles, Tags, Trash2, TriangleAlert, Wrench, X } from 'lucide-react';
+import { AppWindow, ArrowLeft, HardDrive, Layers, ShieldCheck, Sparkles, Tags, Trash2, TriangleAlert, X } from 'lucide-react';
 import { DEFAULT_CONFIG } from '../../../core/defaults';
 import type { Config, ConfigState, RecorderState } from '../../../core/types';
 import { CATEGORY_META } from '../categories';
 import { overrideRows, withDetectPorts, withoutOverride } from '../classifySettings';
 import { useFocusTrap } from '../focusTrap';
 import { formatKB } from '../format';
+import { EarlyoomPanel } from './EarlyoomPanel';
 import { recorderToForm, validateRecorderForm, type RecorderErrors, type RecorderForm } from '../recorderForm';
 
 interface Props {
@@ -319,10 +320,7 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
           </AnimatePresence>
         </section>
 
-        <section>
-          <h3><Wrench size={15} strokeWidth={2} />earlyoom</h3>
-          <p className="hint">Bientôt : configurer earlyoom depuis proc-watch.</p>
-        </section>
+        <EarlyoomPanel protectedList={config.protected} onToast={onToast} />
       </div>
     </>
   );
@@ -335,9 +333,13 @@ interface ConfirmProps {
   confirmLabel: string;
   onConfirm: () => void;
   onCancel: () => void;
+  /** Icône de l'en-tête (corbeille par défaut). */
+  icon?: ReactNode;
+  /** Contenu affiché sous le texte (ex. la ligne exacte à appliquer). */
+  children?: ReactNode;
 }
 
-function SettingsConfirm({ id, title, text, confirmLabel, onConfirm, onCancel }: ConfirmProps) {
+export function SettingsConfirm({ id, title, text, confirmLabel, onConfirm, onCancel, icon, children }: ConfirmProps) {
   const isPresent = useIsPresent();
   const box = useRef<HTMLDivElement>(null);
   useFocusTrap(box);
@@ -367,10 +369,11 @@ function SettingsConfirm({ id, title, text, confirmLabel, onConfirm, onCancel }:
         transition={{ type: 'spring', stiffness: 420, damping: 28, mass: 0.8 }}
       >
         <div className="dialog-head">
-          <span className="ico" aria-hidden><Trash2 size={17} strokeWidth={2} /></span>
+          <span className="ico" aria-hidden>{icon ?? <Trash2 size={17} strokeWidth={2} />}</span>
           <h3 id={id}>{title}</h3>
         </div>
         <p className="hint" style={{ margin: 0 }}>{text}</p>
+        {children}
         <div className="actions">
           <button onClick={guard(onCancel)}>Annuler</button>
           <button className="danger" onClick={guard(onConfirm)}>{confirmLabel}</button>

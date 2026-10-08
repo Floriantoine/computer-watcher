@@ -659,6 +659,56 @@ table.tree small.branch-total { display: block; white-space: nowrap; color: var(
 .rec-field { display: flex; flex-direction: column; gap: 4px; }
 .rec-field input[aria-invalid='true'] { border-color: rgba(255, 92, 138, 0.6); }
 .field-error { color: var(--danger); font-size: 11.5px; }
+
+/* ---------- Réglages › earlyoom ---------- */
+.rec-status .dot.bad { background: var(--danger); box-shadow: 0 0 8px rgba(255, 92, 138, 0.55); }
+.eo-title { margin: 14px 0 6px; font-size: 12px; font-weight: 600; color: var(--text-2); letter-spacing: 0.01em; }
+.eo-absent { margin: 0 0 8px; color: var(--text-2); }
+.eo-cmd { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.settings .eo-cmd code { padding: 5px 8px; font-size: 11.5px; overflow-wrap: anywhere; }
+.eo-kills { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.eo-kills li { display: flex; gap: 10px; align-items: baseline; }
+.eo-when { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 92px; }
+.eo-sig { font-family: var(--font-mono); font-size: 10.5px; color: var(--danger); }
+.pill.eo-pill { padding: 2px 10px; }
+.settings .hint.eo-conv { margin: 8px 0 0; }
+.eo-prefer {
+  display: block;
+  width: 100%;
+  max-width: 420px;
+  box-sizing: border-box;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  padding: 7px 10px;
+  resize: vertical;
+}
+.eo-prefer:focus { outline: none; border-color: var(--accent-soft); background: rgba(255, 255, 255, 0.06); }
+.eo-prefer[aria-invalid='true'] { border-color: rgba(255, 92, 138, 0.6); }
+.eo-warning { margin-top: 12px; font-size: 12px; }
+.eo-lines { display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: start; margin-top: 14px; }
+.eo-label { color: var(--muted); font-size: 11.5px; padding-top: 6px; }
+.eo-lines pre, .eo-confirm-line {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-2);
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 5px 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  /* Aperçu exact : pas de ligatures (« -| » ou « -- » seraient dessinés comme un autre signe). */
+  font-variant-ligatures: none;
+  font-feature-settings: 'liga' 0, 'calt' 0;
+}
+.eo-pill, .eo-prefer, .settings .eo-cmd code, .settings .eo-conv code, .eo-warning code { font-variant-ligatures: none; font-feature-settings: 'liga' 0, 'calt' 0; }
+.eo-lines pre.eo-none { color: var(--muted); font-style: italic; }
 .leak-badge { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; font-size: 11px; font-weight: 500; border-radius: 99px; color: var(--amber); background: rgba(255, 181, 71, 0.12); border: 1px solid rgba(255, 181, 71, 0.3); }
 .leak-badge:hover:not(:disabled) { background: rgba(255, 181, 71, 0.2); border-color: rgba(255, 181, 71, 0.5); color: var(--amber); }
 
