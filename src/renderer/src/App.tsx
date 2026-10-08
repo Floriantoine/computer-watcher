@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AnimatePresence, MotionConfig, motion, useIsPresent } from 'motion/react';
 import { compileProtection } from '../../core/protection';
-import type { Config, ConfigState, GroupSummary, KillSignal, KillTarget, ProcNode, Snapshot } from '../../core/types';
+import type { Category, Config, ConfigState, GroupSummary, InstanceSummary, KillSignal, KillTarget, ProcNode, Snapshot } from '../../core/types';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { DetailView } from './components/DetailView';
 import { SettingsView } from './components/SettingsView';
@@ -11,8 +11,9 @@ import { MetricsView } from './components/MetricsView';
 import { SystemBar, type SystemSparks } from './components/SystemBar';
 import { TopNav } from './components/TopNav';
 import { LiveBuffer, setLive, useHistory } from './history';
+import { projectName, reclassifyMessage, reclassifyScope } from './instances';
 import { leakTimes } from './recorderForm';
-import { findGroup, visibleGroups, ipcErrorMessage, killResultMessages, killRequestForGroup, killRequestForProc, trackKills, type KillRequest, type ViewFilter } from './viewModel';
+import { findGroup, visibleGroups, ipcErrorMessage, killResultMessages, killRequestForGroup, killRequestForInstance, killRequestForProc, trackKills, type KillRequest, type ViewFilter } from './viewModel';
 
 export type Route = { view: 'main' } | { view: 'detail'; groupId: string } | { view: 'settings' } | { view: 'metrics'; at?: number };
 
@@ -155,6 +156,28 @@ export function App() {
     );
   };
   const killProc = (n: ProcNode) => requestKill(killRequestForProc(n.proc, isProtected, snapshot.currentUid));
+  // Kill d'une instance : cibles {pid, startTicks} du dernier snapshot côté main, puis le chemin habituel (confirmation si protégée).
+  const killInstance = (inst: InstanceSummary) => {
+    Promise.all([window.procWatch.instances.targets([inst.key]), window.procWatch.groupProcs(inst.groupId)]).then(
+      ([entries, procs]) => {
+        const targets = entries.find((e) => e.key === inst.key)?.targets ?? [];
+        const req = killRequestForInstance(inst, targets, procs, isProtected, currentUid);
+        if (req.targets.length === 0) pushToast("Cette instance n'existe plus");
+        else requestKill(req);
+      },
+      (e: unknown) => pushToast(ipcErrorMessage(e)),
+    );
+  };
+  const reclassify = (inst: InstanceSummary, category: Category | null) => {
+    const name = projectName(inst, findGroup(snapshot.groups, inst.groupId)?.label ?? inst.groupId);
+    window.procWatch.classify.set(reclassifyScope(inst), inst.signature, category).then(
+      (state) => {
+        setConfigState(state);
+        pushToast(reclassifyMessage(category, name), 'info');
+      },
+      (e: unknown) => pushToast(ipcErrorMessage(e)),
+    );
+  };
 
   async function saveConfig(next: Config) {
     try {
@@ -220,6 +243,8 @@ export function App() {
                 onKillProc={killProc}
                 onForce={forceKill}
                 onToggleProtect={toggleProtect}
+                onReclassify={reclassify}
+                onKillInstance={killInstance}
               />
             )}
             {route.view === 'metrics' && (

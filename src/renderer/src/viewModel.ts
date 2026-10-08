@@ -1,4 +1,4 @@
-import type { GroupSummary, KillResult, KillTarget, ProcInfo, SystemInfo } from '../../core/types';
+import type { GroupSummary, InstanceSummary, KillResult, KillTarget, ProcInfo, SystemInfo } from '../../core/types';
 import { cpuOutOfOrder, memOutOfOrder, stableOrder } from './stableOrder';
 
 export type SortKey = 'mem' | 'cpu' | 'age' | 'name';
@@ -79,6 +79,26 @@ export function killRequestForGroup(g: GroupSummary, all: ProcInfo[], isProtecte
 export function killRequestForProc(p: ProcInfo, isProtected: (n: string) => boolean, _currentUid: number): KillRequest {
   const prot = isProtected(p.name);
   return { targets: [targetOf(p)], title: `Tuer « ${p.name} » (PID ${p.pid}) ?`, needsConfirm: prot, protectedProcs: prot ? [p] : [] };
+}
+
+/**
+ * Kill d'une instance : `targets` vient du main (`instances:targets`), `all` = processus du groupe au dernier snapshot.
+ * Ne garde que les processus de l'utilisateur encore identiques (même startTicks) ; confirmation si l'instance ou l'un
+ * de ses processus est protégé.
+ */
+export function killRequestForInstance(inst: InstanceSummary, targets: KillTarget[], all: ProcInfo[], isProtected: (n: string) => boolean, currentUid: number): KillRequest {
+  const byPid = new Map(all.map((p) => [p.pid, p]));
+  const procs = targets.flatMap((t) => {
+    const p = byPid.get(t.pid);
+    return p && p.uid === currentUid && p.startTicks === t.startTicks ? [p] : [];
+  });
+  const protectedProcs = procs.filter((p) => isProtected(p.name));
+  return {
+    targets: procs.map(targetOf),
+    title: `Tuer l'instance « ${inst.label} » (${procs.length} processus) ?`,
+    needsConfirm: inst.protected || protectedProcs.length > 0,
+    protectedProcs,
+  };
 }
 
 export const FORCE_AFTER_MS = 3000;

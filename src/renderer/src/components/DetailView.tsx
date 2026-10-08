@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
 import { ArrowLeft, ChartLine, ChevronRight, Lock, Shield, ShieldOff, X } from 'lucide-react';
-import type { GroupSummary as Group, ProcNode, RangePreset } from '../../../core/types';
+import type { Category, GroupSummary as Group, InstanceSummary, ProcNode, RangePreset } from '../../../core/types';
 import { formatAge, formatKB } from '../format';
 import { procSparkMap, useHistory } from '../history';
 import { useChartZoom, ZoomChip } from '../chartZoom';
@@ -9,6 +9,7 @@ import { PRESET_MS, refreshMsFor } from '../metrics';
 import { groupChartSeries } from './charts/chartData';
 import { TimeChart } from './charts/TimeChart';
 import { KB_FORMAT, PERCENT_FORMAT } from './charts/uplotTheme';
+import { InstancesPanel } from './InstancesPanel';
 import { ProcTree } from './ProcTree';
 import { RangeSelector } from './RangeSelector';
 import { AnimatedNumber, ForceButton, GroupIcon } from './ui';
@@ -29,6 +30,23 @@ interface Props {
   onKillProc: (node: ProcNode) => void;
   onForce: (pids: number[]) => void;
   onToggleProtect: (g: Group) => void;
+  onReclassify: (inst: InstanceSummary, category: Category | null) => void;
+  onKillInstance: (inst: InstanceSummary) => void;
+  /** Dialogue de confirmation groupée (Task 9) pré-filtré ; absent : boutons d'en-tête de « Instances » désactivés. */
+  onKillInstances?: (instances: InstanceSummary[], launchersOf?: string) => void;
+}
+
+/** pid → startTicks des processus de l'arbre (mini-courbes des instances). */
+function ticksMap(roots: ProcNode[] | null): Map<number, number> {
+  const out = new Map<number, number>();
+  const walk = (ns: ProcNode[]) => {
+    for (const n of ns) {
+      out.set(n.proc.pid, n.proc.startTicks);
+      walk(n.children);
+    }
+  };
+  if (roots) walk(roots);
+  return out;
 }
 
 function BackButton({ onBack }: { onBack: () => void }) {
@@ -101,6 +119,7 @@ export function DetailView(props: Props) {
   );
   const sparks = useMemo(() => procSparkMap(procs), [procs]);
   const sparkOf = useCallback((pid: number, startTicks: number) => sparks.get(`${pid}:${startTicks}`), [sparks]);
+  const ticksOf = useMemo(() => ticksMap(props.roots), [props.roots]);
   if (!group && props.pending) return <p className="empty">Chargement…</p>;
   if (!group) {
     return (
@@ -153,6 +172,19 @@ export function DetailView(props: Props) {
         <div className="tile"><small>Swap</small><b><AnimatedNumber value={group.swapKB} /></b></div>
         <div className="tile"><small>Plus ancien</small><b className={group.oldestAgeSec > 86400 ? 'old' : ''}>{formatAge(group.oldestAgeSec)}</b></div>
       </div>
+      {(group.kind === 'project' || group.kind === 'deleted') && group.instances.length > 0 && (
+        <InstancesPanel
+          group={group}
+          sparks={sparks}
+          ticksOf={ticksOf}
+          stuckPids={props.stuckPids}
+          pendingPids={props.pendingPids}
+          onReclassify={props.onReclassify}
+          onKillInstance={props.onKillInstance}
+          onForce={props.onForce}
+          onKillInstances={props.onKillInstances}
+        />
+      )}
       {!others && <GroupHistoryPanel key={group.id} groupId={group.id} />}
       {group.subgroups.length > 0 ? (
         <div className="subgroups">

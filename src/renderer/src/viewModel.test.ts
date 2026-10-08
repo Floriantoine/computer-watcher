@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
-import type { GroupSummary, ProcInfo, SystemInfo } from '../../core/types';
+import type { GroupSummary, InstanceSummary, ProcInfo, SystemInfo } from '../../core/types';
 import {
-  findGroup, ipcErrorMessage, killErrorMessage, killResultMessages, killRequestForGroup, killRequestForProc, pressureLevel, trackKills, visibleGroups,
+  findGroup, ipcErrorMessage, killErrorMessage, killResultMessages, killRequestForGroup, killRequestForInstance, killRequestForProc, pressureLevel, trackKills, visibleGroups,
 } from './viewModel';
 
 const proc = (pid: number, name: string, extra: Partial<ProcInfo> = {}): ProcInfo => ({
@@ -136,5 +136,30 @@ describe('killResultMessages', () => {
   test('plusieurs EPERM + un autre code → un toast par type d\'erreur', () => {
     const rs = [{ pid: 1, ok: false, error: 'EPERM' }, { pid: 2, ok: false, error: 'EPERM' }, { pid: 3, ok: false, error: 'EIO' }];
     expect(killResultMessages(rs)).toEqual(['2 processus : permission refusée', 'PID 3 : EIO']);
+  });
+});
+
+describe('killRequestForInstance', () => {
+  const inst = (extra: Partial<InstanceSummary> = {}): InstanceSummary => ({
+    key: 'g#1:1', groupId: 'g', project: '/p', category: 'back', source: 'command', signature: 'nest start', label: 'nest start', rootPid: 1, rootStartTicks: 1,
+    pids: [1, 2], ports: [3000], ageSec: 100, rssKB: 1000, swapKB: 0, cpuPercent: 0, duplicate: false, protected: false, ...extra,
+  });
+  const isProtected = (n: string) => n === 'zsh';
+  test('cibles = processus de l\'utilisateur parmi les cibles du main ; pas de confirmation sans protégé', () => {
+    const procs = [proc(1, 'node', { startTicks: 1 }), proc(2, 'node', { startTicks: 2, uid: 33 }), proc(9, 'other')];
+    const r = killRequestForInstance(inst(), [{ pid: 1, startTicks: 1 }, { pid: 2, startTicks: 2 }], procs, isProtected, 1000);
+    expect(r).toMatchObject({ targets: [{ pid: 1, startTicks: 1 }], needsConfirm: false, title: 'Tuer l\'instance « nest start » (1 processus) ?' });
+    expect(r.protectedProcs).toEqual([]);
+  });
+  test('confirmation si l\'instance est protégée ; les processus protégés sont listés', () => {
+    const procs = [proc(1, 'zsh', { startTicks: 1 }), proc(2, 'node', { startTicks: 2 })];
+    const r = killRequestForInstance(inst({ protected: true }), [{ pid: 1, startTicks: 1 }, { pid: 2, startTicks: 2 }], procs, isProtected, 1000);
+    expect(r.needsConfirm).toBe(true);
+    expect(r.protectedProcs.map((p) => p.pid)).toEqual([1]);
+    expect(r.title).toBe('Tuer l\'instance « nest start » (2 processus) ?');
+  });
+  test('cible dont le processus a changé (startTicks) ou disparu : écartée', () => {
+    const procs = [proc(1, 'node', { startTicks: 5 })];
+    expect(killRequestForInstance(inst(), [{ pid: 1, startTicks: 1 }, { pid: 2, startTicks: 2 }], procs, isProtected, 1000).targets).toEqual([]);
   });
 });
