@@ -6,7 +6,7 @@ import { describe, expect, test } from 'vitest';
 import type { DatabaseSync } from 'node:sqlite';
 import { openHistoryDb } from './db';
 import { aggregateMinute } from './maintenance';
-import { bucketMs, pickSource, queryInactive, queryCulprits, queryEvents, queryGroup, queryGroups, queryProcs, queryProcsAt, queryProcTree, querySystem, queryTop, rangeFromPreset } from './queries';
+import { bucketMs, pickSource, queryInactive, queryCulprits, queryEvents, queryGroup, queryGroups, PROC_TREE_MAX, queryProcs, queryProcsAt, queryProcTree, querySystem, queryTop, rangeFromPreset } from './queries';
 
 const H = 3600_000;
 const M = 60_000;
@@ -413,8 +413,36 @@ describe('queryProcTree (rejeu de l\'arbre)', () => {
 
   test('instant dans un trou (aucun échantillon à ± 5 s) ou groupe inconnu : procs vide', () => {
     const db = treeDb();
-    expect(queryProcTree(db, 'g', ts - 30 * M, o)).toEqual({ ts: ts - 30 * M, source: 'detail', procs: [] });
+    expect(queryProcTree(db, 'g', ts - 30 * M, o)).toEqual({ ts: ts - 30 * M, source: 'detail', procs: [], recorded: false, omitted: 0 });
     expect(queryProcTree(db, 'absent', ts, o).procs).toEqual([]);
+  });
+
+  test('trou d\'enregistrement ou processus sous les seuils : recorded distingue les deux', () => {
+    const db = treeDb();
+    const sys = db.prepare('INSERT INTO system_samples VALUES (?,?,?,?,?,?,?,?)');
+    sys.run(ts - 20 * M + 4000, 1, 1, 1, 1, null, 0, 0); // le service tournait, mais rien d'enregistré pour g
+    expect(queryProcTree(db, 'g', ts - 20 * M, o)).toMatchObject({ procs: [], recorded: true });
+    expect(queryProcTree(db, 'g', ts - 30 * M, o)).toMatchObject({ procs: [], recorded: false });
+    db.prepare('INSERT INTO system_minute VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(ts - 2 * M, 1, 1, 100, 0, 0, 100, 0, 0, 1, 1);
+    expect(queryProcTree(db, 'g', ts - M - 20_000, opts(100 * H))).toMatchObject({ source: 'minute', procs: [], recorded: true });
+    expect(queryProcTree(db, 'g', ts + 5 * M, opts(100 * H))).toMatchObject({ source: 'minute', procs: [], recorded: false });
+  });
+
+  test(`au plus ${PROC_TREE_MAX} processus (les plus gros), le reste compté dans omitted`, () => {
+    const { db } = openHistoryDb(join(mkdtempSync(join(tmpdir(), 'pw-cap-')), 'm.db'));
+    db.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'g','g','app')`);
+    const pr = db.prepare('INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id,ppid) VALUES (?,?,?,?,?,?,?)');
+    const ps = db.prepare('INSERT INTO proc_samples VALUES (?,?,?,?,?)');
+    db.exec('BEGIN');
+    for (let i = 1; i <= PROC_TREE_MAX + 5; i++) {
+      pr.run(i, i, 1, 'p', 'p', 1, 1);
+      ps.run(ts, i, i, 0, 0);
+    }
+    db.exec('COMMIT');
+    const r = queryProcTree(db, 'g', ts, o);
+    expect(r.procs).toHaveLength(PROC_TREE_MAX);
+    expect(r.omitted).toBe(5);
+    expect(Math.min(...r.procs.map((p) => p.rssKB))).toBe(6);
   });
 
   test('hors rétention détaillée : ligne minute la plus proche, swap inconnu', () => {
@@ -474,6 +502,10 @@ describe('queryEvents filtré par groupe (alertes du détail)', () => {
     ev.run(t + 4, 'app_kill', 2, '{"pids":[20],"signal":"SIGTERM"}');
     ev.run(t + 5, 'app_kill', 1, '{"pids":[12345],"signal":"SIGTERM"}');
     ev.run(t - 3 * D, 'earlyoom_kill', null, '{"pid":30,"name":"d"}');
+    ev.run(t + 6, 'earlyoom_kill', null, '{"pid":10,"name":"autre"}'); // pid de g vivant, mais nom différent : PID réutilisé
+    ev.run(t + 7, 'app_kill', null, '{"pids":[10],"targets":[{"pid":10,"startTicks":1}],"signal":"SIGTERM"}');
+    ev.run(t + 8, 'app_kill', null, '{"pids":[10],"targets":[{"pid":10,"startTicks":999}],"signal":"SIGTERM"}'); // autre processus
+    ev.run(t + 9, 'app_kill', null, '{"pids":[11],"targets":[{"pid":11,"startTicks":1}],"signal":"SIGTERM"}'); // identité exacte, même sans échantillon récent
     return db;
   }
   const all = { from: 0, to: now };
@@ -487,6 +519,8 @@ describe('queryEvents filtré par groupe (alertes du détail)', () => {
       'earlyoom_kill@0', // pid 10 échantillonné 30 s avant
       'app_kill@3', // pids [99, 10]
       'app_kill@5', // group_id du groupe
+      'app_kill@7', // identité pid + startTicks
+      'app_kill@9',
     ]);
   });
 
@@ -497,7 +531,7 @@ describe('queryEvents filtré par groupe (alertes du détail)', () => {
   test('groupe inconnu : seulement les pressions ; sans groupe : tout, inchangé', () => {
     const db = eventsDb();
     expect(sig(db, 'inconnu')).toEqual([`pressure@${-5 * M}`]);
-    expect(queryEvents(db, all)).toHaveLength(12);
+    expect(queryEvents(db, all)).toHaveLength(16);
     expect(queryEvents(db, all, undefined)).toEqual(queryEvents(db, all));
   });
 });

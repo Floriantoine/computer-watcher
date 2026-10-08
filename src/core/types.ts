@@ -182,7 +182,11 @@ export interface TopConsumer { key: string; label: string; kind: GroupKind; avgK
 export interface TopResult { byAvg: TopConsumer[]; byMax: TopConsumer[] }
 /** Processus enregistré d'un groupe à un instant (rejeu) ; swapKB null pour les agrégats par minute. */
 export interface ProcTreeRow { pid: number; startTicks: number; ppid: number | null; name: string; rssKB: number; swapKB: number | null; cpu: number; sampleTs: number; lastSeenTs: number }
-export interface ProcTreeAt { ts: number; source: 'detail' | 'minute'; procs: ProcTreeRow[] }
+/**
+ * `recorded` : le service échantillonnait autour de ts (sinon trou d'enregistrement) ; `omitted` : processus au-delà
+ * des PROC_TREE_MAX plus gros, non renvoyés.
+ */
+export interface ProcTreeAt { ts: number; source: 'detail' | 'minute'; procs: ProcTreeRow[]; recorded: boolean; omitted: number }
 export interface HistoryEvent { ts: number; type: string; groupKey: string | null; groupLabel: string | null; detail: Record<string, unknown> }
 export interface RecorderState {
   available: boolean; // systemd utilisateur disponible

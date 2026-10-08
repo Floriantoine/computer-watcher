@@ -268,10 +268,13 @@ ipcMain.handle('kill', (_e, raw: unknown, rawSignal: unknown): KillResult[] => {
   const { ordered, refused } = planKill(targets, readProcesses(), { selfPid: process.pid, currentUid: uid });
   const results = [...refused, ...sendSignals(ordered, signal)];
   const killed = results.filter((r) => r.ok).map((r) => r.pid);
+  const killedSet = new Set(killed);
+  // Identité exacte des cibles : rattache le kill au bon processus dans l'historique (alertes du détail), même si le PID est réutilisé.
+  const killedTargets = targets.filter((t) => killedSet.has(t.pid)).map((t) => ({ pid: t.pid, startTicks: t.startTicks }));
   if (killed.length) {
     try {
       mkdirSync(data, { recursive: true });
-      appendFileSync(appEventsPath(data), formatAppEvent({ ts: Date.now(), type: 'app_kill', groupKey: null, detail: { pids: killed, signal } }));
+      appendFileSync(appEventsPath(data), formatAppEvent({ ts: Date.now(), type: 'app_kill', groupKey: null, detail: { pids: killed, signal, targets: killedTargets } }));
     } catch (e) {
       console.error('app event:', e);
     }

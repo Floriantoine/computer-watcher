@@ -37,7 +37,8 @@ export interface AppEvent {
   ts: number;
   type: 'app_kill';
   groupKey: string | null;
-  detail: { pids: number[]; signal: string };
+  /** `targets` : identité pid + startTicks des processus tués (absente des événements plus anciens). */
+  detail: { pids: number[]; signal: string; targets?: { pid: number; startTicks: number }[] };
 }
 
 export const formatAppEvent = (e: AppEvent) => JSON.stringify(e) + '\n';
@@ -68,6 +69,14 @@ export function parseAppEvents(text: string): AppEvent[] {
         // validate detail.signal (string)
         if (typeof detail.signal !== 'string') continue;
 
+        // optional targets (pid + startTicks) : kept only when well-formed
+        const t = detail.targets;
+        const targets =
+          Array.isArray(t) && t.every((x: unknown) => typeof x === 'object' && x !== null &&
+            Number.isInteger((x as { pid: unknown }).pid) && Number.isInteger((x as { startTicks: unknown }).startTicks))
+            ? (t as { pid: number; startTicks: number }[]).map((x) => ({ pid: x.pid, startTicks: x.startTicks }))
+            : null;
+
         // build fresh object
         out.push({
           ts: obj.ts as number,
@@ -76,6 +85,7 @@ export function parseAppEvents(text: string): AppEvent[] {
           detail: {
             pids: detail.pids as number[],
             signal: detail.signal as string,
+            ...(targets ? { targets } : {}),
           },
         });
       }
