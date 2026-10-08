@@ -4,7 +4,8 @@ import {
   EARLYOOM_BASE_IGNORE,
   EARLYOOM_LINE_PATTERN,
   EARLYOOM_LINE_RE,
-  EARLYOOM_REGEX_CHARS,
+  EARLYOOM_TOKEN_CHARS,
+  checkEarlyoomLine,
   buildEarlyoomArgs,
   ignoreConversions,
   checkRegexPart,
@@ -27,11 +28,14 @@ describe('nameToRegex', () => {
   test.each([
     ['node (vitest)', 'node..vitest.'],
     ['tmux: server', 'tmux..server'],
-    ['a{1}[b]<c>&d#e;f$g', 'a.1..b..c..d.e.f.g'],
+    ['a{1}[b]<c>&d#e;', 'a.1..b..c..d.e.'],
     ['gnome-terminal-', 'gnome-terminal-'],
     ['c++', 'c..'],
     ['a\\b', 'a.b'],
     ['é', '.'],
+    ['gnome-terminal-server', 'gnome-terminal-'],
+    ['abcdefghijklmnopq', 'abcdefghijklmno'],
+    ['abcdefghijklmnéz', 'abcdefghijklmn'],
   ])('%s → %s', (name, re) => expect(nameToRegex(name)).toBe(re));
 });
 
@@ -60,7 +64,10 @@ describe('checkRegexPart', () => {
   test('espace', () => expect(checkRegexPart('node (vitest)')).toMatch(/espace/));
   test('antislash', () => expect(checkRegexPart('node.\\(vitest\\)')).toMatch(/antislash/));
   test('vide', () => expect(checkRegexPart('')).toMatch(/vide/));
-  test.each(['a"b', '$(rm)', 'a`b', "a'b", 'a;b', 'a#b', 'a{1}', '[ab]', 'a<b', 'a>b', 'a&b', 'tmux:x', 'a,b', 'clаude' /* а cyrillique */, 'ｃhrome'])('caractère interdit : %s', (p) =>
+  test.each(['systemd.*', 'node.*', 'a', 'node-MainThread', 'x_1.2-3'])('motif accepté : %s', (p) => expect(checkRegexPart(p)).toBeNull());
+  test.each(['a(', '*x', '+', 'a)|(.*', '.*', 'a.*b', 'a**', 'a?', '(a)'])('grammaire refusée : %s', (p) =>
+    expect(checkRegexPart(p)).not.toBeNull());
+  test.each(['a|b', 'a"b', '$(rm)', 'a`b', "a'b", 'a;b', 'a#b', 'a{1}', '[ab]', 'a<b', 'a>b', 'a&b', 'tmux:x', 'a,b', 'clаude' /* а cyrillique */, 'ｃhrome'])('caractère interdit : %s', (p) =>
     expect(checkRegexPart(p)).toMatch(/caractère interdit/));
   test('trop long', () => expect(checkRegexPart('a'.repeat(101))).not.toBeNull());
   test('100 caractères acceptés', () => expect(checkRegexPart('a'.repeat(100))).toBeNull());
@@ -69,24 +76,62 @@ describe('checkRegexPart', () => {
 describe('ignoreConversions', () => {
   test('noms protégés transformés, affichés dans l’aperçu', () => {
     expect(ignoreConversions(DEFAULT_CONFIG.protected)).toEqual([{ name: 'tmux: server', re: 'tmux..server' }]);
+    expect(ignoreConversions(['gnome-terminal-server'])).toEqual([{ name: 'gnome-terminal-server', re: 'gnome-terminal-' }]);
     expect(ignoreConversions(['a$(b)', '/^x/', ''])).toEqual([{ name: 'a$(b)', re: 'a..b.' }]);
   });
 });
 
-describe('EARLYOOM_REGEX_CHARS', () => {
-  test('liste blanche stricte', () => {
-    expect(EARLYOOM_REGEX_CHARS).toBe('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._|*+?()-');
-    for (const c of ['$', '`', ';', "'", '"', '\\', ' ', '#', '{', '}', '[', ']', '<', '>', '&', ':', ',', '\n']) expect(EARLYOOM_REGEX_CHARS).not.toContain(c);
+describe('EARLYOOM_TOKEN_CHARS', () => {
+  test('liste blanche stricte des motifs', () => {
+    expect(EARLYOOM_TOKEN_CHARS).toBe('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-');
+    for (const c of ['$', '`', ';', "'", '"', '\\', ' ', '#', '{', '}', '[', ']', '<', '>', '&', ':', ',', '\n', '(', ')', '|', '*', '+', '?']) expect(EARLYOOM_TOKEN_CHARS).not.toContain(c);
   });
   test('EARLYOOM_LINE_RE construit depuis EARLYOOM_LINE_PATTERN', () => {
     expect(EARLYOOM_LINE_RE.source).toBe(new RegExp(EARLYOOM_LINE_PATTERN).source);
-    expect(EARLYOOM_LINE_PATTERN).toContain(`[${EARLYOOM_REGEX_CHARS}]+`);
+    expect(EARLYOOM_LINE_PATTERN).toContain(`[${EARLYOOM_TOKEN_CHARS}]+`);
+  });
+});
+
+const BASE = 'claude|claude-desktop|warp|zsh|bash|kwin_wayland|kwin_wayland_wr|plasmashell|Xwayland|sddm|systemd.*';
+describe('checkEarlyoomLine (politique, identique au script root)', () => {
+  const ok = (l: string) => expect(checkEarlyoomLine(l)).toBeNull();
+  const ko = (l: string) => expect(checkEarlyoomLine(l)).not.toBeNull();
+  test('ligne valide', () => {
+    ok(`EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(${BASE})$"`);
+    ok(`EARLYOOM_ARGS="-m 50,50 -s 100,100 -r 0 --ignore ^(${BASE}|kitty|node.*)$ --prefer ^(chrome|node..vitest.)$"`);
+    ok(`EARLYOOM_ARGS="-m 1,1 -s 1,1 -r 0 --ignore ^(${BASE})$"`);
+  });
+  test('ligne d’attaque de la revue refusée', () => ko('EARLYOOM_ARGS="-m 99,99 -s 100,100 -r 0 --ignore ^(x)$ --prefer ^(.*)$"'));
+  test.each([
+    ['-m 51,5', `EARLYOOM_ARGS="-m 51,5 -s 35,25 -r 0 --ignore ^(${BASE})$"`],
+    ['-m 0,0', `EARLYOOM_ARGS="-m 0,0 -s 35,25 -r 0 --ignore ^(${BASE})$"`],
+    ['-m 08,5', `EARLYOOM_ARGS="-m 08,5 -s 35,25 -r 0 --ignore ^(${BASE})$"`],
+    ['-s 101,1', `EARLYOOM_ARGS="-m 8,5 -s 101,1 -r 0 --ignore ^(${BASE})$"`],
+    ['kill > term (mém.)', `EARLYOOM_ARGS="-m 8,9 -s 35,25 -r 0 --ignore ^(${BASE})$"`],
+    ['kill > term (swap)', `EARLYOOM_ARGS="-m 8,5 -s 35,36 -r 0 --ignore ^(${BASE})$"`],
+    ['-r 1', `EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 1 --ignore ^(${BASE})$"`],
+    ['base absente', 'EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(x)$"'],
+    ['base dans un autre ordre', `EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(${BASE.replace('claude|claude-desktop', 'claude-desktop|claude')})$"`],
+    ['base tronquée', `EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(${BASE.replace('|systemd.*', '')})$"`],
+    ['base modifiée', `EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(${BASE.replace('systemd.*', 'systemdX*')})$"`],
+    ['regex non compilable', `EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(${BASE})$ --prefer ^(a()$"`],
+    ['quantificateur en tête', `EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(${BASE})$ --prefer ^(*x)$"`],
+    ['sortie des ancres', `EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(${BASE})$ --prefer ^(a)|(.*)$"`],
+    ['prefer .*', `EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(${BASE})$ --prefer ^(.*)$"`],
+    ['alternative vide', `EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(${BASE}|)$"`],
+    ['antislash', `EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(${BASE})$ --prefer ^(node.\\(vitest\\))$"`],
+    ['4 096 caractères', `EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(${BASE}|${'a'.repeat(4096 - 50 - BASE.length - 1)})$"`],
+  ])('%s → refusé', (_n, l) => ko(l));
+  test('4 095 caractères acceptés', () => {
+    const l = `EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(${BASE}|${'a'.repeat(4095 - 50 - BASE.length - 1)})$"`;
+    expect(l.length).toBe(4095);
+    ok(l);
   });
 });
 
 describe('buildEarlyoomArgs', () => {
   test('ligne de plus de 4 095 caractères refusée', () => {
-    const many = Array.from({ length: 60 }, (_, i) => `n${i}${'x'.repeat(90)}`);
+    const many = Array.from({ length: 300 }, (_, i) => `n${String(i).padStart(4, '0')}${'x'.repeat(10)}`);
     const r = buildEarlyoomArgs({ memTerm: 8, memKill: 5, swapTerm: 35, swapKill: 25, prefer: [] }, many);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.errors.join()).toMatch(/trop longue/);
@@ -95,14 +140,14 @@ describe('buildEarlyoomArgs', () => {
     const r = buildEarlyoomArgs(SETTINGS, ['claude']);
     expect(r).toEqual({
       ok: true,
-      line: 'EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(claude|claude-desktop|warp|zsh|bash|kwin_wayland|plasmashell|Xwayland|sddm|systemd.*)$ --prefer ^(chrome|vitest|node..vitest.|node-MainThread|node|npm)$"',
+      line: 'EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(claude|claude-desktop|warp|zsh|bash|kwin_wayland|kwin_wayland_wr|plasmashell|Xwayland|sddm|systemd.*)$ --prefer ^(chrome|vitest|node..vitest.|node-MainThread|node|npm)$"',
     });
     if (r.ok) expect(EARLYOOM_LINE_RE.test(r.line)).toBe(true);
   });
   test('prefer vide → pas de --prefer', () => {
     const r = buildEarlyoomArgs({ ...SETTINGS, prefer: [] }, []);
     expect(r.ok && r.line).toBe(
-      'EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(claude|claude-desktop|warp|zsh|bash|kwin_wayland|plasmashell|Xwayland|sddm|systemd.*)$"',
+      'EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(claude|claude-desktop|warp|zsh|bash|kwin_wayland|kwin_wayland_wr|plasmashell|Xwayland|sddm|systemd.*)$"',
     );
     if (r.ok) expect(EARLYOOM_LINE_RE.test(r.line)).toBe(true);
   });

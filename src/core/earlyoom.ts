@@ -6,40 +6,68 @@
 
 export interface EarlyoomSettings { memTerm: number; memKill: number; swapTerm: number; swapKill: number; prefer: string[] }
 
-/** Toujours exclus, quelle que soit la liste protégée : terminaux, Claude et la session graphique. */
+/** Toujours exclus, en tête et dans cet ordre, quelle que soit la liste protégée : terminaux, Claude, session graphique. */
 export const EARLYOOM_BASE_IGNORE: readonly string[] =
-  ['claude', 'claude-desktop', 'warp', 'zsh', 'bash', 'kwin_wayland', 'plasmashell', 'Xwayland', 'sddm', 'systemd.*'];
+  ['claude', 'claude-desktop', 'warp', 'zsh', 'bash', 'kwin_wayland', 'kwin_wayland_wr', 'plasmashell', 'Xwayland', 'sddm', 'systemd.*'];
 
 export const EARLYOOM_MAX_PREFER = 30;
 const MAX_PART = 100;
+/** Longueur maximale de la ligne entière (ASCII seulement : caractères = octets). */
+export const EARLYOOM_MAX_LINE = 4095;
+/** Longueur du nom de processus (comm) dans le noyau. */
+const COMM_MAX_BYTES = 15;
 
 /**
- * Liste blanche UNIQUE des caractères permis dans les regex de --ignore et --prefer (noms de processus en
- * alternance). Lettres et chiffres énumérés (pas de plage [A-Z], dont le sens dépend de la locale en bash).
- * Exclus en particulier : $ ` ; ' " \ espace # { } [ ] < > & et tout caractère non ASCII.
- * Elle sert à construire à la fois EARLYOOM_LINE_RE (TS) et le motif `re=` du script root (bash).
+ * Grammaire UNIQUE des motifs de --ignore et --prefer, partagée par le TS et le script root (bash) :
+ * une alternance de jetons `[A-Za-z0-9_.-]+`, chacun éventuellement suivi de `.*`. Aucune parenthèse,
+ * aucun autre métacaractère : les ancres `^(` … `)$` ne peuvent pas être quittées, et chaque motif compile.
+ * Lettres et chiffres sont énumérés (en bash, le sens d'une plage [A-Z] dépend de la locale) ; « - » en dernier.
  */
-export const EARLYOOM_REGEX_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._|*+?()-';
-const CLASS = `[${EARLYOOM_REGEX_CHARS}]+`;
-const DIGITS = '[0123456789]';
+export const EARLYOOM_TOKEN_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-';
+const TOKEN = `[${EARLYOOM_TOKEN_CHARS}]+(\\.\\*)?`;
+const MORE_TOKENS = `(\\|${TOKEN})*`;
+/** Base en littéral (« . », « * », « | » échappés), dans l'ordre fixe. */
+const BASE_LITERAL = EARLYOOM_BASE_IGNORE.map((b) => b.replace(/[.*|()^$]/g, (c) => `\\${c}`)).join('\\|');
+const MEM = '([123456789]|[1234][0123456789]|50)';
+const SWAP = '([123456789]|[123456789][0123456789]|100)';
 
-/** Motif POSIX ERE de la ligne, tel qu'écrit dans le script bash (`re='…'`) ; identique en syntaxe JS. */
+/**
+ * Motif POSIX ERE de la ligne, tel qu'écrit dans le script bash (`re='…'`) ; même syntaxe en JS.
+ * Groupes 1 à 4 : SIGTERM et SIGKILL mémoire, puis swap (comparés ensuite : SIGKILL ≤ SIGTERM).
+ */
 export const EARLYOOM_LINE_PATTERN =
-  `^EARLYOOM_ARGS="-m ${DIGITS}{1,2},${DIGITS}{1,2} -s ${DIGITS}{1,3},${DIGITS}{1,3} -r 0 --ignore \\^\\(${CLASS}\\)\\$( --prefer \\^\\(${CLASS}\\)\\$)?"$`;
+  `^EARLYOOM_ARGS="-m ${MEM},${MEM} -s ${SWAP},${SWAP} -r 0 --ignore \\^\\(${BASE_LITERAL}${MORE_TOKENS}\\)\\$( --prefer \\^\\(${TOKEN}${MORE_TOKENS}\\)\\$)?"$`;
 
-/** Ligne acceptée par le script root : construite depuis le même motif que le script bash de src/main/earlyoom.ts. */
 export const EARLYOOM_LINE_RE = new RegExp(EARLYOOM_LINE_PATTERN);
+const TOKEN_RE = new RegExp(`^${TOKEN}$`);
 
-/** Taille maximale du fichier lu par le script root (ligne + saut de ligne). */
-export const EARLYOOM_MAX_FILE_BYTES = 4096;
-
-const NAME_SAFE = /^[A-Za-z0-9_-]$/;
-/** Nom exact → motif sans espace ni antislash : tout caractère hors [A-Za-z0-9_-] devient « . » (« node (vitest) » → « node..vitest. »). */
-export function nameToRegex(name: string): string {
-  return Array.from(name, (c) => (NAME_SAFE.test(c) ? c : '.')).join('');
+/** Politique appliquée aussi par le script root : longueur, forme et bornes (motif), puis SIGKILL ≤ SIGTERM. null si acceptée. */
+export function checkEarlyoomLine(line: string): string | null {
+  if (line.length > EARLYOOM_MAX_LINE) return `Ligne trop longue (${line.length} caractères, ${EARLYOOM_MAX_LINE} au plus)`;
+  const m = EARLYOOM_LINE_RE.exec(line);
+  if (!m) return 'Ligne non conforme (forme, bornes, exclusions de base ou motifs)';
+  if (Number(m[2]) > Number(m[1]) || Number(m[4]) > Number(m[3])) return 'Seuil SIGKILL supérieur au seuil SIGTERM';
+  return null;
 }
 
-/** Noms protégés dont le motif diffère du nom (caractères hors liste blanche remplacés par « . »), pour l'aperçu. */
+const NAME_SAFE = /^[A-Za-z0-9_-]$/;
+/**
+ * Nom exact → motif : tronqué à 15 octets comme le comm du noyau (« gnome-terminal-server » → « gnome-terminal- »),
+ * puis tout caractère hors [A-Za-z0-9_-] devient « . » (« node (vitest) » → « node..vitest. »).
+ */
+export function nameToRegex(name: string): string {
+  let bytes = 0;
+  let out = '';
+  for (const c of name) {
+    const n = new TextEncoder().encode(c).length;
+    if (bytes + n > COMM_MAX_BYTES) break;
+    bytes += n;
+    out += NAME_SAFE.test(c) ? c : '.';
+  }
+  return out;
+}
+
+/** Noms protégés dont le motif diffère du nom (tronqués ou caractères remplacés par « . »), pour l'aperçu. */
 export function ignoreConversions(protectedList: readonly string[]): { name: string; re: string }[] {
   return protectedList.filter((n) => !/^\/.+\/$/.test(n) && n !== '').map((name) => ({ name, re: nameToRegex(name) })).filter((c) => c.re !== c.name);
 }
@@ -58,14 +86,15 @@ export function ignoreList(protectedList: readonly string[]): string[] {
   return out;
 }
 
-/** Message d'erreur en français, ou null si le motif est accepté : non vide, ≤ 100 caractères, uniquement EARLYOOM_REGEX_CHARS. */
+/** Message d'erreur en français, ou null si le motif est accepté : non vide, ≤ 100 caractères, jeton `[A-Za-z0-9_.-]+` éventuellement suivi de `.*`. */
 export function checkRegexPart(part: string): string | null {
   if (part === '') return 'Motif vide';
   if (/\s/.test(part)) return `« ${part} » : espace interdite (EnvironmentFile coupe la ligne aux espaces)`;
   if (part.includes('\\')) return `« ${part} » : antislash interdit (EnvironmentFile le supprime) — utiliser « . »`;
   if (part.length > MAX_PART) return `« ${part.slice(0, 20)}… » : plus de ${MAX_PART} caractères`;
-  const bad = Array.from(part).find((c) => !EARLYOOM_REGEX_CHARS.includes(c));
-  if (bad !== undefined) return `« ${part} » : caractère interdit « ${bad} »`;
+  const bad = Array.from(part).find((c) => !EARLYOOM_TOKEN_CHARS.includes(c) && c !== '*');
+  if (bad !== undefined) return `« ${part} » : caractère interdit « ${bad} » (un motif par ligne, lettres, chiffres, _ . -)`;
+  if (!TOKEN_RE.test(part)) return `« ${part} » : « * » n'est permis qu'à la fin, sous la forme « .* » après au moins un caractère`;
   return null;
 }
 
@@ -96,8 +125,8 @@ export function buildEarlyoomArgs(
   if (errors.length) return { ok: false, errors };
   const prefer = s.prefer.length ? ` --prefer ^(${s.prefer.join('|')})$` : '';
   const line = `EARLYOOM_ARGS="-m ${s.memTerm},${s.memKill} -s ${s.swapTerm},${s.swapKill} -r 0 --ignore ^(${ignore.join('|')})$${prefer}"`;
-  if (line.length + 1 > EARLYOOM_MAX_FILE_BYTES) return { ok: false, errors: [`Ligne trop longue (${line.length} caractères, ${EARLYOOM_MAX_FILE_BYTES - 1} au plus) : raccourcir la liste protégée ou les préférences`] };
-  if (!EARLYOOM_LINE_RE.test(line)) return { ok: false, errors: ['Ligne générée non conforme'] };
+  const bad = checkEarlyoomLine(line);
+  if (bad) return { ok: false, errors: [bad.startsWith('Ligne trop longue') ? `${bad} : raccourcir la liste protégée ou les préférences` : bad] };
   return { ok: true, line };
 }
 

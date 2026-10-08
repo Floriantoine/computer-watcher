@@ -5,7 +5,7 @@ import { ignoreConversions, ignoreList } from '../../../core/earlyoom';
 import type { EarlyoomStatus } from '../../../core/types';
 import { formFromStatus, lastEarlyoomKills, validateEarlyoomForm, type EarlyoomForm } from '../earlyoomForm';
 import { formatInstant } from '../metrics';
-import { SettingsConfirm } from './SettingsView';
+import { SettingsConfirm } from './SettingsConfirm';
 
 interface Props {
   protectedList: string[];
@@ -51,11 +51,11 @@ export function EarlyoomPanel({ protectedList, onToast }: Props) {
     void load();
   }, [load]);
 
-  const apply = async (settings: NonNullable<ReturnType<typeof validateEarlyoomForm>['settings']>) => {
+  const apply = async (settings: NonNullable<ReturnType<typeof validateEarlyoomForm>['settings']>, expectedLine: string) => {
     setConfirm(false);
     setApplying(true);
     try {
-      const r = await window.procWatch.earlyoom.apply(settings);
+      const r = await window.procWatch.earlyoom.apply(settings, expectedLine);
       if (r.ok) onToast('earlyoom redémarré avec la nouvelle configuration', 'info');
       else onToast(r.message, 'error');
     } catch (e) {
@@ -147,7 +147,7 @@ export function EarlyoomPanel({ protectedList, onToast }: Props) {
       </div>
 
       <h4 className="eo-title">Exclusions (jamais tués)</h4>
-      <p className="hint">Base + noms exacts de la liste protégée (les entrées /regex/ ne sont pas reprises). Les caractères spéciaux deviennent « . ».</p>
+      <p className="hint">Base + noms exacts de la liste protégée (les entrées /regex/ ne sont pas reprises), tronqués à 15 caractères comme le nom du processus ; les caractères spéciaux deviennent « . ».</p>
       <div className="pills" data-testid="earlyoom-ignore">
         {ignore.map((p) => (
           <span key={p} className="pill eo-pill">{p}</span>
@@ -155,7 +155,7 @@ export function EarlyoomPanel({ protectedList, onToast }: Props) {
       </div>
       {conversions.length > 0 && (
         <p className="hint eo-conv" data-testid="earlyoom-ignore-converted">
-          Noms adaptés (caractères hors <code>A-Z a-z 0-9 _ -</code> remplacés par « . ») :{' '}
+          Noms adaptés (tronqués à 15 caractères, caractères hors <code>A-Z a-z 0-9 _ -</code> remplacés par « . ») :{' '}
           {conversions.map((c, i) => (
             <span key={c.name}>
               {i > 0 && ', '}
@@ -166,7 +166,7 @@ export function EarlyoomPanel({ protectedList, onToast }: Props) {
       )}
 
       <h4 className="eo-title">Préférences (tués en premier)</h4>
-      <p className="hint">Un motif par ligne, sans espace ni antislash (utiliser « . » à la place).</p>
+      <p className="hint">Un motif par ligne : lettres, chiffres, <code>_ . -</code>, éventuellement terminé par <code>.*</code> (ex. <code>node.*</code>). « . » remplace tout autre caractère.</p>
       <textarea
         className="eo-prefer"
         aria-label="Préférences earlyoom"
@@ -214,11 +214,11 @@ export function EarlyoomPanel({ protectedList, onToast }: Props) {
             key="earlyoom"
             id="earlyoom-title"
             title="Appliquer cette configuration d'earlyoom ?"
-            text="L'ancien fichier est copié en /etc/default/earlyoom.bak-<date>, puis earlyoom est redémarré. Le mot de passe administrateur est demandé."
+            text="L'ancien fichier est copié en /etc/default/earlyoom.bak-<date>, puis earlyoom est redémarré et vérifié (restauré s'il ne reste pas actif). proc-watch redemande confirmation avec cette même ligne, puis le mot de passe administrateur est demandé."
             confirmLabel="Confirmer"
             icon={<KeyRound size={17} strokeWidth={2} />}
             onCancel={() => setConfirm(false)}
-            onConfirm={() => void apply(v.settings!)}
+            onConfirm={() => void apply(v.settings!, v.preview!)}
           >
             <pre className="eo-confirm-line" data-testid="earlyoom-confirm-line">{v.preview}</pre>
           </SettingsConfirm>

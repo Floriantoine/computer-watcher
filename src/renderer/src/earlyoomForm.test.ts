@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import type { EarlyoomStatus, HistoryEvent } from '../../core/types';
 import { formFromStatus, lastEarlyoomKills, validateEarlyoomForm, type EarlyoomForm } from './earlyoomForm';
 
-const LINE = 'EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(claude|claude-desktop|warp|zsh|bash|kwin_wayland|plasmashell|Xwayland|sddm|systemd.*)$ --prefer ^(chrome|vitest|node..vitest.|node-MainThread|node|npm)$"';
+const LINE = 'EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(claude|claude-desktop|warp|zsh|bash|kwin_wayland|kwin_wayland_wr|plasmashell|Xwayland|sddm|systemd.*)$ --prefer ^(chrome|vitest|node..vitest.|node-MainThread|node|npm)$"';
 
 const status = (file: EarlyoomStatus['file']): EarlyoomStatus => ({
   installed: true, version: '1.9.0', active: 'active', file, installHint: 'x',
@@ -44,6 +44,11 @@ describe('validateEarlyoomForm', () => {
   test('motif avec espace → erreur sur prefer nommant le motif', () => {
     const r = validateEarlyoomForm({ ...VALID, prefer: 'chrome\nnode (vitest)' }, []);
     expect(r.errors.prefer).toContain('node (vitest)');
+    expect(r.preview).toBeUndefined();
+  });
+  test.each(['a(', '*x', 'a)|(.*', '.*', 'a|b'])('motif hors grammaire « %s » → erreur sur prefer', (p) => {
+    const r = validateEarlyoomForm({ ...VALID, prefer: p }, []);
+    expect(r.errors.prefer).toBeTruthy();
     expect(r.preview).toBeUndefined();
   });
   test('lignes vides de prefer ignorées', () => {

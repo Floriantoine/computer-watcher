@@ -1,12 +1,12 @@
-// Le script root n'est jamais lancé via pkexec ici : il est exécuté directement, en tant qu'utilisateur,
-// sur une COPIE de test où les deux chemins constants (cible, systemctl) sont remplacés par des chemins temporaires.
-import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+// Le script root n'est jamais lancé via pkexec ici : il est exécuté directement, en tant qu'utilisateur, sur une
+// COPIE de test où seules trois constantes changent (cible, systemctl, attente après redémarrage).
+import { spawnSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import { DEFAULT_CONFIG } from '../core/defaults';
-import { buildEarlyoomArgs, EARLYOOM_LINE_PATTERN, EARLYOOM_LINE_RE } from '../core/earlyoom';
+import { buildEarlyoomArgs, checkEarlyoomLine, EARLYOOM_LINE_PATTERN, EARLYOOM_LINE_RE } from '../core/earlyoom';
 import { applyEarlyoom, applyExitMessage, createEarlyoomApplier, EARLYOOM_APPLY_SCRIPT, earlyoomStatus, PKEXEC, type ExecFn } from './earlyoom';
 
 const cacheRoot = join(homedir(), '.cache');
@@ -14,47 +14,69 @@ mkdirSync(cacheRoot, { recursive: true });
 const root = mkdtempSync(join(cacheRoot, 'pw-earlyoom-test-'));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
+const BASE = 'claude|claude-desktop|warp|zsh|bash|kwin_wayland|kwin_wayland_wr|plasmashell|Xwayland|sddm|systemd.*';
 const OLD = 'EARLYOOM_ARGS="-m 6 -s 30 -r 0"\n';
-const VALID = 'EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(claude|claude-desktop|warp|zsh|bash|kwin_wayland|plasmashell|Xwayland|sddm|systemd.*)$ --prefer ^(chrome|vitest|node..vitest.|node-MainThread|node|npm)$"';
+const VALID = `EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(${BASE})$ --prefer ^(chrome|vitest|node..vitest.|node-MainThread|node|npm)$"`;
 const USER_LINE = 'EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(claude|claude-desktop|warp|zsh|bash|kwin_wayland|plasmashell|Xwayland|sddm|systemd.*)$ --prefer ^(chrome|vitest|node.\\(vitest\\)|node-MainThread|node|npm)$"';
+const ATTACK = 'EARLYOOM_ARGS="-m 99,99 -s 100,100 -r 0 --ignore ^(x)$ --prefer ^(.*)$"';
+const withBase = (rest: string) => `EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(${BASE})$${rest}"`;
 
 let dir = '';
 let n = 0;
-beforeEach(() => {
+const newDir = () => {
   dir = join(root, `case-${n++}`);
   mkdirSync(dir);
-});
+};
+beforeEach(newDir);
 
+/** Faux systemctl : journalise ; 1er restart → FAKE_RESTART_RC (et verrouille la cible si FAKE_LOCK=1) ; 1er is-active → FAKE_ACTIVE_RC. */
 const fakeSystemctl = (): string => {
   const p = join(dir, 'systemctl');
-  writeFileSync(p, '#!/usr/bin/bash\necho "$@" >> "$FAKE_LOG"\nc=$(grep -c "" "$FAKE_LOG")\nif [[ $c -eq 1 ]]; then exit "${FAKE_RC:-0}"; fi\nexit 0\n');
+  writeFileSync(p, [
+    '#!/usr/bin/bash',
+    'echo "$*" >> "$FAKE_LOG"',
+    'c=$(grep -c -- "^$1" "$FAKE_LOG")',
+    'if [[ $1 == restart && $c -eq 1 ]]; then [[ ${FAKE_LOCK:-0} == 1 ]] && chmod 444 "$FAKE_TARGET"; exit "${FAKE_RESTART_RC:-0}"; fi',
+    'if [[ $1 == is-active && $c -eq 1 ]]; then exit "${FAKE_ACTIVE_RC:-0}"; fi',
+    'exit 0',
+    '',
+  ].join('\n'));
   chmodSync(p, 0o755);
   return p;
 };
 
-/** Copie de test du script : seuls les deux chemins constants changent. */
+/** Copie de test du script : seules la cible, systemctl et l'attente changent. */
 function testScript(target: string, systemctl: string): string {
-  const a = 'target=/etc/default/earlyoom\n';
-  const b = 'systemctl=/usr/bin/systemctl\n';
-  if (!EARLYOOM_APPLY_SCRIPT.includes(a) || !EARLYOOM_APPLY_SCRIPT.includes(b)) throw new Error('chemins constants introuvables');
-  return EARLYOOM_APPLY_SCRIPT.replace(a, `target='${target}'\n`).replace(b, `systemctl='${systemctl}'\n`);
+  const swaps: [string, string][] = [
+    ['\ntarget=/etc/default/earlyoom\n', `\ntarget='${target}'\n`],
+    ['\nsystemctl=/usr/bin/systemctl\n', `\nsystemctl='${systemctl}'\n`],
+    ['\nsleep 2\n', '\nsleep 0\n'],
+  ];
+  let s = EARLYOOM_APPLY_SCRIPT;
+  for (const [a, b] of swaps) {
+    if (!s.includes(a)) throw new Error(`constante introuvable : ${a.trim()}`);
+    s = s.replace(a, b);
+  }
+  return s;
 }
 
-function runScript(opts: { content?: string; srcPath?: string | null; target?: string; existing?: string | null; fakeRc?: number }) {
-  const target = opts.target ?? join(dir, 'earlyoom');
-  if (opts.existing !== undefined && opts.existing !== null) writeFileSync(target, opts.existing);
-  const src = opts.srcPath === undefined ? join(dir, 'src') : opts.srcPath;
-  if (src && opts.content !== undefined) writeFileSync(src, opts.content, { mode: 0o600 });
+interface RunOpts { arg?: string | null; existing?: string | null; restartRc?: number; activeRc?: number; lock?: boolean }
+function runScript(o: RunOpts) {
+  const target = join(dir, 'earlyoom');
+  if (o.existing) writeFileSync(target, o.existing);
   const log = join(dir, 'log');
-  const args = ['-c', testScript(target, fakeSystemctl()), 'proc-watch-earlyoom', ...(src ? [src] : [])];
+  const args = ['-c', testScript(target, fakeSystemctl()), 'proc-watch-earlyoom', ...(o.arg === null || o.arg === undefined ? [] : [o.arg])];
   const r = spawnSync('/usr/bin/bash', args, {
-    env: { PATH: '/usr/bin:/bin', FAKE_LOG: log, FAKE_RC: String(opts.fakeRc ?? 0) },
+    env: {
+      PATH: '/usr/bin:/bin', FAKE_LOG: log, FAKE_TARGET: target, FAKE_LOCK: o.lock ? '1' : '0',
+      FAKE_RESTART_RC: String(o.restartRc ?? 0), FAKE_ACTIVE_RC: String(o.activeRc ?? 0),
+    },
     encoding: 'utf8',
     timeout: 10_000,
   });
   const calls = existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').filter(Boolean) : [];
-  const baks = readdirSync(dir).filter((f) => f.startsWith('earlyoom.bak-'));
-  return { code: r.status, target, calls, baks, read: () => (existsSync(target) ? readFileSync(target, 'utf8') : null) };
+  const baks = readdirSync(dir).filter((f) => f.startsWith('earlyoom.bak-')).sort();
+  return { code: r.status, stdout: r.stdout, target, calls, baks, read: () => (existsSync(target) ? readFileSync(target, 'utf8') : null) };
 }
 
 describe('script livré (constante)', () => {
@@ -65,10 +87,20 @@ describe('script livré (constante)', () => {
     expect(EARLYOOM_APPLY_SCRIPT).toContain('\ntarget=/etc/default/earlyoom\n');
     expect(EARLYOOM_APPLY_SCRIPT).toContain('\nsystemctl=/usr/bin/systemctl\n');
     expect(EARLYOOM_APPLY_SCRIPT).toContain('export PATH=/usr/bin:/bin LC_ALL=C\n');
+    expect(EARLYOOM_APPLY_SCRIPT).toContain('\nsleep 2\n');
   });
   test('motif bash = EARLYOOM_LINE_PATTERN (même source que EARLYOOM_LINE_RE)', () => {
     expect(EARLYOOM_APPLY_SCRIPT).toContain(`\nre='${EARLYOOM_LINE_PATTERN}'\n`);
     expect(EARLYOOM_LINE_RE.source).toBe(new RegExp(EARLYOOM_LINE_PATTERN).source);
+  });
+  test('ne lit aucun fichier désigné par l’appelant (ligne en argument)', () => {
+    for (const s of ['< "$', 'read ', 'stat ', 'grep ', 'cat ', 'source', '-f "$line"', '-e "$line"', '-L "$line"', '-p "$line"', '"$line" ;', '< $line']) expect(EARLYOOM_APPLY_SCRIPT).not.toContain(s);
+    expect(EARLYOOM_APPLY_SCRIPT).toContain('line="${1:-}"');
+    expect(EARLYOOM_APPLY_SCRIPT.match(/\$\{?1/g)).toEqual(['${1']);
+    // $line n'apparaît que dans : test non vide, longueur, =~, printf.
+    expect(EARLYOOM_APPLY_SCRIPT.match(/.*\$\{?#?line.*/g)?.map((l) => l.trim().slice(0, 18))).toEqual([
+      '[[ -n "$line" ]] |', '(( ${#line} <= 409', '[[ "$line" =~ $re ', "{ printf '%s\\n' \"$",
+    ]);
   });
   test('syntaxe bash valide', () => {
     expect(spawnSync('/usr/bin/bash', ['-n', '-c', EARLYOOM_APPLY_SCRIPT]).status).toBe(0);
@@ -77,105 +109,125 @@ describe('script livré (constante)', () => {
 });
 
 describe('script root (exécuté directement, sans pkexec)', () => {
-  test('ligne valide, cible existante → écrite, copie .bak, redémarrage', () => {
-    const r = runScript({ content: `${VALID}\n`, existing: OLD });
+  test('ligne valide en argument, cible existante → écrite, copie .bak, redémarrage puis vérification', () => {
+    const r = runScript({ arg: VALID, existing: OLD });
     expect(r.code).toBe(0);
     expect(r.read()).toBe(`${VALID}\n`);
     expect(r.baks).toHaveLength(1);
-    expect(r.baks[0]).toMatch(/^earlyoom\.bak-\d{8}T\d{6}$/);
+    expect(r.baks[0]).toMatch(/^earlyoom\.bak-\d{8}T\d{6}\.\d{3}$/);
     expect(readFileSync(join(dir, r.baks[0]), 'utf8')).toBe(OLD);
-    expect(r.calls).toEqual(['restart earlyoom']);
+    expect(r.calls).toEqual(['restart earlyoom', 'is-active --quiet earlyoom']);
     expect(statSync(r.target).mode & 0o777).toBe(0o644);
     expect(existsSync(`${r.target}.proc-watch.tmp`)).toBe(false);
   });
+  test('deux applications de suite → deux .bak, aucun écrasé', () => {
+    runScript({ arg: VALID, existing: OLD });
+    const r = runScript({ arg: withBase('') });
+    expect(r.code).toBe(0);
+    expect(r.baks).toHaveLength(2);
+    expect(r.baks.map((b) => readFileSync(join(dir, b), 'utf8')).sort()).toEqual([OLD, `${VALID}\n`].sort());
+  });
+  test('.bak déjà présent au même nom → suffixe compteur', () => {
+    // Le nom à la milliseconde est imprévisible : on occupe tous les noms possibles de la seconde courante et des 2 suivantes.
+    const t = new Date();
+    const p2 = (x: number) => String(x).padStart(2, '0');
+    for (let k = 0; k < 3; k++) {
+      const d = new Date(t.getTime() + k * 1000);
+      const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}T${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`;
+      for (let ms = 0; ms < 1000; ms++) writeFileSync(join(dir, `earlyoom.bak-${stamp}.${String(ms).padStart(3, '0')}`), 'occupé');
+    }
+    const r = runScript({ arg: VALID, existing: OLD });
+    expect(r.code).toBe(0);
+    const fresh = r.baks.filter((b) => readFileSync(join(dir, b), 'utf8') === OLD);
+    expect(fresh).toHaveLength(1);
+    expect(fresh[0]).toMatch(/\.\d{3}\.1$/);
+    expect(r.baks.filter((b) => readFileSync(join(dir, b), 'utf8') === 'occupé')).toHaveLength(3000);
+  });
   test('cible absente → écrite, pas de .bak', () => {
-    const r = runScript({ content: `${VALID}\n`, existing: null });
+    const r = runScript({ arg: VALID, existing: null });
     expect(r.code).toBe(0);
     expect(r.read()).toBe(`${VALID}\n`);
     expect(r.baks).toEqual([]);
   });
-  test('ligne actuelle de l’utilisateur (antislash) → 11, rien modifié, systemctl jamais appelé', () => {
-    const r = runScript({ content: `${USER_LINE}\n`, existing: OLD });
+  test.each<[string, RunOpts, number]>([
+    ['ligne actuelle de l’utilisateur (antislash)', { arg: USER_LINE }, 11],
+    ['ligne d’attaque de la revue', { arg: ATTACK }, 11],
+    ['bonne forme mais SIGKILL > SIGTERM', { arg: VALID.replace('-m 8,5', '-m 8,9') }, 11],
+    ['bonne forme mais swap SIGKILL > SIGTERM', { arg: VALID.replace('-s 35,25', '-s 35,36') }, 11],
+    ['bornes : -m 51,5', { arg: VALID.replace('-m 8,5', '-m 51,5') }, 11],
+    ['bornes : -s 101,5', { arg: VALID.replace('-s 35,25', '-s 101,5') }, 11],
+    ['exclusions de base absentes', { arg: 'EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(kitty)$"' }, 11],
+    ['regex non compilable a(', { arg: withBase(' --prefer ^(a()$') }, 11],
+    ['quantificateur en tête *x', { arg: withBase(' --prefer ^(*x)$') }, 11],
+    ['sortie des ancres a)|(.*', { arg: withBase(' --prefer ^(a)|(.*)$') }, 11],
+    ['ligne de 4 096 caractères', { arg: withBase(` --prefer ^(${'a'.repeat(4096 - withBase(' --prefer ^()$').length)})$`) }, 11],
+    ['ligne + saut de ligne', { arg: `${VALID}\n` }, 11],
+    ['argument vide', { arg: '' }, 10],
+    ['argument absent', { arg: null }, 10],
+  ])('%s → refusé, cible inchangée, systemctl jamais appelé', (_name, o, code) => {
+    const r = runScript({ ...o, existing: OLD });
+    expect(r.code).toBe(code);
+    expect(r.read()).toBe(OLD);
+    expect(r.baks).toEqual([]);
+    expect(r.calls).toEqual([]);
+  });
+  test('chemin d’un fichier contenant une ligne valide → 11 (le fichier n’est jamais ouvert)', () => {
+    const p = join(dir, 'ligne');
+    writeFileSync(p, `${VALID}\n`);
+    const r = runScript({ arg: p, existing: OLD });
     expect(r.code).toBe(11);
     expect(r.read()).toBe(OLD);
-    expect(r.baks).toEqual([]);
     expect(r.calls).toEqual([]);
   });
-  test.each<[string, Parameters<typeof runScript>[0], number[]]>([
-    ['espace dans une regex', { content: `${VALID.replace('node-MainThread', 'node MainThread')}\n` }, [11]],
-    ['deux lignes', { content: `${VALID}\n${VALID}\n` }, [10]],
-    ['5 000 octets', { content: `${VALID}${' '.repeat(5000)}\n` }, [10]],
-    ['ligne conforme de 4 097 octets', { content: `EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(${'a'.repeat(4097 - 50)})$"\n` }, [10]],
-    ['argument absent', { srcPath: null }, [10]],
-    ['fichier inexistant', { srcPath: '/nonexistent/proc-watch' }, [10]],
-  ])('%s → refusé, cible inchangée', (_n, opts, codes) => {
-    const r = runScript({ ...opts, existing: OLD });
-    expect(codes).toContain(r.code);
-    expect(r.read()).toBe(OLD);
-    expect(r.baks).toEqual([]);
-    expect(r.calls).toEqual([]);
-  });
-  test('lien symbolique → 10', () => {
-    const real = join(dir, 'real');
-    writeFileSync(real, `${VALID}\n`);
-    const link = join(dir, 'src');
-    symlinkSync(real, link);
-    const r = runScript({ srcPath: link, existing: OLD });
-    expect(r.code).toBe(10);
-    expect(r.read()).toBe(OLD);
-    expect(r.calls).toEqual([]);
-  });
-  test('FIFO → 10 sans bloquer', () => {
-    const fifo = join(dir, 'src');
-    execFileSync('/usr/bin/mkfifo', [fifo]);
-    const r = runScript({ srcPath: fifo, existing: OLD });
-    expect(r.code).toBe(10);
-    expect(r.read()).toBe(OLD);
-    expect(r.calls).toEqual([]);
-  });
-  test('redémarrage en échec → 13, ancien contenu restauré, systemctl appelé deux fois', () => {
-    const r = runScript({ content: `${VALID}\n`, existing: OLD, fakeRc: 1 });
+  test('redémarrage en échec → 13, ancien contenu restauré, redémarré', () => {
+    const r = runScript({ arg: VALID, existing: OLD, restartRc: 1 });
     expect(r.code).toBe(13);
     expect(r.read()).toBe(OLD);
     expect(r.calls).toEqual(['restart earlyoom', 'restart earlyoom']);
   });
-  test('redémarrage en échec sans fichier précédent → 13, fichier retiré', () => {
-    const r = runScript({ content: `${VALID}\n`, existing: null, fakeRc: 1 });
+  test('redémarrage « réussi » mais earlyoom inactif ensuite → 13, ancien contenu restauré', () => {
+    const r = runScript({ arg: VALID, existing: OLD, activeRc: 3 });
+    expect(r.code).toBe(13);
+    expect(r.read()).toBe(OLD);
+    expect(r.calls).toEqual(['restart earlyoom', 'is-active --quiet earlyoom', 'restart earlyoom']);
+  });
+  test('inactif sans fichier précédent → 13, fichier retiré', () => {
+    const r = runScript({ arg: VALID, existing: null, activeRc: 3 });
     expect(r.code).toBe(13);
     expect(r.read()).toBeNull();
   });
-  test('même motif en JS et en bash', () => {
-    const gen = buildEarlyoomArgs({ memTerm: 10, memKill: 4, swapTerm: 100, swapKill: 1, prefer: [] }, DEFAULT_CONFIG.protected);
-    if (!gen.ok) throw new Error('attendu ok');
-    const lines = [
-      VALID,
-      gen.line,
-      USER_LINE,
-      VALID.replace('node-MainThread', 'node MainThread'),
-      VALID.replace('-r 0', '-r 1'),
-      VALID.replace('"-m', '"-m  '),
-      VALID.replace('|npm', '|n"pm'),
-      'EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(a)$ --prefer ^(b)$"; rm -rf /',
-    ];
-    for (const l of lines) {
-      dir = join(root, `case-${n++}`);
-      mkdirSync(dir);
-      const r = runScript({ content: `${l}\n`, existing: OLD });
-      expect({ l, js: EARLYOOM_LINE_RE.test(l) }).toEqual({ l, js: r.code !== 11 });
-    }
+  test('restauration impossible → 14, chemin du .bak sur la sortie', () => {
+    const r = runScript({ arg: VALID, existing: OLD, restartRc: 1, lock: true });
+    expect(r.code).toBe(14);
+    expect(r.baks).toHaveLength(1);
+    expect(r.stdout.trim()).toBe(join(dir, r.baks[0]));
+    expect(readFileSync(join(dir, r.baks[0]), 'utf8')).toBe(OLD);
   });
 });
 
-describe('même motif en TS et en bash ([[ $line =~ $re ]] réel)', () => {
-  const pad = (n: number) => {
-    const head = 'EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(a)$ --prefer ^(';
-    const tail = ')$"';
-    return head + 'a'.repeat(n - head.length - tail.length) + tail;
-  };
+describe('même politique en TS et en bash (vrai bash)', () => {
   const corpus: string[] = [
     VALID,
+    withBase(''),
+    withBase('').replace(')$"', '|kitty|node.*)$"'),
+    VALID.replace('-m 8,5', '-m 50,50').replace('-s 35,25', '-s 100,100'),
+    VALID.replace('-m 8,5', '-m 1,1').replace('-s 35,25', '-s 1,1'),
     USER_LINE,
-    'EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(a)$"',
+    ATTACK,
+    VALID.replace('-m 8,5', '-m 8,9'),
+    VALID.replace('-s 35,25', '-s 35,36'),
+    VALID.replace('-m 8,5', '-m 08,5'),
+    VALID.replace('-m 8,5', '-m 0,0'),
+    VALID.replace('-r 0', '-r 1'),
+    VALID.replace('claude|claude-desktop', 'claude-desktop|claude'),
+    VALID.replace('|systemd.*', ''),
+    withBase(' --prefer ^(a()$'),
+    withBase(' --prefer ^(*x)$'),
+    withBase(' --prefer ^(+)$'),
+    withBase(' --prefer ^(a)|(.*)$'),
+    withBase(' --prefer ^(.*)$'),
+    withBase(' --prefer ^(a.*b)$'),
+    withBase(' --prefer ^(a|)$'),
     VALID.replace('|npm', '|$(reboot)'),
     VALID.replace('|npm', '|`reboot`'),
     VALID.replace('|npm', '|a;reboot'),
@@ -183,41 +235,45 @@ describe('même motif en TS et en bash ([[ $line =~ $re ]] réel)', () => {
     VALID.replace('|npm', '|a#b'),
     VALID.replace('|npm', '|a\nb'),
     `${VALID}\n`,
-    `${VALID}\nreboot`,
     VALID.replace('|npm', '|a b'),
-    VALID.replace('|npm', '|a{1}'),
-    VALID.replace('|npm', '|[ab]'),
-    VALID.replace('|npm', '|a<b'),
-    VALID.replace('|npm', '|a&b'),
     VALID.replace('|npm', '|a:b'),
-    VALID.replace('|npm', '|a"b'),
     VALID.replace('|npm', '|a\\b'),
     VALID.replace('chrome', 'chrоme'), // о cyrillique
     VALID.replace('chrome', 'ｃhrome'), // c pleine chasse
-    VALID.replace('chrome', 'chrómé'),
-    VALID.replace(' -r 0', '\u00a0-r 0'), // espace insécable
+    VALID.replace(' -r 0', ' -r 0'), // espace insécable
     VALID.replace('-m 8,5', '-m ٨,5'), // chiffre arabe-indien
-    VALID.replace('-m 8,5', '-m ８,5'), // chiffre pleine chasse
-    pad(4097),
-    pad(4095),
+    withBase(` --prefer ^(${'a'.repeat(4095 - withBase(' --prefer ^()$').length)})$`),
+    withBase(` --prefer ^(${'a'.repeat(4096 - withBase(' --prefer ^()$').length)})$`),
   ];
-  test('accepte et refuse exactement le même corpus', () => {
-    expect(pad(4097).length).toBe(4097);
-    const bashRe = EARLYOOM_LINE_PATTERN;
+  test('[[ =~ ]] et EARLYOOM_LINE_RE : mêmes verdicts, sous 4 locales', () => {
     for (const line of corpus) {
       for (const lang of ['C', 'C.UTF-8', 'fr_FR.UTF-8', 'en_US.UTF-8']) {
-        const r = spawnSync('/usr/bin/bash', ['-c', '[[ $1 =~ $2 ]]', 'x', line, bashRe], { env: { PATH: '/usr/bin', LANG: lang, LC_ALL: lang } });
+        const r = spawnSync('/usr/bin/bash', ['-c', '[[ $1 =~ $2 ]]', 'x', line, EARLYOOM_LINE_PATTERN], { env: { PATH: '/usr/bin', LANG: lang, LC_ALL: lang } });
         expect({ line, lang, bash: r.status === 0 }).toEqual({ line, lang, bash: EARLYOOM_LINE_RE.test(line) });
       }
     }
-    // Seules les lignes bien formées passent (la longueur est bornée à part, par le script et le générateur).
-    expect(corpus.filter((l) => EARLYOOM_LINE_RE.test(l))).toEqual([VALID, corpus[2], pad(4097), pad(4095)]);
+  });
+  test('script complet et checkEarlyoomLine : mêmes verdicts (le script refuse avec 11)', () => {
+    const accepted: string[] = [];
+    for (const line of corpus) {
+      newDir();
+      const r = runScript({ arg: line, existing: OLD });
+      const ts = checkEarlyoomLine(line) === null;
+      expect({ line, script: r.code !== 11 }).toEqual({ line, script: ts });
+      if (ts) accepted.push(line);
+    }
+    expect(accepted).toEqual([corpus[0], corpus[1], corpus[2], corpus[3], corpus[4], corpus[35]]);
+  });
+  test('lignes générées acceptées par le script', () => {
+    const gen = buildEarlyoomArgs({ memTerm: 10, memKill: 4, swapTerm: 100, swapKill: 1, prefer: ['node.*'] }, DEFAULT_CONFIG.protected);
+    if (!gen.ok) throw new Error(gen.errors.join());
+    expect(runScript({ arg: gen.line, existing: OLD }).code).toBe(0);
   });
 });
 
 describe('applyExitMessage', () => {
   test.each<[number, string]>([
-    [126, 'cancelled'], [127, 'unavailable'], [10, 'invalid'], [11, 'invalid'], [12, 'failed'], [13, 'failed'], [99, 'failed'],
+    [126, 'cancelled'], [127, 'unavailable'], [10, 'invalid'], [11, 'invalid'], [12, 'failed'], [13, 'failed'], [14, 'failed'], [99, 'failed'],
   ])('%i → %s', (code, reason) => {
     const r = applyExitMessage(code, VALID);
     expect(r.ok).toBe(false);
@@ -227,9 +283,19 @@ describe('applyExitMessage', () => {
     }
   });
   test('0 → ok', () => expect(applyExitMessage(0, VALID)).toEqual({ ok: true, line: VALID }));
+  test('127 → autorisation refusée ou pkexec indisponible', () => {
+    const r = applyExitMessage(127, VALID);
+    expect(!r.ok && r.message).toMatch(/^Autorisation refusée ou pkexec indisponible/);
+  });
   test('13 → ancien fichier restauré', () => {
     const r = applyExitMessage(13, VALID);
     expect(!r.ok && r.message).toContain('restauré');
+  });
+  test('14 → restauration impossible, chemin du .bak', () => {
+    const r = applyExitMessage(14, VALID, '/etc/default/earlyoom.bak-20261008T120000.123\n');
+    expect(!r.ok && r.message).toBe('Restauration impossible : voir /etc/default/earlyoom.bak-20261008T120000.123');
+    const r2 = applyExitMessage(14, VALID, 'n’importe quoi');
+    expect(!r2.ok && r2.message).toBe('Restauration impossible : voir /etc/default/earlyoom.bak-…');
   });
   test('code inconnu cité', () => {
     const r = applyExitMessage(99, VALID);
@@ -237,79 +303,97 @@ describe('applyExitMessage', () => {
   });
 });
 
-describe('applyEarlyoom (pkexec simulé)', () => {
-  const capture = (code: number | Error) => {
-    const seen: { cmd: string; args: string[]; mode: number; content: string; timeout?: number }[] = [];
+describe('applyEarlyoom (pkexec simulé, ligne en argument)', () => {
+  const capture = (res: { code: number; stdout?: string; timedOut?: boolean } | Error) => {
+    const seen: { cmd: string; args: string[]; timeout?: number }[] = [];
     const run: ExecFn = async (cmd, args, opts) => {
-      const file = args[args.length - 1];
-      seen.push({ cmd, args, mode: statSync(file).mode & 0o777, content: readFileSync(file, 'utf8'), timeout: opts?.timeout });
-      if (code instanceof Error) throw code;
-      return { code, stdout: '', stderr: '' };
+      seen.push({ cmd, args, timeout: opts?.timeout });
+      if (res instanceof Error) throw res;
+      return { stdout: '', stderr: '', ...res };
     };
     return { run, seen };
   };
-  test('0 → ok ; arguments exacts ; fichier 0600 pendant l’appel, supprimé après', async () => {
-    const { run, seen } = capture(0);
-    expect(await applyEarlyoom(VALID, { run, tmpRoot: dir })).toEqual({ ok: true, line: VALID });
-    expect(seen).toHaveLength(1);
-    const file = seen[0].args[4];
-    expect(seen[0].cmd).toBe('/usr/bin/pkexec');
-    expect(seen[0].args).toEqual(['/usr/bin/bash', '-c', EARLYOOM_APPLY_SCRIPT, 'proc-watch-earlyoom', file]);
-    expect(seen[0].mode).toBe(0o600);
-    expect(seen[0].content).toBe(`${VALID}\n`);
-    expect(seen[0].timeout).toBe(120_000);
-    expect(existsSync(file)).toBe(false);
-    expect(readdirSync(dir)).toEqual([]);
+  test('0 → ok ; arguments exacts : la ligne elle-même, aucun fichier', async () => {
+    const { run, seen } = capture({ code: 0 });
+    expect(await applyEarlyoom(VALID, { run })).toEqual({ ok: true, line: VALID });
+    expect(seen).toEqual([{ cmd: '/usr/bin/pkexec', args: ['/usr/bin/bash', '-c', EARLYOOM_APPLY_SCRIPT, 'proc-watch-earlyoom', VALID], timeout: 120_000 }]);
   });
   test('126 (pkexec annulé) → cancelled', async () => {
-    const r = await applyEarlyoom(VALID, { run: capture(126).run, tmpRoot: dir });
-    expect(r).toMatchObject({ ok: false, reason: 'cancelled' });
+    expect(await applyEarlyoom(VALID, { run: capture({ code: 126 }).run })).toMatchObject({ ok: false, reason: 'cancelled' });
   });
   test('127 → unavailable', async () => {
-    expect(await applyEarlyoom(VALID, { run: capture(127).run, tmpRoot: dir })).toMatchObject({ ok: false, reason: 'unavailable' });
+    expect(await applyEarlyoom(VALID, { run: capture({ code: 127 }).run })).toMatchObject({ ok: false, reason: 'unavailable' });
   });
-  test('spawn ENOENT → unavailable, fichier supprimé', async () => {
+  test('14 → chemin du .bak repris de la sortie', async () => {
+    const r = await applyEarlyoom(VALID, { run: capture({ code: 14, stdout: '/etc/default/earlyoom.bak-20261008T120000.123\n' }).run });
+    expect(!r.ok && r.message).toContain('earlyoom.bak-20261008T120000.123');
+  });
+  test('délai dépassé → message dédié', async () => {
+    const r = await applyEarlyoom(VALID, { run: capture({ code: -1, timedOut: true }).run });
+    expect(r).toEqual({ ok: false, reason: 'failed', message: "Délai dépassé (120 s) : rien n'a été modifié si la fenêtre de mot de passe était encore ouverte." });
+  });
+  test('spawn ENOENT → unavailable', async () => {
     const err = Object.assign(new Error('spawn pkexec ENOENT'), { code: 'ENOENT' });
-    const { run, seen } = capture(err);
-    expect(await applyEarlyoom(VALID, { run, tmpRoot: dir })).toMatchObject({ ok: false, reason: 'unavailable' });
-    expect(existsSync(seen[0].args[4])).toBe(false);
-    expect(readdirSync(dir)).toEqual([]);
+    expect(await applyEarlyoom(VALID, { run: capture(err).run })).toMatchObject({ ok: false, reason: 'unavailable' });
   });
-  test('run qui lève → failed, fichier supprimé', async () => {
-    const { run } = capture(new Error('boum'));
-    expect(await applyEarlyoom(VALID, { run, tmpRoot: dir })).toMatchObject({ ok: false, reason: 'failed' });
-    expect(readdirSync(dir)).toEqual([]);
+  test('run qui lève → failed', async () => {
+    expect(await applyEarlyoom(VALID, { run: capture(new Error('boum')).run })).toMatchObject({ ok: false, reason: 'failed' });
   });
-  test('ligne non conforme → invalid sans appeler pkexec', async () => {
-    const { run, seen } = capture(0);
-    expect(await applyEarlyoom(USER_LINE, { run, tmpRoot: dir })).toMatchObject({ ok: false, reason: 'invalid' });
+  test.each([USER_LINE, ATTACK, VALID.replace('-m 8,5', '-m 8,9')])('ligne hors politique → invalid sans appeler pkexec', async (line) => {
+    const { run, seen } = capture({ code: 0 });
+    expect(await applyEarlyoom(line, { run })).toMatchObject({ ok: false, reason: 'invalid' });
     expect(seen).toEqual([]);
   });
 });
 
 describe('createEarlyoomApplier (IPC earlyoom:apply)', () => {
   const settings = { memTerm: 8, memKill: 5, swapTerm: 35, swapKill: 25, prefer: ['chrome'] };
-  test('réglages invalides → invalid', async () => {
-    const apply = createEarlyoomApplier(() => [], async () => ({ ok: true, line: '' }));
-    expect(await apply({ memTerm: '8' })).toMatchObject({ ok: false, reason: 'invalid' });
-    expect(await apply({ ...settings, memKill: 9 })).toMatchObject({ ok: false, reason: 'invalid' });
+  const lineFor = (prot: string[]) => {
+    const b = buildEarlyoomArgs(settings, prot);
+    if (!b.ok) throw new Error('attendu ok');
+    return b.line;
+  };
+  test('réglages invalides → invalid, ni confirmation ni pkexec', async () => {
+    let calls = 0;
+    const apply = createEarlyoomApplier(() => [], async () => { calls++; return true; }, async () => { calls++; return { ok: true, line: '' }; });
+    expect(await apply({ memTerm: '8' }, '')).toMatchObject({ ok: false, reason: 'invalid' });
+    expect(await apply({ ...settings, memKill: 9 }, '')).toMatchObject({ ok: false, reason: 'invalid' });
+    expect(calls).toBe(0);
   });
-  test('ligne construite avec la liste protégée', async () => {
+  test('ligne de l’aperçu différente de celle du main → refus, ni confirmation ni pkexec', async () => {
+    let calls = 0;
+    const apply = createEarlyoomApplier(() => ['kitty'], async () => { calls++; return true; }, async () => { calls++; return { ok: true, line: '' }; });
+    const r = await apply(settings, lineFor([]));
+    expect(r).toMatchObject({ ok: false, reason: 'invalid' });
+    expect(!r.ok && r.message).toMatch(/aperçu/);
+    expect(await apply(settings, 42)).toMatchObject({ ok: false, reason: 'invalid' });
+    expect(calls).toBe(0);
+  });
+  test('confirmation du main avec la ligne exacte, puis pkexec avec cette ligne', async () => {
+    const shown: string[] = [];
     let got = '';
-    const apply = createEarlyoomApplier(() => ['kitty'], async (line) => { got = line; return { ok: true, line }; });
-    const r = await apply(settings);
-    expect(r.ok).toBe(true);
-    expect(got).toContain('|sddm|systemd.*|kitty)$ --prefer ^(chrome)$"');
+    const apply = createEarlyoomApplier(() => ['kitty'], async (l) => { shown.push(l); return true; }, async (l) => { got = l; return { ok: true, line: l }; });
+    const expected = lineFor(['kitty']);
+    expect(await apply(settings, expected)).toEqual({ ok: true, line: expected });
+    expect(shown).toEqual([expected]);
+    expect(got).toBe(expected);
+    expect(got).toContain('|systemd.*|kitty)$ --prefer ^(chrome)$"');
   });
-  test('second appel concurrent refusé', async () => {
-    let release: () => void = () => {};
-    const apply = createEarlyoomApplier(() => [], (line) => new Promise((res) => { release = () => res({ ok: true, line }); }));
-    const first = apply(settings);
-    expect(await apply(settings)).toEqual({ ok: false, reason: 'failed', message: 'Une application est déjà en cours.' });
-    release();
+  test('confirmation refusée → cancelled, pas de pkexec', async () => {
+    let pk = 0;
+    const apply = createEarlyoomApplier(() => [], async () => false, async () => { pk++; return { ok: true, line: '' }; });
+    expect(await apply(settings, lineFor([]))).toEqual({ ok: false, reason: 'cancelled', message: "Annulé : rien n'a été modifié." });
+    expect(pk).toBe(0);
+  });
+  test('second appel concurrent refusé (pendant la confirmation aussi)', async () => {
+    let release: (v: boolean) => void = () => {};
+    const apply = createEarlyoomApplier(() => [], () => new Promise<boolean>((res) => { release = res; }), async (line) => ({ ok: true, line }));
+    const first = apply(settings, lineFor([]));
+    expect(await apply(settings, lineFor([]))).toEqual({ ok: false, reason: 'failed', message: 'Une application est déjà en cours.' });
+    release(true);
     expect((await first).ok).toBe(true);
-    const third = apply(settings);
-    release();
+    const third = apply(settings, lineFor([]));
+    release(true);
     expect((await third).ok).toBe(true);
   });
 });
@@ -330,7 +414,7 @@ describe('earlyoomStatus', () => {
     const st = await earlyoomStatus({
       run: run({
         '/usr/bin/earlyoom -v': { code: 0, stdout: 'earlyoom 1.9.0\n' },
-        'systemctl is-active earlyoom': { code: 0, stdout: 'active\n' },
+        '/usr/bin/systemctl is-active earlyoom': { code: 0, stdout: 'active\n' },
       }),
       exists: (p) => p === '/usr/bin/earlyoom',
       read: (p) => (p === '/etc/default/earlyoom' ? `${USER_LINE}\n` : null),
@@ -348,7 +432,7 @@ describe('earlyoomStatus', () => {
   });
   test('is-active qui sort inactive (code 3) → inactive', async () => {
     const st = await earlyoomStatus({
-      run: run({ '/usr/bin/earlyoom -v': { code: 0, stdout: 'earlyoom 1.9.0' }, 'systemctl is-active earlyoom': { code: 3, stdout: 'inactive\n' } }),
+      run: run({ '/usr/bin/earlyoom -v': { code: 0, stdout: 'earlyoom 1.9.0' }, '/usr/bin/systemctl is-active earlyoom': { code: 3, stdout: 'inactive\n' } }),
       exists: () => true, read: () => null, env: {},
     });
     expect(st.active).toBe('inactive');

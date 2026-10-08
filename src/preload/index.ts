@@ -51,8 +51,11 @@ const api = {
   },
   earlyoom: {
     status: (): Promise<EarlyoomStatus> => ipcRenderer.invoke('earlyoom:status'),
-    /** pkexec d'un script fixe : la ligne est reconstruite et validée par le main (liste protégée de la config). */
-    apply: (s: EarlyoomSettings): Promise<ApplyResult> => ipcRenderer.invoke('earlyoom:apply', s),
+    /**
+     * Le main reconstruit la ligne (liste protégée de sa config), refuse si elle diffère de `expectedLine` (l'aperçu),
+     * la montre dans une confirmation native, puis lance pkexec d'un script fixe avec la ligne en argument.
+     */
+    apply: (s: EarlyoomSettings, expectedLine: string): Promise<ApplyResult> => ipcRenderer.invoke('earlyoom:apply', s, expectedLine),
   },
   recorder: {
     status: (): Promise<RecorderState> => ipcRenderer.invoke('recorder:status'),
