@@ -33,7 +33,7 @@ interface Props {
   onToggleProtect: (g: Group) => void;
   onReclassify: (inst: InstanceSummary, category: Category | null) => void;
   onKillInstance: (inst: InstanceSummary) => void;
-  /** Dialogue de confirmation groupée (Task 9) pré-filtré ; absent : boutons d'en-tête de « Instances » désactivés. */
+  /** Dialogue de confirmation groupée (BulkKillDialog) pré-filtré ; absent : boutons d'en-tête de « Instances » désactivés. */
   onKillInstances?: (instances: InstanceSummary[], launchersOf?: string) => void;
 }
 

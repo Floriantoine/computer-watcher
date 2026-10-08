@@ -370,6 +370,44 @@ table.tree td.act { width: 1%; text-align: right; }
 .prot-list > div { background: rgba(255, 255, 255, 0.035); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 7px 10px; }
 .prot-list .mono:first-child { color: var(--text-2); overflow-wrap: anywhere; }
 
+/* Dialogue de confirmation groupée */
+.dialog.bulk-dialog { width: min(880px, 94vw); max-height: 88vh; }
+.bulk-sub { margin: 3px 0 0; font-size: 12px; color: var(--label); }
+.bulk-presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.bulk-preset { padding: 4px 11px; font-size: 12px; border-radius: 99px; }
+.bulk-preset.on { background: rgba(124, 92, 255, 0.16); border-color: rgba(124, 92, 255, 0.45); color: var(--text); }
+.bulk-note { margin: -4px 0 0; display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--label); }
+.bulk-rows {
+  display: grid;
+  grid-template-columns: 20px minmax(70px, max-content) minmax(90px, max-content) minmax(0, 1fr) minmax(48px, max-content) 58px 72px 48px;
+  column-gap: 12px;
+  overflow: auto;
+  min-height: 0;
+  max-height: 46vh;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 2px 10px;
+}
+.bulk-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
+  align-items: center;
+  padding: 6px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.045);
+  font-size: 12.5px;
+  min-width: 0;
+  cursor: pointer;
+}
+.bulk-row.bulk-head { position: sticky; top: 0; z-index: 1; background: var(--surface-solid); padding: 6px 0 5px; border-top: 0; font-size: 11px; font-weight: 500; color: var(--label); cursor: default; }
+.bulk-row .num { text-align: right; font-variant-numeric: tabular-nums; }
+.bulk-row input[type='checkbox'] { margin: 0; accent-color: var(--danger); cursor: pointer; }
+.bulk-row.gone { opacity: 0.45; cursor: default; }
+.bulk-proj { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.bulk-lock { flex: none; display: inline-flex; color: var(--amber); }
+.bulk-gone { flex: none; font-size: 10.5px; padding: 0 6px; border-radius: 99px; background: rgba(255, 255, 255, 0.07); color: var(--muted); }
+
 /* ---------- Toasts ---------- */
 .toasts { position: fixed; right: 16px; bottom: 16px; z-index: 20; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; pointer-events: none; }
 .toast {

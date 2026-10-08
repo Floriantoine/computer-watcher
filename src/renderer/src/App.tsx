@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AnimatePresence, MotionConfig, motion, useIsPresent } from 'motion/react';
 import { compileProtection } from '../../core/protection';
-import type { Category, Config, ConfigState, GroupSummary, InstanceSummary, KillSignal, KillTarget, ProcNode, Snapshot } from '../../core/types';
+import type { Category, Config, ConfigState, GroupSummary, InstanceSummary, KillResult, KillSignal, KillTarget, ProcNode, Snapshot } from '../../core/types';
+import { bulkDialogTitle, fetchTargets, killBatches, splitEntries, summarizeResults } from './bulkKill';
+import { BulkKillDialog } from './components/BulkKillDialog';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { DetailView } from './components/DetailView';
 import { SettingsView } from './components/SettingsView';
@@ -34,6 +36,9 @@ export function App() {
   const sentTicks = useRef(new Map<number, number>());
   // Kills d'instance en cours de préparation (garde contre le double clic).
   const instKillsInFlight = useRef(new Set<string>());
+  // Dialogue de kill groupé ouvert, et envoi groupé en cours (un seul à la fois : garde contre le double clic).
+  const [bulk, setBulk] = useState<{ instances: InstanceSummary[]; launchersOf?: string; title: string } | null>(null);
+  const bulkInFlight = useRef(false);
 
   const live = useRef(new LiveBuffer());
 
@@ -92,6 +97,18 @@ export function App() {
   }, [events24h, snapshot]);
 
   const groupIds = useMemo(() => new Set(snapshot?.groupIds ?? []), [snapshot]);
+  // Clés des instances du dernier snapshot (sous-groupes compris) : le dialogue groupé grise celles qui ont disparu.
+  const liveKeys = useMemo(() => {
+    const out = new Set<string>();
+    const walk = (gs: readonly GroupSummary[]) => {
+      for (const g of gs) {
+        for (const i of g.instances) out.add(i.key);
+        walk(g.subgroups);
+      }
+    };
+    walk(snapshot?.groups ?? []);
+    return out;
+  }, [snapshot]);
 
   const isProtected = useMemo(() => compileProtection(configState?.config.protected ?? []).isProtected, [configState]);
 
@@ -101,13 +118,14 @@ export function App() {
     setTimeout(() => setToasts((t) => t.slice(1)), 5000);
   };
 
-  async function sendKill(targets: KillTarget[], signal: KillSignal) {
+  /** Envoie un signal ; `report` : un toast par erreur (le kill groupé fait son propre récapitulatif). null si l'IPC a échoué. */
+  async function sendKill(targets: KillTarget[], signal: KillSignal, report = true): Promise<KillResult[] | null> {
     let results;
     try {
       results = await window.procWatch.kill(targets, signal);
     } catch (e) {
       pushToast(ipcErrorMessage(e));
-      return;
+      return null;
     }
     const now = Date.now();
     for (const r of results) {
@@ -118,7 +136,8 @@ export function App() {
       }
     }
     setPendingPids(new Set(pending.current.keys()));
-    for (const msg of killResultMessages(results)) pushToast(msg);
+    if (report) for (const msg of killResultMessages(results)) pushToast(msg);
+    return results;
   }
 
   // « Forcer » : on réutilise le startTicks du SIGTERM ; sans lui, on ne vise rien.
@@ -173,6 +192,36 @@ export function App() {
         (e: unknown) => pushToast(ipcErrorMessage(e)),
       )
       .finally(() => instKillsInFlight.current.delete(inst.key));
+  };
+  const groupLabel = (id: string) => findGroup(snapshot.groups, id)?.label ?? id;
+  const nameOf = (inst: InstanceSummary) => projectName(inst, groupLabel(inst.groupId));
+  // Kill groupé : ouvre le dialogue (ignoré pendant un envoi groupé en cours).
+  const killInstances = (instances: InstanceSummary[], launchersOf?: string) => {
+    if (bulkInFlight.current || bulk || instances.length === 0) return;
+    const one = instances.every((i) => i.groupId === instances[0]!.groupId) ? nameOf(instances[0]!) : null;
+    setBulk({ instances, launchersOf, title: bulkDialogTitle(instances, launchersOf, one) });
+  };
+  // « Tuer (n) » : cibles fraîches du main, puis le handler `kill` (≤ 2 000 cibles par appel), puis un toast récapitulatif.
+  const confirmBulk = async (keys: string[], launchersOf: string | undefined) => {
+    if (bulkInFlight.current) return;
+    bulkInFlight.current = true;
+    setBulk(null);
+    try {
+      const entries = await fetchTargets(launchersOf ? [...keys, launchersOf] : keys, (k) => window.procWatch.instances.targets(k));
+      const { instances, launchers, gone } = splitEntries(keys, launchersOf, entries);
+      const results: KillResult[] = [];
+      for (const batch of killBatches(instances, launchers)) {
+        const r = await sendKill(batch, 'SIGTERM', false);
+        if (!r) return;
+        results.push(...r);
+      }
+      const s = summarizeResults(instances.map((i) => ({ key: i.key, pids: i.targets.map((t) => t.pid) })), results, gone.length);
+      pushToast(s.message, s.kind);
+    } catch (e) {
+      pushToast(ipcErrorMessage(e));
+    } finally {
+      bulkInFlight.current = false;
+    }
   };
   const reclassify = (inst: InstanceSummary, category: Category | null) => {
     const name = projectName(inst, findGroup(snapshot.groups, inst.groupId)?.label ?? inst.groupId);
@@ -229,6 +278,7 @@ export function App() {
                 sparkOf={sparkOf}
                 leakAt={leakAt}
                 onLeak={(ts) => setRoute({ view: 'metrics', at: ts })}
+                onKillInstances={killInstances}
               />
             )}
             {route.view === 'detail' && (
@@ -251,6 +301,7 @@ export function App() {
                 onToggleProtect={toggleProtect}
                 onReclassify={reclassify}
                 onKillInstance={killInstance}
+                onKillInstances={killInstances}
               />
             )}
             {route.view === 'metrics' && (
@@ -287,6 +338,19 @@ export function App() {
                 setConfirm(null);
               }}
               onCancel={() => setConfirm(null)}
+            />
+          )}
+          {bulk && (
+            <BulkKillDialog
+              key="bulk"
+              title={bulk.title}
+              instances={bulk.instances}
+              launchersOf={bulk.launchersOf}
+              liveKeys={liveKeys}
+              pendingPids={pending.current}
+              nameOf={nameOf}
+              onConfirm={(keys, withLaunchers) => void confirmBulk(keys, withLaunchers ? bulk.launchersOf : undefined)}
+              onCancel={() => setBulk(null)}
             />
           )}
         </AnimatePresence>

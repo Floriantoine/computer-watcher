@@ -27,7 +27,7 @@ interface Props {
   leakAt?: Map<string, number>;
   onLeak?: (ts: number) => void;
   /**
-   * Dialogue de kill groupé (Task 9) ; absent → bouton « Tuer la sélection » désactivé. Reçoit toutes les instances candidates
+   * Dialogue de kill groupé (BulkKillDialog) ; absent → bouton « Tuer la sélection » désactivé. Reçoit toutes les instances candidates
    * (groupes projet / dossier supprimé des catégories choisies), protégées comprises avec leur drapeau : le dialogue les décoche.
    */
   onKillInstances?: (instances: InstanceSummary[]) => void;

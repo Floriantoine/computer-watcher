@@ -22,8 +22,8 @@ interface Props {
   onKillInstance: (inst: InstanceSummary) => void;
   onForce: (pids: number[]) => void;
   /**
-   * Dialogue de confirmation groupée (Task 9), pré-filtré : instances proposées (protégées comprises) et, pour
-   * « Tout arrêter », l'id du groupe dont les lanceurs s'ajoutent. Absent tant que le dialogue n'existe pas : boutons désactivés.
+   * Dialogue de confirmation groupée (BulkKillDialog), pré-filtré : instances proposées (protégées comprises) et, pour
+   * « Tout arrêter », l'id du groupe dont les lanceurs s'ajoutent. Absent : boutons désactivés.
    */
   onKillInstances?: (instances: InstanceSummary[], launchersOf?: string) => void;
 }
