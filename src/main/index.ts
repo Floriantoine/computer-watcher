@@ -2,7 +2,10 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { classifyGroups, type InstanceDecision } from '../core/classify/classify';
+import { readPackageHints } from '../core/classify/packageJson';
 import { CpuTracker } from '../core/collector/cpuTracker';
+import { readListeningPorts } from '../core/collector/ports';
 import { readProcesses, type CwdEntry, type StatusEntry } from '../core/collector/readProcesses';
 import { readSystem } from '../core/collector/readSystem';
 import { configDir, loadConfig, saveConfig, validateConfig } from '../core/config';
@@ -13,12 +16,14 @@ import { planKill, sendSignals } from '../core/kill';
 import { compileProtection } from '../core/protection';
 import { formatAppEvent } from '../core/history/events';
 import { appEventsPath, dataDir } from '../core/paths';
-import { buildSnapshot, groupProcs, isWatch, type FullSnapshot } from '../core/snapshot';
-import type { ConfigState, KillResult, KillTarget, RecorderState, Watch } from '../core/types';
+import { buildSnapshot, flattenGroup, groupProcs, instanceTargets, isWatch, type Classification, type FullSnapshot } from '../core/snapshot';
+import type { ConfigState, Group, KillResult, KillTarget, RecorderState, Watch } from '../core/types';
 import { installDesktopEntry } from './desktopEntry';
 import { clearHistory, createHistoryReader } from './history';
 import { pollDelay, type WindowActivity } from './pollPolicy';
-import { isGroupKeys, isRange, isTopOptions, recorderState as computeRecorderState } from './historyIpc';
+import {
+  applyOverride, classifySetKey, isGroupKeys, isInstanceKeys, isRange, isSinceMs, isTopOptions, recorderState as computeRecorderState,
+} from './historyIpc';
 import { autoManageService, defaultSystemctl, recorderSyncDisabled, ensureRecorderService, recorderExecArgs, systemctlAvailable, unitPath } from './recorderService';
 
 // Service réseau dans le processus main : l'app ne charge que des fichiers locaux, un processus de moins (~20 Mo).
@@ -76,6 +81,66 @@ const STATUS_MAX_AGE_MS = 10_000;
 const separateSeen = new Map<string, number>();
 const CARD_HOLD_MS = 30_000;
 
+// Classement : ports en écoute relus au plus toutes les 10 s (groupes projet / dossier supprimé + instances db) ;
+// décisions en cache par (groupe, racine, nombre de processus), cache vidé quand les corrections ou les ports changent,
+// et toutes les 60 s (durée du cache de package.json).
+const PORTS_EVERY_MS = 10_000;
+const DECISIONS_MAX_AGE_MS = 60_000;
+let ports = new Map<number, number[]>();
+let portsKey = '';
+let portsAt = 0;
+let portsVersion = 0;
+let overridesVersion = 0;
+const decisions = new Map<string, InstanceDecision>();
+let decisionsFor = '';
+let decisionsAt = 0;
+let lastClassification: Classification = new Map();
+
+function refreshPorts(groups: Group[], now: number): void {
+  if (!config.classify.detectPorts) {
+    if (ports.size) {
+      ports = new Map();
+      portsKey = '';
+      portsVersion++;
+    }
+    return;
+  }
+  if (now - portsAt >= 0 && now - portsAt < PORTS_EVERY_MS) return;
+  portsAt = now;
+  const pids = new Set<number>();
+  const visit = (g: Group) => {
+    if (g.kind === 'project' || g.kind === 'deleted') for (const p of flattenGroup(g)) pids.add(p.pid);
+    else g.subgroups.forEach(visit);
+  };
+  groups.forEach(visit);
+  // instances db : d'après le classement précédent
+  for (const c of lastClassification.values()) for (const i of c.instances) if (i.category === 'db') i.pids.forEach((pid) => pids.add(pid));
+  const next = pids.size ? readListeningPorts([...pids]) : new Map<number, number[]>();
+  const key = JSON.stringify([...next].sort((a, b) => a[0] - b[0]));
+  if (key !== portsKey) {
+    portsKey = key;
+    ports = next;
+    portsVersion++;
+  }
+}
+
+function classify(groups: Group[], now: number): Classification {
+  const version = `${overridesVersion}:${portsVersion}`;
+  if (version !== decisionsFor || !(now - decisionsAt >= 0 && now - decisionsAt < DECISIONS_MAX_AGE_MS)) {
+    decisions.clear();
+    decisionsFor = version;
+    decisionsAt = now;
+  }
+  lastClassification = classifyGroups(groups, {
+    overrides: config.classify.overrides,
+    ports,
+    pkg: (root) => readPackageHints(root),
+    isProtected: protection.isProtected,
+    memo: decisions,
+  });
+  return lastClassification;
+}
+
 function takeSnapshot(): FullSnapshot {
   const now = Date.now();
   const samples = readProcesses('/proc', {
@@ -94,7 +159,9 @@ function takeSnapshot(): FullSnapshot {
     keepSeparate: (id) => sticky.has(id),
   });
   recordSeparate(separateSeen, groups, now, (g) => isOverThreshold(g, config.othersThreshold));
-  return { takenAt: Date.now(), currentUid: uid, system: readSystem(), groups };
+  refreshPorts(groups, now);
+  const classification = classify(groups, now);
+  return { takenAt: Date.now(), currentUid: uid, system: readSystem(), groups, classification };
 }
 
 /** Dernier snapshot complet (arbres compris) : sert au kill de groupe et aux réponses immédiates à `watch`. */
@@ -224,12 +291,53 @@ ipcMain.handle('config:set', (_e, next: unknown) => {
   const valid = validateConfig(next);
   if (!valid) throw new Error('Configuration invalide');
   const recorderChanged = valid.recorder.enabled !== config.recorder.enabled;
+  if (valid.classify.detectPorts !== config.classify.detectPorts) portsAt = 0;
   config = valid;
+  overridesVersion++;
   protection = compileProtection(config.protected);
   warning = null;
   saveConfig(dir, config);
   if (recorderChanged) void syncRecorder(true);
   return configState();
+});
+
+/** Recalcule le classement du dernier snapshot (sans relire /proc) et le renvoie au renderer. */
+function reclassify(): void {
+  if (!last) return;
+  last = { ...last, classification: classify(last.groups, Date.now()) };
+  send();
+}
+
+// Correction manuelle : sauvegardée avant d'être appliquée (une sauvegarde qui échoue ne change rien).
+ipcMain.handle('classify:set', (_e, scope: unknown, signature: unknown, category: unknown): ConfigState => {
+  const v = classifySetKey(scope, signature, category);
+  if (!v) throw new Error('Correction invalide');
+  const overrides = applyOverride(config.classify.overrides, v.key, v.category);
+  if (!overrides) throw new Error('Trop de corrections (500 au plus)');
+  const next = { ...config, classify: { ...config.classify, overrides } };
+  saveConfig(dir, next);
+  config = next;
+  overridesVersion++;
+  reclassify();
+  return configState();
+});
+
+/** Clés des instances (du dernier snapshot) sans échantillon CPU ≥ 1 % depuis `since` ; null sans base d'historique. */
+ipcMain.handle('classify:inactive', (_e, keys: unknown, since: unknown): string[] | null => {
+  if (!isInstanceKeys(keys) || !isSinceMs(since)) throw new Error('Requête invalide');
+  if (!last) return [];
+  const known = new Set<string>();
+  for (const c of last.classification.values()) for (const i of c.instances) known.add(i.key);
+  const entries = instanceTargets(last, keys.filter((k) => known.has(k)));
+  const active = history.active(entries.flatMap((e) => e.targets), since);
+  if (!active) return null;
+  return entries.filter((e) => !e.targets.some((t) => active.has(`${t.pid}:${t.startTicks}`))).map((e) => e.key);
+});
+
+/** Cibles de kill des instances (ou lanceurs d'un groupe) d'après le dernier snapshot ; instances disparues absentes. */
+ipcMain.handle('instances:targets', (_e, keys: unknown) => {
+  if (!isInstanceKeys(keys)) throw new Error('Requête invalide');
+  return last ? instanceTargets(last, keys) : [];
 });
 
 ipcMain.handle('history:system', (_e, r: unknown) => (isRange(r) ? history.system(r) : null));

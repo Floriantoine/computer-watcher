@@ -1,5 +1,7 @@
 // src/main/historyIpc.ts — parties pures de l'IPC historique (validation, état du service)
-import type { RangePreset, RecorderState, RecorderStatus, TimeRange, TopOptions } from '../core/types';
+import { isCategory } from '../core/classify/categories';
+import { MAX_OVERRIDE_KEY, MAX_OVERRIDES } from '../core/config';
+import type { Category, RangePreset, RecorderState, RecorderStatus, TimeRange, TopOptions } from '../core/types';
 
 export const isRange = (r: unknown): r is RangePreset | TimeRange =>
   ['1h', '6h', '24h', '7d', '30d'].includes(r as string) ||
@@ -30,4 +32,40 @@ export function recorderState(
   const { status } = p;
   const running = !!status?.lastSampleAt && p.now - status.lastSampleAt < 3 * p.intervalSec * 1000 + 2000;
   return { available: p.available, enabled: p.enabled, running, status };
+}
+
+export const MAX_INSTANCE_KEYS = 200;
+/** Une clé d'instance contient l'id du groupe, donc un chemin de projet (PATH_MAX 4096) + `#pid:startTicks`. */
+export const MAX_INSTANCE_KEY_LEN = 4096;
+
+/** Clés d'instances (ou de groupes) demandées : 1 à 200 chaînes non vides et bornées. */
+export const isInstanceKeys = (k: unknown): k is string[] =>
+  Array.isArray(k) && k.length >= 1 && k.length <= MAX_INSTANCE_KEYS &&
+  k.every((x) => typeof x === 'string' && x.length >= 1 && x.length <= MAX_INSTANCE_KEY_LEN);
+
+export const isSinceMs = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0;
+
+const isBoundedText = (v: unknown): v is string => typeof v === 'string' && v.length >= 1 && v.length <= MAX_OVERRIDE_KEY;
+
+/**
+ * Arguments de `classify:set` → clé de correction `${scope}|${signature}` et catégorie (null : retour à l'automatique).
+ * Chaînes de 1 à 300 caractères, clé complète ≤ 300 (sinon la config sauvegardée serait invalide), catégorie connue ou null.
+ */
+export function classifySetKey(scope: unknown, signature: unknown, category: unknown): { key: string; category: Category | null } | null {
+  if (!isBoundedText(scope) || !isBoundedText(signature)) return null;
+  if (category !== null && !isCategory(category)) return null;
+  const key = `${scope}|${signature}`;
+  return key.length <= MAX_OVERRIDE_KEY ? { key, category } : null;
+}
+
+/** Nouvelles corrections (copie) ; null si l'ajout dépasserait 500 corrections. */
+export function applyOverride(overrides: Record<string, Category>, key: string, category: Category | null): Record<string, Category> | null {
+  const next: Record<string, Category> = { ...overrides };
+  if (category === null) {
+    delete next[key];
+    return next;
+  }
+  if (!Object.prototype.hasOwnProperty.call(next, key) && Object.keys(next).length >= MAX_OVERRIDES) return null;
+  next[key] = category;
+  return next;
 }

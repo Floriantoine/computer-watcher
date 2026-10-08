@@ -43,7 +43,14 @@ export interface ClassifyContext {
   ports: Map<number, number[]>;
   pkg: (projectRoot: string) => PackageHints | null;
   isProtected: (name: string) => boolean;
+  /**
+   * Cache facultatif des décisions par instance (clé : groupe, racine, nombre de processus). L'appelant le vide quand les
+   * corrections ou les ports changent (et périodiquement, pour le cache de package.json) ; les entrées non revues sont retirées.
+   */
+  memo?: Map<string, InstanceDecision>;
 }
+
+export interface InstanceDecision { category: Category; source: InstanceSummary['source']; signature: string; label: string }
 
 export interface GroupClassification {
   categories: Category[];
@@ -61,20 +68,27 @@ const matchScript = (script: string): CommandMatch | null => {
 const PROJECT_PREFIX = 'project:';
 const DUPLICATE_SOURCES: ReadonlySet<InstanceSummary['source']> = new Set(['manual', 'command', 'port']);
 
-function classifyGroup(group: Group, ctx: ClassifyContext, hasInstanceBelow: (pid: number) => boolean): GroupClassification {
+function classifyGroup(group: Group, ctx: ClassifyContext, hasInstanceBelow: (pid: number) => boolean, used: Set<string> | null): GroupClassification {
   const isProject = group.kind === 'project' || group.kind === 'deleted';
   const projectRoot = group.kind === 'project' && group.id.startsWith(PROJECT_PREFIX) ? group.id.slice(PROJECT_PREFIX.length) : null;
   const split = splitInstances(group, hasInstanceBelow);
   const instances: InstanceSummary[] = split.instances.map(({ root, procs }) => {
     const rp = root.proc;
-    const match = isProject ? matchCommand(procs) : classifyByName(rp.name, rp.cmdline);
-    const signature = signatureOf(procs, match, projectRoot);
     const portSet = new Set<number>();
     if (ctx.ports.size > 0) for (const p of procs) for (const port of ctx.ports.get(p.pid) ?? []) portSet.add(port);
     const ports = [...portSet].sort((a, b) => a - b);
-    const overrideKey = `${projectRoot ?? group.id}|${signature}`;
-    const pkg = projectRoot !== null && match === null ? ctx.pkg(projectRoot) : null;
-    const d = decide({ overrideKey, overrides: ctx.overrides, match, ports, chainText: signature, pkg, matchScript });
+    const memoKey = `${group.id}#${rp.pid}:${rp.startTicks}|${procs.length}`;
+    let dec = ctx.memo?.get(memoKey);
+    if (!dec) {
+      const match = isProject ? matchCommand(procs) : classifyByName(rp.name, rp.cmdline);
+      const signature = signatureOf(procs, match, projectRoot);
+      const overrideKey = `${projectRoot ?? group.id}|${signature}`;
+      const pkg = projectRoot !== null && match === null ? ctx.pkg(projectRoot) : null;
+      const d = decide({ overrideKey, overrides: ctx.overrides, match, ports, chainText: signature, pkg, matchScript });
+      dec = { category: d.category, source: d.source === 'command' && !isProject ? 'name' : d.source, signature, label: match?.label ?? signature };
+      ctx.memo?.set(memoKey, dec);
+    }
+    used?.add(memoKey);
     let rssKB = 0; let swapKB = 0; let cpuPercent = 0; let prot = false;
     for (const p of procs) {
       rssKB += p.rssKB; swapKB += p.swapKB; cpuPercent += p.cpuPercent;
@@ -82,8 +96,8 @@ function classifyGroup(group: Group, ctx: ClassifyContext, hasInstanceBelow: (pi
     }
     return {
       key: `${group.id}#${rp.pid}:${rp.startTicks}`, groupId: group.id, project: projectRoot,
-      category: d.category, source: d.source === 'command' && !isProject ? 'name' : d.source,
-      signature, label: match?.label ?? signature, rootPid: rp.pid, rootStartTicks: rp.startTicks,
+      category: dec.category, source: dec.source,
+      signature: dec.signature, label: dec.label, rootPid: rp.pid, rootStartTicks: rp.startTicks,
       pids: procs.map((p) => p.pid), ports, ageSec: rp.ageSec, rssKB, swapKB, cpuPercent, duplicate: false, protected: prot,
     };
   });
@@ -152,8 +166,10 @@ export function classifyGroups(groups: Group[], ctx: ClassifyContext): Map<strin
   const cross = crossGroupAncestors(all);
   const hasInstanceBelow = (pid: number) => cross.has(pid);
   const out = new Map<string, GroupClassification>();
+  const used = ctx.memo ? new Set<string>() : null;
   for (const g of all) {
-    out.set(g.id, g.kind === 'others' ? { categories: [], instances: [], launcherPids: [] } : classifyGroup(g, ctx, hasInstanceBelow));
+    out.set(g.id, g.kind === 'others' ? { categories: [], instances: [], launcherPids: [] } : classifyGroup(g, ctx, hasInstanceBelow, used));
   }
+  if (ctx.memo && used) for (const k of ctx.memo.keys()) if (!used.has(k)) ctx.memo.delete(k);
   return out;
 }

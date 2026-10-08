@@ -39,6 +39,16 @@ describe('readListeningPorts', () => {
     addSocketFd(root, 10, 5, 12345);
     expect(readListeningPorts([10], root).get(10)).toEqual([3000, 5173]);
   });
+  it('plafond de fd parcourus par lecture : au-delà, les pids restants sont ignorés', () => {
+    const root = makeProcRoot();
+    writeNetTcp(root, [LISTEN]);
+    addProc(root, { pid: 10, comm: 'a' });
+    for (let fd = 0; fd < 5; fd++) addSocketFd(root, 10, fd, 1000 + fd);
+    addProc(root, { pid: 11, comm: 'b' });
+    addSocketFd(root, 11, 3, 12345);
+    expect(readListeningPorts([10, 11], root, 5)).toEqual(new Map());
+    expect(readListeningPorts([10, 11], root, 6)).toEqual(new Map([[11, [5173]]]));
+  });
   it('sans /proc/net/tcp → vide', () => {
     const root = makeProcRoot();
     addProc(root, { pid: 10, comm: 'node' });

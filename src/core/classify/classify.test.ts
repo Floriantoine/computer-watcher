@@ -49,6 +49,22 @@ describe('classifyGroups', () => {
     return { npm, vite, esb, tree: node(npm, node(vite, node(esb))) };
   };
 
+  it('cache des décisions : même résultat, réutilisé tant que l\'appelant ne le vide pas, entrées disparues retirées', () => {
+    const { tree } = npmVite(42);
+    const g = group('project:/home/u/acme', 'project', [tree]);
+    const memo = new Map();
+    const plain = classifyGroups([g], ctx()).get(g.id)!;
+    expect(classifyGroups([g], ctx({ memo })).get(g.id)).toEqual(plain);
+    expect([...memo.keys()]).toEqual([`project:/home/u/acme#${plain.instances[0]!.rootPid}:${plain.instances[0]!.rootStartTicks}|2`]);
+    // décision en cache : une correction n'est vue qu'après avoir vidé le cache
+    const overrides = { '/home/u/acme|vite': 'back' as const };
+    expect(classifyGroups([g], ctx({ memo, overrides })).get(g.id)!.instances[0]!.category).toBe('front');
+    memo.clear();
+    expect(classifyGroups([g], ctx({ memo, overrides })).get(g.id)!.instances[0]).toMatchObject({ category: 'back', source: 'manual' });
+    classifyGroups([], ctx({ memo }));
+    expect(memo.size).toBe(0);
+  });
+
   it('npm → vite → esbuild : une instance front enracinée sur vite, npm lanceur', () => {
     const { npm, vite, esb, tree } = npmVite(42);
     const g = group('project:/home/u/acme', 'project', [tree]);

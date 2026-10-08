@@ -279,3 +279,31 @@ export function queryProcsAt(db: DatabaseSync, groupKey: string, ts: number, o: 
     .map((r) => ({ pid: r.pid, startTicks: r.st, ppid: r.ppid, name: r.name, cmdline: r.cmdline, rssKB: r.rss, swapKB: r.swap, cpu: r.cpu }))
     .sort((a, b) => b.rssKB + (b.swapKB ?? 0) - (a.rssKB + (a.swapKB ?? 0)));
 }
+
+/** Seuil d'activité : un échantillon à ≥ 1 % de CPU suffit à rendre un processus actif. */
+export const ACTIVE_CPU_PERCENT = 1;
+
+/**
+ * Pour « inactives depuis T » : renvoie les clés `${pid}:${startTicks}` des cibles **actives**, c'est-à-dire avec au moins
+ * un échantillon CPU ≥ 1 % depuis `since` (table détaillée si `since` est dans la rétention détaillée, sinon minutes
+ * — moyenne par minute — plus le détail récent). Une cible jamais enregistrée (sous les seuils) n'est jamais active.
+ * Une recherche par clé unique (pid, start_ticks) puis par clé primaire (proc_id, ts) par cible : bornée par les cibles.
+ */
+export function queryInactive(db: DatabaseSync, targets: { pid: number; startTicks: number }[], since: number, o: QueryOpts): Set<string> {
+  const active = new Set<string>();
+  if (targets.length === 0) return active;
+  const inDetail = since >= o.now - o.detailHours * H;
+  const findProc = db.prepare('SELECT id FROM procs WHERE pid = ? AND start_ticks = ?');
+  const detail = db.prepare('SELECT 1 FROM proc_samples WHERE proc_id = ? AND ts >= ? AND cpu_percent >= ? LIMIT 1');
+  const minute = inDetail ? null : db.prepare('SELECT 1 FROM proc_minute WHERE proc_id = ? AND ts >= ? AND cpu_avg >= ? LIMIT 1');
+  // La ligne minute couvre [ts, ts + 1 min) : la minute entamée à `since` compte.
+  const minuteFrom = Math.floor(since / M) * M;
+  for (const t of targets) {
+    const key = `${t.pid}:${t.startTicks}`;
+    if (active.has(key)) continue;
+    const row = findProc.get(t.pid, t.startTicks) as { id: number } | undefined;
+    if (!row) continue;
+    if (detail.get(row.id, since, ACTIVE_CPU_PERCENT) || minute?.get(row.id, minuteFrom, ACTIVE_CPU_PERCENT)) active.add(key);
+  }
+  return active;
+}

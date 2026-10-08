@@ -19,8 +19,14 @@ export function parseNetTcp(content: string): Map<number, number> {
 
 const SOCKET_RE = /^socket:\[(\d+)\]$/;
 
-/** pid → ports TCP en écoute (triés, uniques). Toute erreur d'accès → pid absent du résultat. */
-export function readListeningPorts(pids: number[], procRoot = '/proc'): Map<number, number[]> {
+/** Plafond de fd parcourus par lecture (tous pids confondus) : un processus à des dizaines de milliers de fd ne coûte pas une seconde. */
+export const MAX_FDS_PER_READ = 20_000;
+
+/**
+ * pid → ports TCP en écoute (triés, uniques). Toute erreur d'accès → pid absent du résultat.
+ * Au-delà de `maxFds` fd parcourus, les pids restants sont ignorés.
+ */
+export function readListeningPorts(pids: number[], procRoot = '/proc', maxFds = MAX_FDS_PER_READ): Map<number, number[]> {
   const out = new Map<number, number[]>();
   const byInode = new Map<number, number>();
   for (const f of ['tcp', 'tcp6']) {
@@ -31,6 +37,7 @@ export function readListeningPorts(pids: number[], procRoot = '/proc'): Map<numb
     }
   }
   if (byInode.size === 0) return out;
+  let budget = maxFds;
   for (const pid of pids) {
     const dir = join(procRoot, String(pid), 'fd');
     let fds: string[];
@@ -39,6 +46,8 @@ export function readListeningPorts(pids: number[], procRoot = '/proc'): Map<numb
     } catch {
       continue;
     }
+    budget -= fds.length;
+    if (budget < 0) break;
     const ports = new Set<number>();
     for (const fd of fds) {
       try {

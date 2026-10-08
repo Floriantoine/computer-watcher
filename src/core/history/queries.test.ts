@@ -2,10 +2,10 @@
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, test } from 'vitest';
+import { describe, expect, test } from 'vitest';
 import { openHistoryDb } from './db';
 import { aggregateMinute } from './maintenance';
-import { bucketMs, pickSource, queryCulprits, queryEvents, queryGroup, queryGroups, queryProcs, queryProcsAt, querySystem, queryTop, rangeFromPreset } from './queries';
+import { bucketMs, pickSource, queryInactive, queryCulprits, queryEvents, queryGroup, queryGroups, queryProcs, queryProcsAt, querySystem, queryTop, rangeFromPreset } from './queries';
 
 const H = 3600_000;
 const M = 60_000;
@@ -322,4 +322,42 @@ test('base v2 (sans tables horaires, lecture seule) : les plages > 48 h retomben
   const r = rangeFromPreset('7d', 101 * H);
   expect(querySystem(db, r, opts(101 * H)).ts.length).toBeGreaterThan(0);
   expect(queryTop(db, r, opts(101 * H)).byAvg.map((t) => t.key)).toEqual(['app:a']);
+});
+
+describe('queryInactive (« inactives depuis »)', () => {
+  /** p 20 : CPU 5 % il y a 10 min, 0 % sinon ; p 21 : CPU 0,5 % ; p 22 : jamais enregistré. now = 2 h. */
+  function inactiveDb() {
+    const path = join(mkdtempSync(join(tmpdir(), 'pw-q-')), 'm.db');
+    const { db } = openHistoryDb(path);
+    db.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'project:/a','a','project');
+             INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id) VALUES (1,20,200,'vite','vite',1), (2,21,210,'node','node',1);`);
+    const now = 2 * H;
+    for (let ts = now - 60 * M; ts < now; ts += 5000) {
+      db.prepare('INSERT INTO proc_samples VALUES (?,?,?,?,?)').run(ts, 1, 1000, 0, ts === now - 10 * M ? 5 : 0);
+      db.prepare('INSERT INTO proc_samples VALUES (?,?,?,?,?)').run(ts, 2, 1000, 0, 0.5);
+    }
+    return { db, now };
+  }
+  const targets = [{ pid: 20, startTicks: 200 }, { pid: 21, startTicks: 210 }, { pid: 22, startTicks: 220 }];
+
+  test('CPU 5 % il y a 10 min : actif depuis 1 h, inactif depuis 5 min ; sous 1 % ou jamais enregistré : inactif', () => {
+    const { db, now } = inactiveDb();
+    expect(queryInactive(db, targets, now - H, opts(now))).toEqual(new Set(['20:200']));
+    expect(queryInactive(db, targets, now - 5 * M, opts(now))).toEqual(new Set());
+    expect(queryInactive(db, [], now - H, opts(now))).toEqual(new Set());
+  });
+
+  test('au-delà de la rétention détaillée : lit aussi les minutes', () => {
+    const { db } = inactiveDb();
+    // seulement des agrégats minute (détail purgé) : p 20 à 3 % de moyenne il y a 30 h
+    const now = 40 * H;
+    db.exec('DELETE FROM proc_samples');
+    db.prepare('INSERT INTO proc_minute VALUES (?,?,?,?,?)').run(10 * H, 1, 1000, 1000, 3);
+    db.prepare('INSERT INTO proc_minute VALUES (?,?,?,?,?)').run(10 * H, 2, 1000, 1000, 0.2);
+    expect(queryInactive(db, targets, now - 31 * H, opts(now))).toEqual(new Set(['20:200']));
+    expect(queryInactive(db, targets, now - 29 * H, opts(now))).toEqual(new Set());
+    // échantillon détaillé récent aussi pris en compte quand la période dépasse la rétention
+    db.prepare('INSERT INTO proc_samples VALUES (?,?,?,?,?)').run(now - M, 2, 1000, 0, 2);
+    expect(queryInactive(db, targets, now - 31 * H, opts(now))).toEqual(new Set(['20:200', '21:210']));
+  });
 });

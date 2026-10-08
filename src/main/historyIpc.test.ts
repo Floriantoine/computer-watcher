@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import type { RecorderStatus } from '../core/types';
-import { clampToDetail, isGroupKeys, isRange, isTopOptions, recorderState } from './historyIpc';
+import { applyOverride, clampToDetail, classifySetKey, isGroupKeys, isInstanceKeys, isRange, isSinceMs, isTopOptions, recorderState } from './historyIpc';
 
 test('isRange : préréglages et plages valides uniquement', () => {
   for (const ok of ['1h', '6h', '24h', '7d', '30d', { from: 0, to: 10 }]) expect(isRange(ok)).toBe(true);
@@ -34,4 +34,41 @@ test('clampToDetail : plage ramenée aux detailHours dernières heures', () => {
   expect(clampToDetail({ from: 0, to: 100 * H }, 100 * H, 24)).toEqual({ from: 76 * H, to: 100 * H });
   expect(clampToDetail({ from: 90 * H, to: 95 * H }, 100 * H, 24)).toEqual({ from: 90 * H, to: 95 * H });
   expect(clampToDetail({ from: 0, to: 10 * H }, 100 * H, 24)).toEqual({ from: 76 * H, to: 76 * H }); // entièrement hors détail : vide
+});
+
+test('isInstanceKeys : 1 à 200 clés texte non vides et bornées', () => {
+  expect(isInstanceKeys(['a#1:2'])).toBe(true);
+  expect(isInstanceKeys(Array.from({ length: 200 }, (_, i) => `k${i}`))).toBe(true);
+  for (const bad of [[], Array.from({ length: 201 }, (_, i) => `k${i}`), [''], [3], 'a', null, undefined, ['x'.repeat(4097)]]) expect(isInstanceKeys(bad)).toBe(false);
+});
+
+test('isSinceMs : instant fini ≥ 0', () => {
+  expect(isSinceMs(0)).toBe(true);
+  expect(isSinceMs(1_700_000_000_000)).toBe(true);
+  for (const bad of [-1, NaN, Infinity, '5', null]) expect(isSinceMs(bad)).toBe(false);
+});
+
+test('classifySetKey : portée et signature texte de 1 à 300 caractères, catégorie connue ou null', () => {
+  expect(classifySetKey('/home/u/acme', 'vite', 'back')).toEqual({ key: '/home/u/acme|vite', category: 'back' });
+  expect(classifySetKey('app:chrome', 'chrome', null)).toEqual({ key: 'app:chrome|chrome', category: null });
+  expect(classifySetKey('/a', 'vite', 'serveur')).toBeNull();
+  expect(classifySetKey('/a', 'vite', undefined)).toBeNull();
+  expect(classifySetKey('', 'vite', 'front')).toBeNull();
+  expect(classifySetKey('/a', '', 'front')).toBeNull();
+  expect(classifySetKey(3, 'vite', 'front')).toBeNull();
+  expect(classifySetKey('x'.repeat(301), 'vite', 'front')).toBeNull();
+  expect(classifySetKey('/a', 'x'.repeat(301), 'front')).toBeNull();
+  // la clé complète doit rester une clé de config valide (≤ 300)
+  expect(classifySetKey('x'.repeat(200), 'y'.repeat(100), 'front')).toBeNull();
+  expect(classifySetKey('x'.repeat(200), 'y'.repeat(99), 'front')).not.toBeNull();
+});
+
+test('applyOverride : ajoute, remplace, retire ; refuse une 501e correction', () => {
+  expect(applyOverride({}, 'k', 'front')).toEqual({ k: 'front' });
+  expect(applyOverride({ k: 'front' }, 'k', 'back')).toEqual({ k: 'back' });
+  expect(applyOverride({ k: 'front', j: 'db' }, 'k', null)).toEqual({ j: 'db' });
+  const full = Object.fromEntries(Array.from({ length: 500 }, (_, i) => [`k${i}`, 'front' as const]));
+  expect(applyOverride(full, 'nouvelle', 'back')).toBeNull();
+  expect(applyOverride(full, 'k1', 'back')).toMatchObject({ k1: 'back' });
+  expect(applyOverride(full, 'k1', null)).not.toBeNull();
 });

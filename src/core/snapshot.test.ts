@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
-import type { Group, ProcInfo, SystemInfo } from './types';
-import { buildSnapshot, findFullGroup, groupMatches, groupProcs, isWatch, summarizeGroup } from './snapshot';
+import type { GroupClassification } from './classify/classify';
+import type { Group, InstanceSummary, ProcInfo, SystemInfo } from './types';
+import { buildSnapshot, findFullGroup, groupMatches, groupProcs, instanceTargets, isWatch, summarizeGroup } from './snapshot';
 
 const proc = (pid: number, name: string, extra: Partial<ProcInfo> = {}): ProcInfo => ({
   pid, ppid: 1, name, cmdline: name, uid: 1000, startTicks: pid * 10, ageSec: 10, cpuTicks: 0, cpuPercent: 0,
@@ -43,8 +44,32 @@ describe('groupMatches', () => {
   });
 });
 
+const inst = (groupId: string, rootPid: number, pids: number[], extra: Partial<InstanceSummary> = {}): InstanceSummary => ({
+  key: `${groupId}#${rootPid}:${rootPid * 10}`, groupId, project: null, category: 'front', source: 'command', signature: 'vite', label: 'vite',
+  rootPid, rootStartTicks: rootPid * 10, pids, ports: [], ageSec: 10, rssKB: 0, swapKB: 0, cpuPercent: 0, duplicate: false, protected: false, ...extra,
+});
+const classification = new Map<string, GroupClassification>([
+  ['a', { categories: ['front'], instances: [inst('a', 1, [1, 4])], launcherPids: [] }],
+  ['b', { categories: ['browser'], instances: [inst('b', 2, [2], { category: 'browser', source: 'name' })], launcherPids: [] }],
+  ['others', { categories: [], instances: [], launcherPids: [] }],
+  ['c', { categories: ['system'], instances: [inst('c', 3, [3], { category: 'system', source: 'name' })], launcherPids: [] }],
+]);
+
 describe('buildSnapshot', () => {
-  const base = { takenAt: 5, currentUid: 1000, system, groups };
+  const base = { takenAt: 5, currentUid: 1000, system, groups, classification };
+
+  test('résumés : catégories et instances du classement, sous-groupes détaillés d\'« Autres » compris', () => {
+    const s = buildSnapshot(base, { groupId: 'others', query: '' });
+    expect(s.groups[0]).toMatchObject({ id: 'a', categories: ['front'] });
+    expect(s.groups[0]!.instances.map((i) => i.key)).toEqual(['a#1:10']);
+    expect(s.groups[1]!.categories).toEqual(['browser']);
+    expect(s.groups[2]).toMatchObject({ categories: [], instances: [] });
+    expect(s.groups[2]!.subgroups[0]).toMatchObject({ id: 'c', categories: ['system'] });
+    expect(s.groups[2]!.subgroups[0]!.instances[0]!.key).toBe('c#3:30');
+    // groupe absent du classement : vide
+    const none = buildSnapshot({ ...base, classification: new Map() }, { groupId: null, query: '' });
+    expect(none.groups[0]).toMatchObject({ categories: [], instances: [] });
+  });
 
   test('sans suivi : résumés seulement, ni arbre ni recherche', () => {
     const s = buildSnapshot(base, { groupId: null, query: '' });
@@ -82,6 +107,18 @@ test('findFullGroup et groupProcs : tous les processus du groupe, sous-groupes c
   expect(groupProcs(groups, 'a').map((p) => p.pid)).toEqual([1, 4]);
   expect(groupProcs(groups, 'others').map((p) => p.pid)).toEqual([3]);
   expect(groupProcs(groups, 'x')).toEqual([]);
+});
+
+test('instanceTargets : cibles {pid, startTicks} des instances (disparues absentes), lanceurs pour une clé de groupe', () => {
+  const cls = new Map(classification);
+  cls.set('a', { categories: ['front'], instances: [inst('a', 1, [1, 4])], launcherPids: [4] });
+  const full = { takenAt: 5, currentUid: 1000, system, groups, classification: cls };
+  expect(instanceTargets(full, ['a#1:10', 'c#3:30', 'a#9:90', 'zz'])).toEqual([
+    { key: 'a#1:10', targets: [{ pid: 1, startTicks: 10 }, { pid: 4, startTicks: 40 }] },
+    { key: 'c#3:30', targets: [{ pid: 3, startTicks: 30 }] },
+  ]);
+  expect(instanceTargets(full, ['a'])).toEqual([{ key: 'a', targets: [{ pid: 4, startTicks: 40 }] }]);
+  expect(instanceTargets(full, ['b'])).toEqual([{ key: 'b', targets: [] }]);
 });
 
 test('isWatch valide ce qui vient du renderer', () => {

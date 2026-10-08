@@ -1,9 +1,13 @@
-import type { Group, GroupSummary, ProcInfo, ProcNode, Snapshot, SystemInfo, Watch } from './types';
+import type { GroupClassification } from './classify/classify';
+import type { Group, GroupSummary, KillTarget, ProcInfo, ProcNode, Snapshot, SystemInfo, Watch } from './types';
 
-/** Groupe sans arbre : le renderer n'a besoin des processus que pour le groupe ouvert. */
-export function summarizeGroup(g: Group): GroupSummary {
+export type Classification = Map<string, GroupClassification>;
+
+/** Groupe sans arbre : le renderer n'a besoin des processus que pour le groupe ouvert. Catégories et instances d'après `cls`. */
+export function summarizeGroup(g: Group, cls?: Classification): GroupSummary {
   const { roots: _roots, subgroups, ...rest } = g;
-  return { ...rest, subgroups: subgroups.map(summarizeGroup), categories: [], instances: [] };
+  const c = cls?.get(g.id);
+  return { ...rest, subgroups: subgroups.map((s) => summarizeGroup(s, cls)), categories: c?.categories ?? [], instances: c?.instances ?? [] };
 }
 
 function flattenNodes(nodes: ProcNode[], out: ProcInfo[]): ProcInfo[] {
@@ -46,6 +50,8 @@ export interface FullSnapshot {
   currentUid: number;
   system: SystemInfo;
   groups: Group[];
+  /** Classement par id de groupe (sous-groupes de « Autres » compris), lanceurs compris. */
+  classification: Classification;
 }
 
 /**
@@ -60,13 +66,50 @@ export function buildSnapshot(full: FullSnapshot, watch: Watch): Snapshot {
     takenAt: full.takenAt,
     currentUid: full.currentUid,
     system: full.system,
-    groups: full.groups.map((g) => (g.kind === 'others' && !inOthers(g) ? summarizeGroup({ ...g, subgroups: [] }) : summarizeGroup(g))),
+    groups: full.groups.map((g) =>
+      g.kind === 'others' && !inOthers(g) ? summarizeGroup({ ...g, subgroups: [] }, full.classification) : summarizeGroup(g, full.classification),
+    ),
     groupIds: full.groups.flatMap((g) => [g.id, ...g.subgroups.map((s) => s.id)]),
     query,
     matches: query ? full.groups.filter((g) => groupMatches(g, query)).map((g) => g.id) : null,
     watched: watch.groupId,
     detail: followed ? { groupId: followed.id, roots: followed.roots } : null,
   };
+}
+
+/**
+ * Cibles de kill depuis le dernier snapshot complet : pour une clé d'instance (`${groupId}#${rootPid}:${rootStartTicks}`),
+ * tous ses processus ; pour une clé de groupe, ses lanceurs (à ajouter au kill « Tout arrêter » du projet).
+ * Les clés inconnues (instance disparue) sont absentes du résultat.
+ */
+export function instanceTargets(full: FullSnapshot, keys: string[]): { key: string; targets: KillTarget[] }[] {
+  const byKey = new Map<string, { groupId: string; pids: number[] }>();
+  for (const [groupId, c] of full.classification) for (const i of c.instances) byKey.set(i.key, { groupId, pids: i.pids });
+  const procsOf = new Map<string, Map<number, ProcInfo>>();
+  const procs = (groupId: string) => {
+    let m = procsOf.get(groupId);
+    if (!m) {
+      m = new Map(groupProcs(full.groups, groupId).map((p) => [p.pid, p]));
+      procsOf.set(groupId, m);
+    }
+    return m;
+  };
+  const toTargets = (groupId: string, pids: number[]): KillTarget[] =>
+    pids.flatMap((pid) => {
+      const p = procs(groupId).get(pid);
+      return p ? [{ pid, startTicks: p.startTicks }] : [];
+    });
+  const out: { key: string; targets: KillTarget[] }[] = [];
+  for (const key of keys) {
+    const inst = byKey.get(key);
+    if (inst) {
+      out.push({ key, targets: toTargets(inst.groupId, inst.pids) });
+      continue;
+    }
+    const g = full.classification.get(key);
+    if (g) out.push({ key, targets: toTargets(key, g.launcherPids) });
+  }
+  return out;
 }
 
 export const MAX_QUERY = 1000;

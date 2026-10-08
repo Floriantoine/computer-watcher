@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import type {
-  Config, ConfigState, Culprit, ProcInfo, Watch, GroupHistory, GroupsHistory, HistoryEvent, KillResult, KillTarget, KillSignal, ProcsHistory, RangePreset,
+  Category, Config, ConfigState, Culprit, ProcInfo, Watch, GroupHistory, GroupsHistory, HistoryEvent, KillResult, KillTarget, KillSignal, ProcsHistory, RangePreset,
   RecorderState, Snapshot, SystemSeries, TimeRange, TopOptions, TopResult,
 } from '../core/types';
 
@@ -28,6 +28,17 @@ const api = {
   getConfig: (): Promise<ConfigState> => ipcRenderer.invoke('config:get'),
   setConfig: (c: Config): Promise<ConfigState> => ipcRenderer.invoke('config:set', c),
   installDesktopEntry: (): Promise<string> => ipcRenderer.invoke('desktop:install'),
+  classify: {
+    /** Correction manuelle (`scope` = racine du projet ou id du groupe) ; `null` : retour à l'automatique. */
+    set: (scope: string, signature: string, category: Category | null): Promise<ConfigState> =>
+      ipcRenderer.invoke('classify:set', scope, signature, category),
+    /** Clés (≤ 200) des instances sans CPU ≥ 1 % depuis `sinceMs` ; null si l'historique est absent. */
+    inactive: (keys: string[], sinceMs: number): Promise<string[] | null> => ipcRenderer.invoke('classify:inactive', keys, sinceMs),
+  },
+  instances: {
+    /** Cibles de kill (≤ 200 clés) depuis le dernier snapshot : processus d'une instance, ou lanceurs pour une clé de groupe. */
+    targets: (keys: string[]): Promise<{ key: string; targets: KillTarget[] }[]> => ipcRenderer.invoke('instances:targets', keys),
+  },
   history: {
     system: (r: RangePreset | TimeRange): Promise<SystemSeries | null> => ipcRenderer.invoke('history:system', r),
     groups: (r: RangePreset | TimeRange, keys?: string[]): Promise<GroupsHistory | null> => ipcRenderer.invoke('history:groups', r, keys),
