@@ -43,7 +43,9 @@ export const isInstanceKeys = (k: unknown): k is string[] =>
   Array.isArray(k) && k.length >= 1 && k.length <= MAX_INSTANCE_KEYS &&
   k.every((x) => typeof x === 'string' && x.length >= 1 && x.length <= MAX_INSTANCE_KEY_LEN);
 
-export const isSinceMs = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0;
+/** Début de la période « inactive depuis » : fini, ≥ 0, pas dans le futur (sinon tout serait « inactif »). */
+export const isSinceMs = (v: unknown, now: number = Date.now()): v is number =>
+  typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= now;
 
 const isBoundedText = (v: unknown): v is string => typeof v === 'string' && v.length >= 1 && v.length <= MAX_OVERRIDE_KEY;
 

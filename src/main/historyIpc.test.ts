@@ -42,10 +42,13 @@ test('isInstanceKeys : 1 à 200 clés texte non vides et bornées', () => {
   for (const bad of [[], Array.from({ length: 201 }, (_, i) => `k${i}`), [''], [3], 'a', null, undefined, ['x'.repeat(4097)]]) expect(isInstanceKeys(bad)).toBe(false);
 });
 
-test('isSinceMs : instant fini ≥ 0', () => {
-  expect(isSinceMs(0)).toBe(true);
-  expect(isSinceMs(1_700_000_000_000)).toBe(true);
-  for (const bad of [-1, NaN, Infinity, '5', null]) expect(isSinceMs(bad)).toBe(false);
+test('isSinceMs : instant fini, ≥ 0 et pas dans le futur', () => {
+  const now = 1_700_000_000_000;
+  expect(isSinceMs(0, now)).toBe(true);
+  expect(isSinceMs(now - 3600_000, now)).toBe(true);
+  expect(isSinceMs(now, now)).toBe(true);
+  expect(isSinceMs(now + 1, now)).toBe(false);
+  for (const bad of [-1, NaN, Infinity, '5', null]) expect(isSinceMs(bad, now)).toBe(false);
 });
 
 test('classifySetKey : portée et signature texte de 1 à 300 caractères, catégorie connue ou null', () => {

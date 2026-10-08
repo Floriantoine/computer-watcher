@@ -283,19 +283,24 @@ export function queryProcsAt(db: DatabaseSync, groupKey: string, ts: number, o: 
 /** Seuil d'activité : un échantillon à ≥ 1 % de CPU suffit à rendre un processus actif. */
 export const ACTIVE_CPU_PERCENT = 1;
 
+/** Fenêtre lue dans la table détaillée par queryInactive (30 min) ; avant, les agrégats par minute (12 fois moins de lignes) : < 20 ms pour 200 processus inactifs sur 24 h. */
+export const INACTIVE_DETAIL_MS = 30 * M;
+
 /**
  * Pour « inactives depuis T » : renvoie les clés `${pid}:${startTicks}` des cibles **actives**, c'est-à-dire avec au moins
- * un échantillon CPU ≥ 1 % depuis `since` (table détaillée si `since` est dans la rétention détaillée, sinon minutes
- * — moyenne par minute — plus le détail récent). Une cible jamais enregistrée (sous les seuils) n'est jamais active.
- * Une recherche par clé unique (pid, start_ticks) puis par clé primaire (proc_id, ts) par cible : bornée par les cibles.
+ * un échantillon CPU ≥ 1 % depuis `since`. Les 30 dernières minutes (au plus la rétention détaillée) sont lues dans
+ * `proc_samples` ; la partie plus ancienne dans `proc_minute` (moyenne par minute ≥ 1 % : un pic plus court peut
+ * échapper), depuis la minute entamée à `since`. Une cible jamais enregistrée (sous les seuils) n'est jamais active.
+ * Par cible : clé unique (pid, start_ticks) puis parcours de la clé primaire (proc_id, ts) arrêté au premier échantillon actif.
  */
 export function queryInactive(db: DatabaseSync, targets: { pid: number; startTicks: number }[], since: number, o: QueryOpts): Set<string> {
   const active = new Set<string>();
   if (targets.length === 0) return active;
-  const inDetail = since >= o.now - o.detailHours * H;
+  const split = o.now - Math.min(INACTIVE_DETAIL_MS, o.detailHours * H);
+  const detailFrom = Math.max(since, split);
   const findProc = db.prepare('SELECT id FROM procs WHERE pid = ? AND start_ticks = ?');
   const detail = db.prepare('SELECT 1 FROM proc_samples WHERE proc_id = ? AND ts >= ? AND cpu_percent >= ? LIMIT 1');
-  const minute = inDetail ? null : db.prepare('SELECT 1 FROM proc_minute WHERE proc_id = ? AND ts >= ? AND cpu_avg >= ? LIMIT 1');
+  const minute = since < split ? db.prepare('SELECT 1 FROM proc_minute WHERE proc_id = ? AND ts >= ? AND ts < ? AND cpu_avg >= ? LIMIT 1') : null;
   // La ligne minute couvre [ts, ts + 1 min) : la minute entamée à `since` compte.
   const minuteFrom = Math.floor(since / M) * M;
   for (const t of targets) {
@@ -303,7 +308,7 @@ export function queryInactive(db: DatabaseSync, targets: { pid: number; startTic
     if (active.has(key)) continue;
     const row = findProc.get(t.pid, t.startTicks) as { id: number } | undefined;
     if (!row) continue;
-    if (detail.get(row.id, since, ACTIVE_CPU_PERCENT) || minute?.get(row.id, minuteFrom, ACTIVE_CPU_PERCENT)) active.add(key);
+    if (detail.get(row.id, detailFrom, ACTIVE_CPU_PERCENT) || minute?.get(row.id, minuteFrom, split, ACTIVE_CPU_PERCENT)) active.add(key);
   }
   return active;
 }

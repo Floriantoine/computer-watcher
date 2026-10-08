@@ -347,6 +347,18 @@ describe('queryInactive (« inactives depuis »)', () => {
     expect(queryInactive(db, [], now - H, opts(now))).toEqual(new Set());
   });
 
+  test('au-delà des 30 dernières minutes : agrégats par minute (moyenne ≥ 1 %)', () => {
+    const { db, now } = inactiveDb();
+    db.prepare('UPDATE proc_samples SET cpu_percent = 0 WHERE proc_id = 1').run();
+    db.prepare('UPDATE proc_samples SET cpu_percent = 30 WHERE proc_id = 1 AND ts = ?').run(now - 45 * M);
+    // pas encore agrégé : la partie ancienne de la fenêtre ne lit pas le détail
+    expect(queryInactive(db, targets, now - H, opts(now))).toEqual(new Set());
+    for (let m = now - 60 * M; m < now; m += M) aggregateMinute(db, m);
+    // 30 % sur 1 échantillon de 12 → moyenne 2,5 % sur la minute : actif
+    expect(queryInactive(db, targets, now - H, opts(now))).toEqual(new Set(['20:200']));
+    expect(queryInactive(db, targets, now - 40 * M, opts(now))).toEqual(new Set());
+  });
+
   test('au-delà de la rétention détaillée : lit aussi les minutes', () => {
     const { db } = inactiveDb();
     // seulement des agrégats minute (détail purgé) : p 20 à 3 % de moyenne il y a 30 h

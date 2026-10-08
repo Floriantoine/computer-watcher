@@ -44,7 +44,7 @@ export interface ClassifyContext {
   pkg: (projectRoot: string) => PackageHints | null;
   isProtected: (name: string) => boolean;
   /**
-   * Cache facultatif des décisions par instance (clé : groupe, racine, nombre de processus). L'appelant le vide quand les
+   * Cache facultatif des décisions par instance (clé : groupe, racine, empreinte des `pid:startTicks` de l'instance). L'appelant le vide quand les
    * corrections ou les ports changent (et périodiquement, pour le cache de package.json) ; les entrées non revues sont retirées.
    */
   memo?: Map<string, InstanceDecision>;
@@ -65,6 +65,23 @@ const matchScript = (script: string): CommandMatch | null => {
   return matchCommand(parts.map((cmdline) => ({ name: '', cmdline })));
 };
 
+/**
+ * Empreinte (FNV-1a 32 bits) de la liste triée des `pid:startTicks` d'une instance : la décision en cache est revue
+ * dès qu'un processus de l'instance change, même à nombre égal (enfant remplacé).
+ */
+function procsHash(procs: ProcInfo[]): string {
+  const ids = procs.map((p) => [p.pid, p.startTicks] as const).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  let h = 0x811c9dc5;
+  const mix = (n: number) => {
+    // chaque nombre en deux mots de 32 bits (startTicks peut dépasser 2^32 ticks)
+    for (const part of [n >>> 0, Math.floor(n / 0x1_0000_0000) >>> 0]) {
+      for (let s = 0; s < 32; s += 8) h = Math.imul(h ^ ((part >>> s) & 0xff), 0x01000193);
+    }
+  };
+  for (const [pid, st] of ids) { mix(pid); mix(st); }
+  return (h >>> 0).toString(36);
+}
+
 const PROJECT_PREFIX = 'project:';
 const DUPLICATE_SOURCES: ReadonlySet<InstanceSummary['source']> = new Set(['manual', 'command', 'port']);
 
@@ -77,7 +94,7 @@ function classifyGroup(group: Group, ctx: ClassifyContext, hasInstanceBelow: (pi
     const portSet = new Set<number>();
     if (ctx.ports.size > 0) for (const p of procs) for (const port of ctx.ports.get(p.pid) ?? []) portSet.add(port);
     const ports = [...portSet].sort((a, b) => a - b);
-    const memoKey = `${group.id}#${rp.pid}:${rp.startTicks}|${procs.length}`;
+    const memoKey = `${group.id}#${rp.pid}:${rp.startTicks}|${procs.length}:${procsHash(procs)}`;
     let dec = ctx.memo?.get(memoKey);
     if (!dec) {
       const match = isProject ? matchCommand(procs) : classifyByName(rp.name, rp.cmdline);

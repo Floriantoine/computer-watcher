@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 import { DEFAULT_RECORDER } from '../core/defaults';
 import { openHistoryDb } from '../core/history/db';
 import { HistoryWriter } from '../core/history/writer';
@@ -60,6 +60,30 @@ test('createHistoryReader : null sans base, données avec base, récupère aprè
 
   writeFileSync(statusPath(dir), JSON.stringify({ pid: 1, startedAt: 0, lastSampleAt: 5, lastError: null, earlyoomSource: 'ok', dbSizeBytes: 1 }));
   expect(reader.status()?.pid).toBe(1);
+});
+
+test('history.active : null sans base, ensemble avec base, null (et erreur journalisée) si la requête échoue', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pw-hist-'));
+  const reader = createHistoryReader(dir, () => DEFAULT_RECORDER);
+  const targets = [{ pid: 10, startTicks: 100 }];
+  expect(reader.active(targets, 0)).toBeNull();
+
+  makeDb(dir, Date.now());
+  // enregistré (60 Mo) mais CPU 0 : inactif, la base répond par un ensemble vide (≠ null)
+  expect(reader.active(targets, 0)).toEqual(new Set());
+
+  // base illisible pour cette requête : erreur journalisée, null
+  reader.close();
+  const { db } = openHistoryDb(dbPath(dir));
+  db.exec('DROP TABLE proc_samples');
+  db.close();
+  const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    expect(reader.active(targets, 0)).toBeNull();
+    expect(err).toHaveBeenCalledWith('history:', expect.anything());
+  } finally {
+    err.mockRestore();
+  }
 });
 
 const backups = ['metrics.db.pre-v2-20261007T094000', 'metrics.db.bak-20261001T000000', 'metrics.db.bak-20261001T000000-wal'];
