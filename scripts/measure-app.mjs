@@ -9,7 +9,7 @@
 // la fenêtre est réellement affichée et active quel que soit l'état du bureau (écran verrouillé, autre bureau…), et
 // rien n'apparaît à l'écran. MEASURE_KWIN=0 : utiliser la session courante.
 // Variables : MEASURE_SETTLE_S (20), MEASURE_SAMPLE_S (60), MEASURE_SCENARIOS (« visible,minimized »),
-// MEASURE_MAXIMIZE (1 : fenêtre agrandie, plus de cartes à l'écran).
+// MEASURE_MAXIMIZE (1 : fenêtre agrandie, plus de cartes à l'écran), MEASURE_OTHERS_OPEN (1 : carte « Autres » dépliée).
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -222,6 +222,9 @@ try {
   console.log(`apps ${apps.map((a, i) => `${a.dir} (PID ${roots[i]}, ${tree(roots[i]).length} processus)`).join(', ')} ; stabilisation ${SETTLE_S} s, échantillonnage ${SAMPLE_S} s`);
   const onAll = (expr) => Promise.all(apps.map((a) => a.evaluate(expr)));
   if (process.env.MEASURE_MAXIMIZE) await onAll('win.maximize()');
+  // « Autres » dépliée : état mémorisé du renderer, pris en compte au rechargement.
+  if (process.env.MEASURE_OTHERS_OPEN === '1')
+    await onAll("win.webContents.executeJavaScript(\"localStorage.setItem('pw.othersOpen','1'); location.reload()\")");
   await sleep(SETTLE_S * 1000);
   for (const sc of SCENARIOS) {
     if (sc === 'minimized') await onAll('win.minimize()');

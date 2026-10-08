@@ -45,6 +45,11 @@ export function followsOthers(groups: Group[], id: string | null): boolean {
   return groups.some((g) => g.kind === 'others' && (g.id === id || findFullGroup(g.subgroups, id) !== undefined));
 }
 
+/** Sous-groupes de « Autres » à résumer et à classer : carte « Autres » dépliée, ou « Autres » / l'un d'eux suivi. */
+export function othersFollowed(groups: Group[], watch: Watch): boolean {
+  return watch.othersOpen === true || followsOthers(groups, watch.groupId);
+}
+
 /** Processus du groupe `id` (vide s'il n'existe plus) : sert à préparer un kill de groupe. */
 export function groupProcs(groups: Group[], id: string): ProcInfo[] {
   const g = findFullGroup(groups, id);
@@ -62,12 +67,12 @@ export interface FullSnapshot {
 
 /**
  * Snapshot envoyé au renderer : résumés de groupes, résultat de la recherche et arbre du seul groupe suivi.
- * Les centaines de sous-groupes de « Autres » ne sont résumés que si « Autres » ou l'un d'eux est suivi.
+ * Les centaines de sous-groupes de « Autres » ne sont résumés que si « Autres » est déplié, ou lui ou l'un d'eux suivi.
  */
 export function buildSnapshot(full: FullSnapshot, watch: Watch): Snapshot {
   const query = watch.query.trim();
   const followed = watch.groupId === null ? undefined : findFullGroup(full.groups, watch.groupId);
-  const inOthers = (g: Group) => !!followed && (followed === g || g.subgroups.includes(followed));
+  const inOthers = (g: Group) => watch.othersOpen === true || (!!followed && (followed === g || g.subgroups.includes(followed)));
   return {
     takenAt: full.takenAt,
     currentUid: full.currentUid,
@@ -156,4 +161,5 @@ export const isWatch = (w: unknown): w is Watch =>
   w !== null &&
   ((w as Watch).groupId === null || typeof (w as Watch).groupId === 'string') &&
   typeof (w as Watch).query === 'string' &&
-  (w as Watch).query.length <= MAX_QUERY;
+  (w as Watch).query.length <= MAX_QUERY &&
+  ((w as Watch).othersOpen === undefined || typeof (w as Watch).othersOpen === 'boolean');

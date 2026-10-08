@@ -72,6 +72,8 @@ export interface GroupSummary extends Omit<Group, 'roots' | 'subgroups'> {
 export interface Watch {
   groupId: string | null;
   query: string;
+  /** Carte « Autres » dépliée sur la page Processus (ses sous-groupes sont alors résumés). */
+  othersOpen?: boolean;
 }
 
 export interface Snapshot {
@@ -79,7 +81,7 @@ export interface Snapshot {
   /** UID de l'utilisateur qui fait tourner proc-watch */
   currentUid: number;
   system: SystemInfo;
-  /** Les sous-groupes de « Autres » ne sont détaillés que quand « Autres » ou l'un d'eux est suivi (sinon liste vide). */
+  /** Les sous-groupes de « Autres » ne sont détaillés que quand « Autres » est déplié, ou lui ou l'un d'eux suivi (sinon liste vide). */
   groups: GroupSummary[];
   /** Ids de tous les groupes, sous-groupes de « Autres » compris */
   groupIds: string[];

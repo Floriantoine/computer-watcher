@@ -779,3 +779,44 @@ table.tree small.branch-total { display: block; white-space: nowrap; color: var(
 .overrides .ov-sig { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; justify-self: start; max-width: 100%; }
 .overrides .ov-remove { width: 24px; height: 24px; padding: 0; justify-content: center; border: none; background: none; border-radius: 99px; color: var(--muted); }
 .overrides .ov-remove:hover:not(:disabled) { background: rgba(255, 255, 255, 0.1); border: none; color: var(--text); }
+
+/* Page Processus → carte et ligne « Autres » dépliables */
+.others-toggle { padding: 4px 9px 4px 7px; font-size: 11.5px; border-radius: var(--r-sm); gap: 4px; color: var(--label); }
+.card.others-open { grid-column: 1 / -1; }
+.others-fold { display: flex; flex-direction: column; gap: 6px; }
+.others-preview {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 4px 10px;
+}
+.others-preview button {
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto 3.4em;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px 4px 4px;
+  font-size: 12px;
+  text-align: left;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+.others-preview .ico { width: 22px; height: 22px; border-radius: 7px; }
+.others-preview .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.others-preview .mono { font-family: var(--font-mono); font-size: 11px; font-variant-numeric: tabular-nums; text-align: right; }
+.others-preview .mem { color: var(--text-2); }
+.others-preview .cpu { color: var(--muted); }
+.others-see-all { align-self: flex-start; padding: 4px 10px; font-size: 11.5px; color: var(--label); border-radius: var(--r-sm); }
+.others-loading { margin: 0; font-size: 12px; color: var(--muted); }
+table.group-list tr.others-sub td { padding-top: 5px; padding-bottom: 5px; font-size: 12px; color: var(--text-2); }
+table.group-list tr.others-sub td.name { padding-left: 34px; }
+table.group-list tr.others-sub .name-cell .ico { width: 18px; height: 18px; border-radius: 6px; }
+table.group-list tr.others-sub .name-cell .label { font-weight: 400; }
+table.group-list tr.others-see-all-row, table.group-list tr.others-loading-row { cursor: default; }
+table.group-list tr.others-see-all-row:hover, table.group-list tr.others-loading-row:hover { background: none; }
+table.group-list tr.others-see-all-row td { padding-left: 34px; }
+table.group-list tr.others-loading-row td { padding-left: 34px; color: var(--muted); }

@@ -4,10 +4,11 @@ import { ChevronDown, ChevronUp, Lock } from 'lucide-react';
 import type { GroupSummary as Group } from '../../../core/types';
 import { hasDuplicate, primaryTag } from '../categoryFilter';
 import { formatAge, formatCpu, formatKB } from '../format';
+import { othersPreview, othersPreviewEqual } from '../othersFold';
 import { CategoryTag, DuplicateBadge } from './CategoryTag';
 import { sortForList, type ListColumn } from '../listSort';
 import { rowDisplayEqual, sameSeries } from '../renderEquality';
-import type { GroupActions } from './GroupCard';
+import { OthersToggle, type GroupActions } from './GroupCard';
 import { Sparkline } from './charts/Sparkline';
 import { AnimatedNumber, ForceButton, GroupIcon, KillButton, LeakBadge } from './ui';
 
@@ -20,6 +21,8 @@ interface Props {
   pendingPids: Set<number>;
   actions: GroupActions;
   leakAt?: Map<string, number>;
+  /** Ligne « Autres » dépliée : ses 10 plus gros sous-groupes en lignes, puis « Voir tout ». */
+  othersOpen: boolean;
 }
 
 const COLUMNS: { col: ListColumn; label: string; num: boolean }[] = [
@@ -39,10 +42,12 @@ interface RowProps {
   leak?: boolean;
   layoutKey: string;
   actions: GroupActions;
+  /** Ligne « Autres » seulement. */
+  othersOpen?: boolean;
   ref?: Ref<HTMLTableRowElement>;
 }
 
-function GroupRowImpl({ group, spark, stuck, pending, leak, layoutKey, actions, ref }: RowProps) {
+function GroupRowImpl({ group, spark, stuck, pending, leak, layoutKey, actions, othersOpen = false, ref }: RowProps) {
   const isPresent = useIsPresent();
   const tag = primaryTag(group);
   const stop = (fn: () => void) => (e: MouseEvent) => {
@@ -85,12 +90,13 @@ function GroupRowImpl({ group, spark, stuck, pending, leak, layoutKey, actions, 
       <td className="num">{formatCpu(group.cpuPercent)}</td>
       <td className={`num ${group.oldestAgeSec > DAY ? 'old' : ''}`}>{formatAge(group.oldestAgeSec)}</td>
       <td className="act">
-        {group.kind !== 'others' &&
-          (stuck ? (
-            <ForceButton onClick={stop(() => actions.force(group.id))} />
-          ) : (
-            <KillButton size="sm" pending={pending} disabled={!group.killable} onClick={stop(() => actions.kill(group.id))} />
-          ))}
+        {group.kind === 'others' ? (
+          <OthersToggle open={othersOpen} onToggle={stop(() => actions.toggleOthers(!othersOpen))} />
+        ) : stuck ? (
+          <ForceButton onClick={stop(() => actions.force(group.id))} />
+        ) : (
+          <KillButton size="sm" pending={pending} disabled={!group.killable} onClick={stop(() => actions.kill(group.id))} />
+        )}
       </td>
     </motion.tr>
   );
@@ -105,11 +111,53 @@ const GroupRow = memo(
     a.stuck === b.stuck &&
     a.pending === b.pending &&
     a.leak === b.leak &&
+    a.othersOpen === b.othersOpen &&
     sameSeries(a.spark, b.spark) &&
     rowDisplayEqual(a.group, b.group),
 );
 
-export function GroupList({ groups, sparkOf, stuckPids, pendingPids, actions, leakAt }: Props) {
+const COLS = COLUMNS.length + 2; // + graphe + action
+
+/** Lignes de « Autres » dépliée : ses 10 plus gros sous-groupes (clic → détail), puis « Voir tout (n) ». */
+function OthersRowsImpl({ group, actions }: { group: Group; actions: GroupActions }) {
+  if (group.subgroups.length === 0)
+    return group.procCount > 0 ? (
+      <tr className="others-sub others-loading-row"><td colSpan={COLS}>Chargement…</td></tr>
+    ) : null;
+  const { shown } = othersPreview(group);
+  return (
+    <>
+      {shown.map((sg) => (
+        <tr key={sg.id} className="others-sub" data-testid="others-sub" onClick={() => actions.open(sg.id)}>
+          <td className="name">
+            <span className="name-cell">
+              <GroupIcon id={sg.id} kind={sg.kind} size="sm" />
+              <span className="label">{sg.label}</span>
+            </span>
+          </td>
+          <td className="num">{sg.procCount}</td>
+          <td aria-hidden />
+          <td className="num">{formatKB(sg.rssKB + sg.swapKB)}</td>
+          <td className="num">{formatKB(sg.swapKB)}</td>
+          <td className="num">{formatCpu(sg.cpuPercent)}</td>
+          <td className={`num ${sg.oldestAgeSec > DAY ? 'old' : ''}`}>{formatAge(sg.oldestAgeSec)}</td>
+          <td aria-hidden />
+        </tr>
+      ))}
+      <tr className="others-sub others-see-all-row">
+        <td colSpan={COLS}>
+          <button type="button" className="others-see-all" data-testid="others-see-all" onClick={() => actions.open(group.id)}>
+            Voir tout ({group.subgroups.length})
+          </button>
+        </td>
+      </tr>
+    </>
+  );
+}
+
+const OthersRows = memo(OthersRowsImpl, (a, b) => a.actions === b.actions && a.group.procCount === b.group.procCount && othersPreviewEqual(a.group, b.group));
+
+export function GroupList({ groups, sparkOf, stuckPids, pendingPids, actions, leakAt, othersOpen }: Props) {
   const [sort, setSort] = useState<{ col: ListColumn; dir: 'asc' | 'desc' }>({ col: 'mem', dir: 'desc' });
   const order = useRef<{ key: string; ids: string[] }>({ key: '', ids: [] });
   const sortKey = `${sort.col}:${sort.dir}`;
@@ -118,6 +166,8 @@ export function GroupList({ groups, sparkOf, stuckPids, pendingPids, actions, le
     order.current = { key: sortKey, ids: rows.map((g) => g.id) };
   });
   const layoutKey = rows.map((g) => g.id).join('\n');
+  // « Autres » est toujours la dernière ligne : ses sous-groupes s'affichent juste après.
+  const othersRow = rows.find((g) => g.kind === 'others');
   const toggle = (col: ListColumn) =>
     setSort((s) => (s.col === col ? { col, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { col, dir: col === 'name' ? 'asc' : 'desc' }));
   return (
@@ -157,9 +207,11 @@ export function GroupList({ groups, sparkOf, stuckPids, pendingPids, actions, le
                 leak={leakAt?.has(g.id)}
                 layoutKey={layoutKey}
                 actions={actions}
+                othersOpen={g.kind === 'others' && othersOpen}
               />
             ))}
           </AnimatePresence>
+          {othersOpen && othersRow && <OthersRows group={othersRow} actions={actions} />}
         </tbody>
       </table>
     </div>

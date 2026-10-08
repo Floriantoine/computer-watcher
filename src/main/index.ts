@@ -16,7 +16,7 @@ import { killRequest, planKill, sendSignals } from '../core/kill';
 import { compileProtection } from '../core/protection';
 import { formatAppEvent } from '../core/history/events';
 import { appEventsPath, dataDir } from '../core/paths';
-import { buildSnapshot, flattenGroup, followsOthers, groupProcs, instanceTargets, isWatch, type Classification, type FullSnapshot } from '../core/snapshot';
+import { buildSnapshot, flattenGroup, groupProcs, instanceTargets, isWatch, othersFollowed, type Classification, type FullSnapshot } from '../core/snapshot';
 import type { ConfigState, Group, KillResult, RecorderState, Watch } from '../core/types';
 import { installDesktopEntry } from './desktopEntry';
 import { clearHistory, createHistoryReader } from './history';
@@ -139,7 +139,7 @@ function classify(groups: Group[], now: number): Classification {
     isProtected: protection.isProtected,
     memo: decisions,
     // Les centaines de sous-groupes de « Autres » ne sont classés que s'ils sont affichés (≈ 80 % du coût du classement).
-    skipOthersSubgroups: !followsOthers(groups, watch.groupId),
+    skipOthersSubgroups: !othersFollowed(groups, watch),
   });
   return lastClassification;
 }
@@ -284,11 +284,11 @@ ipcMain.handle('config:get', () => configState());
 // Le renderer dit ce qu'il suit ; on renvoie tout de suite le dernier snapshot recalculé (sans relire /proc).
 ipcMain.handle('watch', (_e, w: unknown) => {
   if (!isWatch(w)) return;
-  watch = { groupId: w.groupId, query: w.query };
-  // Ouverture de « Autres » ou d'un de ses sous-groupes : leur classement est calculé tout de suite (reclassify envoie).
+  watch = { groupId: w.groupId, query: w.query, othersOpen: w.othersOpen === true };
+  // « Autres » déplié, ou ouverture de « Autres » / d'un de ses sous-groupes : leur classement est calculé tout de suite (reclassify envoie).
   const others = last?.groups.find((g) => g.kind === 'others');
   const unclassified = !!others && others.subgroups.length > 0 && !last!.classification.has(others.subgroups[0].id);
-  if (unclassified && followsOthers(last!.groups, w.groupId)) reclassify();
+  if (unclassified && othersFollowed(last!.groups, watch)) reclassify();
   else send();
 });
 ipcMain.handle('group:procs', (_e, id: unknown) => (typeof id === 'string' && last ? groupProcs(last.groups, id) : []));
