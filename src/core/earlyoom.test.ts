@@ -2,8 +2,11 @@ import { describe, expect, test } from 'vitest';
 import { DEFAULT_CONFIG } from './defaults';
 import {
   EARLYOOM_BASE_IGNORE,
+  EARLYOOM_LINE_PATTERN,
   EARLYOOM_LINE_RE,
+  EARLYOOM_REGEX_CHARS,
   buildEarlyoomArgs,
+  ignoreConversions,
   checkRegexPart,
   ignoreList,
   isEarlyoomSettings,
@@ -23,7 +26,8 @@ const SETTINGS: EarlyoomSettings = {
 describe('nameToRegex', () => {
   test.each([
     ['node (vitest)', 'node..vitest.'],
-    ['tmux: server', 'tmux:.server'],
+    ['tmux: server', 'tmux..server'],
+    ['a{1}[b]<c>&d#e;f$g', 'a.1..b..c..d.e.f.g'],
     ['gnome-terminal-', 'gnome-terminal-'],
     ['c++', 'c..'],
     ['a\\b', 'a.b'],
@@ -35,7 +39,7 @@ describe('ignoreList', () => {
   test('base puis noms exacts de la liste protégée, sans doublon, regex ignorées', () => {
     expect(ignoreList(DEFAULT_CONFIG.protected)).toEqual([
       ...EARLYOOM_BASE_IGNORE,
-      'fish', 'sh', 'konsole', 'gnome-terminal-', 'kitty', 'alacritty', 'wezterm-gui', 'ghostty', 'tmux:.server',
+      'fish', 'sh', 'konsole', 'gnome-terminal-', 'kitty', 'alacritty', 'wezterm-gui', 'ghostty', 'tmux..server',
       'kwin_x11', 'gnome-shell', 'Xorg', 'gdm',
     ]);
   });
@@ -56,13 +60,37 @@ describe('checkRegexPart', () => {
   test('espace', () => expect(checkRegexPart('node (vitest)')).toMatch(/espace/));
   test('antislash', () => expect(checkRegexPart('node.\\(vitest\\)')).toMatch(/antislash/));
   test('vide', () => expect(checkRegexPart('')).toMatch(/vide/));
-  test.each(['a"b', '$(rm)', 'a`b', "a'b", 'a;b'])('caractère interdit : %s', (p) =>
+  test.each(['a"b', '$(rm)', 'a`b', "a'b", 'a;b', 'a#b', 'a{1}', '[ab]', 'a<b', 'a>b', 'a&b', 'tmux:x', 'a,b', 'clаude' /* а cyrillique */, 'ｃhrome'])('caractère interdit : %s', (p) =>
     expect(checkRegexPart(p)).toMatch(/caractère interdit/));
   test('trop long', () => expect(checkRegexPart('a'.repeat(101))).not.toBeNull());
   test('100 caractères acceptés', () => expect(checkRegexPart('a'.repeat(100))).toBeNull());
 });
 
+describe('ignoreConversions', () => {
+  test('noms protégés transformés, affichés dans l’aperçu', () => {
+    expect(ignoreConversions(DEFAULT_CONFIG.protected)).toEqual([{ name: 'tmux: server', re: 'tmux..server' }]);
+    expect(ignoreConversions(['a$(b)', '/^x/', ''])).toEqual([{ name: 'a$(b)', re: 'a..b.' }]);
+  });
+});
+
+describe('EARLYOOM_REGEX_CHARS', () => {
+  test('liste blanche stricte', () => {
+    expect(EARLYOOM_REGEX_CHARS).toBe('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._|*+?()-');
+    for (const c of ['$', '`', ';', "'", '"', '\\', ' ', '#', '{', '}', '[', ']', '<', '>', '&', ':', ',', '\n']) expect(EARLYOOM_REGEX_CHARS).not.toContain(c);
+  });
+  test('EARLYOOM_LINE_RE construit depuis EARLYOOM_LINE_PATTERN', () => {
+    expect(EARLYOOM_LINE_RE.source).toBe(new RegExp(EARLYOOM_LINE_PATTERN).source);
+    expect(EARLYOOM_LINE_PATTERN).toContain(`[${EARLYOOM_REGEX_CHARS}]+`);
+  });
+});
+
 describe('buildEarlyoomArgs', () => {
+  test('ligne de plus de 4 095 caractères refusée', () => {
+    const many = Array.from({ length: 60 }, (_, i) => `n${i}${'x'.repeat(90)}`);
+    const r = buildEarlyoomArgs({ memTerm: 8, memKill: 5, swapTerm: 35, swapKill: 25, prefer: [] }, many);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors.join()).toMatch(/trop longue/);
+  });
   test('ligne exacte', () => {
     const r = buildEarlyoomArgs(SETTINGS, ['claude']);
     expect(r).toEqual({
@@ -83,7 +111,7 @@ describe('buildEarlyoomArgs', () => {
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(EARLYOOM_LINE_RE.test(r.line)).toBe(true);
-      expect(r.line).toContain('|tmux:.server|');
+      expect(r.line).toContain('|tmux..server|');
     }
   });
   test.each<[string, Partial<EarlyoomSettings>]>([

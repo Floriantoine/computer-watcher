@@ -13,12 +13,35 @@ export const EARLYOOM_BASE_IGNORE: readonly string[] =
 export const EARLYOOM_MAX_PREFER = 30;
 const MAX_PART = 100;
 
-/** Ligne acceptée par le script root (même motif que le script bash de src/main/earlyoom.ts). */
-export const EARLYOOM_LINE_RE = /^EARLYOOM_ARGS="-m \d{1,2},\d{1,2} -s \d{1,3},\d{1,3} -r 0 --ignore \^\([^ "\\]+\)\$( --prefer \^\([^ "\\]+\)\$)?"$/;
+/**
+ * Liste blanche UNIQUE des caractères permis dans les regex de --ignore et --prefer (noms de processus en
+ * alternance). Lettres et chiffres énumérés (pas de plage [A-Z], dont le sens dépend de la locale en bash).
+ * Exclus en particulier : $ ` ; ' " \ espace # { } [ ] < > & et tout caractère non ASCII.
+ * Elle sert à construire à la fois EARLYOOM_LINE_RE (TS) et le motif `re=` du script root (bash).
+ */
+export const EARLYOOM_REGEX_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._|*+?()-';
+const CLASS = `[${EARLYOOM_REGEX_CHARS}]+`;
+const DIGITS = '[0123456789]';
 
-/** Nom exact → motif sans espace ni antislash : tout caractère hors [A-Za-z0-9_:-] devient « . » (« node (vitest) » → « node..vitest. »). */
+/** Motif POSIX ERE de la ligne, tel qu'écrit dans le script bash (`re='…'`) ; identique en syntaxe JS. */
+export const EARLYOOM_LINE_PATTERN =
+  `^EARLYOOM_ARGS="-m ${DIGITS}{1,2},${DIGITS}{1,2} -s ${DIGITS}{1,3},${DIGITS}{1,3} -r 0 --ignore \\^\\(${CLASS}\\)\\$( --prefer \\^\\(${CLASS}\\)\\$)?"$`;
+
+/** Ligne acceptée par le script root : construite depuis le même motif que le script bash de src/main/earlyoom.ts. */
+export const EARLYOOM_LINE_RE = new RegExp(EARLYOOM_LINE_PATTERN);
+
+/** Taille maximale du fichier lu par le script root (ligne + saut de ligne). */
+export const EARLYOOM_MAX_FILE_BYTES = 4096;
+
+const NAME_SAFE = /^[A-Za-z0-9_-]$/;
+/** Nom exact → motif sans espace ni antislash : tout caractère hors [A-Za-z0-9_-] devient « . » (« node (vitest) » → « node..vitest. »). */
 export function nameToRegex(name: string): string {
-  return Array.from(name, (c) => (/^[A-Za-z0-9_:-]$/.test(c) ? c : '.')).join('');
+  return Array.from(name, (c) => (NAME_SAFE.test(c) ? c : '.')).join('');
+}
+
+/** Noms protégés dont le motif diffère du nom (caractères hors liste blanche remplacés par « . »), pour l'aperçu. */
+export function ignoreConversions(protectedList: readonly string[]): { name: string; re: string }[] {
+  return protectedList.filter((n) => !/^\/.+\/$/.test(n) && n !== '').map((name) => ({ name, re: nameToRegex(name) })).filter((c) => c.re !== c.name);
 }
 
 /** Base puis noms exacts de la liste protégée (entrées /regex/ ignorées), sans doublon. */
@@ -35,13 +58,13 @@ export function ignoreList(protectedList: readonly string[]): string[] {
   return out;
 }
 
-/** Message d'erreur en français, ou null si le motif est accepté : non vide, ≤ 100 caractères, uniquement [A-Za-z0-9_.*+?|()\[\]{}:,-]. */
+/** Message d'erreur en français, ou null si le motif est accepté : non vide, ≤ 100 caractères, uniquement EARLYOOM_REGEX_CHARS. */
 export function checkRegexPart(part: string): string | null {
   if (part === '') return 'Motif vide';
   if (/\s/.test(part)) return `« ${part} » : espace interdite (EnvironmentFile coupe la ligne aux espaces)`;
   if (part.includes('\\')) return `« ${part} » : antislash interdit (EnvironmentFile le supprime) — utiliser « . »`;
   if (part.length > MAX_PART) return `« ${part.slice(0, 20)}… » : plus de ${MAX_PART} caractères`;
-  const bad = Array.from(part).find((c) => !/^[A-Za-z0-9_.*+?|()[\]{}:,-]$/.test(c));
+  const bad = Array.from(part).find((c) => !EARLYOOM_REGEX_CHARS.includes(c));
   if (bad !== undefined) return `« ${part} » : caractère interdit « ${bad} »`;
   return null;
 }
@@ -73,6 +96,7 @@ export function buildEarlyoomArgs(
   if (errors.length) return { ok: false, errors };
   const prefer = s.prefer.length ? ` --prefer ^(${s.prefer.join('|')})$` : '';
   const line = `EARLYOOM_ARGS="-m ${s.memTerm},${s.memKill} -s ${s.swapTerm},${s.swapKill} -r 0 --ignore ^(${ignore.join('|')})$${prefer}"`;
+  if (line.length + 1 > EARLYOOM_MAX_FILE_BYTES) return { ok: false, errors: [`Ligne trop longue (${line.length} caractères, ${EARLYOOM_MAX_FILE_BYTES - 1} au plus) : raccourcir la liste protégée ou les préférences`] };
   if (!EARLYOOM_LINE_RE.test(line)) return { ok: false, errors: ['Ligne générée non conforme'] };
   return { ok: true, line };
 }

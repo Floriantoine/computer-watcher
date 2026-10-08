@@ -1,13 +1,13 @@
 // Le script root n'est jamais lancé via pkexec ici : il est exécuté directement, en tant qu'utilisateur,
-// sur une cible temporaire (PW_EARLYOOM_TARGET) avec un faux systemctl (PW_SYSTEMCTL).
-import { spawnSync } from 'node:child_process';
+// sur une COPIE de test où les deux chemins constants (cible, systemctl) sont remplacés par des chemins temporaires.
+import { execFileSync, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import { DEFAULT_CONFIG } from '../core/defaults';
-import { buildEarlyoomArgs, EARLYOOM_LINE_RE } from '../core/earlyoom';
-import { applyEarlyoom, applyExitMessage, createEarlyoomApplier, EARLYOOM_APPLY_SCRIPT, earlyoomStatus, type ExecFn } from './earlyoom';
+import { buildEarlyoomArgs, EARLYOOM_LINE_PATTERN, EARLYOOM_LINE_RE } from '../core/earlyoom';
+import { applyEarlyoom, applyExitMessage, createEarlyoomApplier, EARLYOOM_APPLY_SCRIPT, earlyoomStatus, PKEXEC, type ExecFn } from './earlyoom';
 
 const cacheRoot = join(homedir(), '.cache');
 mkdirSync(cacheRoot, { recursive: true });
@@ -32,21 +32,49 @@ const fakeSystemctl = (): string => {
   return p;
 };
 
+/** Copie de test du script : seuls les deux chemins constants changent. */
+function testScript(target: string, systemctl: string): string {
+  const a = 'target=/etc/default/earlyoom\n';
+  const b = 'systemctl=/usr/bin/systemctl\n';
+  if (!EARLYOOM_APPLY_SCRIPT.includes(a) || !EARLYOOM_APPLY_SCRIPT.includes(b)) throw new Error('chemins constants introuvables');
+  return EARLYOOM_APPLY_SCRIPT.replace(a, `target='${target}'\n`).replace(b, `systemctl='${systemctl}'\n`);
+}
+
 function runScript(opts: { content?: string; srcPath?: string | null; target?: string; existing?: string | null; fakeRc?: number }) {
   const target = opts.target ?? join(dir, 'earlyoom');
   if (opts.existing !== undefined && opts.existing !== null) writeFileSync(target, opts.existing);
-  let src = opts.srcPath === undefined ? join(dir, 'src') : opts.srcPath;
+  const src = opts.srcPath === undefined ? join(dir, 'src') : opts.srcPath;
   if (src && opts.content !== undefined) writeFileSync(src, opts.content, { mode: 0o600 });
   const log = join(dir, 'log');
-  const args = ['-c', EARLYOOM_APPLY_SCRIPT, 'proc-watch-earlyoom', ...(src ? [src] : [])];
+  const args = ['-c', testScript(target, fakeSystemctl()), 'proc-watch-earlyoom', ...(src ? [src] : [])];
   const r = spawnSync('/usr/bin/bash', args, {
-    env: { PATH: '/usr/bin:/bin', PW_EARLYOOM_TARGET: target, PW_SYSTEMCTL: fakeSystemctl(), FAKE_LOG: log, FAKE_RC: String(opts.fakeRc ?? 0) },
+    env: { PATH: '/usr/bin:/bin', FAKE_LOG: log, FAKE_RC: String(opts.fakeRc ?? 0) },
     encoding: 'utf8',
+    timeout: 10_000,
   });
   const calls = existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').filter(Boolean) : [];
   const baks = readdirSync(dir).filter((f) => f.startsWith('earlyoom.bak-'));
   return { code: r.status, target, calls, baks, read: () => (existsSync(target) ? readFileSync(target, 'utf8') : null) };
 }
+
+describe('script livré (constante)', () => {
+  test('aucune variable d’environnement lue : seul ${1:-} est une valeur par défaut', () => {
+    expect(EARLYOOM_APPLY_SCRIPT).not.toContain('${PW_');
+    expect(EARLYOOM_APPLY_SCRIPT).not.toMatch(/PW_/);
+    expect(EARLYOOM_APPLY_SCRIPT.match(/\$\{[^}]*:-[^}]*\}/g)).toEqual(['${1:-}']);
+    expect(EARLYOOM_APPLY_SCRIPT).toContain('\ntarget=/etc/default/earlyoom\n');
+    expect(EARLYOOM_APPLY_SCRIPT).toContain('\nsystemctl=/usr/bin/systemctl\n');
+    expect(EARLYOOM_APPLY_SCRIPT).toContain('export PATH=/usr/bin:/bin LC_ALL=C\n');
+  });
+  test('motif bash = EARLYOOM_LINE_PATTERN (même source que EARLYOOM_LINE_RE)', () => {
+    expect(EARLYOOM_APPLY_SCRIPT).toContain(`\nre='${EARLYOOM_LINE_PATTERN}'\n`);
+    expect(EARLYOOM_LINE_RE.source).toBe(new RegExp(EARLYOOM_LINE_PATTERN).source);
+  });
+  test('syntaxe bash valide', () => {
+    expect(spawnSync('/usr/bin/bash', ['-n', '-c', EARLYOOM_APPLY_SCRIPT]).status).toBe(0);
+  });
+  test('pkexec par chemin absolu', () => expect(PKEXEC).toBe('/usr/bin/pkexec'));
+});
 
 describe('script root (exécuté directement, sans pkexec)', () => {
   test('ligne valide, cible existante → écrite, copie .bak, redémarrage', () => {
@@ -77,6 +105,7 @@ describe('script root (exécuté directement, sans pkexec)', () => {
     ['espace dans une regex', { content: `${VALID.replace('node-MainThread', 'node MainThread')}\n` }, [11]],
     ['deux lignes', { content: `${VALID}\n${VALID}\n` }, [10]],
     ['5 000 octets', { content: `${VALID}${' '.repeat(5000)}\n` }, [10]],
+    ['ligne conforme de 4 097 octets', { content: `EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(${'a'.repeat(4097 - 50)})$"\n` }, [10]],
     ['argument absent', { srcPath: null }, [10]],
     ['fichier inexistant', { srcPath: '/nonexistent/proc-watch' }, [10]],
   ])('%s → refusé, cible inchangée', (_n, opts, codes) => {
@@ -92,6 +121,14 @@ describe('script root (exécuté directement, sans pkexec)', () => {
     const link = join(dir, 'src');
     symlinkSync(real, link);
     const r = runScript({ srcPath: link, existing: OLD });
+    expect(r.code).toBe(10);
+    expect(r.read()).toBe(OLD);
+    expect(r.calls).toEqual([]);
+  });
+  test('FIFO → 10 sans bloquer', () => {
+    const fifo = join(dir, 'src');
+    execFileSync('/usr/bin/mkfifo', [fifo]);
+    const r = runScript({ srcPath: fifo, existing: OLD });
     expect(r.code).toBe(10);
     expect(r.read()).toBe(OLD);
     expect(r.calls).toEqual([]);
@@ -126,6 +163,55 @@ describe('script root (exécuté directement, sans pkexec)', () => {
       const r = runScript({ content: `${l}\n`, existing: OLD });
       expect({ l, js: EARLYOOM_LINE_RE.test(l) }).toEqual({ l, js: r.code !== 11 });
     }
+  });
+});
+
+describe('même motif en TS et en bash ([[ $line =~ $re ]] réel)', () => {
+  const pad = (n: number) => {
+    const head = 'EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(a)$ --prefer ^(';
+    const tail = ')$"';
+    return head + 'a'.repeat(n - head.length - tail.length) + tail;
+  };
+  const corpus: string[] = [
+    VALID,
+    USER_LINE,
+    'EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(a)$"',
+    VALID.replace('|npm', '|$(reboot)'),
+    VALID.replace('|npm', '|`reboot`'),
+    VALID.replace('|npm', '|a;reboot'),
+    VALID.replace('|npm', "|a'b"),
+    VALID.replace('|npm', '|a#b'),
+    VALID.replace('|npm', '|a\nb'),
+    `${VALID}\n`,
+    `${VALID}\nreboot`,
+    VALID.replace('|npm', '|a b'),
+    VALID.replace('|npm', '|a{1}'),
+    VALID.replace('|npm', '|[ab]'),
+    VALID.replace('|npm', '|a<b'),
+    VALID.replace('|npm', '|a&b'),
+    VALID.replace('|npm', '|a:b'),
+    VALID.replace('|npm', '|a"b'),
+    VALID.replace('|npm', '|a\\b'),
+    VALID.replace('chrome', 'chrоme'), // о cyrillique
+    VALID.replace('chrome', 'ｃhrome'), // c pleine chasse
+    VALID.replace('chrome', 'chrómé'),
+    VALID.replace(' -r 0', '\u00a0-r 0'), // espace insécable
+    VALID.replace('-m 8,5', '-m ٨,5'), // chiffre arabe-indien
+    VALID.replace('-m 8,5', '-m ８,5'), // chiffre pleine chasse
+    pad(4097),
+    pad(4095),
+  ];
+  test('accepte et refuse exactement le même corpus', () => {
+    expect(pad(4097).length).toBe(4097);
+    const bashRe = EARLYOOM_LINE_PATTERN;
+    for (const line of corpus) {
+      for (const lang of ['C', 'C.UTF-8', 'fr_FR.UTF-8', 'en_US.UTF-8']) {
+        const r = spawnSync('/usr/bin/bash', ['-c', '[[ $1 =~ $2 ]]', 'x', line, bashRe], { env: { PATH: '/usr/bin', LANG: lang, LC_ALL: lang } });
+        expect({ line, lang, bash: r.status === 0 }).toEqual({ line, lang, bash: EARLYOOM_LINE_RE.test(line) });
+      }
+    }
+    // Seules les lignes bien formées passent (la longueur est bornée à part, par le script et le générateur).
+    expect(corpus.filter((l) => EARLYOOM_LINE_RE.test(l))).toEqual([VALID, corpus[2], pad(4097), pad(4095)]);
   });
 });
 
@@ -167,7 +253,7 @@ describe('applyEarlyoom (pkexec simulé)', () => {
     expect(await applyEarlyoom(VALID, { run, tmpRoot: dir })).toEqual({ ok: true, line: VALID });
     expect(seen).toHaveLength(1);
     const file = seen[0].args[4];
-    expect(seen[0].cmd).toBe('pkexec');
+    expect(seen[0].cmd).toBe('/usr/bin/pkexec');
     expect(seen[0].args).toEqual(['/usr/bin/bash', '-c', EARLYOOM_APPLY_SCRIPT, 'proc-watch-earlyoom', file]);
     expect(seen[0].mode).toBe(0o600);
     expect(seen[0].content).toBe(`${VALID}\n`);

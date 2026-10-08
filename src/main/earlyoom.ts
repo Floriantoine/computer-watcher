@@ -3,12 +3,14 @@ import { execFile } from 'node:child_process';
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildEarlyoomArgs, EARLYOOM_LINE_RE, isEarlyoomSettings, parseEarlyoomDefault } from '../core/earlyoom';
+import { buildEarlyoomArgs, EARLYOOM_LINE_PATTERN, EARLYOOM_LINE_RE, EARLYOOM_MAX_FILE_BYTES, isEarlyoomSettings, parseEarlyoomDefault } from '../core/earlyoom';
 import type { ApplyResult, EarlyoomStatus } from '../core/types';
 
 export type ExecFn = (cmd: string, args: string[], opts?: { timeout?: number }) => Promise<{ code: number; stdout: string; stderr: string }>;
 
-export const EARLYOOM_DEFAULT_FILE = '/etc/default/earlyoom';
+export const EARLYOOM_TARGET = '/etc/default/earlyoom';
+export const EARLYOOM_SYSTEMCTL = '/usr/bin/systemctl';
+export const PKEXEC = '/usr/bin/pkexec';
 export const EARLYOOM_INSTALL_HINT = 'sudo pacman -S earlyoom && sudo systemctl enable --now earlyoom';
 const APPLY_TIMEOUT_MS = 120_000; // saisie du mot de passe
 
@@ -53,34 +55,44 @@ export async function earlyoomStatus(deps: {
     const s = a?.stdout.trim();
     if (s === 'active' || s === 'inactive' || s === 'failed') active = s;
   }
-  const text = read(EARLYOOM_DEFAULT_FILE);
+  const text = read(EARLYOOM_TARGET);
   return { installed, version, active, file: text === null ? null : parseEarlyoomDefault(text), installHint: EARLYOOM_INSTALL_HINT };
 }
 
-// `${D}` évite l'interpolation du gabarit : le script reste une constante, jamais construite à partir d'une entrée.
-const D = '$';
+
+// Le motif bash vient de la même constante que EARLYOOM_LINE_RE (liste blanche EARLYOOM_REGEX_CHARS).
+if (EARLYOOM_LINE_PATTERN.includes("'")) throw new Error('motif earlyoom : apostrophe interdite');
+
 /**
  * Script fixe exécuté en root par pkexec (`bash -c`, pas de fichier .sh : dans une AppImage les fichiers de
- * l'app vivent sous un montage FUSE illisible par root). Valide la ligne (motif identique à EARLYOOM_LINE_RE),
- * copie l'ancien fichier en .bak-<date>, écrit le nouveau et redémarre earlyoom ; restaure l'ancien si le
- * redémarrage échoue. Codes : 10 fichier refusé, 11 ligne non conforme, 12 écriture impossible, 13 redémarrage
- * en échec (ancien fichier restauré). PW_EARLYOOM_TARGET / PW_SYSTEMCTL ne servent qu'aux tests (pkexec
- * efface l'environnement).
+ * l'app vivent sous un montage FUSE illisible par root). Il n'est construit qu'à partir de constantes du module
+ * (jamais d'une entrée) et ne lit AUCUNE variable d'environnement : cible, systemctl, PATH et locale sont fixés.
+ *
+ * Le fichier source est un 0600 dans un dossier mkdtemp 0700 de l'utilisateur. L'utilisateur peut le remplacer
+ * entre les vérifications et la lecture (lien, autre fichier) : c'est sans conséquence, car le contenu est lu
+ * UNE fois dans une variable puis validé par le motif sur cette variable ; seul un contenu conforme est écrit.
+ * Un FIFO est refusé (-p) pour que la lecture ne puisse pas bloquer ; un FIFO substitué après coup ne peut que
+ * bloquer ce bash (aucun effet sur /etc), et l'app abandonne après 120 s.
+ *
+ * Valide la ligne, copie l'ancien fichier en .bak-<date>, écrit le nouveau et redémarre earlyoom ; restaure
+ * l'ancien si le redémarrage échoue. Codes : 10 fichier refusé, 11 ligne non conforme, 12 écriture impossible,
+ * 13 redémarrage en échec (ancien fichier restauré).
  */
-export const EARLYOOM_APPLY_SCRIPT = String.raw`set -u
-src="${D}{1:-}"
-target="${D}{PW_EARLYOOM_TARGET:-/etc/default/earlyoom}"
-systemctl="${D}{PW_SYSTEMCTL:-/usr/bin/systemctl}"
-re='^EARLYOOM_ARGS="-m [0-9]{1,2},[0-9]{1,2} -s [0-9]{1,3},[0-9]{1,3} -r 0 --ignore \^\([^ "\]+\)\$( --prefer \^\([^ "\]+\)\$)?"$'
-[[ -n "$src" && -f "$src" && ! -L "$src" ]] || exit 10
-[[ $(stat -c %s -- "$src") -le 4096 ]] || exit 10
+export const EARLYOOM_APPLY_SCRIPT = `set -u
+export PATH=/usr/bin:/bin LC_ALL=C
+src="\${1:-}"
+target=${EARLYOOM_TARGET}
+systemctl=${EARLYOOM_SYSTEMCTL}
+re='${EARLYOOM_LINE_PATTERN}'
+[[ -n "$src" && -f "$src" && ! -L "$src" && ! -p "$src" ]] || exit 10
+[[ $(stat -c %s -- "$src") -le ${EARLYOOM_MAX_FILE_BYTES} ]] || exit 10
 [[ $(grep -c '' "$src") -eq 1 ]] || exit 10
 line=""
 IFS= read -r line < "$src" || true
 [[ "$line" =~ $re ]] || exit 11
 bak=""
 if [[ -e "$target" ]]; then bak="$target.bak-$(date +%Y%m%dT%H%M%S)"; cp -p -- "$target" "$bak" || exit 12; fi
-{ printf '%s\n' "$line" > "$target.proc-watch.tmp" && chmod 644 "$target.proc-watch.tmp" && mv -f -- "$target.proc-watch.tmp" "$target"; } || { rm -f -- "$target.proc-watch.tmp"; exit 12; }
+{ printf '%s\\n' "$line" > "$target.proc-watch.tmp" && chmod 644 "$target.proc-watch.tmp" && mv -f -- "$target.proc-watch.tmp" "$target"; } || { rm -f -- "$target.proc-watch.tmp"; exit 12; }
 if ! "$systemctl" restart earlyoom; then
   if [[ -n "$bak" ]]; then cp -p -- "$bak" "$target"; else rm -f -- "$target"; fi
   "$systemctl" restart earlyoom
@@ -102,7 +114,7 @@ export function applyExitMessage(code: number, line: string): ApplyResult {
   }
 }
 
-/** Écrit `line` dans un fichier 0600 (mkdtemp sous os.tmpdir()), puis pkexec /usr/bin/bash -c SCRIPT proc-watch-earlyoom <fichier> ; supprime le fichier dans finally. */
+/** Écrit `line` dans un fichier 0600 (mkdtemp sous os.tmpdir()), puis /usr/bin/pkexec /usr/bin/bash -c SCRIPT proc-watch-earlyoom <fichier> ; supprime le fichier dans finally. */
 export async function applyEarlyoom(line: string, deps: { run?: ExecFn; tmpRoot?: string } = {}): Promise<ApplyResult> {
   if (!EARLYOOM_LINE_RE.test(line)) return { ok: false, reason: 'invalid', message: "Ligne non conforme : rien n'a été modifié." };
   const run = deps.run ?? defaultRun;
@@ -112,7 +124,7 @@ export async function applyEarlyoom(line: string, deps: { run?: ExecFn; tmpRoot?
     const file = join(dir, 'earlyoom');
     writeFileSync(file, `${line}\n`, { mode: 0o600 });
     chmodSync(file, 0o600);
-    const r = await run('pkexec', ['/usr/bin/bash', '-c', EARLYOOM_APPLY_SCRIPT, 'proc-watch-earlyoom', file], { timeout: APPLY_TIMEOUT_MS });
+    const r = await run(PKEXEC, ['/usr/bin/bash', '-c', EARLYOOM_APPLY_SCRIPT, 'proc-watch-earlyoom', file], { timeout: APPLY_TIMEOUT_MS });
     return applyExitMessage(r.code, line);
   } catch (e) {
     if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return applyExitMessage(127, line);
