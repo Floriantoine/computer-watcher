@@ -253,7 +253,7 @@ describe('règle 1 ter : outils de dev lancés par Claude dans un projet', () =>
 
   test('claude → zsh -c → npx jest : jest et npx vont dans le projet, marqués lancés par Claude ; zsh reste dans Claude', () => {
     const groups = buildGroups(session(
-      proc({ pid: 30, name: 'zsh', ppid: 20, cwd: '/home/u/acme/backend', cmdline: '/usr/bin/zsh -c source ~/.claude/shell-snapshots/s.sh && npx jest' }),
+      proc({ pid: 30, name: 'zsh', ppid: 20, cwd: '/home/u/acme/backend', cmdline: '/usr/bin/zsh -c source /home/u/.claude/shell-snapshots/snapshot-zsh-1.sh 2>/dev/null || true && eval npx jest' }),
       proc({ pid: 31, name: 'npm exec jest', ppid: 30, cwd: '/home/u/acme/backend', cmdline: 'npm exec jest' }),
       proc({ pid: 32, name: 'node', ppid: 31, cwd: '/home/u/acme/backend', cmdline: 'node /home/u/acme/backend/node_modules/.bin/jest', rssKB: 300 * 1024 }),
     ), o);

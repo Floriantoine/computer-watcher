@@ -1,5 +1,6 @@
 // src/core/grouping/buildGroups.ts
 import type { Group, GroupKind, ProcInfo, ProcNode } from '../types';
+import { baseName, programIndex, splitArgs } from '../classify/argv';
 import { isMcpServer } from '../classify/rules';
 import { isUnderAny } from './claudeDirs';
 import { projectLabel } from './projectRoot';
@@ -70,9 +71,16 @@ export function buildGroups(procs: ProcInfo[], opts: GroupingOptions): Group[] {
     const r = trimSlash(root);
     return r !== '/' && r !== homeDir && !isUnderAny(r, dirs);
   };
-  /** Outil Claude : serveur MCP, ou programme pris dans ~/.claude (hook, outil de plugin). */
-  const isClaudeTool = (p: ProcInfo): boolean =>
-    isMcpServer(p.name, p.cmdline) || (dirs.length > 0 && p.cmdline.split(/\s+/).some((a) => isUnderAny(a, dirs)));
+  /**
+   * Outil Claude : serveur MCP, ou programme pris dans ~/.claude (hook, outil de plugin : `node ~/.claude/plugins/…/x.js`).
+   * Seul le programme significatif compte : les shells de l'outil Bash ont tous `source ~/.claude/shell-snapshots/…` en argument.
+   */
+  const isClaudeTool = (p: ProcInfo): boolean => {
+    if (isMcpServer(p.name, p.cmdline)) return true;
+    if (dirs.length === 0) return false;
+    const raw = splitArgs(p.cmdline);
+    return isUnderAny(raw[Math.max(0, programIndex(raw.map(baseName)))] ?? null, dirs);
+  };
   const claudeLaunched = new Set<number>();
 
   // 1. Sessions Claude : chaque claude de premier niveau et ses descendants, sauf les outils de dev lancés dans un vrai
