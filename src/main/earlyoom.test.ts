@@ -339,6 +339,13 @@ describe('earlyoomStatus', () => {
     expect(st).toMatchObject({ installed: true, version: '1.9.0', active: 'active' });
     expect(st.file?.converted).toEqual(['node.\\(vitest\\)']);
   });
+  test('earlyoom -v écrit sur stderr (1.9.0) → version lue', async () => {
+    const st = await earlyoomStatus({
+      run: async (cmd) => (cmd === '/usr/bin/earlyoom' ? { code: 0, stdout: '', stderr: 'earlyoom 1.9.0\n' } : { code: 0, stdout: 'active\n', stderr: '' }),
+      exists: () => true, read: () => null, env: {},
+    });
+    expect(st.version).toBe('1.9.0');
+  });
   test('is-active qui sort inactive (code 3) → inactive', async () => {
     const st = await earlyoomStatus({
       run: run({ '/usr/bin/earlyoom -v': { code: 0, stdout: 'earlyoom 1.9.0' }, 'systemctl is-active earlyoom': { code: 3, stdout: 'inactive\n' } }),

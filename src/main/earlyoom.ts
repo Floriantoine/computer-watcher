@@ -51,7 +51,7 @@ export async function earlyoomStatus(deps: {
       run(bin, ['-v'], { timeout: 5000 }).catch(() => null),
       run('systemctl', ['is-active', 'earlyoom'], { timeout: 5000 }).catch(() => null),
     ]);
-    version = v?.stdout.match(/earlyoom\s+v?(\d[\w.+-]*)/)?.[1] ?? null;
+    version = (v ? `${v.stdout}\n${v.stderr}` : '').match(/earlyoom\s+v?(\d[\w.+-]*)/)?.[1] ?? null;
     const s = a?.stdout.trim();
     if (s === 'active' || s === 'inactive' || s === 'failed') active = s;
   }
