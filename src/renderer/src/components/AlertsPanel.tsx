@@ -1,10 +1,10 @@
 import { Fragment, useMemo, useState } from 'react';
-import { BellRing, FolderOpen, Gauge, Settings2, Skull, TrendingUp, Unplug, type LucideIcon } from 'lucide-react';
+import { BellRing, FolderOpen, Gauge, Hourglass, Settings2, Skull, TrendingUp, Unplug, type LucideIcon } from 'lucide-react';
 import type { HistoryEvent } from '../../../core/types';
 import { alertsFrom, eventMarkers, formatInstant } from '../metrics';
 import { TmpDirsList } from './TmpDirsList';
 
-const ICONS: Record<string, LucideIcon> = { leak: TrendingUp, earlyoom_kill: Skull, pressure: Gauge, gap: Unplug, tmpfs: FolderOpen };
+const ICONS: Record<string, LucideIcon> = { leak: TrendingUp, earlyoom_kill: Skull, pressure: Gauge, gap: Unplug, tmpfs: FolderOpen, forecast: Hourglass };
 
 interface Props {
   events: HistoryEvent[] | undefined;

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AnimatePresence, MotionConfig, motion, useIsPresent } from 'motion/react';
 import { compileProtection } from '../../core/protection';
-import type { Category, Config, ConfigState, GroupSummary, InstanceSummary, KillResult, KillSignal, KillTarget, ProcNode, Snapshot } from '../../core/types';
-import { bulkDialogTitle, chunkTargets, runBulkKill, type BulkRequest } from './bulkKill';
+import type { Category, Config, ConfigState, Culprit, GroupSummary, InstanceSummary, KillResult, KillSignal, KillTarget, ProcNode, Snapshot } from '../../core/types';
+import { bulkDialogTitle, chunkTargets, freeBlockedReason, freeCandidates, runBulkKill, type BulkRequest, type Preset } from './bulkKill';
 import { AlertPopups, useAlertPopups } from './components/AlertPopups';
 import { BulkKillDialog } from './components/BulkKillDialog';
 import { ConfirmDialog } from './components/ConfirmDialog';
@@ -43,14 +43,19 @@ export function App() {
   // Kills d'instance en cours de préparation (garde contre le double clic).
   const instKillsInFlight = useRef(new Set<string>());
   // Dialogue de kill groupé ouvert, et envoi groupé en cours (un seul à la fois : garde contre le double clic).
-  const [bulk, setBulk] = useState<{ instances: InstanceSummary[]; launchersOf?: string; title: string } | null>(null);
+  const [bulk, setBulk] = useState<{ instances: InstanceSummary[]; launchersOf?: string; title: string; initialPreset?: Preset; ordered?: boolean } | null>(null);
+  // « Libérer de la mémoire » demandé (alerte de prévision, `--free`) : traité dès qu'un snapshot est là.
+  const [freeRequest, setFreeRequest] = useState(0);
+  const requestFree = useCallback(() => setFreeRequest((n) => n + 1), []);
+  const bulkRef = useRef(bulk);
+  bulkRef.current = bulk;
   const bulkInFlight = useRef(false);
 
   const live = useRef(new LiveBuffer());
   const alertPopups = useAlertPopups({
     alerts: configState?.config.alerts,
     onState: setConfigState,
-    onOpenAlert: (e) => setRoute({ view: 'metrics', at: e.ts }),
+    onOpenAlert: (e) => (e.type === 'forecast' ? requestFree() : setRoute({ view: 'metrics', at: e.ts })),
   });
 
   useEffect(() => {
@@ -186,6 +191,44 @@ export function App() {
     if (req.needsConfirm) setConfirm(req);
     else void sendKill(req.targets, 'SIGTERM');
   }
+
+  // « Ignorer 30 min » du pop-up de prévision : le service n'alerte plus pendant 30 min, puis le pop-up se ferme.
+  const closeAlert = alertPopups.close;
+  const snoozeForecast = useCallback(
+    (id: number) => {
+      void window.procWatch.forecast.snooze().then(() => closeAlert(id), () => {});
+    },
+    [closeAlert],
+  );
+  useEffect(() => {
+    window.procWatch.free.takePending().then((p) => p && requestFree(), () => {});
+    return window.procWatch.free.onFree(() => {
+      void window.procWatch.free.takePending().catch(() => {});
+      requestFree();
+    });
+  }, [requestFree]);
+  // Kill groupé pré-rempli : instances de projet, groupes qui grossissent (5 dernières minutes) d'abord. Rien n'est tué sans « Tuer (n) ».
+  useEffect(() => {
+    if (!freeRequest || !snapshot) return;
+    setFreeRequest(0);
+    const groups = snapshot.groups;
+    void window.procWatch.history
+      .culprits(Date.now())
+      .catch((): Culprit[] => [])
+      .then((cs) => {
+        const instances = freeCandidates(groups, cs.filter((c) => c.deltaKB > 0).map((c) => c.key));
+        if (instances.length === 0) {
+          pushToast('Rien à proposer : aucune instance de projet', 'info');
+          return;
+        }
+        const blocked = freeBlockedReason({ sending: bulkInFlight.current, dialogOpen: bulkRef.current !== null });
+        if (blocked) {
+          pushToast(blocked, 'info');
+          return;
+        }
+        setBulk({ instances, title: 'Libérer de la mémoire', initialPreset: 'free', ordered: true });
+      });
+  }, [freeRequest, snapshot]);
 
   const reducedEffects = !!configState?.config.ui.reducedEffects;
   useEffect(() => {
@@ -382,6 +425,8 @@ export function App() {
               title={bulk.title}
               instances={bulk.instances}
               launchersOf={bulk.launchersOf}
+              initialPreset={bulk.initialPreset}
+              ordered={bulk.ordered}
               liveKeys={liveKeys}
               pendingPids={pending.current}
               nameOf={nameOf}
@@ -397,6 +442,8 @@ export function App() {
           onCloseAll={alertPopups.closeAll}
           groupPresent={groupPresent}
           onNavigate={setRoute}
+          onFree={requestFree}
+          onSnooze={snoozeForecast}
         />
       </div>
     </MotionConfig>

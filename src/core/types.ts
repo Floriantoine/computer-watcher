@@ -239,7 +239,7 @@ export interface RecorderState {
   running: boolean; // statut écrit il y a moins de 3 intervalles
   status: RecorderStatus | null;
 }
-export interface RecorderStatus { pid: number; startedAt: number; lastSampleAt: number | null; lastError: string | null; earlyoomSource: 'ok' | 'unavailable'; dbSizeBytes: number; /** Avertissement non bloquant (ex. migration faite sans copie de sécurité) */ warning?: string | null; jobErrors?: Record<'tick' | 'minute' | 'earlyoom', string | null> }
+export interface RecorderStatus { pid: number; startedAt: number; lastSampleAt: number | null; lastError: string | null; earlyoomSource: 'ok' | 'unavailable'; dbSizeBytes: number; /** Avertissement non bloquant (ex. migration faite sans copie de sécurité) */ warning?: string | null; jobErrors?: Record<'tick' | 'minute' | 'earlyoom', string | null>; /** Prévision ② : en préparation (moins de 6 min depuis le démarrage), calculée, ou indisponible (moins de 5 échantillons sur 5 min) */ forecast?: 'warming' | 'ok' | 'unavailable' }
 
 /** État d'earlyoom vu par l'app (Réglages › earlyoom). */
 export interface EarlyoomStatus {

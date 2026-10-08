@@ -11,15 +11,19 @@ import { buildGroups } from '../core/grouping/buildGroups';
 import { claudeDirs } from '../core/grouping/claudeDirs';
 import { createProjectRootCache } from '../core/grouping/projectRootCache';
 import { DEV_TOOL } from '../core/grouping/rules';
+import { readEarlyoomThresholds } from '../core/forecast/earlyoom';
+import { MarginBuffer, SNOOZE_MS, alertText, forecast, stepAlert, type AlertState, type Forecast } from '../core/forecast/forecast';
+import { readSnooze, writeSnooze } from '../core/forecast/snooze';
 import { historyBackups, openHistoryDb } from '../core/history/db';
 import {
   detectGap, insertEvent, lastEventTs, lastSampleTs, parseEarlyoom, parseJournalLine, shouldRecordPressure, shouldRecordTmpfs, takeAppEvents,
   type TmpfsAlertState,
 } from '../core/history/events';
+import { queryCulprits } from '../core/history/queries';
 import { aggregateHour, aggregateMinute, clearAll, leakCandidates, purge } from '../core/history/maintenance';
 import { HistoryWriter } from '../core/history/writer';
-import { appEventsPath, clearRequestPath, dbPath, focusStatePath, statusPath } from '../core/paths';
-import type { RecorderConfig, RecorderStatus } from '../core/types';
+import { appEventsPath, clearRequestPath, dbPath, focusStatePath, forecastSnoozePath, statusPath } from '../core/paths';
+import type { RecorderConfig, RecorderStatus, SystemInfo } from '../core/types';
 import type { Notifier } from './notify';
 
 export interface RecorderDeps {
@@ -35,6 +39,8 @@ export interface RecorderDeps {
   launchApp?: (args: string[]) => void;
   /** Fichier d'état de focus de l'app (défaut : focusStatePath). */
   focusFile?: string;
+  /** Seuils d'earlyoom pour la prévision (défaut : /etc/default/earlyoom). */
+  earlyoomFile?: string;
 }
 
 export interface Recorder {
@@ -53,6 +59,8 @@ export interface Recorder {
    * Point d'entrée de la prévision ② : insérer l'événement `forecast`, puis appeler `notifyAlert`.
    */
   notifyAlert(e: AlertEvent): void;
+  /** Dernière prévision d'épuisement de la mémoire (null : pas assez d'échantillons). */
+  forecast(): Forecast | null;
 }
 
 const M = 60_000;
@@ -61,6 +69,13 @@ const H = 3600_000;
 const ORPHANS_EVERY = 10;
 /** Au-delà, une alerte n'est plus envoyée sur le bureau (rattrapage). */
 const MAX_DESKTOP_AGE_MS = 5 * M;
+/** Seuils d'earlyoom relus toutes les 10 min (Réglages › earlyoom peut les changer). */
+const THRESHOLDS_EVERY_MS = 10 * M;
+/** Écriture d'une alerte de prévision en échec : nouvel essai après 10 s, puis 20 s, 40 s… jusqu'à 5 min. */
+const RETRY_FIRST_MS = 10_000;
+const RETRY_MAX_MS = 5 * M;
+/** Sans prévision plus de 6 min après le démarrage : « indisponible » (moins de 5 échantillons en 5 min). */
+const FORECAST_WARMUP_MS = 6 * M;
 
 export function createRecorder(deps: RecorderDeps): Recorder {
   const now = deps.now ?? Date.now;
@@ -93,6 +108,16 @@ export function createRecorder(deps: RecorderDeps): Recorder {
   st.jobErrors = jobErrors;
   let lastPressureTs: number | null = null;
   let tmpfs: TmpfsAlertState = { lastTs: null, armed: false, belowSince: null };
+  // Prévision ② : marge glissante sur 6 min, seuils d'earlyoom, anti-répétition (30 min) et « Ignorer 30 min ».
+  const margins = new MarginBuffer();
+  let thresholds = readEarlyoomThresholds(deps.earlyoomFile);
+  let thresholdsAt = now();
+  let lastForecast: Forecast | null = null;
+  let forecastState: AlertState = { lastAlertAt: null, snoozedUntil: null, holdingSince: null };
+  /** Échec durable de l'écriture de l'alerte : délai courant (0 : pas d'échec), prochain essai, dernier message journalisé. */
+  let retryMs = 0;
+  let retryAt = 0;
+  const snoozeFile = () => forecastSnoozePath(deps.dataDir);
 
   const writeStatus = () => {
     try {
@@ -145,11 +170,16 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       lastDesktop.set(e.type, t);
       const launch = deps.launchApp;
       const { title, body } = desktopMessage(e);
+      // Prévision : « Libérer… » ouvre l'app sur l'alerte (kill groupé pré-rempli, rien sans confirmation) ; « Ignorer 30 min ».
+      const actions = e.type === 'forecast'
+        ? [...(launch ? [{ id: 'free', label: 'Libérer…' }] : []), { id: 'snooze', label: 'Ignorer 30 min' }]
+        : launch ? [{ id: 'open', label: 'Ouvrir' }] : [];
       notifier
-        .notify({ title, body, urgency: 'critical', actions: launch ? [{ id: 'open', label: 'Ouvrir' }] : [] })
+        .notify({ title, body, urgency: 'critical', actions })
         .then(
           (choice) => {
-            if (choice === 'open') launch?.([`--alert=${e.id}`]);
+            if (choice === 'open' || choice === 'free') launch?.([`--alert=${e.id}`]);
+            else if (choice === 'snooze') snooze(now() + SNOOZE_MS);
           },
           (err: unknown) => log(`notification: ${(err as Error)?.message ?? String(err)}`),
         );
@@ -160,9 +190,77 @@ export function createRecorder(deps: RecorderDeps): Recorder {
   const alert = (id: number, ts: number, type: AlertEvent['type'], groupKey: string | null, groupLabel: string | null, detail: Record<string, unknown>) =>
     notifyAlert({ id, ts, type, groupKey, groupLabel, detail });
 
+  /** « Ignorer 30 min » : retenu en mémoire et dans le fichier d'état (survit à un redémarrage du service). */
+  const snooze = (until: number) => {
+    forecastState = { ...forecastState, snoozedUntil: Math.max(forecastState.snoozedUntil ?? 0, until) };
+    try {
+      writeSnooze(snoozeFile(), forecastState.snoozedUntil!);
+    } catch (e) {
+      log(`prévision: « Ignorer » non enregistré : ${(e as Error).message}`);
+    }
+  };
+
+  /** Prévision après l'écriture du tick ; une erreur ici ne fait pas échouer le tick. */
+  const runForecast = (d: DatabaseSync, ts: number, system: SystemInfo) => {
+    try {
+      margins.push({ ts, memAvailableKB: system.memAvailableKB, swapFreeKB: system.swapFreeKB, memTotalKB: system.memTotalKB, swapTotalKB: system.swapTotalKB });
+      const f = forecast(margins.samples(), thresholds, ts);
+      lastForecast = f;
+      st.forecast = f ? 'ok' : ts - st.startedAt < FORECAST_WARMUP_MS ? 'warming' : 'unavailable';
+      const r = stepAlert(f, forecastState, ts);
+      if (!r.alert) {
+        forecastState = r.state;
+        return;
+      }
+      // pas d'alerte : la condition reste « tenue » (holdingSince), lastAlertAt inchangé
+      const holding = { ...forecastState, holdingSince: r.state.holdingSince };
+      // « Ignorer 30 min » cliqué dans le pop-up de l'app (fichier écrit par le main)
+      const fileSnooze = readSnooze(snoozeFile(), ts);
+      if (fileSnooze !== null && ts < fileSnooze) {
+        forecastState = { ...holding, snoozedUntil: Math.max(holding.snoozedUntil ?? 0, fileSnooze) };
+        return;
+      }
+      if (ts < retryAt) {
+        forecastState = holding;
+        return;
+      }
+      let id: number;
+      let detail: Record<string, unknown>;
+      try {
+        const top = queryCulprits(d, ts, { now: ts, detailHours: cfg.detailHours, intervalSec: cfg.intervalSec }, 5, 5)
+          .filter((c) => c.deltaKB > 0)
+          .slice(0, 2)
+          .map((c) => ({ key: c.key, label: c.label, deltaKB: c.deltaKB }));
+        const swapPct = system.swapTotalKB > 0 ? (100 * (system.swapTotalKB - system.swapFreeKB)) / system.swapTotalKB : null;
+        const { body } = alertText(f!, top, swapPct);
+        detail = {
+          etaMin: Math.round(f!.etaMin! * 10) / 10, marginKB: Math.round(f!.marginKB), slopeKBPerMin: Math.round(f!.slopeKBPerMin),
+          decliningMinutes: f!.decliningMinutes, top, body,
+        };
+        id = insertEvent(d, ts, 'forecast', null, detail);
+      } catch (e) {
+        // base verrouillée ou pleine : nouvel essai espacé, une ligne de journal par changement de délai
+        const next = retryMs ? Math.min(retryMs * 2, RETRY_MAX_MS) : RETRY_FIRST_MS;
+        if (next !== retryMs) log(`prévision: alerte non enregistrée (${(e as Error).message}), nouvel essai dans ${Math.round(next / 1000)} s`);
+        retryMs = next;
+        retryAt = ts + retryMs;
+        forecastState = holding;
+        return;
+      }
+      if (retryMs) log("prévision: enregistrement des alertes rétabli");
+      retryMs = 0;
+      retryAt = 0;
+      forecastState = r.state;
+      alert(id, ts, 'forecast', null, null, detail);
+    } catch (e) {
+      log(`prévision: ${(e as Error).message}`);
+    }
+  };
+
   return {
     config: () => cfg,
     notifyAlert,
+    forecast: () => lastForecast,
     status: () => ({ ...st }),
 
     start() {
@@ -196,6 +294,8 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       lastHour = Math.floor(lastMinute / H) * H;
       lastPressureTs = lastEventTs(db, 'pressure');
       tmpfs = { lastTs: lastEventTs(db, 'tmpfs'), armed: false, belowSince: null };
+      // pas de nouvelle alerte de prévision juste après un redémarrage du service
+      forecastState = { lastAlertAt: lastEventTs(db, 'forecast'), snoozedUntil: readSnooze(snoozeFile(), now()), holdingSince: null };
       writeStatus();
     },
 
@@ -228,6 +328,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
           alert(insertEvent(db, ts, 'tmpfs', null, detail), ts, 'tmpfs', null, null, detail);
         }
         tmpfs = r.state;
+        runForecast(db, ts, system);
         st.lastSampleAt = ts;
         ok('tick');
         writeStatus();
@@ -251,6 +352,11 @@ export function createRecorder(deps: RecorderDeps): Recorder {
           firstError ??= `${name}: ${(e as Error).message ?? String(e)}`;
         }
       };
+      step('seuils earlyoom', () => {
+        if (t - thresholdsAt < THRESHOLDS_EVERY_MS && t >= thresholdsAt) return;
+        thresholds = readEarlyoomThresholds(deps.earlyoomFile);
+        thresholdsAt = t;
+      });
       step('clear-request', () => {
         if (existsSync(clearRequestPath(deps.dataDir))) {
           clearAll(d);

@@ -194,3 +194,10 @@ test('événement tmpfs : marqueur fuchsia « Fichiers en mémoire : 7,8 Go », 
   expect(eventMarkers([e])).toEqual([{ ts: 1, type: 'tmpfs', color: '#e879f9', label: 'Fichiers en mémoire : 7,8 Go' }]);
   expect(alertsFrom([e])).toEqual([e]);
 });
+
+test('eventMarkers : prévision ② « Épuisement prévu dans ~8 min », orange ; alertsFrom la garde', () => {
+  const e = { ts: 5, type: 'forecast', groupKey: null, groupLabel: null, detail: { etaMin: 7.6 } };
+  expect(eventMarkers([e])[0]).toMatchObject({ label: 'Épuisement prévu dans ~8 min', color: '#ffb547' });
+  expect(eventMarkers([{ ...e, detail: { etaMin: 0.3 } }])[0]!.label).toBe("Épuisement prévu dans moins d'une minute");
+  expect(alertsFrom([e])).toHaveLength(1);
+});
