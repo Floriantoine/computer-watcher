@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { DEFAULT_THRESHOLDS } from './earlyoom';
 import {
-  ALERT_EVERY_MS, MarginBuffer, alertText, forecast, formatGo, marginKB, shouldAlert, type AlertState, type MarginSample,
+  ALERT_EVERY_MS, MarginBuffer, alertCondition, alertText, floorKB, forecast, formatGo, marginKB, stepAlert, type AlertState, type MarginSample,
 } from './forecast';
 
 const GO = 1024 * 1024;
@@ -27,7 +27,7 @@ function ramp(end: number, start: number, perMin: number, minutes: number, every
 }
 
 const NOW = 100 * MIN;
-const fresh: AlertState = { lastAlertAt: null, snoozedUntil: null };
+const fresh: AlertState = { lastAlertAt: null, snoozedUntil: null, holdingSince: null };
 
 describe('marginKB', () => {
   test('swap libre sous son seuil : la marge mémoire décide', () => {
@@ -44,77 +44,113 @@ describe('marginKB', () => {
   });
 });
 
-describe('forecast et shouldAlert', () => {
+describe('forecast et alertCondition', () => {
   test('swap à 82 % utilisé, RAM libre à 50 %, stable 5 min → pas d’alerte (Review Focus 1)', () => {
     const samples = ramp(NOW, 0, 0, 6).map((s) => ({ ...s, memAvailableKB: 16 * GO, swapFreeKB: 0.18 * 20 * GO }));
     const f = forecast(samples, T, NOW);
     expect(f).not.toBeNull();
     expect(f!.etaMin).toBeNull();
-    expect(shouldAlert(f, fresh, NOW)).toBe(false);
+    expect(alertCondition(f)).toBe(false);
   });
 
-  test('baisse régulière de 1 Go/min depuis 6 Go → ETA ≈ 6 min, 5 minutes en baisse, alerte', () => {
-    // la marge atteint 6 Go à NOW : départ 12 Go six minutes plus tôt
-    const f = forecast(ramp(NOW, 12 * GO, -GO, 6), T, NOW)!;
-    expect(f.etaMin!).toBeGreaterThan(5.8);
-    expect(f.etaMin!).toBeLessThan(6.2);
+  test('plancher = max(2 Gio, 10 % de la RAM)', () => {
+    expect(floorKB(32 * GO)).toBeCloseTo(3.2 * GO, 0);
+    expect(floorKB(8 * GO)).toBe(2 * GO);
+  });
+
+  test('baisse régulière de 1 Go/min jusqu’à 3 Go (sous le plancher) → ETA ≈ 3 min, 5 minutes en baisse, condition vraie', () => {
+    const f = forecast(ramp(NOW, 9 * GO, -GO, 6), T, NOW)!;
+    expect(f.etaMin!).toBeGreaterThan(2.8);
+    expect(f.etaMin!).toBeLessThan(3.2);
     expect(f.decliningMinutes).toBe(5);
     expect(f.slopeKBPerMin).toBeCloseTo(-GO, -2);
-    expect(shouldAlert(f, fresh, NOW)).toBe(true);
+    expect(f.floorKB).toBeCloseTo(3.2 * GO, 0);
+    expect(alertCondition(f)).toBe(true);
   });
 
-  test('pic court : stable 4 min 20 s puis −3 Go en 40 s → pas d’alerte (Review Focus 1)', () => {
+  test('même baisse mais marge encore au-dessus du plancher (6 Go) → condition fausse malgré ETA ≈ 6 min', () => {
+    const f = forecast(ramp(NOW, 12 * GO, -GO, 6), T, NOW)!;
+    expect(f.etaMin!).toBeLessThan(10);
+    expect(alertCondition(f)).toBe(false);
+  });
+
+  test('baisse de 100 Mo/min (sous la baisse minimale de 128 Mio/min), marge sous le plancher → condition fausse', () => {
+    const f = forecast(ramp(NOW, GO / 2 + 600 * 1024, -100 * 1024, 6), T, NOW)!;
+    expect(f.etaMin!).toBeLessThan(10);
+    expect(f.decliningMinutes).toBe(0);
+    expect(alertCondition(f)).toBe(false);
+  });
+
+  test('pic court : stable 4 min 20 s puis −3 Go en 40 s → condition fausse (Review Focus 1)', () => {
     const stable = ramp(NOW - 40_000, 4 * GO, 0, 5 + 20 / 60);
     const spike = ramp(NOW, 4 * GO, (-3 * GO) / (40 / 60), 40 / 60).slice(1);
     const f = forecast([...stable, ...spike], T, NOW)!;
-    expect(f.etaMin).not.toBeNull(); // la pente est négative…
-    expect(f.etaMin!).toBeLessThan(10); // … et l'ETA brute sous 10 min
-    expect(f.decliningMinutes).toBeLessThanOrEqual(1);
-    expect(shouldAlert(f, fresh, NOW)).toBe(false);
+    expect(f.etaMin!).toBeLessThan(10); // ETA brute sous 10 min et marge sous le plancher…
+    expect(f.marginKB).toBeLessThan(f.floorKB);
+    expect(f.decliningMinutes).toBeLessThanOrEqual(1); // … mais une seule minute en baisse
+    expect(alertCondition(f)).toBe(false);
   });
 
-  test('même pic suivi d’un retour → pas d’alerte', () => {
-    const end = NOW;
-    const samples = ramp(end, 4 * GO, 0, 6).map((s) => (s.ts > end - 80_000 && s.ts <= end - 40_000 ? sample(s.ts, 1 * GO) : s));
-    expect(shouldAlert(forecast(samples, T, end), fresh, end)).toBe(false);
-  });
-
-  test('pic de 2 min (vitest long) → au plus 2 minutes en baisse, pas d’alerte', () => {
-    const stable = ramp(NOW - 2 * MIN, 6 * GO, 0, 4);
-    const fall = ramp(NOW, 6 * GO, -2 * GO, 2).slice(1);
+  test('pic de 2 min → au plus 2 minutes en baisse, condition fausse', () => {
+    const stable = ramp(NOW - 2 * MIN, 4 * GO, 0, 4);
+    const fall = ramp(NOW, 4 * GO, -1.5 * GO, 2).slice(1);
     const f = forecast([...stable, ...fall], T, NOW)!;
     expect(f.decliningMinutes).toBeLessThanOrEqual(2);
-    expect(shouldAlert(f, fresh, NOW)).toBe(false);
+    expect(alertCondition(f)).toBe(false);
   });
 
-  test('baisse lente (−100 Mo/min, 8 Go) → ETA ~80 min, pas d’alerte', () => {
-    const f = forecast(ramp(NOW, 8 * GO + 600 * 1024, -100 * 1024, 6), T, NOW)!;
-    expect(f.etaMin!).toBeGreaterThan(70);
-    expect(shouldAlert(f, fresh, NOW)).toBe(false);
-  });
-
-  test('marge qui monte → etaMin null', () => {
+  test('marge qui monte → etaMin null ; marge déjà nulle et en baisse → etaMin 0', () => {
     expect(forecast(ramp(NOW, 2 * GO, GO, 6), T, NOW)!.etaMin).toBeNull();
-  });
-
-  test('marge déjà nulle et en baisse → etaMin 0', () => {
     expect(forecast(ramp(NOW, GO, -GO, 6), T, NOW)!.etaMin).toBe(0);
   });
 
-  test('moins de 4 min de données, ou 11 échantillons → null', () => {
+  test('moins de 4 min de données → null ; moins de 5 échantillons → null', () => {
     expect(forecast(ramp(NOW, 12 * GO, -GO, 3.5), T, NOW)).toBeNull();
-    expect(forecast(ramp(NOW, 12 * GO, -GO, 5, 30).slice(0, 11), T, NOW)).toBeNull();
-    expect(shouldAlert(null, fresh, NOW)).toBe(false);
+    expect(forecast(ramp(NOW, 12 * GO, -GO, 5, 75).slice(-4), T, NOW)).toBeNull();
+    expect(alertCondition(null)).toBe(false);
   });
 
-  test('anti-répétition : 30 min entre deux alertes ; « Ignorer 30 min » repousse', () => {
-    const f = forecast(ramp(NOW, 12 * GO, -GO, 6), T, NOW)!;
-    const t = NOW;
-    expect(shouldAlert(f, { lastAlertAt: t, snoozedUntil: null }, t + 29 * MIN)).toBe(false);
-    expect(shouldAlert(f, { lastAlertAt: t, snoozedUntil: null }, t + ALERT_EVERY_MS)).toBe(true);
-    const snoozed = { lastAlertAt: null, snoozedUntil: t + 40 * MIN };
-    expect(shouldAlert(f, snoozed, t + 39 * MIN)).toBe(false);
-    expect(shouldAlert(f, snoozed, t + 40 * MIN)).toBe(true);
+  test('intervalle long (60 s) : 6 échantillons en 5 min suffisent', () => {
+    const f = forecast(ramp(NOW, 9 * GO, -GO, 6, 60), T, NOW)!;
+    expect(f).not.toBeNull();
+    expect(f.decliningMinutes).toBe(5);
+    expect(alertCondition(f)).toBe(true);
+  });
+});
+
+describe('stepAlert : condition tenue 30 s, anti-répétition, « Ignorer 30 min »', () => {
+  const f = forecast(ramp(NOW, 9 * GO, -GO, 6), T, NOW)!;
+  const calm = forecast(ramp(NOW, 16 * GO, 0, 6), T, NOW);
+
+  test('une seule évaluation vraie ne suffit pas ; vraie encore 30 s plus tard → alerte', () => {
+    let r = stepAlert(f, fresh, NOW);
+    expect(r.alert).toBe(false);
+    r = stepAlert(f, r.state, NOW + 25_000);
+    expect(r.alert).toBe(false);
+    r = stepAlert(f, r.state, NOW + 30_000);
+    expect(r.alert).toBe(true);
+    expect(r.state.lastAlertAt).toBe(NOW + 30_000);
+  });
+
+  test('condition interrompue entre deux évaluations → le compte repart', () => {
+    let r = stepAlert(f, fresh, NOW);
+    r = stepAlert(calm, r.state, NOW + 20_000);
+    r = stepAlert(f, r.state, NOW + 35_000);
+    expect(r.alert).toBe(false);
+    r = stepAlert(f, r.state, NOW + 65_000);
+    expect(r.alert).toBe(true);
+  });
+
+  test('anti-répétition : 30 min entre deux alertes', () => {
+    const held = { lastAlertAt: NOW, snoozedUntil: null, holdingSince: NOW - MIN };
+    expect(stepAlert(f, held, NOW + 29 * MIN).alert).toBe(false);
+    expect(stepAlert(f, held, NOW + ALERT_EVERY_MS).alert).toBe(true);
+  });
+
+  test('« Ignorer 30 min » repousse', () => {
+    const snoozed = { lastAlertAt: null, snoozedUntil: NOW + 40 * MIN, holdingSince: NOW - MIN };
+    expect(stepAlert(f, snoozed, NOW + 39 * MIN).alert).toBe(false);
+    expect(stepAlert(f, snoozed, NOW + 40 * MIN).alert).toBe(true);
   });
 });
 
@@ -128,7 +164,7 @@ test('MarginBuffer : garde 6 min, ordre préservé', () => {
 });
 
 describe('textes', () => {
-  const f = (etaMin: number) => ({ marginKB: 0, slopeKBPerMin: -1, etaMin, decliningMinutes: 5, spanMin: 5 });
+  const f = (etaMin: number) => ({ marginKB: 0, floorKB: 0, slopeKBPerMin: -1, etaMin, decliningMinutes: 5, spanMin: 5 });
   test('titre arrondi à la minute ; moins d’une minute', () => {
     expect(alertText(f(7.6), [], 82).title).toBe('Mémoire épuisée dans ~8 min');
     expect(alertText(f(0.4), [], 82).title).toBe("Mémoire épuisée dans moins d'une minute");
