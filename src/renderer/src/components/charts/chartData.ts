@@ -14,6 +14,10 @@ export interface ChartSeries {
   stacked?: boolean;
   /** Aire en dégradé sous la courbe (toujours pour une série empilée). Défaut : vrai. */
   fill?: boolean;
+  /** Ligne seule mise au premier plan (pleine opacité) au lieu d'être en retrait. */
+  emphasis?: boolean;
+  /** Pointillés uPlot, ex. [4, 4]. */
+  dash?: number[];
   /** Valeurs affichées dans l'info-bulle si elles diffèrent de `values` (séries cumulées). */
   raw?: (number | null)[];
 }

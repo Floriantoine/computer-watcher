@@ -119,9 +119,10 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
     const series: ChartSeries[] = r.layers.map((l, i) => ({
       label: l.label,
       values: l.values,
-      raw: l.raw,
       tone: l.key === '__rest' ? REST_TONE : LAYER_TONES[i % LAYER_TONES.length],
-      stacked: true,
+      fill: false,
+      emphasis: true,
+      dash: l.key === '__rest' ? [4, 4] : undefined,
     }));
     return { ts: r.ts, series };
   }, [data?.groups, system]);

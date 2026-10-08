@@ -37,7 +37,7 @@ const MARKER_HIT_PX = 6;
 
 /** Clé de structure : seule sa modification recrée l'instance uPlot ; les données passent par setData. */
 function structureKey(series: ChartSeries[]): string {
-  return series.map((s) => [s.label, s.tone, s.axis ?? 'left', s.stacked ? 1 : 0, s.fill === false ? 0 : 1].join('|')).join('§');
+  return series.map((s) => [s.label, s.tone, s.axis ?? 'left', s.stacked ? 1 : 0, s.fill === false ? 0 : 1, s.emphasis ? 1 : 0, s.dash?.join(',') ?? ''].join('|')).join('§');
 }
 
 function span(u: uPlot): number {
@@ -118,8 +118,9 @@ export function TimeChart({ ts, series, height, format, markers, onCursor, onSel
             label: s.label,
             scale: s.axis ?? 'left',
             // Une ligne seule (sans aire) reste en retrait pour ne pas couvrir les aires.
-            stroke: area ? c.line : rgba(c.line, 0.75),
-            width: area ? 1.5 : 1.25,
+            stroke: area || s.emphasis ? c.line : rgba(c.line, 0.75),
+            width: area ? 1.5 : s.emphasis ? 1.75 : 1.25,
+            dash: s.dash,
             fill: area ? gradientFill(c.fill, s.stacked ? 0.5 : 0.42, s.stacked ? 0.08 : 0.02) : undefined,
             points: { show: false },
             spanGaps: false,
