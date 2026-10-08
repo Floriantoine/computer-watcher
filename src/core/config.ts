@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { DEFAULT_CLASSIFY, DEFAULT_CONFIG, DEFAULT_RECORDER, DEFAULT_UI } from './defaults';
 import { inBounds, RECORDER_BOUNDS, type RecorderNumField } from './recorderBounds';
 import { isCategory } from './classify/categories';
+import { validateAlerts } from './alerts';
 import type { Category, ClassifyConfig, Config, RecorderConfig, UiConfig } from './types';
 
 export { DEFAULT_CONFIG };
@@ -84,7 +85,9 @@ export function validateConfig(raw: unknown): Config | null {
   if (!ui) return null;
   const classify = validateClassify(r.classify);
   if (!classify) return null;
-  return { version: 1, protected: [...r.protected], othersThreshold: { memMB: t.memMB, cpuPercent: t.cpuPercent }, recorder, ui, classify };
+  const alerts = validateAlerts(r.alerts);
+  if (!alerts) return null;
+  return { version: 1, protected: [...r.protected], othersThreshold: { memMB: t.memMB, cpuPercent: t.cpuPercent }, recorder, ui, classify, alerts };
 }
 
 export function saveConfig(dir: string, config: Config): void {

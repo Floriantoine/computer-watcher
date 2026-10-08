@@ -1,7 +1,8 @@
 // src/recorder/recorder.ts
-import { existsSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { cpus, homedir } from 'node:os';
 import type { DatabaseSync } from 'node:sqlite';
+import { alertMessage, appFocused, desktopAllowed, parseFocusState, type AlertEvent, type AlertsConfig } from '../core/alerts';
 import { CpuTracker } from '../core/collector/cpuTracker';
 import { readProcesses } from '../core/collector/readProcesses';
 import { readSystem } from '../core/collector/readSystem';
@@ -17,8 +18,9 @@ import {
 } from '../core/history/events';
 import { aggregateHour, aggregateMinute, clearAll, leakCandidates, purge } from '../core/history/maintenance';
 import { HistoryWriter } from '../core/history/writer';
-import { appEventsPath, clearRequestPath, dbPath, statusPath } from '../core/paths';
+import { appEventsPath, clearRequestPath, dbPath, focusStatePath, statusPath } from '../core/paths';
 import type { RecorderConfig, RecorderStatus } from '../core/types';
+import type { Notifier } from './notify';
 
 export interface RecorderDeps {
   dataDir: string;
@@ -27,6 +29,10 @@ export interface RecorderDeps {
   now?: () => number;
   cpuCount?: number;
   log?: (msg: string) => void;
+  /** Notifications du bureau (absent : aucune). */
+  notifier?: Notifier;
+  /** Lance ou réveille l'app avec ces arguments (bouton « Ouvrir ») ; absent : notifications sans bouton. */
+  launchApp?: (args: string[]) => void;
 }
 
 export interface Recorder {
@@ -39,12 +45,22 @@ export interface Recorder {
   stop(): void;
   status(): RecorderStatus;
   config(): RecorderConfig;
+  /**
+   * Notification du bureau pour une alerte déjà enregistrée (id = id de l'événement) : selon son canal, sauf si l'app est
+   * au premier plan, au plus une par type par `desktopMinIntervalMin`. Ne bloque jamais (promesse non attendue).
+   * Point d'entrée de la prévision ② : insérer l'événement `forecast`, puis appeler `notifyAlert`.
+   */
+  notifyAlert(e: AlertEvent): void;
 }
 
 const M = 60_000;
 const H = 3600_000;
 /** Le nettoyage des processus/groupes orphelins (parcours complet) ne tourne qu'une minute sur 10. */
 const ORPHANS_EVERY = 10;
+/** Au-delà, une alerte n'est plus envoyée sur le bureau (rattrapage). */
+const MAX_DESKTOP_AGE_MS = 5 * M;
+/** Attente d'un clic sur « Ouvrir » (notify-send --action attend la fermeture de la notification). */
+const NOTIFY_WAIT_MS = 30 * M;
 
 export function createRecorder(deps: RecorderDeps): Recorder {
   const now = deps.now ?? Date.now;
@@ -57,7 +73,11 @@ export function createRecorder(deps: RecorderDeps): Recorder {
   const wantCwd = (name: string) => DEV_TOOL.test(name);
   // Outils Claude détachés : rangés dans Claude (seuls les outils de dev ont leur dossier de travail lu ici).
   const claudeConfigDirs = claudeDirs();
-  let cfg: RecorderConfig = loadConfig(deps.configDir).config.recorder;
+  const initial = loadConfig(deps.configDir).config;
+  let cfg: RecorderConfig = initial.recorder;
+  let alertsCfg: AlertsConfig = initial.alerts;
+  /** Dernière notification du bureau par type (anti-spam). */
+  const lastDesktop = new Map<string, number>();
   let db: DatabaseSync | null = null;
   let writer: HistoryWriter | null = null;
   let lastMinute = 0;
@@ -104,8 +124,45 @@ export function createRecorder(deps: RecorderDeps): Recorder {
     writeStatus();
   };
 
+  const readFocus = () => {
+    try {
+      return parseFocusState(readFileSync(focusStatePath(deps.dataDir), 'utf8'));
+    } catch {
+      return null;
+    }
+  };
+
+  const notifyAlert = (e: AlertEvent): void => {
+    const notifier = deps.notifier;
+    if (!notifier) return;
+    try {
+      if (alertsCfg.channels[e.type] !== 'both') return;
+      const t = now();
+      // ligne de journal rattrapée en retard : l'alerte reste dans l'app (pop-up), pas sur le bureau
+      if (t - e.ts > MAX_DESKTOP_AGE_MS) return;
+      if (appFocused(readFocus(), t)) return; // l'app au premier plan montre déjà le pop-up
+      if (!desktopAllowed(lastDesktop, e.type, t, alertsCfg.desktopMinIntervalMin)) return;
+      lastDesktop.set(e.type, t);
+      const launch = deps.launchApp;
+      const { title, body } = alertMessage(e);
+      notifier
+        .notify({ title, body, urgency: 'critical', actions: launch ? [{ id: 'open', label: 'Ouvrir' }] : [], waitMs: NOTIFY_WAIT_MS })
+        .then(
+          (choice) => {
+            if (choice === 'open') launch?.([`--alert=${e.id}`]);
+          },
+          (err: unknown) => log(`notification: ${(err as Error)?.message ?? String(err)}`),
+        );
+    } catch (err) {
+      log(`notification: ${(err as Error).message}`);
+    }
+  };
+  const alert = (id: number, ts: number, type: AlertEvent['type'], groupKey: string | null, groupLabel: string | null, detail: Record<string, unknown>) =>
+    notifyAlert({ id, ts, type, groupKey, groupLabel, detail });
+
   return {
     config: () => cfg,
+    notifyAlert,
     status: () => ({ ...st }),
 
     start() {
@@ -159,13 +216,17 @@ export function createRecorder(deps: RecorderDeps): Recorder {
         const cpuPercent = procs.reduce((s, p) => s + p.cpuPercent, 0) / ncpu;
         writer.writeTick({ ts, system, cpuPercent, groups, procs }, cfg);
         if (shouldRecordPressure(system.psiSome10, lastPressureTs, ts)) {
-          insertEvent(db, ts, 'pressure', null, { psi: system.psiSome10 });
+          const detail = { psi: system.psiSome10 };
+          alert(insertEvent(db, ts, 'pressure', null, detail), ts, 'pressure', null, null, detail);
           lastPressureTs = ts;
         }
         const thresholdKB = cfg.tmpfsAlertMB * 1024;
         const r = shouldRecordTmpfs(system.shmemKB, thresholdKB, tmpfs, ts);
         // état retenu seulement après l'écriture : un échec est retenté au tick suivant
-        if (r.record) insertEvent(db, ts, 'tmpfs', null, { shmemKB: system.shmemKB, thresholdKB });
+        if (r.record) {
+          const detail = { shmemKB: system.shmemKB, thresholdKB };
+          alert(insertEvent(db, ts, 'tmpfs', null, detail), ts, 'tmpfs', null, null, detail);
+        }
         tmpfs = r.state;
         st.lastSampleAt = ts;
         ok('tick');
@@ -229,7 +290,8 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       });
       step('fuites', () => {
         for (const l of leakCandidates(d, t, cfg.leakMinMinutes, cfg.leakMinGrowthMB)) {
-          insertEvent(d, t, 'leak', l.key, { growthKB: l.growthKB, memKB: l.memKB, minutes: cfg.leakMinMinutes });
+          const detail = { growthKB: l.growthKB, memKB: l.memKB, minutes: cfg.leakMinMinutes };
+          alert(insertEvent(d, t, 'leak', l.key, detail), t, 'leak', l.key, l.label, detail);
         }
       });
       step('purge', () => {
@@ -249,7 +311,9 @@ export function createRecorder(deps: RecorderDeps): Recorder {
     },
 
     reloadConfig() {
-      cfg = loadConfig(deps.configDir).config.recorder;
+      const c = loadConfig(deps.configDir).config;
+      cfg = c.recorder;
+      alertsCfg = c.alerts;
     },
 
     setEarlyoomSource(s) {
@@ -262,13 +326,15 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       const j = parseJournalLine(line);
       const k = j && parseEarlyoom(j.message);
       if (!j || !k) return;
+      let id: number;
       try {
-        insertEvent(db, j.ts, 'earlyoom_kill', null, k);
+        id = insertEvent(db, j.ts, 'earlyoom_kill', null, k);
       } catch (e) {
         fail('earlyoom', 'earlyoom', e);
         return;
       }
       ok('earlyoom');
+      alert(id, j.ts, 'earlyoom_kill', null, null, k);
     },
 
     stop() {

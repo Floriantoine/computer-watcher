@@ -1,0 +1,75 @@
+import { EventEmitter } from 'node:events';
+import { describe, expect, test, vi } from 'vitest';
+import { appLauncher, appLaunchCommand, launchApp } from './launchApp';
+
+const onDisk = (paths: string[]) => (p: string): boolean => paths.includes(p);
+
+describe('appLauncher', () => {
+  test('AppImage : le fichier AppImage, sans argument', () => {
+    expect(appLauncher({ appImage: '/home/u/proc-watch.AppImage', execPath: '/tmp/.mount_x/proc-watch', recorderScript: undefined, uid: 1000, exists: onDisk(['/home/u/proc-watch.AppImage']) }))
+      .toEqual({ cmd: '/home/u/proc-watch.AppImage', args: [] });
+  });
+
+  test('clone (electron-vite preview) : electron + racine de l’app (out/main/recorder.js → /x)', () => {
+    expect(appLauncher({ execPath: '/x/node_modules/electron/dist/electron', recorderScript: '/x/out/main/recorder.js', uid: 1000, exists: onDisk(['/x/node_modules/electron/dist/electron', '/x/out/main/index.js']) }))
+      .toEqual({ cmd: '/x/node_modules/electron/dist/electron', args: ['/x'] });
+  });
+
+  test('paquet .deb (app.asar) : le binaire empaqueté seul', () => {
+    expect(appLauncher({ execPath: '/opt/proc-watch/proc-watch', recorderScript: '/opt/proc-watch/resources/app.asar/out/main/recorder.js', uid: 1000, exists: onDisk(['/opt/proc-watch/proc-watch']) }))
+      .toEqual({ cmd: '/opt/proc-watch/proc-watch', args: [] });
+  });
+
+  test.each([
+    ['root : jamais de lancement (autre utilisateur)', { execPath: '/x/electron', recorderScript: '/x/out/main/recorder.js', uid: 0, exists: (): boolean => true }],
+    ['app non construite', { execPath: '/x/electron', recorderScript: '/x/out/main/recorder.js', uid: 1000, exists: onDisk(['/x/electron']) }],
+    ['script inconnu', { execPath: '/x/electron', recorderScript: undefined, uid: 1000, exists: (): boolean => true }],
+    ['AppImage disparue', { appImage: '/gone.AppImage', execPath: '/x/electron', recorderScript: undefined, uid: 1000, exists: (): boolean => false }],
+  ])('introuvable → null : %s', (_l, p) => {
+    expect(appLauncher(p)).toBeNull();
+  });
+});
+
+describe('appLaunchCommand', () => {
+  const l = { cmd: '/x/electron', args: ['/x'] };
+  test('avec systemd-run : unité transitoire de l’utilisateur, hors du cgroup du service', () => {
+    expect(appLaunchCommand(l, ['--alert=42'], '/usr/bin/systemd-run')).toEqual({
+      cmd: '/usr/bin/systemd-run', args: ['--user', '--collect', '--quiet', '--', '/x/electron', '/x', '--alert=42'],
+    });
+  });
+  test('sans systemd-run : lancement direct', () => {
+    expect(appLaunchCommand(l, ['--alert=42'], null)).toEqual({ cmd: '/x/electron', args: ['/x', '--alert=42'] });
+  });
+});
+
+describe('launchApp', () => {
+  const fakeSpawn = () => {
+    const child = Object.assign(new EventEmitter(), { unref: vi.fn() });
+    const spawn = vi.fn(() => child);
+    return { spawn, child };
+  };
+
+  test('détaché, sans ELECTRON_RUN_AS_NODE, unref', () => {
+    const { spawn, child } = fakeSpawn();
+    launchApp({ cmd: '/x/electron', args: ['/x', '--alert=1'] }, { spawn: spawn as never, env: { ELECTRON_RUN_AS_NODE: '1', HOME: '/home/u' }, log: () => {} });
+    expect(spawn).toHaveBeenCalledWith('/x/electron', ['/x', '--alert=1'], { detached: true, stdio: 'ignore', env: { HOME: '/home/u' } });
+    expect(child.unref).toHaveBeenCalled();
+  });
+
+  test('erreur de spawn → journal, pas d’exception', () => {
+    const { spawn, child } = fakeSpawn();
+    const log = vi.fn();
+    launchApp({ cmd: '/x/electron', args: [] }, { spawn: spawn as never, env: {}, log });
+    expect(() => child.emit('error', new Error('ENOENT'))).not.toThrow();
+    expect(log).toHaveBeenCalledTimes(1);
+  });
+
+  test('spawn qui lève → journal, pas d’exception', () => {
+    const log = vi.fn();
+    const spawn = vi.fn(() => {
+      throw new Error('EACCES');
+    });
+    expect(() => launchApp({ cmd: '/x/electron', args: [] }, { spawn: spawn as never, env: {}, log })).not.toThrow();
+    expect(log).toHaveBeenCalledTimes(1);
+  });
+});

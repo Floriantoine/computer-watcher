@@ -141,10 +141,12 @@ export function takeAppEvents(path: string): { events: AppEvent[]; ack: () => vo
   };
 }
 
-export function insertEvent(db: DatabaseSync, ts: number, type: EventType, groupKey: string | null, detail: object): void {
-  db.prepare('INSERT INTO events(ts, type, group_id, detail) VALUES (?, ?, (SELECT id FROM groups WHERE key = ?), ?)').run(
+/** Renvoie l'id de l'événement (sert à `--alert=<id>`). */
+export function insertEvent(db: DatabaseSync, ts: number, type: EventType, groupKey: string | null, detail: object): number {
+  const r = db.prepare('INSERT INTO events(ts, type, group_id, detail) VALUES (?, ?, (SELECT id FROM groups WHERE key = ?), ?)').run(
     ts, type, groupKey, JSON.stringify(detail),
   );
+  return Number(r.lastInsertRowid);
 }
 
 export function lastSampleTs(db: DatabaseSync): number | null {

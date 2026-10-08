@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
+import type { AlertEvent } from '../core/alerts';
 import type {
   Category, Config, ConfigState, Culprit, InstanceTargets, ProcInfo, Watch, GroupHistory, GroupsHistory, HistoryEvent, KillResult, KillTarget, KillSignal, ProcsHistory, RangePreset,
   RecorderState, Snapshot, SystemSeries, TimeRange, TmpUsage, TopOptions, TopResult,
@@ -47,6 +48,23 @@ const api = {
     culprits: (ts: number): Promise<Culprit[]> => ipcRenderer.invoke('history:culprits', ts),
     top: (r: RangePreset | TimeRange, o?: TopOptions): Promise<TopResult> => ipcRenderer.invoke('history:top', r, o),
     events: (r: RangePreset | TimeRange): Promise<HistoryEvent[]> => ipcRenderer.invoke('history:events', r),
+  },
+  alerts: {
+    /** Alertes non vues (après `alerts.seenUpTo`), les plus récentes d'abord. */
+    unseen: (): Promise<AlertEvent[]> => ipcRenderer.invoke('alerts:unseen'),
+    get: (id: number): Promise<AlertEvent | null> => ipcRenderer.invoke('alerts:get', id),
+    /** Pop-ups fermés jusqu'à `ts` inclus. */
+    markSeen: (ts: number): Promise<ConfigState> => ipcRenderer.invoke('alerts:markSeen', ts),
+    /** Alerte demandée au lancement (`--alert=<id>`), une seule fois. */
+    takePending: (): Promise<number | null> => ipcRenderer.invoke('alerts:takePending'),
+    /** Notification « Ouvrir » cliquée alors que l'app tournait déjà. */
+    onOpen(cb: (id: number) => void): () => void {
+      const handler = (_e: IpcRendererEvent, id: number) => cb(id);
+      ipcRenderer.on('alert:open', handler);
+      return () => {
+        ipcRenderer.removeListener('alert:open', handler);
+      };
+    },
   },
   tmp: {
     /** Plus gros dossiers de /tmp à cet instant (lecture seule, au plus 100 000 entrées ou 2 s). */

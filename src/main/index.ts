@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { classifyGroups, type InstanceDecision } from '../core/classify/classify';
@@ -17,9 +17,11 @@ import { recordSeparate, stickyIds } from '../core/grouping/stickyCards';
 import { killRequest, planKill, sendSignals } from '../core/kill';
 import { compileProtection } from '../core/protection';
 import { formatAppEvent } from '../core/history/events';
-import { appEventsPath, dataDir } from '../core/paths';
+import { appEventsPath, dataDir, focusStatePath } from '../core/paths';
+import { alertIdFromArgv } from '../core/alerts';
 import { buildSnapshot, flattenGroup, groupProcs, instanceTargets, isWatch, othersFollowed, type Classification, type FullSnapshot } from '../core/snapshot';
 import type { ConfigState, Group, KillResult, ProcInfo, RecorderState, Watch } from '../core/types';
+import { createAlertOpener, createFocusWriter, initSeenUpTo, keepSeenUpTo, markSeen } from './alerts';
 import { installDesktopEntry } from './desktopEntry';
 import { clearHistory, createHistoryReader } from './history';
 import { pollDelay, type WindowActivity } from './pollPolicy';
@@ -32,10 +34,28 @@ import { autoManageService, defaultSystemctl, recorderSyncDisabled, ensureRecord
 // Service réseau dans le processus main : l'app ne charge que des fichiers locaux, un processus de moins (~20 Mo).
 app.commandLine.appendSwitch('enable-features', 'NetworkServiceInProcess2');
 
+// Instance unique : un second lancement (bouton « Ouvrir » d'une notification, menu) réveille la fenêtre existante.
+const primary = app.requestSingleInstanceLock();
+if (!primary) app.quit();
+
 const dir = configDir();
 const loaded = loadConfig(dir);
 let config = loaded.config;
 let warning = loaded.warning;
+{
+  // Alertes « vues » jusqu'à maintenant au premier lancement : pas de pop-up pour l'historique déjà enregistré.
+  const init = initSeenUpTo(config, Date.now());
+  if (init) {
+    config = init;
+    if (primary && !loaded.warning) {
+      try {
+        saveConfig(dir, config);
+      } catch (e) {
+        console.error('config:', e);
+      }
+    }
+  }
+}
 let protection = compileProtection(config.protected);
 const tracker = new CpuTracker();
 const uid = process.getuid!();
@@ -45,6 +65,21 @@ const projectRootOf = createProjectRootCache();
 const claudeConfigDirs = claudeDirs();
 
 const data = dataDir();
+const focusWriter = createFocusWriter({
+  write: (json) => {
+    mkdirSync(data, { recursive: true });
+    const tmp = `${focusStatePath(data)}.${process.pid}.tmp`;
+    writeFileSync(tmp, json);
+    renameSync(tmp, focusStatePath(data));
+  },
+});
+const alertOpener = createAlertOpener((id) => {
+  if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send('alert:open', id);
+});
+{
+  const id = alertIdFromArgv(process.argv);
+  if (id !== null) alertOpener.open(id);
+}
 const history = createHistoryReader(data, () => config.recorder);
 let systemdOk = false;
 
@@ -262,14 +297,22 @@ function createWindow(): void {
     schedule();
     if (wasHidden) setLive(true);
   };
-  win.on('minimize', pause);
-  win.on('hide', pause);
+  win.on('minimize', () => {
+    focusWriter.set(false);
+    pause();
+  });
+  win.on('hide', () => {
+    focusWriter.set(false);
+    pause();
+  });
   win.on('restore', resume);
   win.on('show', () => activity.hidden && resume());
   win.on('blur', () => {
     activity.blurredAt = Date.now();
+    focusWriter.set(false);
   });
   win.on('focus', () => {
+    focusWriter.set(true);
     const slowed = timerDelay !== pollDelay({ ...activity, blurredAt: null }, Date.now());
     activity.blurredAt = null;
     // Sous Wayland, une fenêtre réduite par l'app puis restaurée par le compositeur ne reçoit que `focus`.
@@ -280,6 +323,7 @@ function createWindow(): void {
     schedule();
   });
   win.on('closed', () => {
+    focusWriter.set(false);
     if (timer) clearTimeout(timer);
     timer = null;
     mainWin = null;
@@ -322,8 +366,9 @@ ipcMain.handle('watch', (_e, w: unknown) => {
 ipcMain.handle('group:procs', (_e, id: unknown) => (typeof id === 'string' && last ? groupProcs(last.groups, id) : []));
 
 ipcMain.handle('config:set', (_e, next: unknown) => {
-  const valid = validateConfig(next);
-  if (!valid) throw new Error('Configuration invalide');
+  const checked = validateConfig(next);
+  if (!checked) throw new Error('Configuration invalide');
+  const valid = keepSeenUpTo(checked, config);
   const recorderChanged = valid.recorder.enabled !== config.recorder.enabled;
   if (valid.classify.detectPorts !== config.classify.detectPorts) portsAt = 0;
   const overridesChanged = JSON.stringify(valid.classify.overrides) !== JSON.stringify(config.classify.overrides);
@@ -402,7 +447,37 @@ ipcMain.handle('desktop:install', () => {
   return installDesktopEntry(process.env.APPIMAGE || process.execPath);
 });
 
+ipcMain.handle('alerts:unseen', () => history.unseenAlerts(config.alerts.seenUpTo));
+ipcMain.handle('alerts:get', (_e, id: unknown) => (Number.isSafeInteger(id) && (id as number) > 0 ? history.alert(id as number) : null));
+ipcMain.handle('alerts:markSeen', (_e, ts: unknown): ConfigState => {
+  const next = markSeen(config, ts, Date.now());
+  if (next) {
+    saveConfig(dir, next);
+    config = next;
+  }
+  return configState();
+});
+ipcMain.handle('alerts:takePending', () => alertOpener.take());
+
+/** Montre la fenêtre (la recrée si elle a été fermée), la restaure et la focalise. */
+function showWindow(): void {
+  if (!mainWin || mainWin.isDestroyed()) {
+    createWindow();
+    return;
+  }
+  if (mainWin.isMinimized()) mainWin.restore();
+  mainWin.show();
+  mainWin.focus();
+}
+
+app.on('second-instance', (_e, argv) => {
+  showWindow();
+  const id = alertIdFromArgv(argv);
+  if (id !== null) alertOpener.open(id);
+});
+
 app.whenReady().then(() => {
+  if (!primary) return;
   createWindow();
   void syncRecorder(false);
 });

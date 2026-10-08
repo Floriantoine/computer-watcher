@@ -1,3 +1,5 @@
+import type { AlertsConfig } from './alerts';
+
 export interface ProcSample {
   pid: number;
   ppid: number;
@@ -151,6 +153,7 @@ export interface Config {
   recorder: RecorderConfig;
   ui: UiConfig;
   classify: ClassifyConfig;
+  alerts: AlertsConfig;
 }
 
 export interface ConfigState {

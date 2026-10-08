@@ -1,11 +1,27 @@
 // src/recorder/index.ts
-import { mkdirSync, watch } from 'node:fs';
+import { existsSync, mkdirSync, watch } from 'node:fs';
 import { configDir } from '../core/config';
 import { dataDir } from '../core/paths';
 import { followEarlyoom } from './journal';
+import { appLauncher, appLaunchCommand, launchApp } from './launchApp';
+import { createNotifier, resolveBin } from './notify';
 import { createRecorder } from './recorder';
 
-const rec = createRecorder({ dataDir: dataDir(), configDir: configDir() });
+// Bouton « Ouvrir » des notifications : lanceur de l'app déduit de l'emplacement du service (voir launchApp.ts).
+const launcher = appLauncher({
+  appImage: process.env.APPIMAGE,
+  execPath: process.execPath,
+  recorderScript: process.argv[1],
+  uid: process.getuid?.() ?? 0,
+  exists: existsSync,
+});
+const systemdRun = resolveBin('systemd-run', process.env.PATH);
+const rec = createRecorder({
+  dataDir: dataDir(),
+  configDir: configDir(),
+  notifier: createNotifier(),
+  launchApp: launcher ? (args) => launchApp(appLaunchCommand(launcher, args, systemdRun)) : undefined,
+});
 rec.start();
 
 let timer: NodeJS.Timeout;

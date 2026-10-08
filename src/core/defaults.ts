@@ -1,3 +1,4 @@
+import { DEFAULT_ALERTS } from './alerts';
 import type { ClassifyConfig, Config, RecorderConfig, UiConfig } from './types';
 
 export const DEFAULT_RECORDER: RecorderConfig = {
@@ -30,4 +31,5 @@ export const DEFAULT_CONFIG: Config = {
   recorder: DEFAULT_RECORDER,
   ui: DEFAULT_UI,
   classify: { ...DEFAULT_CLASSIFY, overrides: {} },
+  alerts: DEFAULT_ALERTS,
 };

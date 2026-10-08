@@ -1,0 +1,44 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { expect, test } from 'vitest';
+import { queryAlert, queryUnseenAlerts } from './alertsQuery';
+import { openHistoryDb } from './db';
+import { insertEvent } from './events';
+
+function db() {
+  const { db } = openHistoryDb(join(mkdtempSync(join(tmpdir(), 'pw-aq-')), 'm.db'));
+  db.prepare("INSERT INTO groups(key, kind, label) VALUES ('project:/home/u/acme', 'project', 'acme')").run();
+  return db;
+}
+
+test('alertes après seenUpTo seulement, types d’alerte seulement (gap, app_kill exclus), plus récentes d’abord, avec id et libellé de groupe', () => {
+  const d = db();
+  insertEvent(d, 1000, 'pressure', null, { psi: 30 });
+  const leak = insertEvent(d, 2000, 'leak', 'project:/home/u/acme', { growthKB: 1, memKB: 2, minutes: 60 });
+  insertEvent(d, 2500, 'gap', null, { from: 1, to: 2 });
+  insertEvent(d, 2600, 'app_kill', null, { pids: [1], signal: 'SIGTERM' });
+  const tmp = insertEvent(d, 3000, 'tmpfs', null, { shmemKB: 5, thresholdKB: 4 });
+  expect(queryUnseenAlerts(d, 1000)).toEqual([
+    { id: tmp, ts: 3000, type: 'tmpfs', groupKey: null, groupLabel: null, detail: { shmemKB: 5, thresholdKB: 4 } },
+    { id: leak, ts: 2000, type: 'leak', groupKey: 'project:/home/u/acme', groupLabel: 'acme', detail: { growthKB: 1, memKB: 2, minutes: 60 } },
+  ]);
+  expect(queryUnseenAlerts(d, 3000)).toEqual([]);
+});
+
+test('limite : les plus récentes', () => {
+  const d = db();
+  for (let i = 1; i <= 5; i++) insertEvent(d, i * 1000, 'pressure', null, { psi: 30 + i });
+  expect(queryUnseenAlerts(d, 0, 2).map((e) => e.ts)).toEqual([5000, 4000]);
+});
+
+test('queryAlert : par id ; id inconnu ou non-alerte → null ; détail illisible → {}', () => {
+  const d = db();
+  const id = insertEvent(d, 1000, 'earlyoom_kill', null, { name: 'chrome' });
+  const gap = insertEvent(d, 1100, 'gap', null, {});
+  d.prepare("INSERT INTO events(ts, type, detail) VALUES (1200, 'pressure', 'pas du json')").run();
+  expect(queryAlert(d, id)).toMatchObject({ id, ts: 1000, type: 'earlyoom_kill', detail: { name: 'chrome' } });
+  expect(queryAlert(d, gap)).toBeNull();
+  expect(queryAlert(d, 999)).toBeNull();
+  expect(queryUnseenAlerts(d, 1100)[0]!.detail).toEqual({});
+});
