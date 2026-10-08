@@ -66,7 +66,7 @@ function acme(vitestGB: number) {
 
 function input(over: Partial<EvalInput>): EvalInput {
   return {
-    now: 0, enabled: true, rules: [], groups: [], classification: null, forecast: null, growthKB: new Map(), inactive: null,
+    now: 0, enabled: true, rules: [], groups: [], classification: null, forecast: null, procGrowthKB: null, inactive: null,
     isProtected: () => false, appRoot: null, currentUid: 1000, selfPid: 900, ...over,
   };
 }
@@ -328,21 +328,25 @@ describe('inactive (b)', () => {
 describe('prévision (c)', () => {
   const f = (etaMin: number, decliningMinutes: number): Forecast => ({ marginKB: GB, floorKB: 2 * GB, slopeKBPerMin: -GB, etaMin, decliningMinutes, spanMin: 5 });
   const r = rule({ kind: 'forecast', underMin: 3, includeApps: [] });
+  /** Un groupe = une instance (sa racine) ; croissance donnée par processus (attribution par instance). */
   function world() {
-    const mk = (id: string, kind: GroupKind, pid: number, gb: number, name = 'node') => {
+    const entries: [Group, InstanceSummary[]][] = [];
+    const procGrowthKB = new Map<string, number>();
+    const mk = (id: string, kind: GroupKind, pid: number, gb: number, growth: number, name = 'node') => {
       const p = proc(name, `${name} ${id}`, { pid, ppid: 1, rssKB: gb * GB });
-      return mkGroup(id, kind, [node(p)], id);
+      const n = node(p);
+      const g = mkGroup(id, kind, [n], id);
+      entries.push([g, [inst(g, n, 'back', id)]]);
+      procGrowthKB.set(`${p.pid}:${p.startTicks}`, growth);
+      return g;
     };
     const groups = [
-      mk('project:/a', 'project', 1001, 3), mk('project:/b', 'project', 1002, 6), mk('project:/c', 'project', 1003, 9),
-      mk('command:postgres', 'command', 1004, 10, 'postgres'), mk('app:firefox', 'app', 1005, 12, 'firefox'), mk('claude', 'claude', 1006, 20, 'claude'),
+      mk('project:/a', 'project', 1001, 3, 2 * GB), mk('project:/b', 'project', 1002, 6, 0.5 * GB), mk('project:/c', 'project', 1003, 9, -GB),
+      mk('command:postgres', 'command', 1004, 10, 3 * GB, 'postgres'), mk('app:firefox', 'app', 1005, 12, 2.5 * GB, 'firefox'), mk('claude', 'claude', 1006, 20, 5 * GB, 'claude'),
     ];
-    const growthKB = new Map([
-      ['project:/a', 2 * GB], ['project:/b', 0.5 * GB], ['project:/c', -GB], ['command:postgres', 3 * GB], ['app:firefox', 2.5 * GB], ['claude', 5 * GB],
-    ]);
-    return { groups, growthKB };
+    return { groups, classification: cls(entries), procGrowthKB };
   }
-  const target = (d: RuleDecision[]) => (d[0]?.outcome === 'fire' ? d[0].target.key : null);
+  const target = (d: RuleDecision[]) => (d[0]?.outcome === 'fire' ? d[0].target.groupKey : null);
   /** Condition tenue observée 30 s par le moteur (HOLD_MS) : deux évaluations. */
   const twice = (over: Partial<EvalInput>) => {
     const st = emptyRuleState();
@@ -367,9 +371,9 @@ describe('prévision (c)', () => {
     expect(twice({ rules: [r], ...world(), forecast: { forecast: f(2, 4), held: false } })).toEqual([]);
     expect(twice({ rules: [r], ...world(), forecast: { forecast: f(4, 4), held: true } })).toEqual([]);
   });
-  test('aucun groupe qui grossit → rien', () => {
+  test('aucune instance qui grossit → rien', () => {
     const w = world();
-    expect(twice({ rules: [r], groups: w.groups, growthKB: new Map([...w.growthKB].map(([k]) => [k, -1])), forecast: { forecast: f(2, 4), held: true } })).toEqual([]);
+    expect(twice({ rules: [r], ...w, procGrowthKB: new Map([...w.procGrowthKB].map(([k]) => [k, -1])), forecast: { forecast: f(2, 4), held: true } })).toEqual([]);
   });
 });
 
@@ -380,13 +384,13 @@ describe('pureté', () => {
     const inactive = vi.fn(() => new Set<string>());
     const rules = [vitestRule(), rule({ kind: 'inactive', categories: ['test'], forHours: 1 }, { id: 'r-b' })];
     const inp = input({ now: 0, rules, groups: a.groups, classification: a.classification, isProtected, inactive });
-    const before = JSON.stringify({ ...inp, classification: [...a.classification], growthKB: [...inp.growthKB] });
+    const before = JSON.stringify({ ...inp, classification: [...a.classification] });
     const spyNow = vi.spyOn(Date, 'now');
     evaluateRules(inp, emptyRuleState());
     evaluateRules({ ...inp, now: 10 * MIN }, emptyRuleState());
     expect(spyNow).not.toHaveBeenCalled();
     spyNow.mockRestore();
-    expect(JSON.stringify({ ...inp, classification: [...a.classification], growthKB: [...inp.growthKB] })).toBe(before);
+    expect(JSON.stringify({ ...inp, classification: [...a.classification] })).toBe(before);
   });
 
   test('needsClassification : règle activée de type instance, catégorie ou inactive ; interrupteur éteint → non', () => {
@@ -396,6 +400,6 @@ describe('pureté', () => {
     expect(needsClassification([rule({ kind: 'memory', target: 'group', match: { by: 'name', value: 'x' }, overMB: 200, forMin: 1 })], true)).toBe(false);
     expect(needsClassification([rule({ kind: 'memory', target: 'group', match: { by: 'category', value: 'test' }, overMB: 200, forMin: 1 })], true)).toBe(true);
     expect(needsClassification([rule({ kind: 'inactive', categories: ['back'], forHours: 1 })], true)).toBe(true);
-    expect(needsClassification([rule({ kind: 'forecast', underMin: 3, includeApps: [] })], true)).toBe(false);
+    expect(needsClassification([rule({ kind: 'forecast', underMin: 3, includeApps: [] })], true)).toBe(true); // attribution par instance
   });
 });

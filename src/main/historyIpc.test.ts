@@ -104,10 +104,10 @@ describe('config:set et règles (⑥)', () => {
     const next = { ...current, rules: { enabled: true, list: [rule, { ...rule, id: 'r-b', mode: 'active' }] } };
     expect(() => checkConfigSet(next, current)).toThrow(/^Une nouvelle règle démarre en Simulation/);
   });
-  test('règle existante passée en Active (après 10 min de Simulation) → acceptée', () => {
+  test('règle existante passée en Active (avec 10 min de crédit de Simulation) → acceptée', () => {
     const next = { ...current, rules: { enabled: true, list: [{ ...rule, mode: 'active' }] } };
-    const simulated = { ...current, rules: { enabled: true, list: [{ ...rule, simulatedSince: 0 }] } };
-    expect(checkConfigSet(next, simulated, 3600_000).rules.list[0]!.mode).toBe('active');
+    const sim = { 'r-a': { condition: JSON.stringify(rule.condition), simulatedMs: 10 * 60_000, evaluations: 20 } };
+    expect(checkConfigSet(next, current, sim).rules.list[0]!.mode).toBe('active');
   });
   test('règle invalide envoyée par le renderer → tout est refusé (strict), avec le nom de la règle', () => {
     const next = { ...current, rules: { enabled: true, list: [rule, { ...rule, id: 'r-c', name: 'cassée', condition: { ...rule.condition, overMB: 1 } }] } };
@@ -122,32 +122,26 @@ describe('config:set et règles (⑥)', () => {
   });
 });
 
-describe('M-3 : 10 min de Simulation avant Active, simulatedSince tenu par le main', () => {
-  const NOW = 10 * 3600_000;
+describe('m-3 : Active seulement avec le crédit de Simulation enregistré par le service', () => {
   const rule = {
     id: 'r-a', name: 'vitest', enabled: true, mode: 'simulate' as const, createdAt: 1,
     condition: { kind: 'memory' as const, target: 'instance' as const, match: { by: 'name' as const, value: 'vitest' }, overMB: 4096, forMin: 5 },
   };
   const cfg = (r: object) => ({ ...DEFAULT_CONFIG, rules: { enabled: true, list: [r] } }) as never;
-  test('en Simulation depuis 5 min → refus (« encore 5 min ») ; depuis 10 min → accepté', () => {
-    expect(() => checkConfigSet(cfg({ ...rule, mode: 'active' }), cfg({ ...rule, simulatedSince: NOW - 5 * 60_000 }), NOW)).toThrow(/Au moins 10 min en Simulation.*encore 5 min/);
-    expect(checkConfigSet(cfg({ ...rule, mode: 'active' }), cfg({ ...rule, simulatedSince: NOW - 10 * 60_000 }), NOW).rules.list[0]!.mode).toBe('active');
+  const credit = (ms: number, evaluations: number) => ({ 'r-a': { condition: JSON.stringify(rule.condition), simulatedMs: ms, evaluations } });
+  test('5 min de crédit → refus (« encore 5 min ») ; 10 min et ≥ 1 évaluation → accepté', () => {
+    expect(() => checkConfigSet(cfg({ ...rule, mode: 'active' }), cfg(rule), credit(5 * 60_000, 10))).toThrow(/Au moins 10 min en Simulation.*encore 5 min/);
+    expect(checkConfigSet(cfg({ ...rule, mode: 'active' }), cfg(rule), credit(10 * 60_000, 1)).rules.list[0]!.mode).toBe('active');
   });
-  test('sans début de simulation connu → refus', () => {
-    expect(() => checkConfigSet(cfg({ ...rule, mode: 'active' }), cfg(rule), NOW)).toThrow(/Au moins 10 min/);
+  test('F2 : règle désactivée (ou interrupteur éteint) pendant 11 min → aucune évaluation, aucun crédit → refus', () => {
+    expect(() => checkConfigSet(cfg({ ...rule, mode: 'active' }), cfg({ ...rule, enabled: false }), credit(0, 0))).toThrow(/aucune évaluation/);
+    expect(() => checkConfigSet(cfg({ ...rule, mode: 'active' }), cfg(rule), null)).toThrow(/Au moins 10 min/);
   });
-  test('le renderer ne peut pas antidater simulatedSince : le main le réécrit', () => {
-    const saved = checkConfigSet(cfg({ ...rule, simulatedSince: 0 }), cfg({ ...rule, simulatedSince: NOW - 60_000 }), NOW);
-    expect(saved.rules.list[0]!.simulatedSince).toBe(NOW - 60_000);
-    const fresh = checkConfigSet({ ...DEFAULT_CONFIG, rules: { enabled: true, list: [{ ...rule, id: 'r-new', simulatedSince: 0 }] } }, cfg(rule), NOW);
-    expect(fresh.rules.list[0]!.simulatedSince).toBe(NOW);
+  test('F1 : simulatedSince: 0 écrit à la main → aucun crédit', () => {
+    expect(() => checkConfigSet(cfg({ ...rule, mode: 'active', simulatedSince: 0 }), cfg({ ...rule, simulatedSince: 0 }), null)).toThrow(/Au moins 10 min/);
   });
-  test('condition changée ou retour en Simulation → la Simulation repart', () => {
-    const changed = checkConfigSet(cfg({ ...rule, condition: { ...rule.condition, overMB: 200 } }), cfg({ ...rule, simulatedSince: 0 }), NOW);
-    expect(changed.rules.list[0]!.simulatedSince).toBe(NOW);
-    const back = checkConfigSet(cfg({ ...rule, mode: 'simulate' }), cfg({ ...rule, mode: 'active', simulatedSince: 0 }), NOW);
-    expect(back.rules.list[0]!.simulatedSince).toBe(NOW);
-    const kept = checkConfigSet(cfg({ ...rule, mode: 'active', name: 'autre' }), cfg({ ...rule, mode: 'active', simulatedSince: 7 }), NOW);
-    expect(kept.rules.list[0]!.simulatedSince).toBe(7);
+  test('crédit d’une autre condition → refus', () => {
+    const other = { 'r-a': { condition: JSON.stringify({ ...rule.condition, overMB: 200 }), simulatedMs: 3600_000, evaluations: 50 } };
+    expect(() => checkConfigSet(cfg({ ...rule, mode: 'active' }), cfg(rule), other)).toThrow(/Au moins 10 min/);
   });
 });

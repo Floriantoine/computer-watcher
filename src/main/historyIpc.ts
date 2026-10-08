@@ -1,7 +1,8 @@
 // src/main/historyIpc.ts — parties pures de l'IPC historique (validation, état du service)
 import { isCategory } from '../core/classify/categories';
 import { MAX_OVERRIDE_KEY, MAX_OVERRIDES, validateConfigDetailed } from '../core/config';
-import { checkRulesTransition, stampSimulation } from '../core/rules/config';
+import { checkRulesTransition } from '../core/rules/config';
+import type { SimStats } from '../core/rules/simulation';
 import type { Category, Config, RangePreset, RecorderState, RecorderStatus, TimeRange, TopOptions } from '../core/types';
 
 export const isRange = (r: unknown): r is RangePreset | TimeRange =>
@@ -90,14 +91,15 @@ export function applyOverride(overrides: Record<string, Category>, key: string, 
  * fichier), puis transition des règles (une nouvelle règle, ou une règle active modifiée, démarre en Simulation).
  * Lève une erreur au texte affichable tel quel ; rien n'est sauvegardé.
  */
-export function checkConfigSet(next: unknown, current: Config, now: number = Date.now()): Config {
+/** `sim` : crédit de Simulation enregistré par le service (fichier rules-simulation.json), null s'il est absent. */
+export function checkConfigSet(next: unknown, current: Config, sim: SimStats | null = null): Config {
   const checked = validateConfigDetailed(next);
   if (!checked) throw new Error('Configuration invalide');
   const issue = checked.ruleIssues[0];
   if (issue) throw new Error(issue.index < 0 ? issue.error : `Règle ${issue.name ? `« ${issue.name} »` : `n° ${issue.index + 1}`} invalide : ${issue.error}`);
-  const err = checkRulesTransition(current.rules, checked.config.rules, now);
+  const err = checkRulesTransition(current.rules, checked.config.rules, sim);
   if (err) throw new Error(err);
-  return { ...checked.config, rules: stampSimulation(current.rules, checked.config.rules, now) };
+  return checked.config;
 }
 
 /** Handler `kill` de l'app : PROC_WATCH_NO_KILL=1 (vérifications visuelles) → aucun signal, chaque cible refusée NOKILL. */

@@ -2,6 +2,7 @@
 import { CATEGORIES, isCategory } from '../classify/categories';
 import { APP_NAMES } from '../grouping/rules';
 import { isNeverKillName } from './neverKill';
+import { simulationCredit, type SimStats } from './simulation';
 import type { Rule, RuleCondition, RuleIssue, RuleMatch, RuleMode, RulesConfig } from './types';
 
 export const MAX_RULES = 20;
@@ -16,8 +17,6 @@ export const MATCH_VALUE_RE = /^[A-Za-z0-9._+:@/()-][A-Za-z0-9 ._+:@/()-]{0,99}$
 /** Applis qu'une règle de prévision peut viser sur choix explicite (jamais Claude, Warp, ni Electron qui fait tourner proc-watch). */
 export const OPT_IN_APPS: readonly string[] = [...APP_NAMES].filter((n) => !isNeverKillName(n) && n !== 'electron').sort();
 
-/** Simulation minimale avant le passage en Active (main et service). */
-export const MIN_SIMULATION_MS = 10 * 60_000;
 /** Erreurs de règles gardées (au-delà : une ligne « … et n autres »). */
 export const MAX_RULE_ISSUES = 20;
 
@@ -74,12 +73,9 @@ function validateRule(raw: unknown): Rule | string {
   if (typeof raw.enabled !== 'boolean') return 'champ « activée » invalide';
   if (raw.mode !== 'simulate' && raw.mode !== 'active') return 'mode inconnu (simulate ou active)';
   if (!Number.isSafeInteger(raw.createdAt) || (raw.createdAt as number) < 0) return 'date de création invalide';
-  if (raw.simulatedSince !== undefined && (!Number.isSafeInteger(raw.simulatedSince) || (raw.simulatedSince as number) < 0)) return 'début de simulation invalide';
   const condition = validateCondition(raw.condition);
   if (typeof condition === 'string') return condition;
-  const rule: Rule = { id: raw.id, name: raw.name, enabled: raw.enabled, mode: raw.mode as RuleMode, condition, createdAt: raw.createdAt as number };
-  if (raw.simulatedSince !== undefined) rule.simulatedSince = raw.simulatedSince as number;
-  return rule;
+  return { id: raw.id, name: raw.name, enabled: raw.enabled, mode: raw.mode as RuleMode, condition, createdAt: raw.createdAt as number };
 }
 
 /**
@@ -124,17 +120,12 @@ export function validateRules(raw: unknown): RulesConfig {
 
 const sameCondition = (a: RuleCondition, b: RuleCondition) => JSON.stringify(a) === JSON.stringify(b);
 
-/** Simulation suffisante pour passer en Active : début connu, pas dans le futur, il y a au moins MIN_SIMULATION_MS. */
-export function simulatedLongEnough(r: Pick<Rule, 'simulatedSince'>, now: number): boolean {
-  const s = r.simulatedSince;
-  return typeof s === 'number' && s <= now && now - s >= MIN_SIMULATION_MS;
-}
-
 /**
  * Erreur (texte FR) si une règle absente de `prev` arrive en mode 'active', si une règle active change de condition
- * sans repasser en Simulation, si une règle passe en Active avant 10 min de Simulation, ou si un id est dupliqué ; null sinon.
+ * sans repasser en Simulation, si une règle passe en Active sans crédit de Simulation enregistré par le service
+ * (≥ 10 min et ≥ 1 évaluation, même condition), ou si un id est dupliqué ; null sinon.
  */
-export function checkRulesTransition(prev: RulesConfig, next: RulesConfig, now: number = Date.now()): string | null {
+export function checkRulesTransition(prev: RulesConfig, next: RulesConfig, sim: SimStats | null = null): string | null {
   const ids = new Set<string>();
   for (const r of next.list) {
     if (ids.has(r.id)) return `Identifiant de règle en double : ${r.id}`;
@@ -146,31 +137,16 @@ export function checkRulesTransition(prev: RulesConfig, next: RulesConfig, now: 
     const old = before.get(r.id);
     if (!old) return `Une nouvelle règle démarre en Simulation (« ${r.name} »)`;
     if (!sameCondition(old.condition, r.condition)) return `Une règle modifiée repasse en Simulation (« ${r.name} »)`;
-    if (old.mode !== 'active' && !simulatedLongEnough(old, now)) {
-      const left = typeof old.simulatedSince === 'number' && old.simulatedSince <= now ? Math.ceil((MIN_SIMULATION_MS - (now - old.simulatedSince)) / 60_000) : 10;
-      return `Au moins 10 min en Simulation avant de passer en Active (« ${r.name} » : encore ${left} min)`;
+    if (old.mode !== 'active') {
+      const c = simulationCredit(sim, r);
+      if (!c.ok) {
+        return c.evaluations === 0
+          ? `Au moins 10 min en Simulation avant de passer en Active (« ${r.name} » : aucune évaluation par le service ; active l'interrupteur et la règle)`
+          : `Au moins 10 min en Simulation avant de passer en Active (« ${r.name} » : encore ${c.minutesLeft} min)`;
+      }
     }
   }
   return null;
-}
-
-/**
- * `simulatedSince` appartient au main (jamais à ce que le renderer envoie) : une règle en Simulation garde son début si elle
- * l'était déjà avec la même condition, sinon il vaut `now` (nouvelle règle, retour en Simulation, condition changée) ;
- * une règle active garde celui de la config précédente. À appliquer après checkRulesTransition.
- */
-export function stampSimulation(prev: RulesConfig, next: RulesConfig, now: number): RulesConfig {
-  const before = new Map(prev.list.map((r) => [r.id, r]));
-  const list = next.list.map((r) => {
-    const old = before.get(r.id);
-    const { simulatedSince: _ignored, ...rest } = r;
-    let since: number | undefined;
-    if (r.mode === 'active') since = old?.simulatedSince;
-    else if (old && old.mode === 'simulate' && sameCondition(old.condition, r.condition) && typeof old.simulatedSince === 'number') since = old.simulatedSince;
-    else since = now;
-    return since === undefined ? rest : { ...rest, simulatedSince: since };
-  });
-  return { ...next, list };
 }
 
 /** Les 3 modèles fournis : tous désactivés, en Simulation. */

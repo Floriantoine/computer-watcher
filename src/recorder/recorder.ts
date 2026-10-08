@@ -23,16 +23,19 @@ import {
   type TmpfsAlertState,
 } from '../core/history/events';
 import { historyCovers, queryCulprits, queryInactive } from '../core/history/queries';
+import type { ProcInfo } from '../core/types';
 import type { KillFn } from '../core/kill';
 import { compileProtection, type Protection } from '../core/protection';
-import { simulatedLongEnough } from '../core/rules/config';
+import { ProcGrowth } from '../core/rules/growth';
+import { accumulateSimulation, simulationCredit, type SimStats } from '../core/rules/simulation';
+import { readSimStatsFile, writeSimStatsFile } from '../core/rules/simulationFile';
 import { emptyRuleState, evaluateRules, needsClassification, restoreRuleState, ruleRevision, type RuleState } from '../core/rules/engine';
 import type { Rule, RuleIssue, RulesConfig } from '../core/rules/types';
 import type { Group, RecorderConfig as RecCfg } from '../core/types';
 import { flattenGroup } from '../core/snapshot';
 import { aggregateHour, aggregateMinute, clearAll, leakCandidates, purge } from '../core/history/maintenance';
 import { HistoryWriter } from '../core/history/writer';
-import { appEventsPath, clearRequestPath, dbPath, focusStatePath, forecastSnoozePath, statusPath } from '../core/paths';
+import { appEventsPath, clearRequestPath, dbPath, focusStatePath, forecastSnoozePath, rulesSimulationPath, statusPath } from '../core/paths';
 import type { RecorderConfig, RecorderStatus, SystemInfo } from '../core/types';
 import type { Notifier } from './notify';
 import { createRuleRunner } from './ruleRunner';
@@ -334,18 +337,46 @@ export function createRecorder(deps: RecorderDeps): Recorder {
   /** Pids du groupe Claude au dernier tick (revérifiés avant chaque signal). */
   let claudePids: ReadonlySet<number> = new Set();
   /**
-   * Mode effectif : une règle Active sans période de Simulation d'au moins 10 min (écrite à la main, début dans le futur)
-   * est traitée en Simulation, avec une ligne de journal par règle.
+   * Crédit de Simulation (m-3) : accumulé ici seulement, tick après tick, pour chaque règle en Simulation activée avec
+   * l'interrupteur allumé (durée monotone plafonnée à 4 × intervalle par tick, et une évaluation). Persisté dans
+   * rules-simulation.json (lu par le main au passage en Active) au plus une fois par minute.
+   */
+  let simStats: SimStats = {};
+  let simDirty = false;
+  let simSavedAt: number | null = null;
+  let lastRulesMono: number | null = null;
+  const saveSim = (force = false) => {
+    if (!simDirty) return;
+    const m = mono();
+    if (!force && simSavedAt !== null && m - simSavedAt >= 0 && m - simSavedAt < 60_000) return;
+    try {
+      writeSimStatsFile(rulesSimulationPath(deps.dataDir), simStats);
+      simDirty = false;
+      simSavedAt = m;
+    } catch (e) {
+      log(`règles: crédit de Simulation non enregistré : ${(e as Error).message}`);
+    }
+  };
+  /** Croissance par processus sur 5 min, pour (c) ; alimentée seulement si une règle de prévision est activée. */
+  let growth: ProcGrowth | null = null;
+  /**
+   * Mode effectif : une règle Active sans crédit de Simulation (≥ 10 min et ≥ 1 évaluation, même condition) est traitée
+   * en Simulation, avec une ligne de journal par règle.
    */
   const demoted = new Set<string>();
-  const effective = (r: Rule, wallNow: number): Rule => {
-    if (r.mode !== 'active' || simulatedLongEnough(r, wallNow)) {
+  const effective = (r: Rule): Rule => {
+    if (r.mode !== 'active') {
+      demoted.delete(r.id);
+      return r;
+    }
+    const c = simulationCredit(simStats, r);
+    if (c.ok) {
       demoted.delete(r.id);
       return r;
     }
     if (!demoted.has(r.id)) {
       demoted.add(r.id);
-      log(`règles: « ${r.name} » Active traitée en Simulation : moins de 10 min de Simulation enregistrées (simulatedSince ${r.simulatedSince ?? 'absent'})`);
+      log(`règles: « ${r.name} » Active traitée en Simulation : crédit de Simulation insuffisant (encore ${c.minutesLeft} min, ${c.evaluations} évaluation${c.evaluations > 1 ? 's' : ''})`);
     }
     return { ...r, mode: 'simulate' };
   };
@@ -354,7 +385,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
     if (!rulesCfg.enabled) return null;
     const r = rulesCfg.list.find((x) => x.id === ruleId);
     if (!r || !r.enabled) return null;
-    const e = effective(r, now());
+    const e = effective(r);
     return e.mode === 'active' ? ruleRevision(e) : null;
   };
   let runner: ReturnType<typeof createRuleRunner> | null = null;
@@ -385,21 +416,38 @@ export function createRecorder(deps: RecorderDeps): Recorder {
   };
 
   /** Règles après l'écriture du tick, dans leur propre try : une erreur ici ne casse jamais l'échantillonnage. */
-  const runRules = (d: DatabaseSync, ts: number, groups: Group[]) => {
-    // interrupteur général éteint, ou aucune règle activée : rien (pas même de classement ni de simulation)
-    if (!rulesCfg.enabled || !rulesCfg.list.some((r) => r.enabled)) return;
+  const runRules = (d: DatabaseSync, ts: number, groups: Group[], procs: readonly ProcInfo[]) => {
+    // interrupteur général éteint, ou aucune règle activée : rien (pas même de classement ni de simulation, ni de crédit)
+    if (!rulesCfg.enabled || !rulesCfg.list.some((r) => r.enabled)) {
+      lastRulesMono = null;
+      growth = null;
+      return;
+    }
     try {
       counters.ruleEvaluations++;
+      const m = mono();
+      const intervalMs = cfg.intervalSec * 1000;
+      const delta = lastRulesMono === null ? 0 : Math.min(Math.max(0, m - lastRulesMono), 4 * intervalMs);
+      lastRulesMono = m;
+      const before = JSON.stringify(simStats);
+      simStats = accumulateSimulation(simStats, rulesCfg.list, rulesCfg.enabled, delta);
+      if (JSON.stringify(simStats) !== before) simDirty = true;
+      saveSim();
       claudePids = new Set(groups.filter((g) => g.kind === 'claude').flatMap((g) => g.pids));
-      const rules = rulesCfg.list.map((r) => (r.enabled ? effective(r, ts) : r));
+      const rules = rulesCfg.list.map((r) => (r.enabled ? effective(r) : r));
       const classification = needsClassification(rules, rulesCfg.enabled) ? classifyForRules(groups, ts) : null;
       const wantsForecast = rulesCfg.list.some((r) => r.enabled && r.condition.kind === 'forecast');
       const fc = wantsForecast && lastForecast ? { forecast: lastForecast, held: conditionHeld(lastForecast, forecastState, ts) } : null;
       const opts = { now: ts, detailHours: cfg.detailHours, intervalSec: cfg.intervalSec };
-      const growthKB = fc?.held ? new Map(queryCulprits(d, ts, opts, 5, 50).map((c) => [c.key, c.deltaKB])) : new Map<string, number>();
+      if (wantsForecast) {
+        growth ??= new ProcGrowth(intervalMs);
+        growth.push(m, procs);
+      } else growth = null;
+      const procGrowthKB = fc?.held && growth ? growth.growth(m) : null;
       const out = evaluateRules({
-        now: mono(), wallNow: ts, maxGapMs: 2 * cfg.intervalSec * 1000,
-        enabled: rulesCfg.enabled, rules, groups, classification, forecast: fc, growthKB,
+        // ralentissement toléré jusqu'à 4 × intervalle ; veille ou saut d'horloge (écart murale/monotone) dès 2 ×
+        now: m, wallNow: ts, maxGapMs: 4 * intervalMs, maxSkewMs: 2 * intervalMs,
+        enabled: rulesCfg.enabled, rules, groups, classification, forecast: fc, procGrowthKB,
         // sans historique couvrant toute la période (service récent, trou d'enregistrement) : null, rien n'est « inactif »
         inactive: (targets, since) => (historyCovers(d, since, ts) ? queryInactive(d, targets, since, opts, inactiveCpuThreshold(cfg)) : null),
         isProtected: protection.isProtected, appRoot, currentUid, selfPid,
@@ -420,6 +468,9 @@ export function createRecorder(deps: RecorderDeps): Recorder {
 
     start() {
       mkdirSync(deps.dataDir, { recursive: true, mode: 0o700 });
+      // crédit de Simulation des règles (accumulé par ce service seulement)
+      simStats = readSimStatsFile(rulesSimulationPath(deps.dataDir)) ?? {};
+      lastRulesMono = null;
       let opened: ReturnType<typeof openHistoryDb>;
       try {
         opened = openHistoryDb(dbPath(deps.dataDir), { now });
@@ -454,7 +505,10 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       // quotas et pauses des règles : survivent à un redémarrage du service
       try {
         // tout ce qui est daté dans le futur (horloge revenue en arrière) est relu aussi, compté comme « maintenant »
-        ruleState = restoreRuleState(ruleEventsSince(db, now() - H), now(), mono());
+        // m-1 : référence = la dernière mesure enregistrée (un saut d'horloge en avant pendant l'arrêt ne libère rien)
+        const lastRecorded = lastSampleTs(db);
+        const ref = lastRecorded !== null && lastRecorded < now() ? lastRecorded : now();
+        ruleState = restoreRuleState(ruleEventsSince(db, ref - H), now(), mono(), lastRecorded);
       } catch (e) {
         log(`règles: état non restauré : ${(e as Error).message}`);
       }
@@ -491,7 +545,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
         }
         tmpfs = r.state;
         runForecast(db, ts, system);
-        runRules(db, ts, groups);
+        runRules(db, ts, groups, procs);
         st.lastSampleAt = ts;
         ok('tick');
         writeStatus();
@@ -618,6 +672,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       db = null;
       writer = null;
       runner = null;
+      saveSim(true);
     },
   };
 }

@@ -70,8 +70,13 @@ export interface EvalInput {
   now: number;
   /** Horloge murale (ms) ; absente → `now`. */
   wallNow?: number;
-  /** Écart maximal entre deux évaluations (2 × intervalle) ; au-delà, ou si une horloge recule, les durées repartent. */
+  /**
+   * Écart monotone maximal entre deux évaluations (4 × intervalle : un ralentissement du service est toléré) ; au-delà,
+   * ou si une horloge recule, les durées repartent.
+   */
   maxGapMs?: number;
+  /** Écart maximal entre les avances murale et monotone (2 × intervalle) : au-delà, veille ou saut d'horloge. */
+  maxSkewMs?: number;
   /** Interrupteur général « Règles automatiques » : éteint → aucune décision, aucun appel. */
   enabled: boolean;
   rules: readonly Rule[];
@@ -79,8 +84,8 @@ export interface EvalInput {
   classification: Classification | null;
   /** Prévision ② et décision de stepAlert : `held` = condition d'alerte tenue (≥ 30 s), sans l'anti-répétition. */
   forecast: { forecast: Forecast; held: boolean } | null;
-  /** clé de groupe → hausse sur 5 min */
-  growthKB: ReadonlyMap<string, number>;
+  /** `${pid}:${startTicks}` → hausse mémoire sur 5 min (ProcGrowth) ; null sans 5 min observées. */
+  procGrowthKB: ReadonlyMap<string, number> | null;
   /** clés `${pid}:${startTicks}` ACTIVES depuis `sinceMs` ; null sans historique couvrant la période */
   inactive: ((targets: KillTarget[], sinceMs: number) => Set<string> | null) | null;
   isProtected: (name: string) => boolean;
@@ -97,7 +102,7 @@ export type RuleDecision =
 /** Règle activée de type instance, catégorie ou inactive : le service doit classer les groupes. */
 export function needsClassification(rules: readonly Rule[], enabled = true): boolean {
   if (!enabled) return false;
-  return rules.some((r) => r.enabled && (r.condition.kind === 'inactive' ||
+  return rules.some((r) => r.enabled && (r.condition.kind === 'inactive' || r.condition.kind === 'forecast' ||
     (r.condition.kind === 'memory' && (r.condition.target === 'instance' || r.condition.match.by === 'category'))));
 }
 
@@ -107,7 +112,11 @@ const mem = (p: { rssKB: number; swapKB: number }) => p.rssKB + p.swapKB;
 export const ruleRevision = (r: Rule): string => JSON.stringify(r);
 
 /** Candidate avant filtrage : clé, groupe, libellé, pids, taille ; `growthKB` (prévision) classe avant la taille. */
-interface Candidate { key: string; kind: 'instance' | 'group'; group: Group; label: string; pids: number[]; sizeKB: number; growthKB?: number }
+interface Candidate {
+  key: string; kind: 'instance' | 'group'; group: Group; label: string; pids: number[]; sizeKB: number; growthKB?: number;
+  /** Cible entière ou rien : écartée si un de ses processus est refusé (croissance attribuée à l'instance). */
+  attributable?: boolean;
+}
 
 export function evaluateRules(input: EvalInput, state: RuleState): RuleDecision[] {
   if (!input.enabled) return [];
@@ -116,7 +125,8 @@ export function evaluateRules(input: EvalInput, state: RuleState): RuleDecision[
   // Trou entre deux évaluations (veille, saut ou recul d'une horloge) : toutes les durées observées repartent de zéro.
   const last = state.lastEval;
   const maxGap = input.maxGapMs ?? Infinity;
-  if (last && (now < last.mono || now - last.mono > maxGap || wall < last.wall || wall - last.wall > maxGap)) {
+  const maxSkew = input.maxSkewMs ?? maxGap;
+  if (last && (now < last.mono || now - last.mono > maxGap || wall < last.wall || Math.abs((wall - last.wall) - (now - last.mono)) > maxSkew)) {
     state.overSince.clear();
     state.forecastHeldSince = null;
     state.lastGapWall = Math.max(wall, last.wall);
@@ -176,7 +186,8 @@ export function evaluateRules(input: EvalInput, state: RuleState): RuleDecision[
     let target: RuleTarget | null = null;
     for (const c of ready) {
       const t = toTarget(c);
-      if (t.targets.length) {
+      // (c) : une instance dont un processus est refusé (Claude, protégé, jamais tuer…) n'a pas de croissance attribuable
+      if (t.targets.length && !(c.attributable && t.excluded > 0)) {
         target = t;
         break;
       }
@@ -296,13 +307,32 @@ function candidatesFor(rule: Rule, input: EvalInput, groups: readonly Group[], s
       if (state.forecastHeldSince === null || now - state.forecastHeldSince < HOLD_MS) return [];
       const { etaMin, decliningMinutes } = f.forecast;
       if (etaMin === null || !(etaMin < c.underMin) || decliningMinutes < MIN_DECLINING) return [];
-      // par défaut seulement les projets (et dossiers supprimés) ; une appli seulement si elle est cochée ; jamais une commande
+      // Croissance attribuée par INSTANCE (somme de ses processus) : jamais au groupe, dont la hausse peut venir d'un processus
+      // intouchable (vitest lancé par Claude) et tuerait ses voisins. Par défaut seulement les instances de projets (et
+      // dossiers supprimés) ; une appli seulement si elle est cochée ; jamais une commande.
+      const growth = input.procGrowthKB;
+      if (!growth || !input.classification) return [];
       const apps = new Set(c.includeApps.map((n) => `app:${n}`));
-      return groups
-        .filter((g) => (input.growthKB.get(g.id) ?? 0) >= FORECAST_MIN_GROWTH_KB && (g.kind === 'project' || g.kind === 'deleted' || (g.kind === 'app' && apps.has(g.id))))
-        .map((g) => ({
-          key: g.id, kind: 'group' as const, group: g, label: g.label, pids: flattenGroup(g).map((p) => p.pid), sizeKB: mem(g), growthKB: input.growthKB.get(g.id)!,
-        }));
+      const out: Candidate[] = [];
+      for (const g of groups) {
+        if (!(g.kind === 'project' || g.kind === 'deleted' || (g.kind === 'app' && apps.has(g.id)))) continue;
+        const insts = input.classification.get(g.id)?.instances ?? [];
+        if (!insts.length) continue;
+        const byPid = new Map(flattenGroup(g).map((p) => [p.pid, p]));
+        for (const i of insts) {
+          let kb = 0;
+          let known = true;
+          for (const pid of i.pids) {
+            const p = byPid.get(pid);
+            const d = p ? growth.get(`${p.pid}:${p.startTicks}`) : undefined;
+            if (d === undefined) known = false;
+            else kb += d;
+          }
+          if (!known || kb < FORECAST_MIN_GROWTH_KB) continue;
+          out.push({ key: i.key, kind: 'instance', group: g, label: g.kind === 'project' ? `${i.label} (${g.label})` : i.label, pids: i.pids, sizeKB: mem(i), growthKB: kb, attributable: true });
+        }
+      }
+      return out;
     }
   }
 }
@@ -314,12 +344,15 @@ export interface RuleEventRow { ts: number; type: 'rule_action' | 'rule_dry_run'
  * État après un redémarrage du service, d'après les événements de la dernière heure : dernier déclenchement par règle,
  * actions réelles et simulations (quotas), pauses de quota en cours. L'escalade SIGKILL n'est pas une action à part.
  */
-export function restoreRuleState(rows: readonly RuleEventRow[], wallNow: number, monoNow: number = wallNow): RuleState {
+export function restoreRuleState(rows: readonly RuleEventRow[], wallNow: number, monoNow: number = wallNow, lastRecorded: number | null = null): RuleState {
   const st = emptyRuleState();
+  // Référence : la dernière mesure enregistrée avant le redémarrage si elle est plus ancienne que l'heure murale (un saut
+  // en avant pendant l'arrêt ne vieillit pas les actions) ; un arrêt réel prolonge donc quotas et cooldown (échec fermé).
+  const ref = lastRecorded !== null && lastRecorded < wallNow ? lastRecorded : wallNow;
   // instant mural → monotone ; un événement daté dans le futur (horloge revenue en arrière) compte comme « maintenant »
-  const toMono = (ts: number) => monoNow - Math.max(0, wallNow - ts);
+  const toMono = (ts: number) => monoNow - Math.max(0, ref - ts);
   for (const r of rows) {
-    if (wallNow - r.ts >= HOUR_MS) continue;
+    if (ref - r.ts >= HOUR_MS) continue;
     const t = toMono(r.ts);
     if (r.result === 'quota') {
       st.pausedUntil.set(r.ruleId, Math.max(st.pausedUntil.get(r.ruleId) ?? -Infinity, t + QUOTA_PAUSE_MS));

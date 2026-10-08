@@ -2,7 +2,8 @@
 // Moteur pur : aucun signal possible ici. `now` = horloge monotone, `wallNow` = horloge murale.
 import { describe, expect, test, vi } from 'vitest';
 import { group, node, proc } from '../classify/testFixtures';
-import type { Group, GroupKind, ProcInfo, ProcNode } from '../types';
+import type { GroupClassification } from '../classify/classify';
+import type { Group, GroupKind, InstanceSummary, ProcInfo, ProcNode } from '../types';
 import { emptyRuleState, evaluateRules, FORECAST_MIN_GROWTH_KB, restoreRuleState, type EvalInput, type RuleDecision } from './engine';
 import { isNeverKillName } from './neverKill';
 import type { Rule, RuleCondition } from './types';
@@ -25,7 +26,7 @@ function mkGroup(id: string, kind: GroupKind, roots: ProcNode[], label = id): Gr
 }
 const rule = (condition: RuleCondition, over: Partial<Rule> = {}): Rule => ({ id: 'r-a', name: 'r', enabled: true, mode: 'active', createdAt: 0, condition, ...over });
 const input = (over: Partial<EvalInput>): EvalInput => ({
-  now: 0, enabled: true, rules: [], groups: [], classification: null, forecast: null, growthKB: new Map(), inactive: null,
+  now: 0, enabled: true, rules: [], groups: [], classification: null, forecast: null, procGrowthKB: null, inactive: null,
   isProtected: () => false, appRoot: null, currentUid: 1000, selfPid: 900, ...over,
 });
 const fires = (ds: RuleDecision[]) => ds.filter((d) => d.outcome === 'fire');
@@ -37,6 +38,23 @@ function world(extra: Group[]) {
 function project(id = 'acme', pid = 700, gb = 5, kind: GroupKind = 'project') {
   const v = proc('node', 'node vitest', { pid, ppid: 500, startTicks: pid * 10, rssKB: gb * GB });
   return mkGroup(kind === 'project' ? `project:/home/u/${id}` : kind === 'app' ? `app:${id}` : `command:${id}`, kind, [node(v)], id);
+}
+/** Une instance par groupe (sa racine) et la croissance de son processus : attribution par instance. */
+function attribute(groups: Group[], growth: [string, number][]) {
+  const m = new Map(growth);
+  const classification = new Map<string, GroupClassification>();
+  const procGrowthKB = new Map<string, number>();
+  for (const g of groups) {
+    const p = g.roots[0]?.proc;
+    if (!p || !m.has(g.id)) continue;
+    const i: InstanceSummary = {
+      key: `${g.id}#${p.pid}:${p.startTicks}`, groupId: g.id, project: g.id, category: 'back', source: 'command', signature: g.label, label: g.label,
+      rootPid: p.pid, rootStartTicks: p.startTicks, pids: [p.pid], ports: [], ageSec: 100, rssKB: p.rssKB, swapKB: 0, cpuPercent: 0, duplicate: false, protected: false,
+    };
+    classification.set(g.id, { categories: ['back'], instances: [i], launcherPids: [] });
+    procGrowthKB.set(`${p.pid}:${p.startTicks}`, m.get(g.id)!);
+  }
+  return { classification, procGrowthKB };
 }
 const memRule = (forMin = 1, over: Partial<Rule> = {}) => rule({ kind: 'memory', target: 'group', match: { by: 'name', value: 'acme' }, overMB: 4096, forMin }, over);
 
@@ -115,7 +133,7 @@ describe('I-2 : la durée repart après un trou entre deux échantillons', () =>
     const fc = { forecast: { etaMin: 1, decliningMinutes: 5 } as never, held: true };
     const r = rule({ kind: 'forecast', underMin: 3, includeApps: [] });
     const ev = (now: number, wallNow: number) =>
-      fires(evaluateRules(input({ now, wallNow, maxGapMs: 10_000, rules: [r], groups, forecast: fc, growthKB: new Map([[g.id, GB]]) }), st)).length;
+      fires(evaluateRules(input({ now, wallNow, maxGapMs: 10_000, rules: [r], groups, forecast: fc, ...attribute(groups, [[g.id, GB]]) }), st)).length;
     expect(ev(T, T)).toBe(0);
     expect(ev(T + 5000, T + H)).toBe(0); // réveil : le compte repart à T + 5 s
     let firstFire: number | null = null;
@@ -158,8 +176,8 @@ describe('I-3 : (c) seulement une vraie croissance (≥ 100 Mio), classée par c
   const r = rule({ kind: 'forecast', underMin: 3, includeApps: [] });
   const evalWith = (groups: Group[], growth: [string, number][]) => {
     const st = emptyRuleState();
-    evaluateRules(input({ now: 0, rules: [r], groups, forecast: fc, growthKB: new Map(growth) }), st);
-    return evaluateRules(input({ now: 30_000, rules: [r], groups, forecast: fc, growthKB: new Map(growth) }), st);
+    evaluateRules(input({ now: 0, rules: [r], groups, forecast: fc, ...attribute(groups, growth) }), st);
+    return evaluateRules(input({ now: 30_000, rules: [r], groups, forecast: fc, ...attribute(groups, growth) }), st);
   };
   test('E3 bruit : +4 Ko ne compte pas ; le vrai coupable (+2 Go) est visé', () => {
     const big = project('big', 1200, 3);
@@ -201,13 +219,13 @@ describe('I-4 : démons de session jamais tués ; (c) seulement projets par déf
     const app = project('firefox', 1301, 6, 'app');
     const st = emptyRuleState();
     const r = rule({ kind: 'forecast', underMin: 3, includeApps: [] });
-    const growth = new Map([[cmd.id, 2 * GB], [app.id, 2 * GB]]);
-    evaluateRules(input({ now: 0, rules: [r], groups: world([cmd, app]), forecast: fc, growthKB: growth }), st);
-    expect(evaluateRules(input({ now: 30_000, rules: [r], groups: world([cmd, app]), forecast: fc, growthKB: growth }), st)).toEqual([]);
+    const growth = attribute(world([cmd, app]), [[cmd.id, 2 * GB], [app.id, 2 * GB]]);
+    evaluateRules(input({ now: 0, rules: [r], groups: world([cmd, app]), forecast: fc, ...growth }), st);
+    expect(evaluateRules(input({ now: 30_000, rules: [r], groups: world([cmd, app]), forecast: fc, ...growth }), st)).toEqual([]);
     const r2 = rule({ kind: 'forecast', underMin: 3, includeApps: ['firefox'] });
     const st2 = emptyRuleState();
-    evaluateRules(input({ now: 0, rules: [r2], groups: world([cmd, app]), forecast: fc, growthKB: growth }), st2);
-    expect(fires(evaluateRules(input({ now: 30_000, rules: [r2], groups: world([cmd, app]), forecast: fc, growthKB: growth }), st2))[0])
+    evaluateRules(input({ now: 0, rules: [r2], groups: world([cmd, app]), forecast: fc, ...growth }), st2);
+    expect(fires(evaluateRules(input({ now: 30_000, rules: [r2], groups: world([cmd, app]), forecast: fc, ...growth }), st2))[0])
       .toMatchObject({ target: { groupKey: 'app:firefox' } });
   });
 });

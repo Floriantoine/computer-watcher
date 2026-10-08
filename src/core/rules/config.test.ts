@@ -109,9 +109,13 @@ describe('checkRulesTransition', () => {
     expect(checkRulesTransition(prev, { enabled: true, list: [vitest, { ...vitest, id: 'r-b', mode: 'active' }] })).toMatch(/^Une nouvelle règle démarre en Simulation/);
   });
   test('règle existante passée de simulate à active → null', () => {
-    const simulated = { enabled: true, list: [{ ...vitest, simulatedSince: 0 }] };
-    expect(checkRulesTransition(simulated, { enabled: true, list: [{ ...vitest, mode: 'active' }] }, 10 * 60_000)).toBeNull();
-    expect(checkRulesTransition(simulated, { enabled: true, list: [{ ...vitest, mode: 'active' }] }, 9 * 60_000)).toMatch(/Au moins 10 min/);
+    // crédit de Simulation enregistré par le service : ≥ 10 min et ≥ 1 évaluation, même condition
+    const credit = (ms: number, evaluations = 3) => ({ 'r-a': { condition: JSON.stringify(vitest.condition), simulatedMs: ms, evaluations } });
+    const next = { enabled: true, list: [{ ...vitest, mode: 'active' as const }] };
+    expect(checkRulesTransition(prev, next, credit(10 * 60_000))).toBeNull();
+    expect(checkRulesTransition(prev, next, credit(9 * 60_000))).toMatch(/Au moins 10 min.*encore 1 min/);
+    expect(checkRulesTransition(prev, next, credit(60 * 60_000, 0))).toMatch(/aucune évaluation/);
+    expect(checkRulesTransition(prev, next, null)).toMatch(/Au moins 10 min/);
   });
   test('règle nouvelle en simulation → null', () => {
     expect(checkRulesTransition(prev, { enabled: true, list: [vitest, { ...vitest, id: 'r-b' }] })).toBeNull();
@@ -128,10 +132,8 @@ describe('checkRulesTransition', () => {
 });
 
 describe('revue de sécurité', () => {
-  test('simulatedSince : optionnel, entier ≥ 0, gardé', () => {
-    expect(one({ ...vitest, simulatedSince: 5 }).rules.list[0]!.simulatedSince).toBe(5);
-    expect(one({ ...vitest, simulatedSince: -1 }).issues[0]!.error).toMatch(/simulation/);
-    expect(one({ ...vitest, simulatedSince: 'hier' }).issues).toHaveLength(1);
+  test('m-3 : un simulatedSince écrit à la main n’est pas recopié (aucun crédit)', () => {
+    expect(one({ ...vitest, simulatedSince: 0 }).rules.list[0]).toEqual(vitest);
   });
   test('M-4 : 100 000 règles invalides → au plus 20 erreurs + une ligne « … et n autres »', () => {
     const list = Array.from({ length: 100_000 }, (_, i) => ({ ...vitest, id: `r-${i}`, mode: 'kill' }));

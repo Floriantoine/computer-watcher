@@ -14,8 +14,7 @@ import type { Notifier, NotifyRequest } from './notify';
 import { createRecorder } from './recorder';
 
 const GB = 1024 * 1024;
-// simulatedSince ancien : une règle Active est effective (sinon le service la traite en Simulation, voir recorder.rules.safety)
-const vitestRule = (over: Partial<Rule> = {}): Rule => ({ ...RULE_TEMPLATES[0]!, id: 'r-v', createdAt: 0, enabled: true, simulatedSince: 0, ...over });
+const vitestRule = (over: Partial<Rule> = {}): Rule => ({ ...RULE_TEMPLATES[0]!, id: 'r-v', createdAt: 0, enabled: true, ...over });
 
 function setup(o: { rules?: RulesConfig; protectedNames?: string[] } = {}) {
   const base = mkdtempSync(join(tmpdir(), 'pw-rules-'));
@@ -39,6 +38,9 @@ function setup(o: { rules?: RulesConfig; protectedNames?: string[] } = {}) {
       classify: { detectPorts: false, overrides: {} }, rules,
     }));
   writeCfg(o.rules ?? { enabled: true, list: [vitestRule()] });
+  // crédit de Simulation déjà enregistré (sinon une règle Active est traitée en Simulation, voir recorder.rules.safety)
+  mkdirSync(join(base, 'data'), { recursive: true });
+  writeFileSync(join(base, 'data', 'rules-simulation.json'), JSON.stringify({ 'r-v': { condition: JSON.stringify(vitestRule().condition), simulatedMs: 3600_000, evaluations: 100 } }));
   let t = 10_000_000;
   let mono = 0;
   const kill = vi.fn<KillFn>();

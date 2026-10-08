@@ -17,7 +17,8 @@ import { recordSeparate, stickyIds } from '../core/grouping/stickyCards';
 import { killRequest, planKill, sendSignals } from '../core/kill';
 import { compileProtection } from '../core/protection';
 import { formatAppEvent } from '../core/history/events';
-import { appEventsPath, dataDir, focusStatePath, forecastSnoozePath } from '../core/paths';
+import { appEventsPath, dataDir, focusStatePath, forecastSnoozePath, rulesSimulationPath } from '../core/paths';
+import { readSimStatsFile } from '../core/rules/simulationFile';
 import { alertIdFromArgv } from '../core/alerts';
 import { buildSnapshot, flattenGroup, groupProcs, instanceTargets, isWatch, othersFollowed, type Classification, type FullSnapshot } from '../core/snapshot';
 import type { ConfigState, Group, KillResult, ProcInfo, RecorderState, Watch } from '../core/types';
@@ -413,7 +414,7 @@ ipcMain.handle('group:procs', (_e, id: unknown) => (typeof id === 'string' && la
 
 ipcMain.handle('config:set', (_e, next: unknown) => {
   // validation stricte (règles comprises) et transition des règles : une nouvelle règle démarre en Simulation
-  const checked = checkConfigSet(next, config);
+  const checked = checkConfigSet(next, config, readSimStatsFile(rulesSimulationPath(data)));
   const valid = keepSeenUpTo(checked, config);
   const recorderChanged = valid.recorder.enabled !== config.recorder.enabled;
   const trayChanged = valid.ui.trayIcon !== config.ui.trayIcon;
