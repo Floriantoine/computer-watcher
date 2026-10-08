@@ -25,5 +25,8 @@ describe('categoryForPorts', () => {
     expect(categoryForPorts([3000], 'node /home/next/server.js')).toBe('back');
     expect(categoryForPorts([3000], 'node --name=next s.js')).toBe('back');
     expect(categoryForPorts([3000], 'node /x/node_modules/.bin/NEXT dev')).toBe('front');
+    expect(categoryForPorts([3000], 'node node_modules/react-scripts/scripts/start.js')).toBe('front');
+    expect(categoryForPorts([3000], 'node node_modules/next/dist/bin/next dev')).toBe('front');
+    expect(categoryForPorts([3000], 'node server.js next')).toBe('back');
   });
 });

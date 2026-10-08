@@ -7,7 +7,13 @@ const BACK = new Set([4000, 5000, 8000, 8080, 8081, 9000]);
 const FRONT_PROGRAMS = new Set(['next', 'react-scripts']);
 
 function hasFrontProgram(chainText: string): boolean {
-  return chainText.split(/\s+/).some((tok) => FRONT_PROGRAMS.has((tok.split('/').pop() ?? '').toLowerCase()));
+  const toks = chainText.split(/\s+/).filter(Boolean);
+  if (toks.some((t) => /(^|\/)node_modules\/(next|react-scripts)\//i.test(t))) return true;
+  const isFront = (t: string) => FRONT_PROGRAMS.has((t.split('/').pop() ?? '').toLowerCase());
+  if (toks.length === 0) return false;
+  if (isFront(toks[0])) return true;
+  const firstArg = toks.slice(1).find((t) => !t.startsWith('-'));
+  return firstArg !== undefined && isFront(firstArg);
 }
 
 // Précédence quand plusieurs ports : db > front > back.
