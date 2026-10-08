@@ -779,3 +779,15 @@ table.tree small.branch-total { display: block; white-space: nowrap; color: var(
 .overrides .ov-sig { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; justify-self: start; max-width: 100%; }
 .overrides .ov-remove { width: 24px; height: 24px; padding: 0; justify-content: center; border: none; background: none; border-radius: 99px; color: var(--muted); }
 .overrides .ov-remove:hover:not(:disabled) { background: rgba(255, 255, 255, 0.1); border: none; color: var(--text); }
+
+/* Rejeu « voyage dans le temps » (détail) */
+.replay-play { flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; font-size: 11.5px; border-radius: 99px; background: rgba(231, 233, 238, 0.08); border: 1px solid rgba(231, 233, 238, 0.22); color: var(--text); }
+.replay-play:hover { background: rgba(231, 233, 238, 0.14); }
+.replay-panel { border-color: rgba(231, 233, 238, 0.22); }
+.replay-banner { background: rgba(231, 233, 238, 0.05); flex-wrap: wrap; row-gap: 4px; }
+.replay-banner > svg { color: var(--text-2); flex: none; }
+.replay-banner .sub { min-width: 0; }
+table.replay-tree td.name { color: var(--text-2); }
+table.replay-tree td.state { color: var(--label); }
+table.replay-tree tr.dead td { opacity: 0.45; }
+table.replay-tree tr.dead td.state { opacity: 1; color: var(--muted); }

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import type { ProcInfo, ProcNode, ProcTreeRow } from '../../core/types';
 import { liveKeySet, nextReplayTs, REPLAY_SPEED, replayTree, type ReplayNode } from './replay';
+import { replayReducer, type ReplayState } from './useReplay';
 
 const row = (pid: number, ppid: number | null, rssKB = 100, swapKB: number | null = 0, lastSeenTs = 1000): ProcTreeRow => ({
   pid, startTicks: pid * 10, ppid, name: `p${pid}`, rssKB, swapKB, cpu: 0, sampleTs: 500, lastSeenTs,
@@ -50,4 +51,48 @@ test('nextReplayTs : ×60, borné à la fin de la plage', () => {
   const a = nextReplayTs(t, range, 1000);
   expect(a).toEqual({ ts: t + 60_000, done: false });
   expect(nextReplayTs(a.ts, range, 1000)).toEqual({ ts: t + 90_000, done: true });
+});
+
+describe('replayReducer (état du rejeu)', () => {
+  const t = 1_000_000;
+  const range = { from: t - 600_000, to: t + 90_000 };
+  const direct: ReplayState = { instant: null, playing: false, range: null };
+
+  test('pick fige l\'instant sans lecture', () => {
+    expect(replayReducer(direct, { type: 'pick', ts: t })).toEqual({ instant: t, playing: false, range: null });
+  });
+
+  test('play sans instant : départ au début de la plage', () => {
+    expect(replayReducer(direct, { type: 'play', range })).toEqual({ instant: range.from, playing: true, range });
+  });
+
+  test('play depuis un instant figé : départ à cet instant', () => {
+    expect(replayReducer({ instant: t, playing: false, range: null }, { type: 'play', range })).toEqual({ instant: t, playing: true, range });
+  });
+
+  test('play depuis la fin de la plage (ou hors plage) : repart du début', () => {
+    expect(replayReducer({ instant: range.to, playing: false, range }, { type: 'play', range })).toMatchObject({ instant: range.from, playing: true });
+    expect(replayReducer({ instant: range.from - 1, playing: false, range: null }, { type: 'play', range })).toMatchObject({ instant: range.from });
+  });
+
+  test('tick : +60 s par seconde ; au-delà de la fin, instant = fin et lecture arrêtée', () => {
+    const s1 = replayReducer({ instant: t, playing: true, range }, { type: 'tick', elapsedMs: 1000 });
+    expect(s1).toEqual({ instant: t + 60_000, playing: true, range });
+    expect(replayReducer(s1, { type: 'tick', elapsedMs: 1000 })).toEqual({ instant: range.to, playing: false, range });
+  });
+
+  test('tick sans lecture : rien ne bouge', () => {
+    const s = { instant: t, playing: false, range };
+    expect(replayReducer(s, { type: 'tick', elapsedMs: 1000 })).toBe(s);
+  });
+
+  test('pause garde l\'instant ; live revient au direct', () => {
+    const playing = { instant: t, playing: true, range };
+    expect(replayReducer(playing, { type: 'pause' })).toEqual({ instant: t, playing: false, range });
+    expect(replayReducer(playing, { type: 'live' })).toEqual(direct);
+  });
+
+  test('pick pendant la lecture : met en pause', () => {
+    expect(replayReducer({ instant: t, playing: true, range }, { type: 'pick', ts: t - 5000 })).toMatchObject({ instant: t - 5000, playing: false });
+  });
 });

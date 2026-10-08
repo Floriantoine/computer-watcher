@@ -1,13 +1,17 @@
 import { useCallback, useMemo, useRef } from 'react';
 import { motion } from 'motion/react';
-import { ArrowLeft, ChevronRight, Lock, Shield, ShieldOff, X } from 'lucide-react';
+import { ArrowLeft, ChevronRight, History, Lock, Shield, ShieldOff, X } from 'lucide-react';
 import type { Category, GroupSummary as Group, InstanceSummary, ProcNode } from '../../../core/types';
 import { formatAge, formatKB } from '../format';
 import { procSparkMap, useHistory } from '../history';
 import { GroupHistoryPanel } from './GroupHistoryPanel';
 import { ticksIndex } from '../instances';
+import { formatInstant } from '../metrics';
+import { liveKeySet, replayTree } from '../replay';
+import { useReplay, type Replay } from '../useReplay';
 import { InstancesPanel } from './InstancesPanel';
 import { ProcTree } from './ProcTree';
+import { ReplayTree } from './ReplayTree';
 import { AnimatedNumber, ForceButton, GroupIcon } from './ui';
 
 interface Props {
@@ -40,6 +44,40 @@ function BackButton({ onBack }: { onBack: () => void }) {
   );
 }
 
+/** Arbre reconstruit à l'instant examiné, à la place de l'arbre en direct. */
+function ReplayPanel({ replay, liveRoots }: { replay: Replay; liveRoots: ProcNode[] | null }) {
+  const instant = replay.instant!;
+  const tree = replay.tree;
+  const live = useMemo(() => liveKeySet(liveRoots), [liveRoots]);
+  // Tant que l'arbre en direct n'est pas arrivé, personne n'est déclaré mort.
+  const nodes = useMemo(
+    () => (tree ? replayTree(tree.procs, (pid, st) => liveRoots === null || live.has(`${pid}:${st}`)) : []),
+    [tree, live, liveRoots],
+  );
+  return (
+    <div className="panel replay-panel">
+      <div className="panel-head replay-banner" data-testid="replay-banner">
+        <History size={14} strokeWidth={2} />
+        <h3>Arbre au {formatInstant(instant)}</h3>
+        <span className="sub">
+          — seuls les processus au-dessus des seuils d'enregistrement apparaissent{tree?.source === 'minute' ? ' (moyennes par minute)' : ''}
+        </span>
+        <span className="spacer" />
+        <button className="tree-toggle-all" data-testid="replay-live" onClick={replay.live}>Revenir au direct</button>
+      </div>
+      {tree === undefined ? (
+        <p className="empty">Chargement…</p>
+      ) : tree === null ? (
+        <p className="empty">Historique indisponible</p>
+      ) : nodes.length === 0 ? (
+        <p className="empty">Aucun processus enregistré à cet instant</p>
+      ) : (
+        <ReplayTree nodes={nodes} at={instant} />
+      )}
+    </div>
+  );
+}
+
 export function DetailView(props: Props) {
   const { group, onBack } = props;
   const groupId = group?.id;
@@ -49,6 +87,7 @@ export function DetailView(props: Props) {
     [groupId, others],
   );
   const sparks = useMemo(() => procSparkMap(procs), [procs]);
+  const replay = useReplay(groupId ?? '');
   const sparkOf = useCallback((pid: number, startTicks: number) => sparks.get(`${pid}:${startTicks}`), [sparks]);
   // Index pid → startTicks : même objet tant que l'arbre a les mêmes processus (lignes d'instances mémoïsées).
   const ticksRef = useRef<Map<number, number> | undefined>(undefined);
@@ -118,7 +157,7 @@ export function DetailView(props: Props) {
           onKillInstances={props.onKillInstances}
         />
       )}
-      {!others && <GroupHistoryPanel key={group.id} groupId={group.id} />}
+      {!others && <GroupHistoryPanel key={group.id} groupId={group.id} replay={replay} />}
       {group.subgroups.length > 0 ? (
         <div className="subgroups">
           {group.subgroups.map((sg) => (
@@ -130,6 +169,8 @@ export function DetailView(props: Props) {
             </div>
           ))}
         </div>
+      ) : replay.instant !== null ? (
+        <ReplayPanel replay={replay} liveRoots={props.roots} />
       ) : !props.roots ? (
         <div className="panel"><p className="empty">Chargement…</p></div>
       ) : (
