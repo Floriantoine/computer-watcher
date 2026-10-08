@@ -2,7 +2,9 @@ import { memo, type MouseEvent, type Ref } from 'react';
 import { motion, useIsPresent } from 'motion/react';
 import { Lock } from 'lucide-react';
 import type { GroupSummary as Group } from '../../../core/types';
+import { hasDuplicate, instancesLine, primaryTag } from '../categoryFilter';
 import { formatAge, formatCpu } from '../format';
+import { CategoryTag, DuplicateBadge } from './CategoryTag';
 import { barWidth } from '../motionBudget';
 import { cardDisplayEqual, sameSeries } from '../renderEquality';
 import { cardTone } from '../theme';
@@ -45,6 +47,8 @@ function GroupCardImpl({ group, memTotalKB, spark, stuck, pending, leak, layoutK
     if (isPresent) fn();
   };
   const sub = [`${group.procCount} processus`, ...group.tags].join(' · ');
+  const tag = primaryTag(group);
+  const line = group.kind === 'project' || group.kind === 'deleted' ? instancesLine(group) : '';
   return (
     <motion.div
       ref={ref}
@@ -70,12 +74,20 @@ function GroupCardImpl({ group, memTotalKB, spark, stuck, pending, leak, layoutK
                 <Lock size={12} strokeWidth={2.4} />
               </span>
             )}
+            {tag && <CategoryTag category={tag.category} port={tag.port} />}
+            {!line && hasDuplicate(group) && <DuplicateBadge />}
             {leak && <LeakBadge onClick={stop(() => actions.leak(group.id))} />}
           </div>
           <div className="sub" title={sub}>{sub}</div>
         </div>
       </div>
       <AnimatedNumber className="big" value={total} />
+      {line && (
+        <div className="instances-row">
+          <span className="instances-line mono" data-testid="instances-line" title={line}>{line}</span>
+          {hasDuplicate(group) && <DuplicateBadge />}
+        </div>
+      )}
       <Sparkline values={spark} tone={cardTone(pct)} height={28} />
       <div className="bar"><i className={`tone-${cardTone(pct)}`} style={{ width: barWidth(pct) }} /></div>
       <div className="card-foot">

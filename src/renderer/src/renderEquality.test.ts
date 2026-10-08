@@ -29,6 +29,22 @@ describe('cardDisplayEqual : une carte dont l\'affichage ne change pas ne se re-
   });
 });
 
+describe('catégories (étiquette, résumé, doublon)', () => {
+  const i = (extra: Partial<GroupSummary['instances'][number]> = {}) => ({
+    key: 'k', groupId: 'app:chrome', project: null, category: 'front' as const, source: 'command' as const, signature: 'vite', label: 'vite',
+    rootPid: 1, rootStartTicks: 1, pids: [1], ports: [5173], ageSec: 10, rssKB: 1, swapKB: 0, cpuPercent: 0, duplicate: false, protected: false, ...extra,
+  });
+  test('RAM/CPU d\'instance changés → égal ; port, catégorie ou doublon changés → différent (carte et ligne)', () => {
+    const a = g({ categories: ['front'], instances: [i()] });
+    expect(cardDisplayEqual(a, g({ categories: ['front'], instances: [i({ rssKB: 9, cpuPercent: 4 })] }), MEM, MEM)).toBe(true);
+    for (const b of [i({ ports: [5174] }), i({ category: 'back' }), i({ duplicate: true })]) {
+      const gb = g({ categories: [b.category], instances: [b] });
+      expect(cardDisplayEqual(a, gb, MEM, MEM)).toBe(false);
+      expect(rowDisplayEqual(a, gb)).toBe(false);
+    }
+  });
+});
+
 describe('rowDisplayEqual (vue liste)', () => {
   test('même affichage → égal ; swap affiché changé → différent', () => {
     expect(rowDisplayEqual(g(), g({ rssKB: 2_000_300 }))).toBe(true);

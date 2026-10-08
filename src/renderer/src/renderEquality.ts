@@ -1,6 +1,7 @@
 // Comparaisons « ce qui est affiché » pour React.memo : un snapshot arrive toutes les 3 s avec des objets neufs,
 // mais la plupart des cartes et lignes affichent exactement les mêmes textes. Celles-là ne se re-rendent pas.
 import type { GroupSummary, ProcInfo } from '../../core/types';
+import { categoryDisplayKey } from './categoryFilter';
 import { formatAge, formatCpu, formatKB } from './format';
 import { barWidth } from './motionBudget';
 import { cardTone } from './theme';
@@ -28,7 +29,8 @@ function baseEqual(a: GroupSummary, b: GroupSummary): boolean {
     formatKB(a.rssKB + a.swapKB) === formatKB(b.rssKB + b.swapKB) &&
     formatCpu(a.cpuPercent) === formatCpu(b.cpuPercent) &&
     formatAge(a.oldestAgeSec) === formatAge(b.oldestAgeSec) &&
-    a.oldestAgeSec > DAY === b.oldestAgeSec > DAY
+    a.oldestAgeSec > DAY === b.oldestAgeSec > DAY &&
+    (a.instances === b.instances || categoryDisplayKey(a) === categoryDisplayKey(b))
   );
 }
 

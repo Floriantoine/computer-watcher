@@ -2,7 +2,9 @@ import { memo, useLayoutEffect, useRef, useState, type MouseEvent, type Ref } fr
 import { AnimatePresence, motion, useIsPresent } from 'motion/react';
 import { ChevronDown, ChevronUp, Lock } from 'lucide-react';
 import type { GroupSummary as Group } from '../../../core/types';
+import { hasDuplicate, primaryTag } from '../categoryFilter';
 import { formatAge, formatCpu, formatKB } from '../format';
+import { CategoryTag, DuplicateBadge } from './CategoryTag';
 import { sortForList, type ListColumn } from '../listSort';
 import { rowDisplayEqual, sameSeries } from '../renderEquality';
 import type { GroupActions } from './GroupCard';
@@ -42,6 +44,7 @@ interface RowProps {
 
 function GroupRowImpl({ group, spark, stuck, pending, leak, layoutKey, actions, ref }: RowProps) {
   const isPresent = useIsPresent();
+  const tag = primaryTag(group);
   const stop = (fn: () => void) => (e: MouseEvent) => {
     e.stopPropagation();
     if (isPresent) fn();
@@ -70,6 +73,8 @@ function GroupRowImpl({ group, spark, stuck, pending, leak, layoutKey, actions, 
               <Lock size={12} strokeWidth={2.4} />
             </span>
           )}
+          {tag && <CategoryTag category={tag.category} port={tag.port} />}
+          {hasDuplicate(group) && <DuplicateBadge />}
           {leak && <LeakBadge onClick={stop(() => actions.leak(group.id))} />}
         </span>
       </td>
