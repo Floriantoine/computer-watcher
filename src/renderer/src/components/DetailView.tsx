@@ -1,16 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { ArrowLeft, ChartLine, ChevronRight, Lock, Shield, ShieldOff, X } from 'lucide-react';
+import { ArrowLeft, ChartLine, ChevronRight, Lock, PenLine, Shield, ShieldOff, X } from 'lucide-react';
 import type { Category, GroupSummary as Group, InstanceSummary, ProcNode, RangePreset } from '../../../core/types';
 import { formatAge, formatKB } from '../format';
 import { procSparkMap, useHistory } from '../history';
-import { ticksIndex } from '../instances';
+import { showRevertToAuto, ticksIndex } from '../instances';
+import { headerReclassTarget } from '../reclassHeader';
 import { useChartZoom, ZoomChip } from '../chartZoom';
 import { PRESET_MS, refreshMsFor } from '../metrics';
 import { groupChartSeries } from './charts/chartData';
 import { TimeChart } from './charts/TimeChart';
 import { KB_FORMAT, PERCENT_FORMAT } from './charts/uplotTheme';
+import { CategoryTag } from './CategoryTag';
 import { InstancesPanel } from './InstancesPanel';
+import { ReclassMenu } from './ReclassMenu';
 import { ProcTree } from './ProcTree';
 import { RangeSelector } from './RangeSelector';
 import { AnimatedNumber, ForceButton, GroupIcon } from './ui';
@@ -110,6 +113,7 @@ export function DetailView(props: Props) {
   // Index pid → startTicks : même objet tant que l'arbre a les mêmes processus (lignes d'instances mémoïsées).
   const ticksRef = useRef<Map<number, number> | undefined>(undefined);
   const ticksOf = useMemo(() => (ticksRef.current = ticksIndex(props.roots, ticksRef.current)), [props.roots]);
+  const [reclassOpen, setReclassOpen] = useState(false);
   if (!group && props.pending) return <p className="empty">Chargement…</p>;
   if (!group) {
     return (
@@ -121,6 +125,8 @@ export function DetailView(props: Props) {
   }
   const stuck = group.pids.filter((pid) => props.stuckPids.has(pid));
   const pending = group.pids.some((pid) => props.pendingPids.has(pid));
+  // Groupes hors projet (app, commande, Claude) : leur instance unique se reclasse depuis l'en-tête (étiquette seulement).
+  const reclass = headerReclassTarget(group);
   return (
     <>
       <div className="page-head">
@@ -135,6 +141,26 @@ export function DetailView(props: Props) {
           )}
         </h2>
         <span className="spacer" />
+        {reclass && (
+          <span className="head-reclass" data-testid="header-reclass">
+            <CategoryTag category={reclass.category} />
+            {reclass.source === 'manual' && (
+              <span className="inst-manual" title="Classé à la main" aria-label="Classé à la main" role="img">
+                <PenLine size={11} strokeWidth={2.4} />
+              </span>
+            )}
+            <ReclassMenu
+              current={reclass.category}
+              revert={showRevertToAuto(reclass)}
+              open={reclassOpen}
+              onOpen={setReclassOpen}
+              onPick={(c) => {
+                setReclassOpen(false);
+                props.onReclassify(reclass, c);
+              }}
+            />
+          </span>
+        )}
         {group.kind !== 'others' && (
           <button onClick={() => props.onToggleProtect(group)}>
             {props.rootProtectedByName ? <ShieldOff size={14} strokeWidth={2} /> : <Shield size={14} strokeWidth={2} />}

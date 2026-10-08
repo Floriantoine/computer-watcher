@@ -820,3 +820,8 @@ table.group-list tr.others-see-all-row, table.group-list tr.others-loading-row {
 table.group-list tr.others-see-all-row:hover, table.group-list tr.others-loading-row:hover { background: none; }
 table.group-list tr.others-see-all-row td { padding-left: 34px; }
 table.group-list tr.others-loading-row td { padding-left: 34px; color: var(--muted); }
+
+/* Détail → « Reclasser » dans l'en-tête des groupes hors projet */
+.head-reclass { display: inline-flex; align-items: center; gap: 8px; }
+.head-reclass .cat-tag { font-size: 11.5px; }
+.page-head .reclass-btn { padding: 7px 12px; font-size: inherit; border-radius: var(--r-md); }

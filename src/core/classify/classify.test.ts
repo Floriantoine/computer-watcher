@@ -340,6 +340,16 @@ describe('classifyGroups', () => {
     expect(run([d, c])).toEqual([8003]);
   });
 
+  it('« Reclasser » depuis l\'en-tête : override command:gitstatusd|<signature> = back → back (manual)', () => {
+    const gs = proc('gitstatusd', '/home/u/.cache/gitstatus/gitstatusd-linux-x86_64 -G v1.5.4 -s -1 -u -1');
+    const g = group('command:gitstatusd', 'command', [node(gs)]);
+    const auto = classifyGroups([g], ctx()).get(g.id)!.instances[0];
+    expect(auto.source).not.toBe('manual');
+    const r = classifyGroups([g], ctx({ overrides: { [`command:gitstatusd|${auto.signature}`]: 'back' } })).get(g.id)!;
+    expect(r.instances[0]).toMatchObject({ category: 'back', source: 'manual', signature: auto.signature });
+    expect(r.categories).toEqual(['back']);
+  });
+
   it('groupes non-projet : launcherPids vide', () => {
     const c = proc('chrome', '/opt/google/chrome/chrome');
     const g = group('app:chrome', 'app', [node(c)]);
