@@ -91,3 +91,33 @@ const AUTO_REFRESH_MS = 30_000;
 export function refreshMsFor(preset: RangePreset, zoomed: boolean): number | null {
   return zoomed || preset === '7d' || preset === '30d' ? null : AUTO_REFRESH_MS;
 }
+
+const WHEEL_FACTOR = 1.25;
+
+/** Garde `[from, from + span]` dans les bornes en le décalant (la largeur ne change pas). */
+function clampWindow(from: number, span: number, bounds: TimeRange): TimeRange {
+  const f = Math.min(Math.max(from, bounds.from), bounds.to - span);
+  return { from: f, to: f + span };
+}
+
+/**
+ * Ctrl + molette : zoom de 25 % par cran centré sur `anchor` (l'instant sous la souris reste sous la souris).
+ * Jamais plus court que `minMs` ; `null` quand on dézoome jusqu'à la plage complète (retour à la plage choisie).
+ */
+export function wheelZoom(view: TimeRange, bounds: TimeRange, anchor: number, deltaY: number, minMs: number): TimeRange | null {
+  if (deltaY === 0) return view;
+  const span = view.to - view.from;
+  const full = bounds.to - bounds.from;
+  const next = Math.max(minMs, Math.min(full, deltaY < 0 ? span / WHEEL_FACTOR : span * WHEEL_FACTOR));
+  if (next >= full) return null;
+  const ratio = span > 0 ? (anchor - view.from) / span : 0.5;
+  return clampWindow(Math.round(anchor - ratio * next), Math.round(next), bounds);
+}
+
+/** Maj + molette : déplace la fenêtre zoomée de 10 % de sa largeur par cran, sans sortir des bornes ; `null` si pas de zoom. */
+export function wheelPan(view: TimeRange, bounds: TimeRange, delta: number): TimeRange | null {
+  const span = view.to - view.from;
+  if (span >= bounds.to - bounds.from) return null;
+  const shift = Math.max(-span, Math.min(span, (span * 0.1 * delta) / 100));
+  return clampWindow(Math.round(view.from + shift), span, bounds);
+}

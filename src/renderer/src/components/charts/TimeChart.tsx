@@ -28,6 +28,10 @@ interface Props {
   focusSeries?: number | null;
   /** Marqueur mis en avant (son horodatage) : net, épais et légendé ; les autres estompés. */
   focusMarker?: number | null;
+  /** Fenêtre de temps affichée (zoom molette) ; absente = étendue des données. */
+  xRange?: { from: number; to: number } | null;
+  /** Ctrl + molette (zoom) ou Maj + molette (déplacement) sur le graphe. */
+  onWheel?: (w: { anchor: number; delta: number; pan: boolean }) => void;
 }
 
 interface Tip {
@@ -53,15 +57,15 @@ function zeroBased(_u: uPlot, _min: number, max: number): uPlot.Range.MinMax {
   return [0, max > 0 ? max * 1.08 : 1];
 }
 
-export function TimeChart({ ts, series, height, format, markers, onCursor, onSelectRange, focusSeries = null, focusMarker = null }: Props) {
+export function TimeChart({ ts, series, height, format, markers, onCursor, onSelectRange, focusSeries = null, focusMarker = null, xRange = null, onWheel }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const plot = useRef<uPlot | null>(null);
   const reduce = !!useReducedMotionConfig();
   const [tip, setTip] = useState<Tip | null>(null);
 
   // Valeurs lues par les hooks uPlot sans recréer l'instance.
-  const live = useRef({ ts, series, format, markers, onCursor, onSelectRange, focusMarker });
-  live.current = { ts, series, format, markers, onCursor, onSelectRange, focusMarker };
+  const live = useRef({ ts, series, format, markers, onCursor, onSelectRange, focusMarker, onWheel });
+  live.current = { ts, series, format, markers, onCursor, onSelectRange, focusMarker, onWheel };
 
   const key = structureKey(series);
   const data = useMemo(() => toAligned(ts, series), [ts, series]);
@@ -178,6 +182,19 @@ export function TimeChart({ ts, series, height, format, markers, onCursor, onSel
             });
             u.over.addEventListener('dblclick', () => live.current.onSelectRange?.(null));
             u.over.addEventListener('mouseleave', () => setTip(null));
+            // Ctrl + molette : zoom (et pas le zoom de page d'Electron) ; Maj + molette : déplacement. Molette seule : la page défile.
+            u.over.addEventListener(
+              'wheel',
+              (e) => {
+                if (!e.ctrlKey && !e.shiftKey) return;
+                e.preventDefault();
+                const delta = e.deltaY || e.deltaX;
+                if (!delta || !live.current.onWheel) return;
+                const rect = u.over.getBoundingClientRect();
+                live.current.onWheel({ anchor: u.posToVal(e.clientX - rect.left, 'x'), delta, pan: !e.ctrlKey });
+              },
+              { passive: false },
+            );
           },
         ],
       },
@@ -206,9 +223,14 @@ export function TimeChart({ ts, series, height, format, markers, onCursor, onSel
     if (u && u.height !== height) u.setSize({ width: u.width, height });
   }, [height]);
 
+  const xFrom = xRange?.from ?? null;
+  const xTo = xRange?.to ?? null;
   useEffect(() => {
-    plot.current?.setData(data);
-  }, [data]);
+    const u = plot.current;
+    if (!u) return;
+    u.setData(data, xFrom === null);
+    if (xFrom !== null && xTo !== null) u.setScale('x', { min: xFrom, max: xTo });
+  }, [data, xFrom, xTo, key]);
 
   useEffect(() => {
     plot.current?.redraw(false);

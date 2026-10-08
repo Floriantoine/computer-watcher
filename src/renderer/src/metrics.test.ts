@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { alertsFrom, eventMarkers, fetchMetrics, formatInstant, investigationSeries, refreshMsFor } from './metrics';
+import { alertsFrom, eventMarkers, fetchMetrics, formatInstant, investigationSeries, refreshMsFor, wheelPan, wheelZoom } from './metrics';
 
 test('investigationSeries : top n + Reste, valeurs brutes (courbes séparées, pas d\'empilement)', () => {
   const h = {
@@ -93,4 +93,33 @@ test('refreshMsFor : 30 s jusqu\'à 24 h, jamais pour 7 j / 30 j ni en zoom', ()
   expect(refreshMsFor('7d', false)).toBeNull();
   expect(refreshMsFor('30d', false)).toBeNull();
   expect(refreshMsFor('1h', true)).toBeNull();
+});
+
+const M = 60_000;
+const bounds = { from: 0, to: 60 * M };
+
+test('wheelZoom : zoom avant centré sur la souris (le point sous la souris ne bouge pas)', () => {
+  const r = wheelZoom(bounds, bounds, 15 * M, -100, 10 * M)!;
+  expect(r.to - r.from).toBeCloseTo(48 * M, -3); // 60 / 1,25
+  // 15 min est au quart de la fenêtre avant comme après
+  expect((15 * M - r.from) / (r.to - r.from)).toBeCloseTo(0.25, 5);
+});
+
+test('wheelZoom : jamais sous la durée minimale, et reste dans les bornes', () => {
+  const r = wheelZoom({ from: 0, to: 11 * M }, bounds, 0, -100, 10 * M)!;
+  expect(r.to - r.from).toBe(10 * M);
+  expect(r.from).toBe(0);
+});
+
+test('wheelZoom : dézoomer jusqu\'à la plage complète rend null (retour à la plage choisie)', () => {
+  expect(wheelZoom({ from: 10 * M, to: 58 * M }, bounds, 30 * M, 100, 10 * M)).toBeNull();
+  const r = wheelZoom({ from: 20 * M, to: 40 * M }, bounds, 30 * M, 100, 10 * M)!;
+  expect(r.to - r.from).toBe(25 * M);
+});
+
+test('wheelPan : décale la fenêtre sans sortir des bornes ; sans zoom, rien à déplacer', () => {
+  expect(wheelPan({ from: 10 * M, to: 20 * M }, bounds, 100)).toEqual({ from: 11 * M, to: 21 * M }); // 10 % de la fenêtre par cran
+  expect(wheelPan({ from: 55 * M, to: 59 * M + 30_000 }, bounds, 1000)).toEqual({ from: 55 * M + 30_000, to: 60 * M });
+  expect(wheelPan({ from: M, to: 11 * M }, bounds, -1000)).toEqual({ from: 0, to: 10 * M });
+  expect(wheelPan(bounds, bounds, 100)).toBeNull();
 });

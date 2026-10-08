@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Activity, CircleAlert, Cpu, Gauge, HardDrive, MemoryStick, MousePointerClick, Power, RefreshCw, RotateCcw, Search, ZoomIn } from 'lucide-react';
 import type { Culprit, RangePreset, TimeRange } from '../../../core/types';
 import { formatKB } from '../format';
 import { useHistory } from '../history';
 import { ipcErrorMessage } from '../viewModel';
-import { eventMarkers, fetchMetrics, formatInstant, INVESTIGATION_LAYERS, investigationSeries, refreshMsFor } from '../metrics';
+import { eventMarkers, fetchMetrics, formatInstant, INVESTIGATION_LAYERS, investigationSeries, refreshMsFor, wheelPan, wheelZoom } from '../metrics';
 import { AlertsPanel } from './AlertsPanel';
 import { CulpritsPanel } from './CulpritsPanel';
 import { seriesIndexOf, type ChartSeries } from './charts/chartData';
@@ -51,7 +51,18 @@ interface SysChart {
 
 export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
   const [preset, setPreset] = useState<RangePreset>(() => presetFor(at));
-  const [zoom, setZoom] = useState<TimeRange | null>(null);
+  const [zoom, setZoomNow] = useState<TimeRange | null>(null);
+  // Fenêtre affichée : suit la molette tout de suite ; `zoom` (qui recharge les données) suit 250 ms après le dernier cran.
+  const [view, setView] = useState<TimeRange | null>(null);
+  const viewRef = useRef<TimeRange | null>(null);
+  viewRef.current = view;
+  const wheelTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const setZoom = (z: TimeRange | null) => {
+    if (wheelTimer.current) clearTimeout(wheelTimer.current);
+    setView(z);
+    setZoomNow(z);
+  };
+  useEffect(() => () => { if (wheelTimer.current) clearTimeout(wheelTimer.current); }, []);
   const [cursor, setCursor] = useState<number | null>(at ?? null);
   const [statusGen, setStatusGen] = useState(0);
   const [enableError, setEnableError] = useState<string | null>(null);
@@ -145,6 +156,16 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
     const half = Math.max(r.to - r.from, MIN_ZOOM_MS) / 2;
     setZoom({ from: Math.round(mid - half), to: Math.round(mid + half) });
   };
+  const onWheel = (w: { anchor: number; delta: number; pan: boolean }) => {
+    const now = Date.now();
+    const bounds = { from: now - PRESET_MS[preset], to: now };
+    const cur = viewRef.current ?? bounds;
+    if (w.pan && !viewRef.current) return; // rien à déplacer sans zoom
+    const next = w.pan ? wheelPan(cur, bounds, w.delta) : wheelZoom(cur, bounds, w.anchor, w.delta, MIN_ZOOM_MS);
+    setView(next);
+    if (wheelTimer.current) clearTimeout(wheelTimer.current);
+    wheelTimer.current = setTimeout(() => setZoomNow(next), 250);
+  };
   const pickPreset = (p: RangePreset) => {
     setZoom(null);
     setPreset(p);
@@ -168,7 +189,7 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
           </button>
         )}
         <span className="spacer" />
-        <span className="sub hint">Glisser pour zoomer · double-clic pour revenir · clic pour les coupables</span>
+        <span className="sub hint">Glisser ou Ctrl + molette pour zoomer · Maj + molette pour se déplacer · double-clic pour revenir · clic pour les coupables</span>
       </div>
 
       <StatusBanner
@@ -195,7 +216,7 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
               {'sub' in c && <span className="sub">{c.sub}</span>}
             </div>
             {'series' in c ? (
-              <TimeChart ts={system!.ts} series={c.series} height={96} format={c.format} markers={markers} focusMarker={hoverTs} onCursor={setCursor} onSelectRange={onSelectRange} />
+              <TimeChart ts={system!.ts} series={c.series} height={96} format={c.format} markers={markers} focusMarker={hoverTs} xRange={view} onWheel={onWheel} onCursor={setCursor} onSelectRange={onSelectRange} />
             ) : (
               <div className="chart-empty small">{data === undefined ? 'Chargement…' : 'Pas de données'}</div>
             )}
@@ -217,7 +238,7 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
                   </span>
                 ))}
               </div>
-              <TimeChart ts={inv.ts} series={inv.series} height={320} format={KB} markers={markers} focusSeries={focusSeries} focusMarker={hoverTs} onCursor={setCursor} onSelectRange={onSelectRange} />
+              <TimeChart ts={inv.ts} series={inv.series} height={320} format={KB} markers={markers} focusSeries={focusSeries} focusMarker={hoverTs} xRange={view} onWheel={onWheel} onCursor={setCursor} onSelectRange={onSelectRange} />
             </>
           ) : (
             <div className="chart-empty tall">{data === undefined ? 'Chargement…' : 'Pas encore assez de données pour l’enquête'}</div>
