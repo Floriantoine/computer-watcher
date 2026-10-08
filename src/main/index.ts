@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Tray } from 'electron';
 import { appendFileSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -27,6 +27,7 @@ import { createEarlyoomApplier, earlyoomStatus } from './earlyoom';
 import { clearHistory, createHistoryReader } from './history';
 import { pollDelay, type WindowActivity } from './pollPolicy';
 import { sharedScan } from './tmpUsage';
+import { closeAction, createTrayController, defaultRun, statusNotifierAvailable } from './tray';
 import {
   applyOverride, classifySetKey, isGroupKeys, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState as computeRecorderState,
 } from './historyIpc';
@@ -306,6 +307,12 @@ function createWindow(): void {
     schedule();
     if (wasHidden) setLive(true);
   };
+  // Fermer la fenêtre la cache dans la barre des tâches (si l'icône y est réellement) ; le `hide` qui suit suspend la collecte.
+  win.on('close', (e) => {
+    if (closeAction({ closeToTray: config.ui.closeToTray, trayActive: trayCtl !== null, quitting }) !== 'hide') return;
+    e.preventDefault();
+    win.hide();
+  });
   win.on('minimize', () => {
     focusWriter.set(false);
     pause();
@@ -382,6 +389,7 @@ ipcMain.handle('config:set', (_e, next: unknown) => {
   if (!checked) throw new Error('Configuration invalide');
   const valid = keepSeenUpTo(checked, config);
   const recorderChanged = valid.recorder.enabled !== config.recorder.enabled;
+  const trayChanged = valid.ui.trayIcon !== config.ui.trayIcon;
   if (valid.classify.detectPorts !== config.classify.detectPorts) portsAt = 0;
   const overridesChanged = JSON.stringify(valid.classify.overrides) !== JSON.stringify(config.classify.overrides);
   config = valid;
@@ -390,6 +398,7 @@ ipcMain.handle('config:set', (_e, next: unknown) => {
   warning = null;
   saveConfig(dir, config);
   if (recorderChanged) void syncRecorder(true);
+  if (trayChanged) void syncTray();
   // Correction retirée depuis les Réglages : classement à jour sans attendre le prochain tick (fenêtre réduite comprise).
   if (overridesChanged) reclassify();
   return configState();
@@ -509,6 +518,60 @@ function showWindow(): void {
   mainWin.focus();
 }
 
+/**
+ * « Libérer de la mémoire… » du menu de la barre des tâches : montre la fenêtre puis demande au renderer d'ouvrir le
+ * kill groupé pré-rempli (canal 'free', attendu après le chargement si la fenêtre vient d'être recréée).
+ * Point d'accroche de la piste E (`openFree`, `onFree` du preload) : la fusion les relie.
+ */
+function openFreeMemory(): void {
+  showWindow();
+  const wc = mainWin?.webContents;
+  if (!wc) return;
+  if (wc.isLoading()) wc.once('did-finish-load', () => wc.send('free'));
+  else wc.send('free');
+}
+
+// Icône dans la barre des tâches : seulement si le bureau a une zone de notification (StatusNotifierWatcher), sinon
+// fermer la fenêtre quitte comme avant.
+let quitting = false;
+let trayCtl: ReturnType<typeof createTrayController> | null = null;
+let traySyncing: Promise<void> = Promise.resolve();
+app.on('before-quit', () => {
+  quitting = true;
+});
+
+async function doSyncTray(): Promise<void> {
+  if (!config.ui.trayIcon) {
+    trayCtl?.stop();
+    trayCtl = null;
+    return;
+  }
+  if (trayCtl || !(await statusNotifierAvailable(defaultRun)) || !config.ui.trayIcon || quitting) return;
+  trayCtl = createTrayController({
+    createTray: (img) => new Tray(img as Electron.NativeImage),
+    image: (png) => nativeImage.createFromBuffer(png),
+    menu: (items) => Menu.buildFromTemplate(items),
+    readSystem: () => readSystem(),
+    setInterval: (fn, ms) => setInterval(fn, ms),
+    clearInterval: (h) => clearInterval(h as NodeJS.Timeout),
+    onOpen: showWindow,
+    onFree: openFreeMemory,
+    onQuit: () => {
+      quitting = true;
+      app.quit();
+    },
+  });
+}
+
+/** Crée ou retire l'icône selon `config.ui.trayIcon` (appels sérialisés). */
+function syncTray(): Promise<void> {
+  const run = () => doSyncTray().catch((e) => console.error('tray:', e));
+  traySyncing = traySyncing.then(run, run);
+  return traySyncing;
+}
+
+ipcMain.handle('tray:available', () => statusNotifierAvailable(defaultRun));
+
 app.on('second-instance', (_e, argv) => {
   showWindow();
   const id = alertIdFromArgv(argv);
@@ -519,5 +582,6 @@ app.whenReady().then(() => {
   if (!primary) return;
   createWindow();
   void syncRecorder(false);
+  void syncTray();
 });
 app.on('window-all-closed', () => app.quit());

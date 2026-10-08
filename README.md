@@ -17,6 +17,7 @@ Né d'un PC gelé dix minutes par 19 Go de swap : vieilles sessions de terminal,
 - **Programmes protégés** : terminaux, shells, Claude, bureau… Les tuer demande une confirmation qui dit exactement ce qui va mourir. La liste se modifie dans les Réglages et est conservée dans `~/.config/proc-watch/config.json`.
 - **Mini-courbes** de mémoire sur chaque carte et **vue liste** compacte en alternative aux cartes.
 - **Historique en arrière-plan** et onglet **Métriques** (voir plus bas).
+- **Icône dans la barre des tâches** : un anneau montre la RAM utilisée, sa couleur suit la pression mémoire (normal, orange, rouge). Son menu donne la RAM, le swap, la pression et la charge, et propose « Ouvrir proc-watch », « Libérer de la mémoire… » et « Quitter ». Fermer la fenêtre la cache dans la barre au lieu de quitter ; la collecte est alors suspendue, comme fenêtre réduite. Les deux se coupent dans Réglages → Affichage. Sur un bureau sans zone de notification (pas de `StatusNotifierWatcher` sur le bus de session), pas d'icône et fermer la fenêtre quitte l'app.
 - proc-watch refuse de tuer lui-même, ses parents (ton terminal) et les processus des autres utilisateurs.
 
 ## Classement front / back et actions groupées

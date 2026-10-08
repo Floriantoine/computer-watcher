@@ -80,6 +80,10 @@ const api = {
       };
     },
   },
+  tray: {
+    /** Le bureau a-t-il une zone de notification (StatusNotifierWatcher) ? Sinon fermer la fenêtre quitte l'app. */
+    available: (): Promise<boolean> => ipcRenderer.invoke('tray:available'),
+  },
   tmp: {
     /** Plus gros dossiers de /tmp à cet instant (lecture seule, au plus 100 000 entrées ou 2 s). */
     topDirs: (): Promise<TmpUsage> => ipcRenderer.invoke('tmp:topDirs'),

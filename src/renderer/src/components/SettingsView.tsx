@@ -124,6 +124,18 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
   const [now, setNow] = useState(() => Date.now());
   const [alertsForm, setAlertsForm] = useState<FormState>(CALM);
   const [eo, setEo] = useState<EarlyoomAttention>({ ...CALM, status: null });
+  /** Zone de notification présente sur ce bureau ? null tant que la réponse n'est pas arrivée. */
+  const [trayOk, setTrayOk] = useState<boolean | null>(null);
+  useEffect(() => {
+    let alive = true;
+    window.procWatch.tray.available().then(
+      (ok) => alive && setTrayOk(ok),
+      () => alive && setTrayOk(false),
+    );
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -400,6 +412,38 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
                     label="Effets visuels réduits"
                     onToggle={() => onSave({ ...config, ui: { ...config.ui, reducedEffects: !config.ui.reducedEffects } })}
                   />
+                )}
+              </Row>
+              <Row label="Icône dans la barre des tâches" help="Anneau de la RAM utilisée, coloré selon la pression ; menu avec la mémoire, « Libérer de la mémoire… » et « Quitter ».">
+                {(id) => (
+                  <span data-testid="tray-icon">
+                    <Switch
+                      id={id}
+                      checked={config.ui.trayIcon}
+                      label="Icône dans la barre des tâches"
+                      onToggle={() => onSave({ ...config, ui: { ...config.ui, trayIcon: !config.ui.trayIcon } })}
+                    />
+                  </span>
+                )}
+              </Row>
+              <Row
+                label="Fermer la fenêtre la garde dans la barre des tâches"
+                help={
+                  trayOk === false
+                    ? "Pas de zone de notification sur ce bureau : fermer la fenêtre quitte l'app."
+                    : "Fenêtre cachée : la collecte est suspendue comme fenêtre réduite. « Quitter » dans le menu de l'icône ferme vraiment."
+                }
+              >
+                {(id) => (
+                  <span data-testid="close-to-tray">
+                    <Switch
+                      id={id}
+                      checked={config.ui.closeToTray && config.ui.trayIcon && trayOk !== false}
+                      label="Fermer la fenêtre la garde dans la barre des tâches"
+                      disabled={!config.ui.trayIcon || trayOk === false}
+                      onToggle={() => onSave({ ...config, ui: { ...config.ui, closeToTray: !config.ui.closeToTray } })}
+                    />
+                  </span>
                 )}
               </Row>
               <p className="hint s-auto">Enregistré dès le changement.</p>
