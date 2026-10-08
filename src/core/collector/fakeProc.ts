@@ -45,3 +45,17 @@ export function addProc(root: string, p: FakeProc): void {
   writeFileSync(join(dir, 'cmdline'), argv.length ? argv.join('\0') + '\0' : '');
   if (p.cwd !== null) symlinkSync(p.cwd ?? '/', join(dir, 'cwd'));
 }
+
+/** Écrit /proc/net/tcp (ou tcp6) factice ; `lines` = lignes de données (l'en-tête est ajouté). */
+export function writeNetTcp(root: string, lines: string[], file: 'tcp' | 'tcp6' = 'tcp'): void {
+  mkdirSync(join(root, 'net'), { recursive: true });
+  const header = '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n';
+  writeFileSync(join(root, 'net', file), header + lines.join('\n') + (lines.length ? '\n' : ''));
+}
+
+/** Ajoute un fd `socket:[inode]` au processus déjà créé par addProc. */
+export function addSocketFd(root: string, pid: number, fd: number, inode: number): void {
+  const dir = join(root, String(pid), 'fd');
+  mkdirSync(dir, { recursive: true });
+  symlinkSync(`socket:[${inode}]`, join(dir, String(fd)));
+}
