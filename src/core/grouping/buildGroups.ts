@@ -67,8 +67,17 @@ export function buildGroups(procs: ProcInfo[], opts: GroupingOptions): Group[] {
     }
   }
 
-  // 1 bis. Outils Claude détachés (serveur du compagnon visuel, MCP, outils de plugins lancés à part) : dossier de
-  // travail sous ~/.claude (ou $CLAUDE_CONFIG_DIR), même sans session claude parmi leurs ancêtres.
+  // 2. Applis multi-processus : la descente s'arrête aux outils de dev et à claude
+  for (const p of procs) {
+    if (!APP_NAMES.has(p.name) || keyOf.has(p.pid) || hasAncestor(p, (a) => a.name === p.name)) continue;
+    const key = `app:${p.name}`;
+    meta.set(key, { kind: 'app', label: appLabel(p.name) });
+    assignTree(p, key, (c) => DEV_TOOL.test(c.name) || c.name === CLAUDE_NAME);
+  }
+
+  // 2 bis. Outils Claude détachés (serveur du compagnon visuel, MCP, outils de plugins lancés à part) : dossier de
+  // travail sous ~/.claude (ou $CLAUDE_CONFIG_DIR), même sans session claude parmi leurs ancêtres. Après les applis :
+  // un shell de terminal ou d'éditeur ouvert dans ~/.claude reste dans son appli (seuls les non-affectés sont pris).
   const dirs = opts.claudeDirs ?? [];
   if (dirs.length) {
     for (const p of procs) {
@@ -76,14 +85,6 @@ export function buildGroups(procs: ProcInfo[], opts: GroupingOptions): Group[] {
       meta.set('claude', { kind: 'claude', label: 'Claude' });
       assignTree(p, 'claude', () => false);
     }
-  }
-
-  // 2. Applis multi-processus : la descente s'arrête aux outils de dev et à claude
-  for (const p of procs) {
-    if (!APP_NAMES.has(p.name) || keyOf.has(p.pid) || hasAncestor(p, (a) => a.name === p.name)) continue;
-    const key = `app:${p.name}`;
-    meta.set(key, { kind: 'app', label: appLabel(p.name) });
-    assignTree(p, key, (c) => DEV_TOOL.test(c.name) || c.name === CLAUDE_NAME);
   }
 
   // 3. Outils de dev : par projet
@@ -151,7 +152,8 @@ function makeGroup(id: string, { kind, label }: Meta, list: ProcInfo[], opts: Gr
     kind,
     label,
     tags: kind === 'project' || kind === 'deleted' ? [...new Set(list.map((p) => p.name))] : [],
-    rootName: roots[0].proc.name,
+    // Groupe Claude : « claude » même si sa racine la plus grosse est un outil détaché (jamais « Protéger « node » »).
+    rootName: kind === 'claude' ? 'claude' : roots[0].proc.name,
     roots,
     pids: list.map((p) => p.pid),
     procCount: list.length,

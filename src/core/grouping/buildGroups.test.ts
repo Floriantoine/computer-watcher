@@ -212,6 +212,23 @@ describe('règle 1 bis : outils Claude détachés (dossier de travail sous ~/.cl
     expect(claude[0]!.roots.map((r) => r.proc.pid).sort((a, b) => a - b)).toEqual([20, 4000]);
   });
 
+  test('arbre d\'une appli : warp → zsh (cwd ~/.claude) → vim reste dans app:warp', () => {
+    const groups = buildGroups([
+      ...detached(),
+      proc({ pid: 60, name: 'warp', ppid: 1500, cwd: '/home/u' }),
+      proc({ pid: 61, name: 'zsh', ppid: 60, cwd: '/home/u/.claude' }),
+      proc({ pid: 62, name: 'vim', ppid: 61, cwd: '/home/u/.claude' }),
+    ], opts({ claudeDirs }));
+    expect(byId(groups, 'app:warp').pids.sort((a, b) => a - b)).toEqual([60, 61, 62]);
+    // l'outil détaché (parent systemd --user) va toujours dans Claude
+    expect(byId(groups, 'claude').pids.sort((a, b) => a - b)).toEqual([4000, 4001]);
+  });
+
+  test('groupe Claude sans session claude : nom racine « claude » (jamais « Protéger « node » »)', () => {
+    const groups = buildGroups(detached(), opts({ claudeDirs }));
+    expect(byId(groups, 'claude').rootName).toBe('claude');
+  });
+
   test('un processus sous ~/.claude-backup reste où il était', () => {
     const groups = buildGroups([proc({ pid: 50, name: 'node', cwd: '/home/u/.claude-backup/x' })], opts({ claudeDirs }));
     expect(groups.some((g) => g.id === 'claude')).toBe(false);
