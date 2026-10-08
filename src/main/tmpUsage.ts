@@ -2,6 +2,7 @@
 import { lstat, opendir } from 'node:fs/promises';
 import type { Stats } from 'node:fs';
 import { join } from 'node:path';
+import { TMP_SCAN_LIMITS } from '../core/tmpScanLimits';
 import type { TmpDirUsage, TmpUsage } from '../core/types';
 
 export interface TmpScanOptions {
@@ -20,11 +21,11 @@ const usedKB = (st: Stats) => (st.blocks * 512) / 1024;
 /**
  * Plus gros dossiers de premier niveau de `root` (équivalent de `du -x` sans suivre les liens), asynchrone : le main
  * n'est jamais bloqué. Liens symboliques jamais suivis ; autres systèmes de fichiers (montages FUSE des AppImage
- * `/tmp/.mount_*`) ignorés ; dossiers illisibles ignorés et comptés ; arrêt à `maxEntries` entrées ou `budgetMs`.
+ * `/tmp/.mount_*`) ignorés ; dossiers illisibles ignorés et comptés ; arrêt à `maxEntries` entrées (100 000 par défaut) ou `budgetMs`.
  */
 export async function topTmpDirs(root = '/tmp', o: TmpScanOptions = {}): Promise<TmpUsage> {
-  const maxEntries = o.maxEntries ?? 20_000;
-  const budgetMs = o.budgetMs ?? 2_000;
+  const maxEntries = o.maxEntries ?? TMP_SCAN_LIMITS.maxEntries;
+  const budgetMs = o.budgetMs ?? TMP_SCAN_LIMITS.budgetMs;
   const limit = o.limit ?? 5;
   const now = o.now ?? Date.now;
   const start = now();

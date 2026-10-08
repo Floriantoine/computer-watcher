@@ -634,6 +634,7 @@ table.tree td.spark-cell .spark { width: 64px; }
 .tmp-dirs .path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
 .tmp-dirs .size { flex: none; text-align: right; font-variant-numeric: tabular-nums; }
 .tmp-dirs .note { color: var(--label); font-style: italic; }
+.tmp-dirs .partial { color: #ffb547; }
 .metrics-list .list-cols { display: inline-flex; color: var(--label); font-size: 11px; padding-right: 6px; }
 .metrics-list .list-cols span { width: 62px; text-align: right; }
 .metrics-list .mono { white-space: nowrap; }

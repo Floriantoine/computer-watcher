@@ -49,7 +49,7 @@ const api = {
     events: (r: RangePreset | TimeRange): Promise<HistoryEvent[]> => ipcRenderer.invoke('history:events', r),
   },
   tmp: {
-    /** Plus gros dossiers de /tmp à cet instant (lecture seule, au plus 20 000 entrées ou 2 s). */
+    /** Plus gros dossiers de /tmp à cet instant (lecture seule, au plus 100 000 entrées ou 2 s). */
     topDirs: (): Promise<TmpUsage> => ipcRenderer.invoke('tmp:topDirs'),
   },
   recorder: {

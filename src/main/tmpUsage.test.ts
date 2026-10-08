@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'vitest';
 import type { TmpUsage } from '../core/types';
+import { TMP_SCAN_LIMITS } from '../core/tmpScanLimits';
 import { sharedScan, topTmpDirs } from './tmpUsage';
 
 const KB = 1024;
@@ -118,3 +119,13 @@ test('sharedScan : un seul parcours à la fois, la promesse en cours est réutil
   release();
   expect((await c).rootFilesKB).toBe(2);
 });
+
+test('plafond par défaut : 100 000 entrées et 2 s ; 25 000 entrées parcourues sans arrêt', async () => {
+  expect(TMP_SCAN_LIMITS).toEqual({ maxEntries: 100_000, budgetMs: 2_000 });
+  const root = mkdtempSync(join(tmpdir(), 'pw-tmp-'));
+  mkdirSync(join(root, 'beaucoup'));
+  for (let i = 0; i < 25_000; i++) writeFileSync(join(root, 'beaucoup', `f${i}`), '');
+  // budget de temps neutralisé : seul le plafond d'entrées compte ici
+  const r = await topTmpDirs(root, { budgetMs: 60_000 });
+  expect(r.truncated).toBe(false);
+}, 60_000);

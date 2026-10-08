@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { TmpUsage } from '../../../core/types';
+import { TMP_SCAN_LIMITS } from '../../../core/tmpScanLimits';
 import { formatKB } from '../format';
 import { ipcErrorMessage } from '../viewModel';
 
@@ -39,7 +40,11 @@ export function TmpDirsList() {
             </ul>
           )}
           <div className="sub">Fichiers à la racine : {atLeast}{formatKB(usage.rootFilesKB)}</div>
-          {usage.truncated && <div className="sub">Parcours arrêté (20 000 entrées ou 2 s) : tailles « au moins »</div>}
+          {usage.truncated && (
+            <div className="sub partial">
+              Parcours partiel (arrêté à {TMP_SCAN_LIMITS.maxEntries.toLocaleString('fr-FR')} entrées ou {TMP_SCAN_LIMITS.budgetMs / 1000} s) : tailles « au moins »
+            </div>
+          )}
           {usage.skipped > 0 && (
             <div className="sub">{usage.skipped} dossier{usage.skipped > 1 ? 's' : ''} illisible{usage.skipped > 1 ? 's' : ''} ignoré{usage.skipped > 1 ? 's' : ''}</div>
           )}
