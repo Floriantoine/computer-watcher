@@ -1,24 +1,22 @@
 import { memo, useState } from 'react';
 import { FolderOpen, HardDrive, Moon, Settings2 } from 'lucide-react';
 import type { SwapRow, SwapView } from '../../../core/swap';
-import type { GroupSummary, InstanceSummary } from '../../../core/types';
 import { formatKB } from '../format';
 import { useHistory } from '../history';
 import { barWidth } from '../motionBudget';
-import { rowAction, sleepLabel, sleepingInstances, STOP_SLEEPING_HINT, stopSleepingLabel } from '../swapPanel';
+import { rowAction, sleepLabel, STOP_SLEEPING_HINT, stopSleepingLabel } from '../swapPanel';
 import { CategoryTag } from './CategoryTag';
 import { Sparkline } from './charts/Sparkline';
 import { TmpDirsList } from './TmpDirsList';
 import { GroupIcon } from './ui';
 
 interface Props {
-  /** Groupes du dernier snapshot : instances proposées à « Arrêter les endormis ». */
-  groups: readonly GroupSummary[];
   /** Seuil « endormi » (Mo de swap cumulé) : la vue est relue quand il change. */
   minMB: number;
   /** Swap utilisé enregistré (graphe au-dessus de la jauge) ; absent sans historique. */
   swapSeries?: (number | null)[];
-  onStopSleeping: (instances: InstanceSummary[]) => void;
+  /** Clés des instances endormies éligibles ; le parent les résout dans le dernier snapshot (instances disparues ignorées). */
+  onStopSleeping: (keys: readonly string[]) => void;
   onStopOne: (row: SwapRow) => void;
   onSettings?: () => void;
 }
@@ -27,13 +25,16 @@ const ROWS_SHOWN = 30;
 /** Même vue que la précédente (rien n'a bougé) : pas de nouveau rendu. */
 const sameView = (a: SwapView | null | undefined, b: SwapView | null) => JSON.stringify(a) === JSON.stringify(b);
 
-/** Onglet Métriques : swap par groupe et instance, état actif / endormi, « Arrêter les endormis ». Relu toutes les 30 s (collecte en pause : rien). */
-export function SwapPanel({ groups, minMB, swapSeries, onStopSleeping, onStopOne, onSettings }: Props) {
+/**
+ * Onglet Métriques : swap par groupe et instance, état actif / endormi, « Arrêter les endormis ». Relu toutes les 30 s (collecte
+ * en pause : rien) ; mémoïsé, il ne se redessine pas à chaque snapshot.
+ */
+export const SwapPanel = memo(function SwapPanel({ minMB, swapSeries, onStopSleeping, onStopOne, onSettings }: Props) {
   const view = useHistory(() => window.procWatch.swap.view(), [minMB], 30_000, sameView);
   const [all, setAll] = useState(false);
   const [tmpOpen, setTmpOpen] = useState(false);
   const now = Date.now();
-  const sleeping = sleepingInstances(view, groups);
+  const sleeping = view?.sleepingKeys ?? [];
   const pct = view && view.swapTotalKB > 0 ? (view.swapUsedKB / view.swapTotalKB) * 100 : 0;
   const rows = view ? (all ? view.rows : view.rows.slice(0, ROWS_SHOWN)) : [];
   return (
@@ -91,7 +92,7 @@ export function SwapPanel({ groups, minMB, swapSeries, onStopSleeping, onStopOne
       )}
     </section>
   );
-}
+});
 
 const SwapGroupRows = memo(function SwapGroupRows({ row, now, historyFrom, onStopOne }: { row: SwapRow; now: number; historyFrom: number | null; onStopOne: (r: SwapRow) => void }) {
   return (

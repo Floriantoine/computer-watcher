@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Activity, CircleAlert, Cpu, Gauge, HardDrive, MemoryStick, MousePointerClick, Power, RefreshCw, Search } from 'lucide-react';
 import type { OpenPort, OpenPortsInfo } from '../../../core/openPorts';
 import type { SwapRow } from '../../../core/swap';
-import type { Culprit, GroupSummary, InstanceSummary, RangePreset, TimeRange } from '../../../core/types';
+import type { Culprit, RangePreset, TimeRange } from '../../../core/types';
 import { formatKB } from '../format';
 import { useHistory } from '../history';
 import { ipcErrorMessage } from '../viewModel';
@@ -34,13 +34,10 @@ interface Props {
   pendingPids?: Set<number>;
   onFreePort?: (row: OpenPort) => void;
   onOpenPortGroup?: (groupId: string) => void;
-  /** Panneau « Swap » (sous les alertes) ; absent sans `swap`. */
-  swap?: {
-    groups: readonly GroupSummary[];
-    minMB: number;
-    onStopSleeping: (instances: InstanceSummary[]) => void;
-    onStopOne: (row: SwapRow) => void;
-  };
+  /** Panneau « Swap » (sous les ports) : seuil « endormi » (Mo) ; absent sans les actions. */
+  swapMinMB?: number;
+  onStopSleeping?: (keys: readonly string[]) => void;
+  onStopSwapRow?: (row: SwapRow) => void;
 }
 
 /** Teintes des couches de l'enquête (de la plus grosse à la 8e) ; les trois couches du Reste ont les leurs, en pointillés. */
@@ -77,7 +74,7 @@ interface SysChart {
 
 const NO_PIDS = new Set<number>();
 
-export function MetricsView({ at, canOpen, onOpenGroup, onOpenSettings, openPorts, pendingPids = NO_PIDS, onFreePort, onOpenPortGroup, swap }: Props) {
+export function MetricsView({ at, canOpen, onOpenGroup, onOpenSettings, openPorts, pendingPids = NO_PIDS, onFreePort, onOpenPortGroup, swapMinMB = 100, onStopSleeping, onStopSwapRow }: Props) {
   const [preset, setPreset] = useState<RangePreset>(() => presetFor(at));
   const z = useChartZoom(PRESET_MS[preset]);
   const { zoom, view, setZoom } = z;
@@ -108,6 +105,8 @@ export function MetricsView({ at, canOpen, onOpenGroup, onOpenSettings, openPort
   useEffect(() => z.onData(), [data]);
   const system = data?.system;
   const events = data?.events;
+  const swapSeries = system && system.ts.length >= 2 ? system.swapUsedKB : undefined;
+  const openDisplaySettings = useMemo(() => onOpenSettings && (() => onOpenSettings('display')), [onOpenSettings]);
 
   const culprits = useHistory(
     async (): Promise<{ ts: number; list: Culprit[] } | null> =>
@@ -290,15 +289,8 @@ export function MetricsView({ at, canOpen, onOpenGroup, onOpenSettings, openPort
         <AlertsPanel events={events} onPick={setCursor} onHover={setHoverTs} onSettings={onOpenSettings && (() => onOpenSettings('alerts'))} />
       </div>
       {onFreePort && onOpenPortGroup && <OpenPortsPanel info={openPorts ?? null} pendingPids={pendingPids} onFree={onFreePort} onOpenGroup={onOpenPortGroup} />}
-      {swap && (
-        <SwapPanel
-          groups={swap.groups}
-          minMB={swap.minMB}
-          swapSeries={system && system.ts.length >= 2 ? system.swapUsedKB : undefined}
-          onStopSleeping={swap.onStopSleeping}
-          onStopOne={swap.onStopOne}
-          onSettings={onOpenSettings && (() => onOpenSettings('display'))}
-        />
+      {onStopSleeping && onStopSwapRow && (
+        <SwapPanel minMB={swapMinMB} swapSeries={swapSeries} onStopSleeping={onStopSleeping} onStopOne={onStopSwapRow} onSettings={openDisplaySettings} />
       )}
     </div>
   );

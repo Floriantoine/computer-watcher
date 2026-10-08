@@ -19,7 +19,7 @@ export const STOP_SLEEPING_HINT = 'Seules les instances de projets sont proposé
  * Instances de `sleepingKeys` encore présentes au snapshot (sous-groupes compris), pour le kill groupé. Défense en plus du
  * main : seulement des instances non protégées, pas lancées par Claude, de groupes projet / dossier supprimé.
  */
-export function sleepingInstances(view: SwapView | null | undefined, groups: readonly GroupSummary[]): InstanceSummary[] {
+export function sleepingInstances(view: Pick<SwapView, 'sleepingKeys'> | null | undefined, groups: readonly GroupSummary[]): InstanceSummary[] {
   if (!view || view.sleepingKeys.length === 0) return [];
   const byKey = new Map<string, InstanceSummary>();
   const walk = (gs: readonly GroupSummary[]) => {

@@ -12,7 +12,7 @@ import { Toasts, type Toast } from './components/Toasts';
 import { MainView } from './components/MainView';
 import { MetricsView } from './components/MetricsView';
 import type { SwapRow } from '../../core/swap';
-import { stopOneCheck } from './swapPanel';
+import { sleepingInstances, stopOneCheck } from './swapPanel';
 import { SystemBar, type SystemSparks } from './components/SystemBar';
 import { TopNav } from './components/TopNav';
 import { LiveBuffer, setLive, useHistory } from './history';
@@ -96,6 +96,11 @@ export function App() {
   const freePortRef = useRef<(row: OpenPort) => void>(() => {});
   const onFreePort = useCallback((row: OpenPort) => freePortRef.current(row), []);
   const onOpenPortGroup = useCallback((groupId: string) => setRoute({ view: 'detail', groupId }), []);
+  // Actions stables du panneau « Swap » (mémoïsé : il ne se redessine pas à chaque snapshot).
+  const swapActions = useRef({ stopSleeping: (_keys: readonly string[]) => {}, stopOne: (_row: SwapRow) => {} });
+  const onStopSleeping = useCallback((keys: readonly string[]) => swapActions.current.stopSleeping(keys), []);
+  const onStopSwapRow = useCallback((row: SwapRow) => swapActions.current.stopOne(row), []);
+  const openSettings = useCallback((section: SettingsSection) => setRoute({ view: 'settings', section }), []);
   // Résultat de recherche valable seulement pour la requête en cours ; en attente de la réponse du main : pas de filtre.
   const query = filter.query.trim();
   const matches = useMemo(
@@ -327,14 +332,15 @@ export function App() {
       bulkInFlight.current = false;
     }
   };
-  // Vue swap, « Arrêter les endormis » : le kill groupé habituel (instances de projets seulement, cibles fraîches, « Tuer (n) »).
-  const stopSleeping = (instances: InstanceSummary[]) => {
-    if (bulkInFlight.current || bulk || instances.length === 0) return;
-    setBulk({ instances, title: 'Arrêter les endormis' });
+  // Vue swap, « Arrêter les endormis » : le kill groupé habituel (instances de projets du dernier snapshot seulement, cibles
+  // fraîches, « Tuer (n) »).
+  swapActions.current.stopSleeping = (keys) => {
+    if (bulkInFlight.current || bulk) return;
+    const instances = sleepingInstances({ sleepingKeys: [...keys] }, snapshot.groups);
+    if (instances.length === 0) pushToast('Plus aucune instance endormie à arrêter', 'info');
+    else setBulk({ instances, title: 'Arrêter les endormis' });
   };
-  // Vue swap, « Arrêter » d'une appli endormie : kill de groupe avec confirmation ; refusé si le groupe a changé ou
-  // contient un processus protégé (jamais Claude : garde de stopOneCheck).
-  const stopSwapRow = (row: SwapRow) => {
+  swapActions.current.stopOne = (row: SwapRow) => {
     const g = findGroup(snapshot.groups, row.groupId);
     const check = stopOneCheck(row, g ?? (groupIds.has(row.groupId) ? row : undefined));
     if (!check.ok) {
@@ -447,12 +453,14 @@ export function App() {
                 at={route.at}
                 canOpen={(key) => groupIds.has(key)}
                 onOpenGroup={(key) => groupIds.has(key) && setRoute({ view: 'detail', groupId: key })}
-                onOpenSettings={(section) => setRoute({ view: 'settings', section })}
+                onOpenSettings={openSettings}
                 openPorts={snapshot.openPorts}
                 pendingPids={pendingPids}
                 onFreePort={onFreePort}
                 onOpenPortGroup={onOpenPortGroup}
-                swap={{ groups: snapshot.groups, minMB: configState.config.ui.swapSleepMinMB, onStopSleeping: stopSleeping, onStopOne: stopSwapRow }}
+                swapMinMB={configState.config.ui.swapSleepMinMB}
+                onStopSleeping={onStopSleeping}
+                onStopSwapRow={onStopSwapRow}
               />
             )}
             {route.view === 'settings' && (
