@@ -46,6 +46,11 @@ export interface ClassifyContext {
    * corrections ou les ports changent (et périodiquement, pour le cache de package.json) ; les entrées non revues sont retirées.
    */
   memo?: Map<string, InstanceDecision>;
+  /**
+   * Ne pas classer les sous-groupes de « Autres » (des centaines de petites commandes, ~80 % du coût) : ils ne sont
+   * affichés que si « Autres » est ouvert. Leurs processus servent toujours à repérer les lanceurs entre groupes.
+   */
+  skipOthersSubgroups?: boolean;
 }
 
 export interface InstanceDecision { category: Category; source: InstanceSummary['source']; signature: string; label: string }
@@ -184,7 +189,10 @@ export function classifyGroups(groups: Group[], ctx: ClassifyContext): Map<strin
   const hasInstanceBelow = (pid: number) => cross.has(pid);
   const out = new Map<string, GroupClassification>();
   const used = ctx.memo ? new Set<string>() : null;
+  const skip = new Set<Group>();
+  if (ctx.skipOthersSubgroups) for (const g of groups) if (g.kind === 'others') g.subgroups.forEach((s) => skip.add(s));
   for (const g of all) {
+    if (skip.has(g)) continue;
     out.set(g.id, g.kind === 'others' ? { categories: [], instances: [], launcherPids: [] } : classifyGroup(g, ctx, hasInstanceBelow, used));
   }
   if (ctx.memo && used) for (const k of ctx.memo.keys()) if (!used.has(k)) ctx.memo.delete(k);

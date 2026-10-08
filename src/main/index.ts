@@ -16,7 +16,7 @@ import { killRequest, planKill, sendSignals } from '../core/kill';
 import { compileProtection } from '../core/protection';
 import { formatAppEvent } from '../core/history/events';
 import { appEventsPath, dataDir } from '../core/paths';
-import { buildSnapshot, flattenGroup, groupProcs, instanceTargets, isWatch, type Classification, type FullSnapshot } from '../core/snapshot';
+import { buildSnapshot, flattenGroup, followsOthers, groupProcs, instanceTargets, isWatch, type Classification, type FullSnapshot } from '../core/snapshot';
 import type { ConfigState, Group, KillResult, RecorderState, Watch } from '../core/types';
 import { installDesktopEntry } from './desktopEntry';
 import { clearHistory, createHistoryReader } from './history';
@@ -137,6 +137,8 @@ function classify(groups: Group[], now: number): Classification {
     pkg: (root) => readPackageHints(root),
     isProtected: protection.isProtected,
     memo: decisions,
+    // Les centaines de sous-groupes de « Autres » ne sont classés que s'ils sont affichés (≈ 80 % du coût du classement).
+    skipOthersSubgroups: !followsOthers(groups, watch.groupId),
   });
   return lastClassification;
 }
@@ -282,7 +284,11 @@ ipcMain.handle('config:get', () => configState());
 ipcMain.handle('watch', (_e, w: unknown) => {
   if (!isWatch(w)) return;
   watch = { groupId: w.groupId, query: w.query };
-  send();
+  // Ouverture de « Autres » ou d'un de ses sous-groupes : leur classement est calculé tout de suite (reclassify envoie).
+  const others = last?.groups.find((g) => g.kind === 'others');
+  const unclassified = !!others && others.subgroups.length > 0 && !last!.classification.has(others.subgroups[0].id);
+  if (unclassified && followsOthers(last!.groups, w.groupId)) reclassify();
+  else send();
 });
 ipcMain.handle('group:procs', (_e, id: unknown) => (typeof id === 'string' && last ? groupProcs(last.groups, id) : []));
 

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import type { GroupClassification } from './classify/classify';
 import type { Group, InstanceSummary, ProcInfo, SystemInfo } from './types';
-import { buildSnapshot, findFullGroup, groupMatches, groupProcs, instanceTargets, isWatch, summarizeGroup } from './snapshot';
+import { buildSnapshot, findFullGroup, followsOthers, groupMatches, groupProcs, instanceTargets, isWatch, summarizeGroup } from './snapshot';
 
 const proc = (pid: number, name: string, extra: Partial<ProcInfo> = {}): ProcInfo => ({
   pid, ppid: 1, name, cmdline: name, uid: 1000, startTicks: pid * 10, ageSec: 10, cpuTicks: 0, cpuPercent: 0,
@@ -99,6 +99,14 @@ describe('buildSnapshot', () => {
     expect(buildSnapshot(base, { groupId: null, query: 'chrome' }).matches).toEqual(['b']);
     expect(buildSnapshot(base, { groupId: null, query: '   ' })).toMatchObject({ query: '', matches: null });
   });
+});
+
+test('followsOthers : vrai seulement si « Autres » ou l\'un de ses sous-groupes est suivi', () => {
+  expect(followsOthers(groups, 'others')).toBe(true);
+  expect(followsOthers(groups, 'c')).toBe(true);
+  expect(followsOthers(groups, 'a')).toBe(false);
+  expect(followsOthers(groups, 'x')).toBe(false);
+  expect(followsOthers(groups, null)).toBe(false);
 });
 
 test('findFullGroup et groupProcs : tous les processus du groupe, sous-groupes compris', () => {

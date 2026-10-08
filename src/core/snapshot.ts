@@ -39,6 +39,12 @@ export function findFullGroup(groups: Group[], id: string): Group | undefined {
   return undefined;
 }
 
+/** Le groupe suivi est « Autres » ou l'un de ses sous-groupes : leur classement doit alors être calculé. */
+export function followsOthers(groups: Group[], id: string | null): boolean {
+  if (id === null) return false;
+  return groups.some((g) => g.kind === 'others' && (g.id === id || findFullGroup(g.subgroups, id) !== undefined));
+}
+
 /** Processus du groupe `id` (vide s'il n'existe plus) : sert à préparer un kill de groupe. */
 export function groupProcs(groups: Group[], id: string): ProcInfo[] {
   const g = findFullGroup(groups, id);

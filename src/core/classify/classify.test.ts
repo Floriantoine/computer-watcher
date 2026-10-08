@@ -218,6 +218,21 @@ describe('classifyGroups', () => {
     expect(m.get('app:chrome')!.categories).toEqual(['browser']);
   });
 
+  it('skipOthersSubgroups : sous-groupes de « Autres » non classés, lanceurs vus à travers eux quand même', () => {
+    const c = proc('chrome', '/opt/google/chrome/chrome');
+    const npm = proc('npm run dev', 'npm run dev', { ageSec: 900 });
+    const conc = proc('node', 'node /x/node_modules/.bin/concurrently vite', { ageSec: 900 });
+    const sh2 = proc('sh', 'sh -c vite; true', { ageSec: 899, ppid: conc.pid });
+    const vite = proc('node', 'node /x/node_modules/.bin/vite', { ageSec: 899, ppid: sh2.pid });
+    const g = group('project:/x', 'project', [node(npm, node(conc)), node(vite)]);
+    // le wrapper sh est un petit groupe rangé dans « Autres »
+    const others = { ...group('others', 'others', []), subgroups: [group('app:chrome', 'app', [node(c)]), group('command:sh', 'command', [node(sh2)])] };
+    const m = classifyGroups([g, others], ctx({ skipOthersSubgroups: true }));
+    expect([...m.keys()]).toEqual(['project:/x', 'others']);
+    expect(m.get(g.id)!.launcherPids).toEqual([npm.pid, conc.pid]);
+    expect(m.get(g.id)!.instances.map((i) => i.label)).toEqual(['vite']);
+  });
+
   it('projet de 5 Mo inactif (seuils par défaut) : sa propre carte, avec son instance', () => {
     const npm = proc('npm run dev', 'npm run dev', { rssKB: 2 * 1024, cpuPercent: 0 });
     const vite = proc('node', 'node /home/u/acme/node_modules/.bin/vite', { ppid: npm.pid, rssKB: 3 * 1024, cpuPercent: 0 });
