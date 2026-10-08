@@ -137,6 +137,14 @@ describe('classifyGroups', () => {
     expect(r.categories).toEqual(['front']);
   });
 
+  it('deux back différents du même projet (commandes différentes) : pas de doublon', () => {
+    const api = proc('node', 'node /x/node_modules/.bin/nest start', { ageSec: 500 });
+    const other = proc('node', 'node /x/node_modules/.bin/tsx watch src/server.ts', { ageSec: 10 });
+    const g = group('project:/x', 'project', [node(api), node(other)]);
+    const r = classifyGroups([g], ctx()).get(g.id)!;
+    expect(r.instances.map((i) => [i.category, i.duplicate])).toEqual([['back', false], ['back', false]]);
+  });
+
   it('pas de doublon pour les catégories hors front/back/worker/db', () => {
     const a = proc('node', 'node /x/node_modules/.bin/vitest', { ageSec: 10 });
     const b = proc('node', 'node /x/node_modules/.bin/vitest', { ageSec: 20 });

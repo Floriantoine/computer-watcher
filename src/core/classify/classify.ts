@@ -119,16 +119,18 @@ function classifyGroup(group: Group, ctx: ClassifyContext, hasInstanceBelow: (pi
     };
   });
 
-  // Doublons : dans un même projet, même catégorie parmi front/back/worker/db → toutes sauf la plus ancienne.
+  // Doublons : dans un même projet, même catégorie parmi front/back/worker/db ET même commande (signature)
+  // → toutes sauf la plus ancienne. Une API et un worker, ou deux apps d'un monorepo, ne sont pas des doublons.
   // Seules les instances reconnues (correction, commande, port) comptent : une catégorie déduite du package.json
   // (script annexe, outil inconnu) ne doit jamais faire désigner un vrai serveur comme doublon.
   if (projectRoot !== null) {
-    const byCat = new Map<Category, InstanceSummary[]>();
+    const byCat = new Map<string, InstanceSummary[]>();
     for (const i of instances) {
       if (!DUPLICATE_CATEGORIES.has(i.category) || !DUPLICATE_SOURCES.has(i.source)) continue;
-      const list = byCat.get(i.category) ?? [];
+      const k = `${i.category}|${i.signature}`;
+      const list = byCat.get(k) ?? [];
       list.push(i);
-      byCat.set(i.category, list);
+      byCat.set(k, list);
     }
     for (const list of byCat.values()) {
       if (list.length < 2) continue;
