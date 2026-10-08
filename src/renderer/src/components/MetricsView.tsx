@@ -31,6 +31,7 @@ interface Props {
   openPorts?: OpenPortsInfo | null;
   pendingPids?: Set<number>;
   onFreePort?: (row: OpenPort) => void;
+  onOpenPortGroup?: (groupId: string) => void;
 }
 
 /** Teintes des couches de l'enquête (de la plus grosse à la 8e) ; les trois couches du Reste ont les leurs, en pointillés. */
@@ -67,7 +68,7 @@ interface SysChart {
 
 const NO_PIDS = new Set<number>();
 
-export function MetricsView({ at, canOpen, onOpenGroup, onOpenSettings, openPorts, pendingPids = NO_PIDS, onFreePort }: Props) {
+export function MetricsView({ at, canOpen, onOpenGroup, onOpenSettings, openPorts, pendingPids = NO_PIDS, onFreePort, onOpenPortGroup }: Props) {
   const [preset, setPreset] = useState<RangePreset>(() => presetFor(at));
   const z = useChartZoom(PRESET_MS[preset]);
   const { zoom, view, setZoom } = z;
@@ -279,7 +280,7 @@ export function MetricsView({ at, canOpen, onOpenGroup, onOpenSettings, openPort
         <TopConsumers top={data?.top} canOpen={canOpen} onOpenGroup={onOpenGroup} onHover={setHoverKey} />
         <AlertsPanel events={events} onPick={setCursor} onHover={setHoverTs} onSettings={onOpenSettings && (() => onOpenSettings('alerts'))} />
       </div>
-      {onFreePort && <OpenPortsPanel info={openPorts ?? null} pendingPids={pendingPids} onFree={onFreePort} />}
+      {onFreePort && onOpenPortGroup && <OpenPortsPanel info={openPorts ?? null} pendingPids={pendingPids} onFree={onFreePort} onOpenGroup={onOpenPortGroup} />}
     </div>
   );
 }

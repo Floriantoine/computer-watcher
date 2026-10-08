@@ -87,17 +87,51 @@ export function readListeningPorts(pids: number[], procRoot = '/proc', maxFds = 
     }
     budget -= fds.length;
     if (budget < 0) break;
-    const ports = new Set<number>();
-    for (const fd of fds) {
-      try {
-        const m = SOCKET_RE.exec(readlinkSync(join(dir, fd)));
-        const port = m ? byInode.get(Number(m[1])) : undefined;
-        if (port !== undefined) ports.add(port);
-      } catch {
-        /* fd fermé entre-temps */
-      }
-    }
-    if (ports.size) out.set(pid, [...ports].sort((a, b) => a - b));
+    const ports = portsOf(dir, fds, byInode);
+    if (ports) out.set(pid, ports);
   }
   return out;
+}
+
+function portsOf(dir: string, fds: string[], byInode: ReadonlyMap<number, number>): number[] | null {
+  const ports = new Set<number>();
+  for (const fd of fds) {
+    try {
+      const m = SOCKET_RE.exec(readlinkSync(join(dir, fd)));
+      const port = m ? byInode.get(Number(m[1])) : undefined;
+      if (port !== undefined) ports.add(port);
+    } catch {
+      /* fd fermé entre-temps */
+    }
+  }
+  return ports.size ? [...ports].sort((a, b) => a - b) : null;
+}
+
+/**
+ * Lecture par tranches (pour ne pas bloquer le main) : à partir de `pids[start]`, lit les pids tant que le total de fd parcourus
+ * reste ≤ `maxFds` (au moins un pid lisible par tranche ; un pid à plus de MAX_FDS_PER_READ fd est sauté). `next` : indice du
+ * prochain pid à lire (`pids.length` en fin de liste).
+ */
+export function readListeningPortsSlice(pids: readonly number[], start: number, sockets: readonly ListenSocket[], maxFds: number, procRoot = '/proc'): { ports: Map<number, number[]>; next: number } {
+  const out = new Map<number, number[]>();
+  const byInode = new Map<number, number>();
+  for (const s of sockets) byInode.set(s.inode, s.port);
+  if (byInode.size === 0) return { ports: out, next: pids.length };
+  let used = 0;
+  let i = start;
+  for (; i < pids.length; i++) {
+    const dir = join(procRoot, String(pids[i]), 'fd');
+    let fds: string[];
+    try {
+      fds = readdirSync(dir);
+    } catch {
+      continue;
+    }
+    if (fds.length > MAX_FDS_PER_READ) continue;
+    if (used > 0 && used + fds.length > maxFds) break;
+    used += fds.length;
+    const ports = portsOf(dir, fds, byInode);
+    if (ports) out.set(pids[i], ports);
+  }
+  return { ports: out, next: i };
 }

@@ -113,11 +113,12 @@ export function buildSnapshot(full: FullSnapshot, watch: Watch): Snapshot {
   const followed = watch.groupId === null ? undefined : findFullGroup(full.groups, watch.groupId);
   const pss = full.memMetric === 'pss';
   const port = parsePortQuery(query);
-  const ports = wantsAllPorts(watch) ? openPorts(full, full.listen?.byPid ?? new Map(), full.listen?.sockets ?? [], full.currentUid) : null;
+  // Passe de lecture pas encore terminée (`listen` absent) : null, le renderer affiche « Recherche… ».
+  const ports = wantsAllPorts(watch) && full.listen ? openPorts(full, full.listen.byPid, full.listen.sockets, full.currentUid) : null;
   let matches: string[] | null = null;
   if (port !== null) {
     // Groupes de premier niveau : « Autres » correspond si l'un de ses sous-groupes écoute ce port.
-    const ids = new Set(portMatches(ports!, port).groupIds);
+    const ids = new Set(ports ? portMatches(ports, port).groupIds : []);
     matches = full.groups.filter((g) => ids.has(g.id) || g.subgroups.some((s) => ids.has(s.id))).map((g) => g.id);
   } else if (query) matches = full.groups.filter((g) => groupMatches(g, query)).map((g) => g.id);
   const inOthers = (g: Group) => watch.othersOpen === true || (!!followed && (followed === g || g.subgroups.includes(followed)));

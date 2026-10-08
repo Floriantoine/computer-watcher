@@ -145,8 +145,8 @@ describe('buildSnapshot', () => {
     // ni panneau ni recherche de port : rien
     expect(buildSnapshot({ ...base, listen }, { groupId: null, query: 'vite' }).openPorts).toBeNull();
     expect(buildSnapshot({ ...base, listen }, { groupId: null, query: '' }).openPorts).toBeNull();
-    // ports pas encore lus : liste vide plutôt qu'une erreur
-    expect(buildSnapshot(base, { groupId: null, query: ':3000' }).openPorts).toEqual({ ports: [], otherUsers: [] });
+    // ports pas encore lus (passe en cours) : null (« Recherche… ») et aucune carte retenue
+    expect(buildSnapshot(base, { groupId: null, query: ':3000' })).toMatchObject({ openPorts: null, matches: [] });
   });
 
   test('recherche : ids des groupes de premier niveau qui correspondent', () => {

@@ -1037,6 +1037,10 @@ button.primary:hover:not(:disabled) { background: rgba(124, 92, 255, 0.32); bord
 .port-empty { margin: 4px 0 6px; color: var(--muted); font-size: 12.5px; }
 .port-note { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .free-port { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; font-size: 11.5px; border-radius: 99px; white-space: nowrap; font-family: inherit; }
+.port-act { gap: 8px; align-items: center; }
+.port-protected { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; }
+.link-btn { background: none; border: 0; padding: 2px 4px; color: var(--accent); font-size: 11.5px; cursor: pointer; font-family: inherit; }
+.link-btn:hover { text-decoration: underline; }
 .free-port.is-pending { animation: pending-pulse 1.1s ease-in-out infinite; }
 @media (max-width: 720px) {
   .port-rows { grid-template-columns: 56px minmax(0, 1fr) auto; }

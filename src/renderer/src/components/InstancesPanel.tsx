@@ -160,8 +160,8 @@ function InstanceRowImpl({ inst: i, spark, stuck, pending, canKill, menuOpen, me
           <ForceButton onClick={() => actions.force(stuck)} />
         ) : (
           <>
-            {i.ports.length > 0 && (
-              // Même chemin que le bouton kill de l'instance (confirmation habituelle, protégée → confirmation explicite).
+            {i.ports.length > 0 && !i.protected && (
+              // Même chemin que le bouton kill de l'instance ; jamais sur une instance protégée (son bouton kill demande confirmation).
               <button
                 type="button"
                 className={`danger free-port${pending ? ' is-pending' : ''}`}

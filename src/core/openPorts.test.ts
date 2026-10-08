@@ -43,13 +43,13 @@ describe('openPorts', () => {
     const row = info.ports.find((p) => p.port === 3000)!;
     expect(row).toEqual({
       port: 3000, pid: 20, startTicks: 200, groupId: 'acme', groupLabel: 'acme', instanceKey: 'acme#20:200', category: 'back', project: 'acme',
-      label: 'nest start', ageSec: 600, protected: false,
+      label: 'nest start', ageSec: 600, protected: false, freeable: true,
     });
   });
 
   it('processus d\'un groupe app sans instance : instanceKey null, libellé du processus, groupe à part', () => {
     const row = info.ports.find((p) => p.port === 9229)!;
-    expect(row).toMatchObject({ pid: 30, startTicks: 300, groupId: 'code', groupLabel: 'VS Code', instanceKey: null, category: null, project: null, label: 'code', ageSec: 7200 });
+    expect(row).toMatchObject({ pid: 30, startTicks: 300, groupId: 'code', groupLabel: 'VS Code', instanceKey: null, category: null, project: null, label: 'code', ageSec: 7200, freeable: false });
   });
 
   it('hors projet, un descendant qui écoute n\'est pas son instance (serveur lancé depuis une session Claude) : processus seul', () => {
@@ -60,9 +60,10 @@ describe('openPorts', () => {
       ['claude', { categories: ['ai'], instances: [inst('claude', 60, [60, 61], { category: 'ai', project: null, label: 'claude', ageSec: 86400 })], launcherPids: [] }],
     ]);
     const r = openPorts({ ...full, groups: [g], classification: cls }, new Map([[61, [5200]], [60, [9000]]]), [], 1000).ports;
-    expect(r.find((x) => x.port === 5200)).toMatchObject({ pid: 61, instanceKey: null, category: null, label: 'node', ageSec: 5, groupLabel: 'Claude' });
-    // la racine de l'instance qui écoute elle-même : l'instance
-    expect(r.find((x) => x.port === 9000)).toMatchObject({ pid: 60, instanceKey: 'claude#60:600', category: 'ai' });
+    // groupe Claude : protégé et jamais arrêtable depuis la liste des ports
+    expect(r.find((x) => x.port === 5200)).toMatchObject({ pid: 61, instanceKey: null, category: null, label: 'node', ageSec: 5, groupLabel: 'Claude', protected: true, freeable: false });
+    // la racine de l'instance qui écoute elle-même : l'instance (affichée, pas arrêtable hors projet)
+    expect(r.find((x) => x.port === 9000)).toMatchObject({ pid: 60, instanceKey: 'claude#60:600', category: 'ai', freeable: false });
   });
 
   it('sous-groupe de « Autres » : son propre id de groupe', () => {
@@ -80,26 +81,43 @@ describe('openPorts', () => {
   });
 
   it('pid inconnu du snapshot (disparu) : ignoré', () => {
-    expect(openPorts(full, new Map([[999, [7000]]]), [], 1000)).toEqual({ ports: [], otherUsers: [] });
+    expect(openPorts(full, new Map([[999, [7000]]]), [], 1000)).toEqual({ ports: [], otherUsers: [], unreadable: [] });
   });
 
-  it('protection : instance ou groupe protégé', () => {
-    const prot = openPorts({ ...full, groups: [{ ...groups[1]!, protected: true }] }, byPid, [], 1000);
-    expect(prot.ports.every((p) => p.protected)).toBe(true);
+  it('protection : ligne d\'instance = protection de l\'instance ; ligne de processus = protection du groupe', () => {
+    // groupe projet marqué protégé par un lanceur `sh -c` : l'instance non protégée reste arrêtable
+    const prot = openPorts({ ...full, groups: [{ ...groups[0]!, protected: true }, { ...groups[1]!, protected: true }] }, byPid, [], 1000);
+    expect(prot.ports.find((p) => p.port === 3000)).toMatchObject({ protected: false, freeable: true });
+    expect(prot.ports.find((p) => p.port === 9229)).toMatchObject({ protected: true, freeable: false });
+    // instance protégée : affichée, jamais arrêtable depuis la liste
+    const cls = new Map(classification);
+    cls.set('acme', { categories: ['back'], instances: [inst('acme', 20, [20], { protected: true })], launcherPids: [19] });
+    expect(openPorts({ ...full, classification: cls }, byPid, [], 1000).ports.find((p) => p.port === 3000)).toMatchObject({ protected: true, freeable: false });
+  });
+
+  it('seules les instances de projet / dossier supprimé sont arrêtables (pas « Autres », pas les applis)', () => {
+    expect(info.ports.filter((p) => p.freeable).map((p) => p.port)).toEqual([3000, 8080, 8080]);
+  });
+
+  it('ports à soi sans processus lisible (autre espace de noms, plafond de fd) : comptés à part', () => {
+    expect(info.unreadable).toEqual([]);
+    const r = openPorts(full, byPid, [...sockets, { inode: 9, port: 7777, uid: 1000 }, { inode: 10, port: 3000, uid: 1000 }], 1000);
+    expect(r.unreadable).toEqual([7777]);
   });
 });
 
 describe('portMatches', () => {
   const info = openPorts(full, new Map([[20, [3000]], [40, [8080]], [41, [8080]], [50, [631]]]), [{ inode: 6, port: 5432, uid: 965 }], 1000);
   it('groupes qui écoutent ce port (dédoublonnés)', () => {
-    expect(portMatches(info, 3000)).toEqual({ groupIds: ['acme'], otherUsers: [] });
-    expect(portMatches(info, 8080)).toEqual({ groupIds: ['beta'], otherUsers: [] });
+    expect(portMatches(info, 3000)).toMatchObject({ groupIds: ['acme'], otherUsers: [] });
+    expect(portMatches(info, 8080)).toMatchObject({ groupIds: ['beta'], otherUsers: [] });
     expect(portMatches(info, 631).groupIds).toEqual(['cron']);
   });
   it('port d\'un autre utilisateur : aucun groupe, otherUsers non vide', () => {
-    expect(portMatches(info, 5432)).toEqual({ groupIds: [], otherUsers: [{ port: 5432, uid: 965 }] });
+    expect(portMatches(info, 5432)).toEqual({ groupIds: [], otherUsers: [{ port: 5432, uid: 965 }], unreadable: false });
   });
   it('port libre : vide', () => {
-    expect(portMatches(info, 1)).toEqual({ groupIds: [], otherUsers: [] });
+    expect(portMatches(info, 1)).toEqual({ groupIds: [], otherUsers: [], unreadable: false });
+    expect(portMatches({ ...info, unreadable: [7777] }, 7777).unreadable).toBe(true);
   });
 });

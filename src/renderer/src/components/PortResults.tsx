@@ -1,18 +1,22 @@
 import { memo } from 'react';
-import { Plug, Unplug } from 'lucide-react';
+import { Lock, Plug, Unplug } from 'lucide-react';
 import type { OpenPort, OpenPortsInfo } from '../../../core/openPorts';
 import { formatAge } from '../format';
 import { freePortLabel, portRowsFor, portSearchEmpty } from '../ports';
 import { CategoryTag } from './CategoryTag';
 
-interface RowProps {
+export interface PortRowProps {
   row: OpenPort;
   pending: boolean;
   onFree: (row: OpenPort) => void;
+  onOpenGroup: (groupId: string) => void;
 }
 
-/** Une ligne de port : catégorie, projet, libellé, port, ancienneté et « Libérer :port » (jamais pour un autre utilisateur : pas de ligne). */
-function PortRowImpl({ row, pending, onFree }: RowProps) {
+/**
+ * Une ligne de port : port, libellé, catégorie, groupe, ancienneté. « Libérer :port » seulement pour une instance non protégée
+ * d'un projet (`freeable`) ; toute autre ligne n'offre que « Voir le groupe » (et « protégé » si elle l'est).
+ */
+function PortRowImpl({ row, pending, onFree, onOpenGroup }: PortRowProps) {
   return (
     <div className="port-row" role="row" data-testid="port-row">
       <span className="port-num mono" role="cell">:{row.port}</span>
@@ -21,22 +25,47 @@ function PortRowImpl({ row, pending, onFree }: RowProps) {
       <span className="port-project" role="cell" title={row.project ?? row.groupLabel}>{row.groupLabel}</span>
       <span className="num mono" role="cell">{formatAge(row.ageSec)}</span>
       <span className="port-act" role="cell">
-        <button
-          type="button"
-          className={`danger free-port${pending ? ' is-pending' : ''}`}
-          data-testid="free-port"
-          aria-busy={pending || undefined}
-          title={row.instanceKey ? `Tuer l'instance « ${row.label} »${row.protected ? ' (protégée : confirmation)' : ''}` : `Tuer le processus ${row.pid} (confirmation)`}
-          onClick={() => onFree(row)}
-        >
-          <Unplug size={12} strokeWidth={2.4} />
-          {freePortLabel(row.port)}
-        </button>
+        {row.freeable ? (
+          <button
+            type="button"
+            className={`danger free-port${pending ? ' is-pending' : ''}`}
+            data-testid="free-port"
+            aria-busy={pending || undefined}
+            title={`Tuer l'instance « ${row.label} »`}
+            onClick={() => onFree(row)}
+          >
+            <Unplug size={12} strokeWidth={2.4} />
+            {freePortLabel(row.port)}
+          </button>
+        ) : (
+          <>
+            {row.protected && (
+              <span className="port-protected" data-testid="port-protected" title="Protégé : pas d'arrêt depuis la liste des ports">
+                <Lock size={11} strokeWidth={2.4} /> protégé
+              </span>
+            )}
+            <button type="button" className="link-btn" data-testid="port-open-group" onClick={() => onOpenGroup(row.groupId)}>
+              Voir le groupe
+            </button>
+          </>
+        )}
       </span>
     </div>
   );
 }
-export const PortRow = memo(PortRowImpl);
+
+/** Même affichage → pas de re-rendu (les lignes sont recréées à chaque snapshot, l'ancienneté change toutes les secondes). */
+export function portRowEqual(a: PortRowProps, b: PortRowProps): boolean {
+  const x = a.row;
+  const y = b.row;
+  return (
+    a.pending === b.pending && a.onFree === b.onFree && a.onOpenGroup === b.onOpenGroup &&
+    x.port === y.port && x.pid === y.pid && x.startTicks === y.startTicks && x.instanceKey === y.instanceKey && x.label === y.label &&
+    x.category === y.category && x.groupId === y.groupId && x.groupLabel === y.groupLabel && x.project === y.project &&
+    x.protected === y.protected && x.freeable === y.freeable && formatAge(x.ageSec) === formatAge(y.ageSec)
+  );
+}
+export const PortRow = memo(PortRowImpl, portRowEqual);
 
 export function PortRowsHead() {
   return (
@@ -57,10 +86,11 @@ interface Props {
   info: OpenPortsInfo | null;
   pendingPids: Set<number>;
   onFree: (row: OpenPort) => void;
+  onOpenGroup: (groupId: string) => void;
 }
 
 /** Résultat d'une recherche `:port` au-dessus des cartes : qui tient ce port, avec « Libérer :port ». */
-export function PortResults({ port, info, pendingPids, onFree }: Props) {
+export function PortResults({ port, info, pendingPids, onFree, onOpenGroup }: Props) {
   const rows = info ? portRowsFor(info, port) : [];
   return (
     <section className="chart-panel port-results" data-testid="port-results">
@@ -74,7 +104,7 @@ export function PortResults({ port, info, pendingPids, onFree }: Props) {
       ) : (
         <div className="port-rows" role="table" aria-label={`Processus qui écoutent :${port}`}>
           <PortRowsHead />
-          {rows.map((r) => <PortRow key={`${r.port}:${r.pid}`} row={r} pending={pendingPids.has(r.pid)} onFree={onFree} />)}
+          {rows.map((r) => <PortRow key={`${r.port}:${r.pid}`} row={r} pending={pendingPids.has(r.pid)} onFree={onFree} onOpenGroup={onOpenGroup} />)}
         </div>
       )}
     </section>

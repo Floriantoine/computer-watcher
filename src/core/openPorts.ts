@@ -21,7 +21,13 @@ export interface OpenPort {
   label: string;
   /** Ancienneté de l'instance, sinon du processus */
   ageSec: number;
+  /** Ligne d'instance : instance protégée ; sinon groupe protégé, ou groupe Claude (serveurs MCP, outils des sessions). */
   protected: boolean;
+  /**
+   * « Libérer :port » proposé : instance non protégée d'un groupe projet / dossier supprimé (même périmètre que le kill groupé).
+   * Toute autre ligne n'est qu'informative (applis, Claude, commandes, système).
+   */
+  freeable: boolean;
 }
 
 /** Port en écoute d'un autre utilisateur : visible dans /proc/net/tcp, mais ni son processus ni ses fd ne sont lisibles. */
@@ -34,6 +40,8 @@ export interface OtherUserPort {
 export interface OpenPortsInfo {
   ports: OpenPort[];
   otherUsers: OtherUserPort[];
+  /** Ports écoutés sous son propre uid sans processus lisible (autre espace de noms de pid, plafond de fd), triés */
+  unreadable: number[];
 }
 
 /**
@@ -53,12 +61,15 @@ export function openPorts(full: FullSnapshot, portsByPid: ReadonlyMap<number, nu
           // Ailleurs (session Claude, navigateur…), seul le processus racine désigne son instance : un serveur lancé depuis une
           // session Claude ne doit pas proposer de tuer la session.
           const found = instOf.get(p.pid);
-          const inst = found && (g.kind === 'project' || g.kind === 'deleted' || found.rootPid === p.pid) ? found : undefined;
+          const dev = g.kind === 'project' || g.kind === 'deleted';
+          const inst = found && (dev || found.rootPid === p.pid) ? found : undefined;
+          const prot = inst ? inst.protected : g.protected || g.kind === 'claude';
           for (const port of list) {
             ports.push({
               port, pid: p.pid, startTicks: p.startTicks, groupId: g.id, groupLabel: g.label,
               instanceKey: inst?.key ?? null, category: inst?.category ?? null, project: inst?.project ?? null,
-              label: inst?.label ?? p.name, ageSec: inst?.ageSec ?? p.ageSec, protected: (inst?.protected ?? false) || g.protected,
+              label: inst?.label ?? p.name, ageSec: inst?.ageSec ?? p.ageSec,
+              protected: prot, freeable: !!inst && dev && !prot,
             });
           }
         }
@@ -79,11 +90,13 @@ export function openPorts(full: FullSnapshot, portsByPid: ReadonlyMap<number, nu
     otherUsers.push({ port: s.port, uid: s.uid });
   }
   otherUsers.sort((a, b) => a.port - b.port || a.uid - b.uid);
-  return { ports, otherUsers };
+  const held = new Set(ports.map((p) => p.port));
+  const unreadable = [...new Set(sockets.filter((s) => s.uid === currentUid && !held.has(s.port)).map((s) => s.port))].sort((a, b) => a - b);
+  return { ports, otherUsers, unreadable };
 }
 
 /** Recherche `:port` : groupes (les plus précis) qui écoutent ce port, et autres utilisateurs qui l'écoutent. */
-export function portMatches(info: OpenPortsInfo, port: number): { groupIds: string[]; otherUsers: OtherUserPort[] } {
+export function portMatches(info: OpenPortsInfo, port: number): { groupIds: string[]; otherUsers: OtherUserPort[]; unreadable: boolean } {
   const groupIds = [...new Set(info.ports.filter((p) => p.port === port).map((p) => p.groupId))];
-  return { groupIds, otherUsers: info.otherUsers.filter((o) => o.port === port) };
+  return { groupIds, otherUsers: info.otherUsers.filter((o) => o.port === port), unreadable: info.unreadable.includes(port) };
 }

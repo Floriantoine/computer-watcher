@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { addProc, addSocketFd, makeProcRoot, writeNetTcp } from './fakeProc';
-import { parseNetTcp, parseNetTcpListen, readListenSockets, readListeningPorts } from './ports';
+import { parseNetTcp, parseNetTcpListen, readAllListenSockets, readListenSockets, readListeningPorts, readListeningPortsSlice } from './ports';
 
 const HEADER = '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n';
 const LISTEN = '   0: 0100007F:1435 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 12345 1 0000000000000000 100 0 0 10 0';
@@ -89,5 +89,37 @@ describe('readListenSockets', () => {
   });
   it('sans /proc/net : vide', () => {
     expect(readListenSockets(makeProcRoot())).toEqual([]);
+  });
+});
+
+describe('readListeningPortsSlice', () => {
+  const setup = () => {
+    const root = makeProcRoot();
+    writeNetTcp(root, [LISTEN, PG]);
+    addProc(root, { pid: 10, comm: 'a' });
+    for (let fd = 0; fd < 3; fd++) addSocketFd(root, 10, fd, 1000 + fd);
+    addSocketFd(root, 10, 3, 12345);
+    addProc(root, { pid: 11, comm: 'b' });
+    addSocketFd(root, 11, 3, 4242);
+    addProc(root, { pid: 12, comm: 'c' });
+    addSocketFd(root, 12, 3, 7);
+    return root;
+  };
+  it('s\'arrête avant de dépasser le budget de fd et reprend au bon pid', () => {
+    const root = setup();
+    const sockets = readAllListenSockets(root);
+    const first = readListeningPortsSlice([10, 11, 12], 0, sockets, 5, root);
+    expect(first).toEqual({ ports: new Map([[10, [5173]], [11, [5432]]]), next: 2 });
+    const second = readListeningPortsSlice([10, 11, 12], first.next, sockets, 5, root);
+    expect(second).toEqual({ ports: new Map(), next: 3 });
+  });
+  it('au moins un pid par tranche, même au-delà du budget ; pid illisible sauté', () => {
+    const root = setup();
+    const sockets = readAllListenSockets(root);
+    expect(readListeningPortsSlice([99, 10, 11], 0, sockets, 2, root)).toEqual({ ports: new Map([[10, [5173]]]), next: 2 });
+  });
+  it('fin de liste : next = longueur', () => {
+    const root = setup();
+    expect(readListeningPortsSlice([10], 1, readAllListenSockets(root), 5, root)).toEqual({ ports: new Map(), next: 1 });
   });
 });

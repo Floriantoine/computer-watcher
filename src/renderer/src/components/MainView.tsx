@@ -42,6 +42,7 @@ interface Props {
   /** Recherche `:port` : ports ouverts calculés par le main pour la recherche en cours (null en attente). */
   openPorts?: OpenPortsInfo | null;
   onFreePort?: (row: OpenPort) => void;
+  onOpenPortGroup?: (groupId: string) => void;
 }
 
 const CATEGORIES_KEY = 'pw.categories';
@@ -145,8 +146,8 @@ export function MainView(props: Props) {
         projectsOnlyHint={showProjectsOnlyHint(categories, candidates)}
         onKillSelection={props.onKillInstances ? killSelection : undefined}
       />
-      {port !== null && props.onFreePort && (
-        <PortResults port={port} info={props.openPorts ?? null} pendingPids={pendingPids} onFree={props.onFreePort} />
+      {port !== null && props.onFreePort && props.onOpenPortGroup && (
+        <PortResults port={port} info={props.openPorts ?? null} pendingPids={pendingPids} onFree={props.onFreePort} onOpenGroup={props.onOpenPortGroup} />
       )}
       {shown.length === 0 ? (
         port !== null ? null : <p className="empty">Aucun groupe ne correspond.</p>

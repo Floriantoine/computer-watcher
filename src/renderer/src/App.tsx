@@ -19,7 +19,7 @@ import { leakMemOf } from './memMetric';
 import { readOthersOpen, writeOthersOpen } from './othersFold';
 import type { OpenPort } from '../../core/openPorts';
 import { parsePortQuery } from '../../core/portQuery';
-import { freePortAction, freePortRequest } from './ports';
+import { freePortCheck } from './ports';
 import type { SettingsSection } from './settingsNav';
 import { leakTimes } from './recorderForm';
 import { findGroup, visibleGroups, ipcErrorMessage, killResultMessages, killRequestForGroup, killRequestForProc, trackKills, type KillRequest, type ViewFilter } from './viewModel';
@@ -80,9 +80,15 @@ export function App() {
   const othersShown = othersOpen && route.view === 'main';
   // Panneau « Ports ouverts » (onglet Métriques) : le main lit alors les ports de tous les processus de l'utilisateur.
   const portsShown = route.view === 'metrics';
+  // Une recherche `:port` ne compte que sur la page Processus (ailleurs, pas de lecture des ports de tous les processus).
+  const sentQuery = route.view === 'main' || parsePortQuery(filter.query) === null ? filter.query : '';
   useEffect(() => {
-    window.procWatch.watch({ groupId: detailId, query: filter.query, othersOpen: othersShown, ports: portsShown }).catch(() => {});
-  }, [detailId, filter.query, othersShown, portsShown]);
+    window.procWatch.watch({ groupId: detailId, query: sentQuery, othersOpen: othersShown, ports: portsShown }).catch(() => {});
+  }, [detailId, sentQuery, othersShown, portsShown]);
+  // Actions stables pour les lignes de ports mémoïsées (elles appellent la version du dernier rendu).
+  const freePortRef = useRef<(row: OpenPort) => void>(() => {});
+  const onFreePort = useCallback((row: OpenPort) => freePortRef.current(row), []);
+  const onOpenPortGroup = useCallback((groupId: string) => setRoute({ view: 'detail', groupId }), []);
   // Résultat de recherche valable seulement pour la requête en cours ; en attente de la réponse du main : pas de filtre.
   const query = filter.query.trim();
   const matches = useMemo(
@@ -243,21 +249,12 @@ export function App() {
       )
       .finally(() => instKillsInFlight.current.delete(inst.key));
   };
-  // « Libérer :port » : instance → kill de l'instance (chemin habituel) ; sinon le seul processus, même pid et startTicks, avec confirmation.
-  const freePort = (row: OpenPort) => {
-    const a = freePortAction(row, instancesByKey);
-    if (a.kind === 'instance') {
-      killInstance(a.inst);
-      return;
-    }
-    window.procWatch.groupProcs(a.groupId).then(
-      (procs) => {
-        const req = freePortRequest(row.port, a, procs, isProtected, currentUid);
-        if (req) requestKill(req);
-        else pushToast(`Le processus ${a.pid} n'écoute plus :${row.port}`);
-      },
-      (e: unknown) => pushToast(ipcErrorMessage(e)),
-    );
+  // « Libérer :port » : seulement une instance non protégée d'un projet qui tient toujours ce port (garde en plus du rendu),
+  // puis le chemin habituel du kill d'instance.
+  freePortRef.current = (row: OpenPort) => {
+    const r = freePortCheck(row, snapshot.openPorts, instancesByKey, (id) => findGroup(snapshot.groups, id)?.kind);
+    if (r.ok) killInstance(r.inst);
+    else pushToast(r.message);
   };
   const portQuery = parsePortQuery(filter.query);
   const groupLabel = (id: string) => findGroup(snapshot.groups, id)?.label ?? id;
@@ -344,7 +341,8 @@ export function App() {
                 othersOpen={othersOpen}
                 memMetric={snapshot.memMetric}
                 openPorts={portQuery !== null && snapshot.query === query ? snapshot.openPorts : null}
-                onFreePort={freePort}
+                onFreePort={onFreePort}
+                onOpenPortGroup={onOpenPortGroup}
                 onToggleOthers={(open) => {
                   writeOthersOpen(open);
                   setOthersOpen(open);
@@ -383,7 +381,8 @@ export function App() {
                 onOpenSettings={(section) => setRoute({ view: 'settings', section })}
                 openPorts={snapshot.openPorts}
                 pendingPids={pendingPids}
-                onFreePort={freePort}
+                onFreePort={onFreePort}
+                onOpenPortGroup={onOpenPortGroup}
               />
             )}
             {route.view === 'settings' && (
