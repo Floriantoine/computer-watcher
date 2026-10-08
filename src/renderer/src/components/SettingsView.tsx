@@ -1,13 +1,14 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { AnimatePresence, motion, useIsPresent } from 'motion/react';
-import { AppWindow, ArrowLeft, HardDrive, Layers, ShieldCheck, Sparkles, Tags, Trash2, TriangleAlert, Wrench, X } from 'lucide-react';
+import { useEffect, useState, type CSSProperties } from 'react';
+import { AnimatePresence } from 'motion/react';
+import { AppWindow, ArrowLeft, HardDrive, Layers, ShieldCheck, Sparkles, Tags, TriangleAlert, X } from 'lucide-react';
 import { DEFAULT_CONFIG } from '../../../core/defaults';
 import type { Config, ConfigState, MemoryMetric, RecorderState } from '../../../core/types';
 import { CATEGORY_META } from '../categories';
 import { overrideRows, withDetectPorts, withoutOverride } from '../classifySettings';
-import { useFocusTrap } from '../focusTrap';
 import { AlertsSettings } from './AlertsSettings';
 import { formatKB } from '../format';
+import { EarlyoomPanel } from './EarlyoomPanel';
+import { SettingsConfirm } from './SettingsConfirm';
 import { recorderToForm, validateRecorderForm, type RecorderErrors, type RecorderForm } from '../recorderForm';
 
 interface Props {
@@ -345,63 +346,8 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
           </AnimatePresence>
         </section>
 
-        <section>
-          <h3><Wrench size={15} strokeWidth={2} />earlyoom</h3>
-          <p className="hint">Bientôt : configurer earlyoom depuis proc-watch.</p>
-        </section>
+        <EarlyoomPanel protectedList={config.protected} onToast={onToast} />
       </div>
     </>
-  );
-}
-
-interface ConfirmProps {
-  id: string;
-  title: string;
-  text: string;
-  confirmLabel: string;
-  onConfirm: () => void;
-  onCancel: () => void;
-}
-
-function SettingsConfirm({ id, title, text, confirmLabel, onConfirm, onCancel }: ConfirmProps) {
-  const isPresent = useIsPresent();
-  const box = useRef<HTMLDivElement>(null);
-  useFocusTrap(box);
-  const guard = (fn: () => void) => () => {
-    if (isPresent) fn();
-  };
-  return (
-    <motion.div
-      className="overlay"
-      onClick={guard(onCancel)}
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.18 }}
-      style={{ pointerEvents: isPresent ? undefined : 'none' }}
-    >
-      <motion.div
-        ref={box}
-        className="dialog"
-        role="alertdialog"
-        aria-modal="true"
-        aria-labelledby={id}
-        onClick={(e) => e.stopPropagation()}
-        initial={{ opacity: 0, scale: 0.94, y: 12 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.97, y: 6, transition: { duration: 0.14 } }}
-        transition={{ type: 'spring', stiffness: 420, damping: 28, mass: 0.8 }}
-      >
-        <div className="dialog-head">
-          <span className="ico" aria-hidden><Trash2 size={17} strokeWidth={2} /></span>
-          <h3 id={id}>{title}</h3>
-        </div>
-        <p className="hint" style={{ margin: 0 }}>{text}</p>
-        <div className="actions">
-          <button onClick={guard(onCancel)}>Annuler</button>
-          <button className="danger" onClick={guard(onConfirm)}>{confirmLabel}</button>
-        </div>
-      </motion.div>
-    </motion.div>
   );
 }

@@ -39,6 +39,8 @@ export function setLive(v: boolean): void {
   live = v;
   if (resumed) for (const f of liveListeners) f();
 }
+/** Collecte en direct active (lecture sans abonnement, pour les minuteries hors React). */
+export const isLive = (): boolean => live;
 /** `cb` à chaque reprise de la collecte en direct ; renvoie la désinscription. */
 export function onLiveResume(cb: () => void): () => void {
   liveListeners.add(cb);

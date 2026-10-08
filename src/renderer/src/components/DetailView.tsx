@@ -1,22 +1,21 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { ArrowLeft, ChartLine, ChevronRight, Lock, PenLine, Shield, ShieldOff, X } from 'lucide-react';
-import type { Category, GroupSummary as Group, InstanceSummary, MemoryMetric, ProcNode, RangePreset } from '../../../core/types';
+import { ArrowLeft, ChevronRight, History, Lock, PenLine, Shield, ShieldOff, X } from 'lucide-react';
+import type { Category, GroupSummary as Group, InstanceSummary, MemoryMetric, ProcNode } from '../../../core/types';
 import { formatAge, formatKB } from '../format';
 import { procSparkMap, useHistory } from '../history';
+import { GroupHistoryPanel } from './GroupHistoryPanel';
 import { showRevertToAuto, ticksIndex } from '../instances';
 import { fallbackTitle, memTileLabel } from '../memMetric';
 import { headerReclassTarget } from '../reclassHeader';
-import { useChartZoom, ZoomChip } from '../chartZoom';
-import { PRESET_MS, refreshMsFor } from '../metrics';
-import { groupChartSeries } from './charts/chartData';
-import { TimeChart } from './charts/TimeChart';
-import { KB_FORMAT, PERCENT_FORMAT } from './charts/uplotTheme';
+import { formatInstant } from '../metrics';
+import { liveKeySet, replayEmptyText, replayTree } from '../replay';
+import { useReplay, type Replay } from '../useReplay';
 import { CategoryTag } from './CategoryTag';
 import { InstancesPanel } from './InstancesPanel';
 import { ReclassMenu } from './ReclassMenu';
 import { ProcTree } from './ProcTree';
-import { RangeSelector } from './RangeSelector';
+import { ReplayTree } from './ReplayTree';
 import { AnimatedNumber, ForceButton, GroupIcon } from './ui';
 
 interface Props {
@@ -51,55 +50,38 @@ function BackButton({ onBack }: { onBack: () => void }) {
   );
 }
 
-const CHART_FORMAT = { left: KB_FORMAT, right: PERCENT_FORMAT };
-
-/** Panneau « Historique » : RAM, swap et CPU du groupe sur la plage choisie, avec les mêmes gestes que l'onglet Métriques. */
-function GroupHistoryPanel({ groupId }: { groupId: string }) {
-  const [range, setRange] = useState<RangePreset>('1h');
-  const z = useChartZoom(PRESET_MS[range]);
-  const h = useHistory(() => window.procWatch.history.group(groupId, z.range()), [groupId, range, z.zoom], refreshMsFor(range, z.frozen));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => z.onData(), [h]);
-  const series = useMemo(() => (h ? groupChartSeries(h) : []), [h]);
-  const [hover, setHover] = useState<number | null>(null);
-  const enough = !!h && h.ts.length >= 2;
-  const pickRange = (r: RangePreset) => {
-    z.setZoom(null);
-    setRange(r);
-  };
+/** Arbre reconstruit à l'instant examiné, à la place de l'arbre en direct. */
+function ReplayPanel({ replay, liveRoots }: { replay: Replay; liveRoots: ProcNode[] | null }) {
+  const instant = replay.instant!;
+  const tree = replay.tree;
+  const live = useMemo(() => liveKeySet(liveRoots), [liveRoots]);
+  // Tant que l'arbre en direct n'est pas arrivé, personne n'est déclaré mort.
+  const nodes = useMemo(
+    () => (tree ? replayTree(tree.procs, (pid, st) => liveRoots === null || live.has(`${pid}:${st}`)) : []),
+    [tree, live, liveRoots],
+  );
   return (
-    <section className="chart-panel" data-testid="group-history">
-      <div className="chart-panel-head">
-        <h3><ChartLine size={14} strokeWidth={2} /> Historique</h3>
-        {enough && (
-          <span className="chart-legend" onMouseLeave={() => setHover(null)}>
-            {(['lg-mem', 'lg-swap', 'lg-cpu'] as const).map((cls, i) => (
-              <span key={cls} className={hover !== null && hover !== i ? 'dim' : ''} onMouseEnter={() => setHover(i)}>
-                <i className={cls} />{series[i]?.label}
-              </span>
-            ))}
-          </span>
-        )}
+    <div className="panel replay-panel">
+      <div className="panel-head replay-banner" data-testid="replay-banner">
+        <History size={14} strokeWidth={2} />
+        {/* Instant de l'arbre affiché (l'arbre précédent reste à l'écran pendant le chargement du suivant). */}
+        <h3>Arbre au {formatInstant(tree ? tree.ts : instant)}</h3>
+        <span className="sub">
+          — seuls les processus au-dessus des seuils d'enregistrement apparaissent{tree?.source === 'minute' ? ' (moyennes par minute)' : ''}
+        </span>
         <span className="spacer" />
-        <ZoomChip zoom={z.zoom} onReset={() => z.setZoom(null)} />
-        <RangeSelector value={range} onChange={pickRange} />
+        <button className="tree-toggle-all" data-testid="replay-live" onClick={replay.live}>Revenir au direct</button>
       </div>
-      {enough ? (
-        <TimeChart
-          ts={h.ts}
-          series={series}
-          height={190}
-          format={CHART_FORMAT}
-          focusSeries={hover}
-          xRange={z.view}
-          onWheel={z.onWheel}
-          onDragPan={z.onDragPan}
-          onSelectRange={z.onSelectRange}
-        />
+      {tree === undefined ? (
+        <p className="empty">Chargement…</p>
+      ) : tree === null ? (
+        <p className="empty">Historique indisponible</p>
+      ) : nodes.length === 0 ? (
+        <p className="empty" data-testid="replay-empty">{replayEmptyText(tree)}</p>
       ) : (
-        <div className="chart-empty">{h === undefined ? 'Chargement…' : "Pas encore d'historique pour ce groupe"}</div>
+        <ReplayTree nodes={nodes} at={tree.ts} omitted={tree.omitted} />
       )}
-    </section>
+    </div>
   );
 }
 
@@ -112,6 +94,7 @@ export function DetailView(props: Props) {
     [groupId, others],
   );
   const sparks = useMemo(() => procSparkMap(procs), [procs]);
+  const replay = useReplay(groupId ?? '');
   const sparkOf = useCallback((pid: number, startTicks: number) => sparks.get(`${pid}:${startTicks}`), [sparks]);
   // Index pid → startTicks : même objet tant que l'arbre a les mêmes processus (lignes d'instances mémoïsées).
   const ticksRef = useRef<Map<number, number> | undefined>(undefined);
@@ -206,7 +189,7 @@ export function DetailView(props: Props) {
           memMetric={memMetric}
         />
       )}
-      {!others && <GroupHistoryPanel key={group.id} groupId={group.id} />}
+      {!others && <GroupHistoryPanel key={group.id} groupId={group.id} replay={replay} />}
       {group.subgroups.length > 0 ? (
         <div className="subgroups">
           {group.subgroups.map((sg) => (
@@ -218,6 +201,8 @@ export function DetailView(props: Props) {
             </div>
           ))}
         </div>
+      ) : replay.instant !== null ? (
+        <ReplayPanel replay={replay} liveRoots={props.roots} />
       ) : !props.roots ? (
         <div className="panel"><p className="empty">Chargement…</p></div>
       ) : (

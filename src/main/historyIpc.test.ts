@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import type { RecorderStatus } from '../core/types';
-import { applyOverride, clampToDetail, classifySetKey, isGroupKeys, isInstanceKeys, isRange, isSinceMs, isTopOptions, recorderState } from './historyIpc';
+import { applyOverride, clampToDetail, classifySetKey, isGroupKeys, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState } from './historyIpc';
 
 test('isRange : préréglages et plages valides uniquement', () => {
   for (const ok of ['1h', '6h', '24h', '7d', '30d', { from: 0, to: 10 }]) expect(isRange(ok)).toBe(true);
@@ -74,4 +74,20 @@ test('applyOverride : ajoute, remplace, retire ; refuse une 501e correction', ()
   expect(applyOverride(full, 'nouvelle', 'back')).toBeNull();
   expect(applyOverride(full, 'k1', 'back')).toMatchObject({ k1: 'back' });
   expect(applyOverride(full, 'k1', null)).not.toBeNull();
+});
+
+test('isProcTreeRequest : clé de 1 à 4 096 caractères, instant fini, ≥ 0, ≤ now + 60 s', () => {
+  expect(isProcTreeRequest('app:chrome', 1000, 2000)).toBe(true);
+  expect(isProcTreeRequest('x'.repeat(4096), 0, 2000)).toBe(true);
+  expect(isProcTreeRequest('a', 62_000, 2000)).toBe(true);
+  expect(isProcTreeRequest('', 1000, 2000)).toBe(false);
+  expect(isProcTreeRequest('x'.repeat(4097), 1000, 2000)).toBe(false);
+  expect(isProcTreeRequest(5, 1000, 2000)).toBe(false);
+  for (const bad of [NaN, -1, Infinity, '5', null]) expect(isProcTreeRequest('a', bad, 2000)).toBe(false);
+  expect(isProcTreeRequest('a', 2000 + 61_000, 2000)).toBe(false);
+});
+
+test('isOptionalGroupKey : absent, ou clé de 1 à 4 096 caractères', () => {
+  for (const ok of [undefined, 'a', 'x'.repeat(4096)]) expect(isOptionalGroupKey(ok)).toBe(true);
+  for (const bad of ['', 'x'.repeat(4097), 3, null, {}, ['a']]) expect(isOptionalGroupKey(bad)).toBe(false);
 });

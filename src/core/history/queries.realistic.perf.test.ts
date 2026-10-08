@@ -10,7 +10,7 @@ import { afterAll, expect, test } from 'vitest';
 import type { Group, ProcInfo, RangePreset, SystemInfo } from '../types';
 import { openHistoryDb } from './db';
 import { aggregateHour, aggregateMinute, rollupHours } from './maintenance';
-import { queryCulprits, queryEvents, queryGroups, querySystem, queryTop, rangeFromPreset } from './queries';
+import { queryCulprits, queryEvents, queryGroups, queryProcTree, querySystem, queryTop, rangeFromPreset } from './queries';
 import { HistoryWriter, SMALL_GROUPS_KEY } from './writer';
 
 const M = 60_000;
@@ -24,6 +24,8 @@ const CHURN_PER_MIN = 20; // processus courts (builds, tests, onglets) : ~1 300 
 const CMDLINE = 600;
 const DAYS = 30;
 const THRESHOLDS = { procMinMemMB: 50, procMinCpuPercent: 1, groupMinMemMB: 20 };
+/** Groupe à fort renouvellement (Claude, Chrome) : ~176 000 processus distincts sur 30 j, ~15 s de vie chacun. */
+const CHURN_GROUP_PROCS = 176_000;
 
 const dirs: string[] = [];
 afterAll(() => {
@@ -81,6 +83,23 @@ test.skipIf(process.env.PROC_WATCH_PERF !== '1')('requêtes Métriques et taille
     for (const id of [...prevChurn, ...churn]) ins.pm.run(ts, id, 60_000, 70_000, 2);
     prevChurn = churn;
     if (m % 30 === 0) ins.ev.run(ts, 'pressure', null, '{"psi":30}');
+    // un kill earlyoom par heure, sur un processus stable : le filtre par groupe le résout via proc_minute
+    if (m % 60 === 0) ins.ev.run(ts, 'earlyoom_kill', null, JSON.stringify({ pid: 1000 + ((m / 60) % STABLE_PROCS) + 1, name: 'p' }));
+  }
+  // --- groupe à fort renouvellement : un processus court toutes les ~15 s sur les 30 jours ---
+  const churnGid = GROUPS + 2;
+  ins.group.run(churnGid, 'command:churn', 'churn', 'command');
+  const cps = db.prepare('INSERT INTO proc_samples VALUES (?,?,?,?,?)');
+  const churnEvery = Math.floor((DAYS * D) / CHURN_GROUP_PROCS);
+  for (let i = 0; i < CHURN_GROUP_PROCS; i++) {
+    const id = 50_000_000 + i;
+    const ts = start + i * churnEvery;
+    ins.proc.run(id, 4_200_000 + (i % 100_000), id, 'claude', 'claude', churnGid, 1);
+    if (ts < detailFrom) ins.pm.run(Math.floor(ts / M) * M, id, 70_000, 80_000, 3);
+    else {
+      cps.run(ts, id, 70_000, 0, 3);
+      cps.run(ts + TICK, id, 71_000, 0, 3);
+    }
   }
   rollupHours(db, { from: start, to: detailFrom });
   db.exec('COMMIT');
@@ -166,12 +185,34 @@ test.skipIf(process.env.PROC_WATCH_PERF !== '1')('requêtes Métriques et taille
     const top = time('top', () => queryTop(ro, r, o, { peakLimit: 8 }));
     time('groups', () => queryGroups(ro, r, o, top.byMax.map((t) => t.key)));
     time('events', () => queryEvents(ro, r));
+    // détail d'un groupe (B7) : pressions + fuites et kills du groupe
+    // Premier appel à froid : chaque kill lit au hasard procs et proc_minute (~1 Go, cache de pages repris sous MemoryMax=3G) :
+    // 97 à 194 ms à 7 j selon le passage ; second appel 2 ms. Borne stricte de 150 ms sur l'appel chaud (le cas de l'app,
+    // dont la connexion reste ouverte), et 3 fois plus large sur l'appel à froid. Ce test ne tourne qu'avec PROC_WATCH_PERF=1.
+    time('events g1 (froid)', () => queryEvents(ro, r, 'command:g1'));
+    time('events g1', () => queryEvents(ro, r, 'command:g1'));
     time('culprits', () => queryCulprits(ro, r.from + (r.to - r.from) / 2, o));
     const total = Object.values(times).reduce((a, b) => a + b, 0);
     console.info(`${preset} : ${Object.entries(times).map(([k, v]) => `${k} ${v.toFixed(1)} ms`).join(', ')} — total ${total.toFixed(1)} ms`);
     expect(sysSeries.ts.length).toBeGreaterThan(0);
     expect(top.byAvg.length).toBe(10);
-    for (const [k, v] of Object.entries(times)) expect(v, `${preset} ${k}`).toBeLessThan(150);
+    for (const [k, v] of Object.entries(times)) expect(v, `${preset} ${k}`).toBeLessThan(k.endsWith('(froid)') ? 450 : 150);
   }
+  // --- rejeu (B5) : arbre d'un groupe à un instant, borne 50 ms, groupes à fort renouvellement ---
+  const tree: Record<string, number> = {};
+  const timeTree = (name: string, key: string, ts: number) => {
+    const a = performance.now();
+    const r = queryProcTree(ro, key, ts, o);
+    tree[name] = performance.now() - a;
+    expect(r.procs.length, name).toBeGreaterThan(0);
+  };
+  // instant aligné sur la naissance d'un processus du groupe (un toutes les ~15 s : la fenêtre de ± 5 s pourrait tomber entre deux)
+  const churnStep = Math.floor((DAYS * D) / CHURN_GROUP_PROCS);
+  timeTree('churn détail', 'command:churn', start + Math.ceil((now - 12 * H - start) / churnStep) * churnStep + 2000);
+  timeTree('churn minute', 'command:churn', now - 10 * D);
+  timeTree('g1 détail', 'command:g1', now - 12 * H);
+  timeTree('g1 minute', 'command:g1', now - 10 * D);
+  console.info(`procTree : ${Object.entries(tree).map(([k, v]) => `${k} ${v.toFixed(1)} ms`).join(', ')}`);
+  for (const [k, v] of Object.entries(tree)) expect(v, `procTree ${k}`).toBeLessThan(50);
   ro.close();
 }, 600_000);

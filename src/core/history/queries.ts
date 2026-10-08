@@ -1,7 +1,7 @@
 // src/core/history/queries.ts
 import type { DatabaseSync } from 'node:sqlite';
 import type {
-  Culprit, GroupHistory, GroupKind, GroupsHistory, HistoryEvent, ProcsHistory, RangePreset, SystemSeries, TimeRange, TopConsumer, TopOptions, TopResult,
+  Culprit, GroupHistory, GroupKind, GroupsHistory, HistoryEvent, ProcsHistory, ProcTreeAt, ProcTreeRow, RangePreset, SystemSeries, TimeRange, TopConsumer, TopOptions, TopResult,
 } from '../types';
 import { hasColumn } from './db';
 import { alignSeries } from './series';
@@ -266,13 +266,47 @@ export function queryTop(db: DatabaseSync, range: TimeRange, o: QueryOpts, { lim
   return { byAvg: byAvgRows.flatMap((r) => toConsumer(r, true)), byMax: byMaxRows.flatMap((r) => toConsumer(r, false)) };
 }
 
-export function queryEvents(db: DatabaseSync, range: TimeRange): HistoryEvent[] {
-  const rows = db
-    .prepare(
-      `SELECT e.ts, e.type, g.key AS gk, g.label AS gl, e.detail FROM events e LEFT JOIN groups g ON g.id = e.group_id
-       WHERE e.ts >= ? AND e.ts < ? ORDER BY e.ts`,
-    )
-    .all(range.from, range.to) as { ts: number; type: string; gk: string | null; gl: string | null; detail: string }[];
+/**
+ * Sans groupKey : inchangé. Avec groupKey : pressure (système) ; leak du groupe ; app_kill et earlyoom_kill dont une cible
+ * est un processus enregistré du groupe (procs.group_id) — ou dont group_id est le groupe. Cible : identité exacte
+ * detail.targets [{pid, startTicks}] quand l'événement la porte ; sinon detail.pids / detail.pid d'un processus vivant au moment
+ * du kill (échantillon dans les 2 min précédentes en détail, ou une ligne minute dans les 3 min précédentes) et, si
+ * detail.name est donné (earlyoom), de même nom. Le groupe d'un processus est sa dernière classification (upsert du service).
+ * Exclut gap et tmpfs.
+ */
+export function queryEvents(db: DatabaseSync, range: TimeRange, groupKey?: string): HistoryEvent[] {
+  const base = `SELECT e.ts, e.type, g.key AS gk, g.label AS gl, e.detail FROM events e LEFT JOIN groups g ON g.id = e.group_id
+       WHERE e.ts >= ? AND e.ts < ?`;
+  // Un PID peut avoir été réutilisé : la cible n'appartient au groupe que si ce processus y vivait juste avant le kill.
+  // `+p.group_id` écarte l'index procs_group : la recherche part des PID ciblés (index unique (pid, start_ticks)) au lieu
+  // de parcourir les dizaines de milliers de processus d'un groupe à chaque kill (4,4 s → quelques ms sur 7 j).
+  const rows = (
+    groupKey === undefined
+      ? db.prepare(`${base} ORDER BY e.ts`).all(range.from, range.to)
+      : db
+          .prepare(
+            `WITH gs AS (SELECT id FROM groups WHERE key = ?)
+             ${base}
+             AND (e.type = 'pressure'
+               OR (e.type = 'leak' AND e.group_id = (SELECT id FROM gs))
+               OR (e.type IN ('app_kill', 'earlyoom_kill') AND (e.group_id = (SELECT id FROM gs)
+                 -- identité exacte (pid + startTicks) quand l'événement la porte
+                 OR EXISTS (
+                   SELECT 1 FROM json_each(e.detail, '$.targets') t
+                   JOIN procs p ON p.pid = json_extract(t.value, '$.pid') AND p.start_ticks = json_extract(t.value, '$.startTicks')
+                   WHERE +p.group_id = (SELECT id FROM gs))
+                 -- sinon pid vivant juste avant le kill, et même nom quand l'événement en donne un (earlyoom)
+                 OR (json_type(e.detail, '$.targets') IS NULL AND EXISTS (
+                   SELECT 1 FROM procs p
+                   WHERE +p.group_id = (SELECT id FROM gs)
+                     AND p.pid IN (SELECT CAST(value AS INTEGER) FROM json_each(e.detail, '$.pids') UNION ALL SELECT json_extract(e.detail, '$.pid'))
+                     AND (json_extract(e.detail, '$.name') IS NULL OR p.name = json_extract(e.detail, '$.name'))
+                     AND (EXISTS (SELECT 1 FROM proc_samples s WHERE s.proc_id = p.id AND s.ts BETWEEN e.ts - 120000 AND e.ts)
+                          OR EXISTS (SELECT 1 FROM proc_minute m WHERE m.proc_id = p.id AND m.ts BETWEEN e.ts - 180000 AND e.ts)))))))
+             ORDER BY e.ts`,
+          )
+          .all(groupKey, range.from, range.to)
+  ) as { ts: number; type: string; gk: string | null; gl: string | null; detail: string }[];
   return rows.map((r) => ({ ts: r.ts, type: r.type, groupKey: r.gk, groupLabel: r.gl, detail: JSON.parse(r.detail) as Record<string, unknown> }));
 }
 
@@ -316,6 +350,72 @@ export function queryProcsAt(db: DatabaseSync, groupKey: string, ts: number, o: 
   return rows
     .map((r) => ({ pid: r.pid, startTicks: r.st, ppid: r.ppid, name: r.name, cmdline: r.cmdline, rssKB: r.rss, swapKB: r.swap, cpu: r.cpu }))
     .sort((a, b) => b.rssKB + (b.swapKB ?? 0) - (a.rssKB + (a.swapKB ?? 0)));
+}
+
+/** Taille maximale de l'arbre rejoué : au-delà (fork bomb, make -j), seuls les plus gros processus sont renvoyés. */
+export const PROC_TREE_MAX = 2000;
+
+/**
+ * Processus enregistrés du groupe à l'instant ts : par processus, l'échantillon le plus proche de ts dans [ts − intervalle, ts + intervalle]
+ * (proc_samples si ts est dans la rétention détaillée), sinon la ligne de proc_minute la plus proche dans [minute(ts) − 1 min, minute(ts) + 1 min]
+ * (swap inconnu). lastSeenTs = dernier échantillon connu du processus (MAX(ts) de proc_samples, sinon de proc_minute + 59 999).
+ * Au plus PROC_TREE_MAX processus, les plus gros (rss + swap) ; `omitted` compte les autres. `recorded` : le service
+ * échantillonnait autour de ts (system_samples à ± 2 intervalles, ou system_minute à ± 1 min).
+ * Tolère une base v1 (ppid NULL). Aucun processus → procs: [].
+ */
+export function queryProcTree(db: DatabaseSync, groupKey: string, ts: number, o: QueryOpts): ProcTreeAt {
+  const ppid = hasColumn(db, 'procs', 'ppid') ? 'p.ppid' : 'NULL';
+  const source: ProcTreeAt['source'] = ts >= o.now - o.detailHours * H ? 'detail' : 'minute';
+  const half = o.intervalSec * 1000;
+  const minute = Math.floor(ts / M) * M;
+  // Piloté par l'index sur ts (CROSS JOIN : proc_samples d'abord) : quelques centaines de lignes dans la fenêtre, quel que
+  // soit le nombre de processus que le groupe a eus sur toute la rétention (176 000 pour 30 j de Claude : 0,6 ms au lieu de 30 à 90).
+  // Une ligne par échantillon de la fenêtre, triées par processus puis distance à ts : la première de chaque id est retenue.
+  const rows = (
+    source === 'detail'
+      ? db
+          .prepare(
+            `SELECT p.id, p.pid, p.start_ticks AS st, ${ppid} AS ppid, p.name, s.ts AS sts, s.rss_kb AS rss, s.swap_kb AS swap, s.cpu_percent AS cpu
+             FROM proc_samples s CROSS JOIN procs p ON p.id = s.proc_id
+             WHERE s.ts >= ? AND s.ts <= ? AND +p.group_id = (SELECT id FROM groups WHERE key = ?)
+             ORDER BY p.id, ABS(s.ts - ?)`,
+          )
+          .all(ts - half, ts + half, groupKey, ts)
+      : db
+          .prepare(
+            `SELECT p.id, p.pid, p.start_ticks AS st, ${ppid} AS ppid, p.name, s.ts AS sts, s.mem_kb_avg AS rss, NULL AS swap, s.cpu_avg AS cpu
+             FROM proc_minute s CROSS JOIN procs p ON p.id = s.proc_id
+             WHERE s.ts >= ? AND s.ts <= ? AND +p.group_id = (SELECT id FROM groups WHERE key = ?)
+             ORDER BY p.id, ABS(s.ts - ?)`,
+          )
+          .all(minute - M, minute + M, groupKey, minute)
+  ) as { id: number; pid: number; st: number; ppid: number | null; name: string; sts: number; rss: number; swap: number | null; cpu: number }[];
+  const nearest: typeof rows = [];
+  let prev = -1;
+  for (const r of rows) {
+    if (r.id === prev) continue;
+    prev = r.id;
+    nearest.push(r);
+  }
+  nearest.sort((a, b) => b.rss + (b.swap ?? 0) - (a.rss + (a.swap ?? 0)));
+  const kept = nearest.slice(0, PROC_TREE_MAX);
+  const lastDetail = db.prepare('SELECT MAX(ts) AS t FROM proc_samples WHERE proc_id = ?');
+  const lastMinute = db.prepare('SELECT MAX(ts) AS t FROM proc_minute WHERE proc_id = ?');
+  const lastSeen = (id: number, fallback: number): number => {
+    const d = (lastDetail.get(id) as { t: number | null }).t;
+    if (d !== null) return d;
+    const m = (lastMinute.get(id) as { t: number | null }).t;
+    return m !== null ? m + M - 1 : fallback;
+  };
+  const procs: ProcTreeRow[] = kept.map((r) => ({
+    pid: r.pid, startTicks: r.st, ppid: r.ppid, name: r.name, rssKB: r.rss, swapKB: r.swap, cpu: r.cpu, sampleTs: r.sts, lastSeenTs: lastSeen(r.id, r.sts),
+  }));
+  const recorded =
+    procs.length > 0 ||
+    (source === 'detail'
+      ? db.prepare('SELECT 1 FROM system_samples WHERE ts >= ? AND ts <= ? LIMIT 1').get(ts - 2 * half, ts + 2 * half)
+      : db.prepare('SELECT 1 FROM system_minute WHERE ts >= ? AND ts <= ? LIMIT 1').get(minute - M, minute + M)) !== undefined;
+  return { ts, source, procs, recorded, omitted: nearest.length - kept.length };
 }
 
 /** Seuil d'activité : un échantillon à ≥ 1 % de CPU suffit à rendre un processus actif. */

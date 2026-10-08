@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain } from 'electron';
 import { appendFileSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -23,11 +23,12 @@ import { buildSnapshot, flattenGroup, groupProcs, instanceTargets, isWatch, othe
 import type { ConfigState, Group, KillResult, ProcInfo, RecorderState, Watch } from '../core/types';
 import { createAlertOpener, createFocusWriter, initSeenUpTo, keepSeenUpTo, markSeen, unseenFilter } from './alerts';
 import { installDesktopEntry } from './desktopEntry';
+import { createEarlyoomApplier, earlyoomStatus } from './earlyoom';
 import { clearHistory, createHistoryReader } from './history';
 import { pollDelay, type WindowActivity } from './pollPolicy';
 import { sharedScan } from './tmpUsage';
 import {
-  applyOverride, classifySetKey, isGroupKeys, isInstanceKeys, isRange, isSinceMs, isTopOptions, recorderState as computeRecorderState,
+  applyOverride, classifySetKey, isGroupKeys, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState as computeRecorderState,
 } from './historyIpc';
 import { autoManageService, defaultSystemctl, recorderSyncDisabled, ensureRecorderService, recorderExecArgs, systemctlAvailable, unitPath } from './recorderService';
 
@@ -348,10 +349,13 @@ ipcMain.handle('kill', (_e, raw: unknown, rawSignal: unknown): KillResult[] => {
   const { ordered, refused } = planKill(targets, readProcesses(), { selfPid: process.pid, currentUid: uid });
   const results = [...refused, ...sendSignals(ordered, signal)];
   const killed = results.filter((r) => r.ok).map((r) => r.pid);
+  const killedSet = new Set(killed);
+  // Identité exacte des cibles : rattache le kill au bon processus dans l'historique (alertes du détail), même si le PID est réutilisé.
+  const killedTargets = targets.filter((t) => killedSet.has(t.pid)).map((t) => ({ pid: t.pid, startTicks: t.startTicks }));
   if (killed.length) {
     try {
       mkdirSync(data, { recursive: true });
-      appendFileSync(appEventsPath(data), formatAppEvent({ ts: Date.now(), type: 'app_kill', groupKey: null, detail: { pids: killed, signal } }));
+      appendFileSync(appEventsPath(data), formatAppEvent({ ts: Date.now(), type: 'app_kill', groupKey: null, detail: { pids: killed, signal, targets: killedTargets } }));
     } catch (e) {
       console.error('app event:', e);
     }
@@ -434,9 +438,10 @@ ipcMain.handle('history:system', (_e, r: unknown) => (isRange(r) ? history.syste
 ipcMain.handle('history:groups', (_e, r: unknown, keys: unknown) => (isRange(r) && isGroupKeys(keys) ? history.groups(r, keys) : null));
 ipcMain.handle('history:group', (_e, key: unknown, r: unknown) => (typeof key === 'string' && isRange(r) ? history.group(key, r) : null));
 ipcMain.handle('history:procs', (_e, key: unknown, r: unknown) => (typeof key === 'string' && isRange(r) ? history.procs(key, r) : null));
+ipcMain.handle('history:procTree', (_e, key: unknown, ts: unknown) => (isProcTreeRequest(key, ts) ? history.procTree(key as string, ts as number) : null));
 ipcMain.handle('history:culprits', (_e, ts: unknown) => (Number.isFinite(ts) ? history.culprits(ts as number) : []));
 ipcMain.handle('history:top', (_e, r: unknown, o: unknown) => (isRange(r) && isTopOptions(o) ? history.top(r, o) : { byAvg: [], byMax: [] }));
-ipcMain.handle('history:events', (_e, r: unknown) => (isRange(r) ? history.events(r) : []));
+ipcMain.handle('history:events', (_e, r: unknown, groupKey: unknown) => (isRange(r) && isOptionalGroupKey(groupKey) ? history.events(r, groupKey) : []));
 const tmpTopDirs = sharedScan();
 ipcMain.handle('tmp:topDirs', () => tmpTopDirs());
 ipcMain.handle('recorder:status', () => recorderState());
@@ -449,6 +454,26 @@ ipcMain.handle('recorder:setEnabled', async (_e, enabled: unknown) => {
   return recorderState();
 });
 ipcMain.handle('recorder:clearHistory', () => clearHistory(data, { running: recorderState().running, pid: history.status()?.pid, beforeDelete: history.close }));
+
+ipcMain.handle('earlyoom:status', () => earlyoomStatus());
+/** Confirmation dans le main, avec la ligne exacte que le main a construite, avant tout pkexec. */
+const confirmEarlyoomLine = async (line: string): Promise<boolean> => {
+  const opts: Electron.MessageBoxOptions = {
+    type: 'warning',
+    title: 'earlyoom',
+    message: 'Écrire cette ligne dans /etc/default/earlyoom et redémarrer earlyoom ?',
+    detail: line,
+    buttons: ['Annuler', 'Écrire et redémarrer'],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  };
+  const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+  const r = parent ? await dialog.showMessageBox(parent, opts) : await dialog.showMessageBox(opts);
+  return r.response === 1;
+};
+const applyEarlyoomIpc = createEarlyoomApplier(() => config.protected, confirmEarlyoomLine);
+ipcMain.handle('earlyoom:apply', (_e, s: unknown, expectedLine: unknown) => applyEarlyoomIpc(s, expectedLine));
 
 ipcMain.handle('desktop:install', () => {
   if (!app.isPackaged) throw new Error('Disponible uniquement dans la version installée (AppImage ou .deb)');

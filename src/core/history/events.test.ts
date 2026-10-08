@@ -57,6 +57,11 @@ test('app events : format, parse validation stricte', () => {
   expect(parseAppEvents(JSON.stringify({ ts: 5, type: 'app_kill', groupKey: 'app:chrome', detail: { pids: [1] } }))).toEqual([]);
   // null line
   expect(parseAppEvents('null\n')).toEqual([]);
+  // identités pid + startTicks conservées ; mal formées : ignorées (l'événement reste, avec ses pids)
+  const withTargets = { ts: 5, type: 'app_kill', groupKey: null, detail: { pids: [1], signal: 'SIGTERM', targets: [{ pid: 1, startTicks: 42 }] } };
+  expect(parseAppEvents(JSON.stringify(withTargets))).toEqual([withTargets]);
+  const bad = { ...withTargets, detail: { ...withTargets.detail, targets: [{ pid: 1, startTicks: 'x' }] } };
+  expect(parseAppEvents(JSON.stringify(bad))).toEqual([{ ...withTargets, detail: { pids: [1], signal: 'SIGTERM' } }]);
 });
 
 test('takeAppEvents : flux normal, fichier vide après ack', () => {

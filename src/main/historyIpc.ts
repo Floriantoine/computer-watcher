@@ -47,6 +47,18 @@ export const isInstanceKeys = (k: unknown): k is string[] =>
 export const isSinceMs = (v: unknown, now: number = Date.now()): v is number =>
   typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= now;
 
+/** Rejeu de l'arbre : groupKey chaîne de 1 à 4 096 caractères ; ts nombre fini, ≥ 0, ≤ now + 60 s. */
+export function isProcTreeRequest(groupKey: unknown, ts: unknown, now: number = Date.now()): boolean {
+  return (
+    typeof groupKey === 'string' && groupKey.length >= 1 && groupKey.length <= MAX_INSTANCE_KEY_LEN &&
+    typeof ts === 'number' && Number.isFinite(ts) && ts >= 0 && ts <= now + 60_000
+  );
+}
+
+/** Filtre optionnel des événements par groupe : absent, ou clé de 1 à 4 096 caractères. */
+export const isOptionalGroupKey = (k: unknown): k is string | undefined =>
+  k === undefined || (typeof k === 'string' && k.length >= 1 && k.length <= MAX_INSTANCE_KEY_LEN);
+
 const isBoundedText = (v: unknown): v is string => typeof v === 'string' && v.length >= 1 && v.length <= MAX_OVERRIDE_KEY;
 
 /**

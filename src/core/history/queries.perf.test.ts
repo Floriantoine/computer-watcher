@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { expect, test } from 'vitest';
 import { openHistoryDb } from './db';
 import { aggregateMinute } from './maintenance';
-import { queryGroups, queryProcsAt, querySystem, queryTop, rangeFromPreset } from './queries';
+import { queryGroups, queryProcsAt, queryProcTree, querySystem, queryTop, rangeFromPreset } from './queries';
 
 // Objectifs réels (150 ms, 50 ms pour queryProcsAt) : vérifiés avec PROC_WATCH_PERF=1 (`npm run test:recorder`),
 // sur une machine au repos. Dans `npm test`, la suite tourne en parallèle sur tous les cœurs (et parfois à côté d'un
@@ -43,7 +43,7 @@ test('performance : 24 h x 100 groupes à 5 s', () => {
     fn();
     const ms = performance.now() - t0;
     console.info(`${name}: ${ms.toFixed(1)} ms`);
-    expect(ms).toBeLessThan((name.startsWith('queryProcsAt') ? 50 : 150) * SLACK);
+    expect(ms).toBeLessThan((/^queryProc(sAt|Tree)/.test(name) ? 50 : 150) * SLACK);
   };
   time('queryGroups 24h', () => expect(queryGroups(db, rangeFromPreset('24h', now), o).series).toHaveLength(100));
   time('queryGroups 1h', () => expect(queryGroups(db, rangeFromPreset('1h', now), o).series).toHaveLength(100));
@@ -55,5 +55,10 @@ test('performance : 24 h x 100 groupes à 5 s', () => {
     expect(queryProcsAt(db, 'app:g1', now - 1, o)).toHaveLength(100);
   });
   time('queryProcsAt minute (100 procs)', () => expect(queryProcsAt(db, 'app:g1', now - 12 * H, { ...o, detailHours: 6 })).toHaveLength(100));
+  time('queryProcTree détail (100 procs)', () => {
+    expect(queryProcTree(db, 'app:g1', now - 12 * H, o).procs).toHaveLength(100);
+    expect(queryProcTree(db, 'app:g1', now - 1, o).procs).toHaveLength(100);
+  });
+  time('queryProcTree minute (100 procs)', () => expect(queryProcTree(db, 'app:g1', now - 12 * H, { ...o, detailHours: 6 }).procs).toHaveLength(100));
   time('querySystem 24h', () => expect(querySystem(db, rangeFromPreset('24h', now), o).ts.length).toBeGreaterThan(0));
 }, 60_000);

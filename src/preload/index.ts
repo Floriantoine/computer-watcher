@@ -1,7 +1,8 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import type { AlertEvent } from '../core/alerts';
+import type { EarlyoomSettings } from '../core/earlyoom';
 import type {
-  Category, Config, ConfigState, Culprit, InstanceTargets, ProcInfo, Watch, GroupHistory, GroupsHistory, HistoryEvent, KillResult, KillTarget, KillSignal, ProcsHistory, RangePreset,
+  ApplyResult, Category, EarlyoomStatus, Config, ConfigState, Culprit, InstanceTargets, ProcInfo, Watch, GroupHistory, GroupsHistory, HistoryEvent, KillResult, KillTarget, KillSignal, ProcsHistory, ProcTreeAt, RangePreset,
   RecorderState, Snapshot, SystemSeries, TimeRange, TmpUsage, TopOptions, TopResult,
 } from '../core/types';
 
@@ -45,9 +46,20 @@ const api = {
     groups: (r: RangePreset | TimeRange, keys?: string[]): Promise<GroupsHistory | null> => ipcRenderer.invoke('history:groups', r, keys),
     group: (key: string, r: RangePreset | TimeRange): Promise<GroupHistory | null> => ipcRenderer.invoke('history:group', key, r),
     procs: (key: string, r: RangePreset | TimeRange): Promise<ProcsHistory | null> => ipcRenderer.invoke('history:procs', key, r),
+    /** Arbre enregistré du groupe à l'instant ts (rejeu) ; null sans base ou requête invalide. */
+    procTree: (key: string, ts: number): Promise<ProcTreeAt | null> => ipcRenderer.invoke('history:procTree', key, ts),
     culprits: (ts: number): Promise<Culprit[]> => ipcRenderer.invoke('history:culprits', ts),
     top: (r: RangePreset | TimeRange, o?: TopOptions): Promise<TopResult> => ipcRenderer.invoke('history:top', r, o),
-    events: (r: RangePreset | TimeRange): Promise<HistoryEvent[]> => ipcRenderer.invoke('history:events', r),
+    /** Événements de la plage ; avec `groupKey`, seulement ceux du groupe et les pressions système. */
+    events: (r: RangePreset | TimeRange, groupKey?: string): Promise<HistoryEvent[]> => ipcRenderer.invoke('history:events', r, groupKey),
+  },
+  earlyoom: {
+    status: (): Promise<EarlyoomStatus> => ipcRenderer.invoke('earlyoom:status'),
+    /**
+     * Le main reconstruit la ligne (liste protégée de sa config), refuse si elle diffère de `expectedLine` (l'aperçu),
+     * la montre dans une confirmation native, puis lance pkexec d'un script fixe avec la ligne en argument.
+     */
+    apply: (s: EarlyoomSettings, expectedLine: string): Promise<ApplyResult> => ipcRenderer.invoke('earlyoom:apply', s, expectedLine),
   },
   alerts: {
     /** Alertes non vues (les 100 plus récentes d'abord) et leur nombre total. */
