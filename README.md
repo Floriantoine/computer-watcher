@@ -4,7 +4,7 @@ Voir ce qui tourne sur ta machine Linux, depuis combien de temps, ce que ça con
 
 Né d'un PC gelé dix minutes par 19 Go de swap : vieilles sessions de terminal, serveurs de dev oubliés dans des worktrees supprimés, navigateur gourmand. proc-watch regroupe tout ça pour qu'on le voie et qu'on le nettoie avant d'en arriver là.
 
-![Vue principale](docs/screenshot-main.png)
+![Détail d'un projet : instances classées, ports, doublon](docs/screenshot-main.png)
 
 ## Ce que ça fait
 
@@ -51,7 +51,7 @@ Dans un projet, proc-watch découpe les processus en **instances** : un serveur 
 
 ### AppImage (toutes distributions)
 
-1. Télécharger `proc-watch-<version>-x86_64.AppImage` depuis les [Releases](https://github.com/Floriantoine/proc-watch/releases).
+1. Télécharger `proc-watch-<version>-x86_64.AppImage` depuis les [Releases](https://github.com/Floriantoine/proc-watcher/releases).
 2. `chmod +x proc-watch-*.AppImage` puis le lancer.
 3. Dans **Réglages**, cliquer **Ajouter au menu des applications**.
 
@@ -66,8 +66,8 @@ sudo apt install ./proc-watch-<version>-amd64.deb
 ### Depuis les sources
 
 ```bash
-git clone https://github.com/Floriantoine/proc-watch
-cd proc-watch
+git clone https://github.com/Floriantoine/proc-watcher
+cd proc-watcher
 npm install
 npm run dev
 ```

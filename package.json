@@ -7,8 +7,8 @@
     "name": "floriantoine",
     "email": "47173268+Floriantoine@users.noreply.github.com"
   },
-  "homepage": "https://github.com/Floriantoine/proc-watch",
-  "repository": "github:Floriantoine/proc-watch",
+  "homepage": "https://github.com/Floriantoine/proc-watcher",
+  "repository": "github:Floriantoine/proc-watcher",
   "license": "MIT",
   "scripts": {
     "dev": "electron-vite dev",
