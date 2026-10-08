@@ -39,3 +39,10 @@ export interface RuleIssue {
   name: string | null;
   error: string;
 }
+
+/** Réglages › Règles : dernier déclenchement et nombre de déclenchements sur 7 jours (escalades SIGKILL et quotas non comptés). */
+export interface RuleStats {
+  lastTs: number | null;
+  lastResult: string | null;
+  count7d: number;
+}

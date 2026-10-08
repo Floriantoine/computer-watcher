@@ -201,3 +201,16 @@ test('eventMarkers : prévision ② « Épuisement prévu dans ~8 min », orange
   expect(eventMarkers([{ ...e, detail: { etaMin: 0.3 } }])[0]!.label).toBe("Épuisement prévu dans moins d'une minute");
   expect(alertsFrom([e])).toHaveLength(1);
 });
+
+test('eventMarkers : règles (⑥) — libellés et couleurs ; alertsFrom les garde', () => {
+  const ev = (type: string, detail: Record<string, unknown>) => ({ ts: 1, type, groupKey: null, groupLabel: null, detail });
+  const d = { rule: 'vitest > 4 Go', target: 'vitest', memKB: 4.3 * 1024 * 1024 };
+  const m = eventMarkers([ev('rule_action', { ...d, result: 'sigterm' }), ev('rule_action', { rule: 'vitest > 4 Go', result: 'quota' }), ev('rule_dry_run', { ...d, result: 'dry_run' })]);
+  expect(m.map((x) => x.label)).toEqual([
+    'Règle « vitest > 4 Go » : vitest arrêté (4,3 Go)',
+    'Règle « vitest > 4 Go » : quota atteint',
+    'Simulation « vitest > 4 Go » : aurait arrêté vitest (4,3 Go)',
+  ]);
+  expect(m.map((x) => x.color)).toEqual(['#ff5c8a', '#ff5c8a', '#8b91a0']);
+  expect(alertsFrom([ev('rule_action', d), ev('rule_dry_run', d)])).toHaveLength(2);
+});

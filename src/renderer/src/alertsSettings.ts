@@ -2,13 +2,15 @@
 import { DESKTOP_INTERVAL_BOUNDS, type AlertChannel, type AlertType } from '../../core/alerts';
 import type { Config, RecorderState } from '../../core/types';
 
-/** Types réglables aujourd'hui (les règles ⑥ ajouteront `rule_action` / `rule_dry_run`). */
+/** Types réglables (règles ⑥ comprises). */
 export const SETTINGS_ALERT_TYPES: { type: AlertType; label: string }[] = [
   { type: 'earlyoom_kill', label: 'Kill earlyoom' },
   { type: 'leak', label: 'Fuite probable' },
   { type: 'tmpfs', label: 'Fichiers en mémoire (/tmp)' },
   { type: 'pressure', label: 'Pression mémoire' },
   { type: 'forecast', label: 'Mémoire bientôt épuisée (prévision)' },
+  { type: 'rule_action', label: 'Règle automatique exécutée' },
+  { type: 'rule_dry_run', label: 'Règle en simulation' },
 ];
 
 /** État de la prévision ② affiché à côté de sa ligne ; null quand elle fonctionne (ou état inconnu). */

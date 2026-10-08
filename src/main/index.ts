@@ -534,6 +534,7 @@ ipcMain.handle('alerts:seenAll', () => {
   return ts === null ? configState() : applySeen({ upTo: ts });
 });
 ipcMain.handle('alerts:takePending', () => alertOpener.take());
+ipcMain.handle('rules:stats', () => history.ruleStats());
 ipcMain.handle('free:takePending', () => freeOpener.take());
 // « Ignorer 30 min » du pop-up de prévision : fichier d'état lu par le service avant toute alerte de prévision.
 ipcMain.handle('forecast:snooze', () => {

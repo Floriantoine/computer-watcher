@@ -1,6 +1,6 @@
 // Réglages (logique pure) : sections de la barre latérale, section mémorisée, points d'attention, saisie modifiée.
 
-export type SettingsSection = 'protected' | 'others' | 'display' | 'classify' | 'alerts' | 'recorder' | 'earlyoom' | 'desktop';
+export type SettingsSection = 'protected' | 'others' | 'display' | 'classify' | 'alerts' | 'rules' | 'recorder' | 'earlyoom' | 'desktop';
 
 export const SETTINGS_SECTIONS: { id: SettingsSection; label: string; description: string }[] = [
   { id: 'protected', label: 'Protégés', description: 'Programmes dont le kill demande toujours une confirmation.' },
@@ -8,6 +8,7 @@ export const SETTINGS_SECTIONS: { id: SettingsSection; label: string; descriptio
   { id: 'display', label: 'Affichage', description: 'Mémoire affichée, effets visuels et barre des tâches.' },
   { id: 'classify', label: 'Classement', description: 'Classement automatique des instances, ports et corrections manuelles.' },
   { id: 'alerts', label: 'Alertes', description: 'Où chaque type d’alerte est signalé, et à quelle fréquence.' },
+  { id: 'rules', label: 'Règles', description: 'Arrêts automatiques sous conditions, exécutés par le service d’enregistrement.' },
   { id: 'recorder', label: 'Enregistrement', description: 'Service d’arrière-plan qui alimente l’onglet Métriques.' },
   { id: 'earlyoom', label: 'earlyoom', description: 'Tue le processus le plus gourmand avant que le système ne gèle.' },
   { id: 'desktop', label: 'Menu des applications', description: 'Raccourci proc-watch dans le menu du bureau.' },
@@ -102,6 +103,8 @@ export interface AttentionInput {
   /** null : pas encore lu. */
   recorder: FormState & { status: { available: boolean; enabled: boolean; running: boolean } | null };
   earlyoom: FormState & { status: { installed: boolean; active: string } | null };
+  /** Réglages › Règles : éditeur ouvert (modifié, invalide) et règles du fichier refusées. */
+  rules?: FormState & { issues: number };
 }
 export type AttentionTone = 'error' | 'dirty' | 'warn';
 export interface Attention { tone: AttentionTone; reasons: string[] }
@@ -143,6 +146,9 @@ export function sectionAttention(i: AttentionInput): Partial<Record<SettingsSect
     alerts: attention(i.alerts, null),
     recorder: attention(i.recorder, recorderWarning(i.recorder.status)),
     earlyoom: attention(i.earlyoom, earlyoomWarning(i.earlyoom.status)),
+    rules: i.rules?.issues
+      ? { tone: 'error', reasons: [`${i.rules.issues} règle${i.rules.issues > 1 ? 's' : ''} invalide${i.rules.issues > 1 ? 's' : ''} ignorée${i.rules.issues > 1 ? 's' : ''}`] }
+      : attention(i.rules ?? null, null),
   };
   for (const k of Object.keys(out) as SettingsSection[]) if (!out[k]) delete out[k];
   return out;

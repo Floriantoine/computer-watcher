@@ -131,9 +131,19 @@ Au premier lancement de la version installée (AppImage, .deb), proc-watch insta
 - **Réglages → Alertes** : pour chaque type, « Pop-up et bureau », « Pop-up seulement » ou « Rien » (par défaut : pression en pop-up seulement, le reste partout) ; au plus une notification du bureau par type toutes les 5 min (1 à 120).
 - **« Ouvrir »** lance proc-watch, ou affiche la fenêtre déjà ouverte (instance unique), sur l'instant de l'alerte (`--alert=<id>`). Le service trouve l'app à partir de son propre emplacement : AppImage → le fichier AppImage ; paquet → le binaire installé ; clone du dépôt lancé avec `npm start` (`electron-vite preview`) → `electron <dossier du clone>` (la sortie `out/` doit être construite). L'app est lancée sous le même utilisateur, via `systemd-run --user` quand il existe (hors du service : redémarrer le service ne la ferme pas). Sinon, la notification part sans bouton.
 
+### Règles automatiques
+
+Réglages → Règles : le service d'enregistrement peut arrêter des processus **sans confirmation** selon des règles. Tout est éteint par défaut (interrupteur « Règles automatiques » : éteint, rien ne tourne, pas même les simulations).
+
+- **Conditions** : un groupe ou une instance (par nom, comparé tel quel, ou par catégorie) au-dessus de X Go (RAM + swap) pendant Y min ; une instance de projet (front, back…) inactive depuis T (aucune mesure CPU ≥ 1 % ; sans historique couvrant toute la période, rien n'est arrêté) ; la prévision « Mémoire bientôt épuisée » qui annonce l'épuisement dans moins de N min (cible : le plus gros groupe qui grossit ; les applis seulement si tu les coches).
+- **Simulation d'abord** : chaque nouvelle règle démarre en Simulation (journal « aurait arrêté… », aucun signal). Le passage en « Active » demande une confirmation ; une règle active dont la condition change repasse en Simulation. Trois modèles fournis, désactivés.
+- **Action** : SIGTERM, puis SIGKILL 5 s plus tard aux seuls processus encore vivants avec la même identité (pid + heure de démarrage).
+- **Garde-fous** (codés en dur, revérifiés juste avant chaque signal) : jamais Claude ni ce qu'il a lancé, les terminaux et les shells, le bureau (KWin, Plasma, X), systemd, D-Bus, PipeWire, earlyoom, proc-watch et ses parents, les programmes protégés, root ni les processus d'autres utilisateurs. Au plus 1 action par règle toutes les 5 min et 10 par heure en tout : au-delà, la règle se met en pause 1 h (notification).
+- **Journal** : chaque action et chaque simulation est une alerte (Métriques → Alertes, pop-up, notification du bureau pour les actions) ; Réglages → Règles montre le dernier déclenchement et le nombre sur 7 jours. Une règle invalide écrite à la main dans `config.json` est ignorée seule, avec son erreur affichée.
+
 ## Va bien avec earlyoom
 
-proc-watch ne tue jamais rien tout seul. Pour éviter qu'un manque de mémoire ne gèle la machine, installe [earlyoom](https://github.com/rfjakob/earlyoom). Une future version permettra de le configurer depuis proc-watch.
+proc-watch ne tue jamais rien tout seul, sauf règles automatiques que tu as activées. Pour éviter qu'un manque de mémoire ne gèle la machine, installe [earlyoom](https://github.com/rfjakob/earlyoom). Une future version permettra de le configurer depuis proc-watch.
 
 ## Licence
 

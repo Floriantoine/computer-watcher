@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import type { AlertEvent } from '../core/alerts';
 import type { EarlyoomSettings } from '../core/earlyoom';
+import type { RuleStats } from '../core/rules/types';
 import type {
   ApplyResult, Category, EarlyoomStatus, Config, ConfigState, Culprit, InstanceTargets, ProcInfo, Watch, GroupHistory, GroupsHistory, HistoryEvent, KillResult, KillTarget, KillSignal, ProcsHistory, ProcTreeAt, RangePreset,
   RecorderState, Snapshot, SystemSeries, TimeRange, TmpUsage, TopOptions, TopResult,
@@ -79,6 +80,10 @@ const api = {
         ipcRenderer.removeListener('alert:open', handler);
       };
     },
+  },
+  rules: {
+    /** Dernier déclenchement et nombre sur 7 j, par id de règle ({} sans historique). */
+    stats: (): Promise<Record<string, RuleStats>> => ipcRenderer.invoke('rules:stats'),
   },
   tray: {
     /** Le bureau a-t-il une zone de notification (StatusNotifierWatcher) ? Sinon fermer la fenêtre quitte l'app. */

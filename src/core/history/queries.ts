@@ -1,4 +1,5 @@
 // src/core/history/queries.ts
+import type { RuleStats } from '../rules/types';
 import type { DatabaseSync } from 'node:sqlite';
 import type {
   Culprit, GroupHistory, GroupKind, GroupsHistory, HistoryEvent, ProcsHistory, ProcTreeAt, ProcTreeRow, RangePreset, SystemSeries, TimeRange, TopConsumer, TopOptions, TopResult,
@@ -459,4 +460,29 @@ export function historyCovers(db: DatabaseSync, since: number, now: number): boo
   const first = (db.prepare('SELECT MIN(ts) AS ts FROM system_minute').get() as { ts: number | null }).ts;
   if (first === null || first > since + 5 * M) return false;
   return db.prepare("SELECT 1 FROM events WHERE type = 'gap' AND ts >= ? AND ts <= ? LIMIT 1").get(since, now + M) === undefined;
+}
+
+/**
+ * Statistiques des règles sur les 7 derniers jours (rule_action + rule_dry_run), par `detail.ruleId` : dernier
+ * événement (hors escalade SIGKILL) et nombre de déclenchements (hors escalade et hors quota). Détail sans ruleId ignoré.
+ */
+export function queryRuleStats(db: DatabaseSync, now: number): Record<string, RuleStats> {
+  const rows = db
+    .prepare("SELECT ts, detail FROM events WHERE type IN ('rule_action', 'rule_dry_run') AND ts >= ? AND ts <= ? ORDER BY ts, id")
+    .all(now - 7 * 24 * H, now) as { ts: number; detail: string }[];
+  const out: Record<string, RuleStats> = {};
+  for (const r of rows) {
+    let d: Record<string, unknown>;
+    try {
+      d = JSON.parse(r.detail) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    if (typeof d.ruleId !== 'string' || typeof d.result !== 'string' || d.result === 'sigkill') continue;
+    const s = (out[d.ruleId] ??= { lastTs: null, lastResult: null, count7d: 0 });
+    s.lastTs = r.ts;
+    s.lastResult = d.result;
+    if (d.result !== 'quota') s.count7d++;
+  }
+  return out;
 }

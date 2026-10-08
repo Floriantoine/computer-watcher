@@ -7,7 +7,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { openHistoryDb } from './db';
 import { createV3Db } from './testDb';
 import { aggregateMinute } from './maintenance';
-import { bucketMs, historyCovers, pickSource, queryInactive, queryCulprits, queryEvents, queryGroup, queryGroups, PROC_TREE_MAX, queryProcs, queryProcsAt, queryProcTree, querySystem, queryTop, rangeFromPreset } from './queries';
+import { bucketMs, historyCovers, queryRuleStats, pickSource, queryInactive, queryCulprits, queryEvents, queryGroup, queryGroups, PROC_TREE_MAX, queryProcs, queryProcsAt, queryProcTree, querySystem, queryTop, rangeFromPreset } from './queries';
 
 const H = 3600_000;
 const M = 60_000;
@@ -603,4 +603,25 @@ test('historyCovers : premier agrégat ≤ since + 5 min et aucun trou depuis', 
   expect(historyCovers(db, 9 * M, 10 * M)).toBe(true); // trou avant la période
   const empty = openHistoryDb(join(mkdtempSync(join(tmpdir(), 'pw-q-')), 'e.db')).db;
   expect(historyCovers(empty, 0, M)).toBe(false);
+});
+
+test('queryRuleStats : rule_action + rule_dry_run des 7 derniers jours par ruleId ; plus vieux et sans ruleId ignorés', () => {
+  const { db } = openHistoryDb(join(mkdtempSync(join(tmpdir(), 'pw-q-')), 'r.db'));
+  const D = 86400_000;
+  const now = 20 * D;
+  const ins = (ts: number, type: string, detail: object | string) =>
+    db.prepare('INSERT INTO events(ts,type,group_id,detail) VALUES (?,?,NULL,?)').run(ts, type, typeof detail === 'string' ? detail : JSON.stringify(detail));
+  ins(now - 8 * D, 'rule_action', { ruleId: 'r-a', result: 'sigterm' });
+  ins(now - 3 * D, 'rule_dry_run', { ruleId: 'r-a', result: 'dry_run' });
+  ins(now - 2 * D, 'rule_dry_run', { ruleId: 'r-a', result: 'dry_run' });
+  ins(now - 1 * D, 'rule_action', { ruleId: 'r-a', result: 'sigterm' });
+  ins(now - 1 * D + 5000, 'rule_action', { ruleId: 'r-a', result: 'sigkill' }); // escalade : pas un déclenchement de plus
+  ins(now - 1000, 'rule_action', { result: 'sigterm' });
+  ins(now - 500, 'rule_dry_run', { ruleId: 'r-b', result: 'quota' });
+  ins(now - 400, 'leak', { ruleId: 'r-b' });
+  ins(now - 300, 'rule_action', 'pas du json');
+  expect(queryRuleStats(db, now)).toEqual({
+    'r-a': { lastTs: now - 1 * D, lastResult: 'sigterm', count7d: 3 },
+    'r-b': { lastTs: now - 500, lastResult: 'quota', count7d: 0 },
+  });
 });

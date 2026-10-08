@@ -1,3 +1,4 @@
+import { ruleEventText } from '../../core/alerts';
 import { topKeysByMax } from '../../core/history/series';
 import type { GroupsHistory, HistoryEvent, RangePreset, SystemSeries, TimeRange, TopOptions, TopResult } from '../../core/types';
 import { formatKB } from './format';
@@ -81,6 +82,7 @@ export function breakdownAt(inv: { ts: number[]; layers: { key: string; values: 
 
 const COLORS: Record<string, string> = {
   earlyoom_kill: '#ff5c8a', pressure: '#ffb547', gap: '#8b91a0', app_kill: '#a07cff', leak: '#ff8a3d', tmpfs: REST_TONES.shmem, forecast: '#ffb547',
+  rule_action: '#ff5c8a', rule_dry_run: '#8b91a0',
 };
 
 function label(e: HistoryEvent): string {
@@ -104,6 +106,9 @@ function label(e: HistoryEvent): string {
       if (!Number.isFinite(eta)) return 'Épuisement de la mémoire prévu';
       return eta < 1 ? "Épuisement prévu dans moins d'une minute" : `Épuisement prévu dans ~${Math.round(eta)} min`;
     }
+    case 'rule_action':
+    case 'rule_dry_run':
+      return ruleEventText(e.type, d).title;
     default: return e.type;
   }
 }

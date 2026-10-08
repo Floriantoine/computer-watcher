@@ -33,8 +33,10 @@ test('createHistoryReader : null sans base, données avec base, récupère aprè
   expect(reader.system(range)).toBeNull();
   expect(reader.top(range)).toEqual({ byAvg: [], byMax: [] });
   expect(reader.status()).toBeNull();
+  expect(reader.ruleStats()).toEqual({}); // rules:stats sans base : vide
 
   makeDb(dir, Date.now());
+  expect(reader.ruleStats()).toEqual({});
   expect(reader.system(range)?.memUsedKB).toEqual([600]);
 
   expect(reader.system(range)?.memUsedKB).toEqual([600]);

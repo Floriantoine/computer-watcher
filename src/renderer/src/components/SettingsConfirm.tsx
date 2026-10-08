@@ -14,9 +14,11 @@ interface ConfirmProps {
   icon?: ReactNode;
   /** Contenu affiché sous le texte (ex. la ligne exacte à appliquer). */
   children?: ReactNode;
+  /** Focus initial sur « Annuler » (action risquée : Entrée ne confirme pas par mégarde). */
+  focusCancel?: boolean;
 }
 
-export function SettingsConfirm({ id, title, text, confirmLabel, onConfirm, onCancel, icon, children }: ConfirmProps) {
+export function SettingsConfirm({ id, title, text, confirmLabel, onConfirm, onCancel, icon, children, focusCancel }: ConfirmProps) {
   const isPresent = useIsPresent();
   const box = useRef<HTMLDivElement>(null);
   useFocusTrap(box);
@@ -52,7 +54,7 @@ export function SettingsConfirm({ id, title, text, confirmLabel, onConfirm, onCa
         <p className="hint" style={{ margin: 0 }}>{text}</p>
         {children}
         <div className="actions">
-          <button onClick={guard(onCancel)}>Annuler</button>
+          <button onClick={guard(onCancel)} autoFocus={focusCancel} data-testid={focusCancel ? 'confirm-cancel' : undefined}>Annuler</button>
           <button className="danger" onClick={guard(onConfirm)}>{confirmLabel}</button>
         </div>
       </motion.div>

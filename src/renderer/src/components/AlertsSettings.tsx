@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties } from 'react';
-import { BellRing, FolderOpen, Gauge, Hourglass, MonitorSmartphone, Skull, TrendingUp, type LucideIcon } from 'lucide-react';
+import { BellRing, Bot, FlaskConical, FolderOpen, Gauge, Hourglass, MonitorSmartphone, Skull, TrendingUp, type LucideIcon } from 'lucide-react';
 import type { AlertType } from '../../../core/alerts';
 import type { Config, RecorderState } from '../../../core/types';
 import { CHANNEL_LABELS, forecastNote, parseIntervalInput, SETTINGS_ALERT_TYPES, withChannel, withInterval } from '../alertsSettings';
@@ -8,7 +8,7 @@ import type { FormState } from '../settingsNav';
 import { Card, NumberField, Row, SaveBar } from './settingsUi';
 import '../alerts.css';
 
-const ICONS: Partial<Record<AlertType, LucideIcon>> = { earlyoom_kill: Skull, leak: TrendingUp, tmpfs: FolderOpen, pressure: Gauge, forecast: Hourglass };
+const ICONS: Partial<Record<AlertType, LucideIcon>> = { earlyoom_kill: Skull, leak: TrendingUp, tmpfs: FolderOpen, pressure: Gauge, forecast: Hourglass, rule_action: Bot, rule_dry_run: FlaskConical };
 const colorOf = (type: AlertType) => eventMarkers([{ ts: 0, type, groupKey: null, groupLabel: null, detail: {} }])[0]!.color;
 
 /** Réglages › Alertes : canal par type (pop-up et bureau / pop-up seulement / rien), anti-spam du bureau. */

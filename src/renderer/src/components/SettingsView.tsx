@@ -4,6 +4,7 @@ import {
   AppWindow,
   ArrowLeft,
   BellRing,
+  Bot,
   Clock,
   HardDrive,
   Layers,
@@ -24,6 +25,7 @@ import { AlertsSettings } from './AlertsSettings';
 import { formatKB } from '../format';
 import { pollWhileLive } from '../history';
 import { EarlyoomPanel, type EarlyoomAttention } from './EarlyoomPanel';
+import { RulesPanel } from './RulesPanel';
 import { SettingsConfirm } from './SettingsConfirm';
 import { Card, NumberField, Row, SaveBar, Switch } from './settingsUi';
 import { recorderToForm, validateRecorderForm, type RecorderErrors, type RecorderForm } from '../recorderForm';
@@ -60,6 +62,7 @@ const ICONS: Record<SettingsSection, LucideIcon> = {
   display: Sparkles,
   classify: Tags,
   alerts: BellRing,
+  rules: Bot,
   recorder: HardDrive,
   earlyoom: Wrench,
   desktop: AppWindow,
@@ -124,6 +127,8 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
   const overrides = overrideRows(config.classify.overrides);
   const [now, setNow] = useState(() => Date.now());
   const [alertsForm, setAlertsForm] = useState<FormState>(CALM);
+  const [rulesForm, setRulesForm] = useState<FormState>(CALM);
+  const ruleIssues = state.ruleIssues ?? [];
   const [eo, setEo] = useState<EarlyoomAttention>({ ...CALM, status: null });
   /** Zone de notification présente sur ce bureau ? null tant que la réponse n'est pas arrivée. */
   const [trayOk, setTrayOk] = useState<boolean | null>(null);
@@ -230,6 +235,7 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
     alerts: alertsForm,
     recorder: { ...recorderState, status: rec ? { available: rec.available, enabled: rec.enabled, running: rec.running } : null },
     earlyoom: eo,
+    rules: { ...rulesForm, issues: ruleIssues.length },
   });
 
   const tabs = useRef(new Map<SettingsSection, HTMLButtonElement>());
@@ -521,6 +527,8 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
           )}
 
           {panel('alerts', undefined, <AlertsSettings config={config} onSave={onSave} onFormState={setAlertsForm} recorder={rec} />)}
+
+          {panel('rules', 'rules-panel', <RulesPanel config={config} issues={ruleIssues} onSaved={onConfigChanged} onFormState={setRulesForm} />)}
 
           {panel(
             'recorder',

@@ -3,7 +3,7 @@ import { existsSync, readFileSync, rmSync, statSync, writeFileSync, mkdirSync } 
 import type { DatabaseSync } from 'node:sqlite';
 import { historyBackups, openHistoryDb, SCHEMA_VERSION } from '../core/history/db';
 import {
-  queryCulprits, queryEvents, queryGroup, queryGroups, queryInactive, queryProcs, queryProcTree, querySystem, queryTop, rangeFromPreset, type QueryOpts,
+  queryCulprits, queryEvents, queryGroup, queryGroups, queryInactive, queryProcs, queryProcTree, queryRuleStats, querySystem, queryTop, rangeFromPreset, type QueryOpts,
 } from '../core/history/queries';
 import { countUnseenAlerts, newestAlertTs, queryAlert, queryAlertTimes, queryUnseenAlerts, type UnseenFilter } from '../core/history/alertsQuery';
 import { clearRequestPath, dbPath, statusPath } from '../core/paths';
@@ -74,6 +74,8 @@ export function createHistoryReader(dataDir: string, getConfig: () => RecorderCo
     /** Instants des alertes (élagage des ids fermés) ; null sans base lisible. */
     alertTimes: (ids: number[]) => run<Map<number, number> | null>((d) => queryAlertTimes(d, ids), null),
     alert: (id: number) => run((d) => queryAlert(d, id), null),
+    /** Réglages › Règles : dernier déclenchement et compte sur 7 j par règle ; {} sans base. */
+    ruleStats: () => run((d) => queryRuleStats(d, Date.now()), {}),
     /** Clés `pid:startTicks` actives (CPU ≥ 1 %) depuis `since` ; null sans base (ou en cas d'erreur). */
     active: (targets: { pid: number; startTicks: number }[], since: number): Set<string> | null =>
       run<Set<string> | null>((d) => queryInactive(d, targets, since, opts()), null),

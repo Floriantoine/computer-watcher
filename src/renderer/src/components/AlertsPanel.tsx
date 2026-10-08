@@ -1,10 +1,12 @@
 import { Fragment, useMemo, useState } from 'react';
-import { BellRing, FolderOpen, Gauge, Hourglass, Settings2, Skull, TrendingUp, Unplug, type LucideIcon } from 'lucide-react';
+import { BellRing, Bot, FlaskConical, FolderOpen, Gauge, Hourglass, Settings2, Skull, TrendingUp, Unplug, type LucideIcon } from 'lucide-react';
 import type { HistoryEvent } from '../../../core/types';
 import { alertsFrom, eventMarkers, formatInstant } from '../metrics';
 import { TmpDirsList } from './TmpDirsList';
 
-const ICONS: Record<string, LucideIcon> = { leak: TrendingUp, earlyoom_kill: Skull, pressure: Gauge, gap: Unplug, tmpfs: FolderOpen, forecast: Hourglass };
+const ICONS: Record<string, LucideIcon> = {
+  leak: TrendingUp, earlyoom_kill: Skull, pressure: Gauge, gap: Unplug, tmpfs: FolderOpen, forecast: Hourglass, rule_action: Bot, rule_dry_run: FlaskConical,
+};
 
 interface Props {
   events: HistoryEvent[] | undefined;
@@ -16,7 +18,7 @@ interface Props {
 }
 
 /**
- * Fuites, kills earlyoom, pics de pression, fichiers en mémoire et trous d'enregistrement ; un clic place le curseur de l'enquête.
+ * Fuites, kills earlyoom, actions et simulations des règles automatiques, pics de pression, fichiers en mémoire et trous d'enregistrement ; un clic place le curseur de l'enquête.
  * Une alerte « fichiers en mémoire » déplie les plus gros dossiers actuels de /tmp.
  */
 export function AlertsPanel({ events, onPick, onHover, onSettings }: Props) {

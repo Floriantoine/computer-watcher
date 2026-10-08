@@ -24,8 +24,8 @@ const calm: AttentionInput = {
 };
 
 describe('SETTINGS_SECTIONS', () => {
-  test('huit sections, dans l’ordre de la barre latérale, chacune avec un libellé et une description', () => {
-    expect(SETTINGS_SECTIONS.map((s) => s.id)).toEqual(['protected', 'others', 'display', 'classify', 'alerts', 'recorder', 'earlyoom', 'desktop']);
+  test('neuf sections, dans l’ordre de la barre latérale, chacune avec un libellé et une description', () => {
+    expect(SETTINGS_SECTIONS.map((s) => s.id)).toEqual(['protected', 'others', 'display', 'classify', 'alerts', 'rules', 'recorder', 'earlyoom', 'desktop']);
     for (const s of SETTINGS_SECTIONS) {
       expect(s.label.length).toBeGreaterThan(0);
       expect(s.description.length).toBeGreaterThan(0);
@@ -174,5 +174,14 @@ describe('tokenDiff', () => {
   });
   test('jeton répété : marqué au-delà du nombre d’occurrences anciennes', () => {
     expect(tokenDiff('a b', 'a a b').filter((t) => t.changed).map((t) => t.text)).toEqual(['a']);
+  });
+});
+
+describe('sectionAttention : Règles', () => {
+  test('règle refusée dans le fichier → erreur ; éditeur modifié → non enregistré ; rien → pas de point', () => {
+    expect(sectionAttention({ ...calm, rules: { dirty: false, invalid: false, issues: 1 } }).rules).toEqual({ tone: 'error', reasons: ['1 règle invalide ignorée'] });
+    expect(sectionAttention({ ...calm, rules: { dirty: true, invalid: false, issues: 0 } }).rules).toEqual({ tone: 'dirty', reasons: ['Modifications non enregistrées'] });
+    expect(sectionAttention({ ...calm, rules: { dirty: false, invalid: false, issues: 0 } }).rules).toBeUndefined();
+    expect(sectionAttention(calm).rules).toBeUndefined();
   });
 });
