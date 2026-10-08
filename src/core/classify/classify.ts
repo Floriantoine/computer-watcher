@@ -1,6 +1,6 @@
-import type { Group, InstanceSummary } from '../types';
+import type { Group, InstanceSummary, ProcInfo, ProcNode } from '../types';
 import { CATEGORIES, DUPLICATE_CATEGORIES, type Category } from './categories';
-import { findInstances } from './instances';
+import { isMatched, splitInstances } from './instances';
 import type { CommandMatch } from './match';
 import { categoryForPorts } from './portRules';
 import type { PackageHints } from './packageJson';
@@ -43,10 +43,14 @@ export interface ClassifyContext {
   ports: Map<number, number[]>;
   pkg: (projectRoot: string) => PackageHints | null;
   isProtected: (name: string) => boolean;
-  home: string;
 }
 
-export interface GroupClassification { categories: Category[]; instances: InstanceSummary[] }
+export interface GroupClassification {
+  categories: Category[];
+  instances: InstanceSummary[];
+  /** Lanceurs du groupe (npm, concurrently, sh -c…) : dans aucune instance ; à ajouter au kill « Tout arrêter le projet ». */
+  launcherPids: number[];
+}
 
 const matchScript = (script: string): CommandMatch | null => {
   // Un script peut enchaîner plusieurs commandes (« a && b ») : la première qui correspond à une règle.
@@ -56,10 +60,11 @@ const matchScript = (script: string): CommandMatch | null => {
 
 const PROJECT_PREFIX = 'project:';
 
-function classifyGroup(group: Group, ctx: ClassifyContext): GroupClassification {
+function classifyGroup(group: Group, ctx: ClassifyContext, hasInstanceBelow: (pid: number) => boolean): GroupClassification {
   const isProject = group.kind === 'project' || group.kind === 'deleted';
   const projectRoot = group.kind === 'project' && group.id.startsWith(PROJECT_PREFIX) ? group.id.slice(PROJECT_PREFIX.length) : null;
-  const instances: InstanceSummary[] = findInstances(group).map(({ root, procs }) => {
+  const split = splitInstances(group, hasInstanceBelow);
+  const instances: InstanceSummary[] = split.instances.map(({ root, procs }) => {
     const rp = root.proc;
     const match = isProject ? matchCommand(procs) : classifyByName(rp.name, rp.cmdline);
     const signature = signatureOf(procs, match, projectRoot);
@@ -93,22 +98,59 @@ function classifyGroup(group: Group, ctx: ClassifyContext): GroupClassification 
     }
     for (const list of byCat.values()) {
       if (list.length < 2) continue;
-      list.sort((a, b) => b.ageSec - a.ageSec || a.rootStartTicks - b.rootStartTicks);
+      list.sort((a, b) => b.ageSec - a.ageSec || a.rootStartTicks - b.rootStartTicks || a.rootPid - b.rootPid);
       for (let k = 1; k < list.length; k++) list[k].duplicate = true;
     }
   }
 
   const present = new Set(instances.map((i) => i.category));
-  return { categories: CATEGORIES.filter((c) => present.has(c)), instances };
+  return { categories: CATEGORIES.filter((c) => present.has(c)), instances, launcherPids: split.launchers.map((p) => p.pid) };
+}
+
+const walk = (n: ProcNode, f: (p: ProcInfo) => void) => {
+  const stack = [n];
+  while (stack.length) { const c = stack.pop()!; f(c.proc); stack.push(...c.children); }
+};
+
+/**
+ * Pids qui ont une instance projet parmi leurs descendants en passant par d'autres groupes (ex. `sh -c vite` rangé
+ * dans command:sh entre concurrently et vite) : pour chaque racine de groupe projet contenant un nœud reconnu, on
+ * remonte la chaîne des parents sur l'ensemble des processus.
+ */
+function crossGroupAncestors(all: Group[]): Set<number> {
+  const marked = new Set<number>();
+  const starts: ProcInfo[] = [];
+  for (const g of all) {
+    if (g.kind !== 'project' && g.kind !== 'deleted') continue;
+    for (const r of g.roots) {
+      let any = false;
+      walk(r, (p) => { if (!any && isMatched(p)) any = true; });
+      if (any) starts.push(r.proc);
+    }
+  }
+  if (starts.length === 0) return marked;
+  const byPid = new Map<number, ProcInfo>();
+  for (const g of all) for (const r of g.roots) walk(r, (p) => byPid.set(p.pid, p));
+  for (const s of starts) {
+    let cur = s.ppid !== s.pid ? byPid.get(s.ppid) : undefined;
+    while (cur && !marked.has(cur.pid)) {
+      marked.add(cur.pid);
+      cur = cur.ppid !== cur.pid ? byPid.get(cur.ppid) : undefined;
+    }
+  }
+  return marked;
 }
 
 /** Classe les instances de chaque groupe (sous-groupes de « Autres » compris), indexé par id de groupe. */
 export function classifyGroups(groups: Group[], ctx: ClassifyContext): Map<string, GroupClassification> {
+  const all: Group[] = [];
+  const collect = (g: Group) => { all.push(g); g.subgroups.forEach(collect); };
+  groups.forEach(collect);
+  const cross = crossGroupAncestors(all);
+  const hasInstanceBelow = (pid: number) => cross.has(pid);
   const out = new Map<string, GroupClassification>();
-  const visit = (g: Group) => {
-    out.set(g.id, g.kind === 'others' ? { categories: [], instances: [] } : classifyGroup(g, ctx));
-    for (const s of g.subgroups) visit(s);
-  };
-  for (const g of groups) visit(g);
+  for (const g of all) {
+    out.set(g.id, g.kind === 'others' ? { categories: [], instances: [], launcherPids: [] } : classifyGroup(g, ctx, hasInstanceBelow));
+  }
   return out;
 }

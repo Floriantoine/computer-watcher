@@ -1,20 +1,17 @@
 import type { Group, ProcInfo, ProcNode } from '../types';
-import { baseName, programIndex, splitArgs } from './argv';
 import { matchCommand } from './rules';
 
 /** Racine d'instance et tous les processus de l'instance (racine d'abord, ordre de parcours). */
 export interface InstanceDraft { root: ProcNode; procs: ProcInfo[] }
 
-const LAUNCHERS = new Set(['npm', 'pnpm', 'yarn', 'bun', 'npx', 'sh', 'bash', 'concurrently', 'nodemon']);
-
-/** Lanceur générique : par le nom (« npm run dev ») ou par le programme significatif (`node …/concurrently`). */
-function isLauncher(p: ProcInfo): boolean {
-  if (LAUNCHERS.has(p.name.split(/\s+/)[0] ?? '')) return true;
-  const raw = splitArgs(p.cmdline);
-  const i = programIndex(raw.map(baseName));
-  const prog = i >= 0 ? baseName(raw[i]).replace(/\.(m?js|cjs)$/, '') : '';
-  return LAUNCHERS.has(prog);
+export interface InstanceSplit {
+  instances: InstanceDraft[];
+  /** Lanceurs (npm, concurrently, sh -c…) : hors de toute instance, ni classés ni tués par un kill d'instance. */
+  launchers: ProcInfo[];
 }
+
+/** Processus reconnu par une règle de commande, sur sa seule ligne de commande. */
+export const isMatched = (p: ProcInfo): boolean => matchCommand([p]) !== null;
 
 function subtree(n: ProcNode, out: ProcInfo[] = []): ProcInfo[] {
   const stack = [n];
@@ -26,41 +23,58 @@ function subtree(n: ProcNode, out: ProcInfo[] = []): ProcInfo[] {
   return out;
 }
 
-/** Enfant « serveur » : un processus de son sous-arbre correspond à une règle de commande. */
-const isServer = (n: ProcNode): boolean => matchCommand(subtree(n)) !== null;
+const older = (a: ProcNode, b: ProcNode) => a.proc.startTicks - b.proc.startTicks || a.proc.pid - b.proc.pid;
 
-/** Sous-arbre d'une racine d'instance, en découpant les lanceurs génériques qui lancent plusieurs serveurs. */
-function collect(root: ProcNode): InstanceDraft[] {
-  const own: ProcInfo[] = [];
-  const split: InstanceDraft[] = [];
-  const visit = (n: ProcNode) => {
-    own.push(n.proc);
-    let servers: ProcNode[] = [];
-    if (n.children.length > 1 && isLauncher(n.proc)) {
-      servers = n.children.filter(isServer);
-      if (servers.length < 2) servers = [];
-    }
-    for (const c of n.children) {
-      if (servers.includes(c)) split.push(...collect(c));
-      else visit(c);
-    }
-  };
-  visit(root);
-  // Après découpage, le reste (lanceurs seuls : npm, concurrently…) n'est pas une instance à part.
-  if (split.length > 0 && own.every(isLauncher)) return split;
-  return [{ root, procs: own }, ...split];
-}
-
-export function findInstances(group: Group): InstanceDraft[] {
-  if (group.roots.length === 0 || group.kind === 'others') return [];
-  if (group.kind === 'project' || group.kind === 'deleted') {
-    // buildGroups ne met dans un groupe projet que des outils de dev (DEV_TOOL) : chaque racine du groupe
-    // ouvre une instance (même sans règle, pour que tous ses processus aient une instance) et ses
-    // descendants y appartiennent, sauf sous un lanceur générique qui lance plusieurs serveurs.
-    return group.roots.flatMap((r) => collect(r));
+/**
+ * Découpe un groupe en instances.
+ * Groupes projet / dossier supprimé : les racines d'instance sont les nœuds reconnus (règle de commande) les plus
+ * hauts ; une instance = sa racine et tous ses descendants. Un nœud non reconnu qui a au moins une instance parmi ses
+ * descendants est un lanceur (npm, pnpm, concurrently, nodemon, sh -c…) : il n'appartient à aucune instance. Un nœud
+ * non reconnu sans instance en dessous forme sa propre instance (avec son sous-arbre).
+ * `hasInstanceBelow(pid)` peut signaler une instance descendante hors du groupe (wrapper `sh -c` rangé ailleurs) ;
+ * il s'ajoute à ce que montre l'arbre du groupe.
+ * Autres groupes : une seule instance, racine = la racine la plus ancienne (startTicks puis pid), pour une clé stable.
+ */
+export function splitInstances(group: Group, hasInstanceBelow?: (pid: number) => boolean): InstanceSplit {
+  if (group.roots.length === 0 || group.kind === 'others') return { instances: [], launchers: [] };
+  if (group.kind !== 'project' && group.kind !== 'deleted') {
+    const roots = [...group.roots].sort(older);
+    const procs: ProcInfo[] = [];
+    for (const r of roots) subtree(r, procs);
+    return { instances: [{ root: roots[0], procs }], launchers: [] };
   }
-  const procs: ProcInfo[] = [];
-  for (const r of group.roots) subtree(r, procs);
-  return [{ root: group.roots[0], procs }];
+
+  // Mémo « une instance en dessous » dans l'arbre du groupe (nœud reconnu parmi les descendants stricts).
+  const below = new Map<ProcNode, boolean>();
+  const matched = new Map<ProcNode, boolean>();
+  const isM = (n: ProcNode) => {
+    let m = matched.get(n);
+    if (m === undefined) { m = isMatched(n.proc); matched.set(n, m); }
+    return m;
+  };
+  const computeBelow = (n: ProcNode): boolean => {
+    let any = false;
+    for (const c of n.children) if (computeBelow(c) || isM(c)) any = true;
+    below.set(n, any);
+    return any;
+  };
+  group.roots.forEach(computeBelow);
+
+  const instances: InstanceDraft[] = [];
+  const launchers: ProcInfo[] = [];
+  const visit = (n: ProcNode) => {
+    if (isM(n)) { instances.push({ root: n, procs: subtree(n) }); return; }
+    if (below.get(n) || hasInstanceBelow?.(n.proc.pid)) {
+      launchers.push(n.proc);
+      n.children.forEach(visit);
+      return;
+    }
+    instances.push({ root: n, procs: subtree(n) });
+  };
+  group.roots.forEach(visit);
+  return { instances, launchers };
 }
 
+export function findInstances(group: Group, hasInstanceBelow?: (pid: number) => boolean): InstanceDraft[] {
+  return splitInstances(group, hasInstanceBelow).instances;
+}

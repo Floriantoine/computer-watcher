@@ -1,41 +1,80 @@
 import { describe, expect, it } from 'vitest';
 import type { ProcInfo } from '../types';
-import { findInstances } from './instances';
+import { findInstances, splitInstances } from './instances';
 import { group, node, proc } from './testFixtures';
 
 const pidsOf = (d: { procs: ProcInfo[] }) => d.procs.map((p) => p.pid);
 
-describe('findInstances', () => {
-  it('npm run dev → node vite → esbuild = une seule instance enracinée sur npm', () => {
+describe('findInstances / splitInstances', () => {
+  it('npm run dev → node vite → esbuild : une instance enracinée sur vite, npm est un lanceur', () => {
     const npm = proc('npm run dev', 'npm run dev');
     const vite = proc('node', 'node /home/u/acme/node_modules/.bin/vite');
     const esb = proc('esbuild', '/home/u/acme/node_modules/@esbuild/linux-x64/bin/esbuild --service=0.21.5 --ping');
     const g = group('project:/home/u/acme', 'project', [node(npm, node(vite, node(esb)))]);
-    const r = findInstances(g);
-    expect(r).toHaveLength(1);
-    expect(r[0].root.proc.pid).toBe(npm.pid);
-    expect(pidsOf(r[0])).toEqual([npm.pid, vite.pid, esb.pid]);
+    const r = splitInstances(g);
+    expect(r.instances).toHaveLength(1);
+    expect(r.instances[0].root.proc.pid).toBe(vite.pid);
+    expect(pidsOf(r.instances[0])).toEqual([vite.pid, esb.pid]);
+    expect(r.launchers.map((p) => p.pid)).toEqual([npm.pid]);
+    expect(findInstances(g)).toEqual(r.instances);
   });
 
-  it('concurrently "vite" "nest start" : chaque enfant serveur est sa propre instance', () => {
+  it('concurrently "vite" "nest start" : chaque serveur est sa propre instance, npm et concurrently sont des lanceurs', () => {
     const npm = proc('npm run dev', 'npm run dev');
     const conc = proc('node', 'node /home/u/acme/node_modules/.bin/concurrently vite nest start');
     const vite = proc('node', 'node /home/u/acme/node_modules/.bin/vite');
     const esb = proc('esbuild', 'esbuild --service=0.21.5 --ping');
     const nest = proc('node', 'node /home/u/acme/node_modules/.bin/nest start');
     const g = group('project:/home/u/acme', 'project', [node(npm, node(conc, node(vite, node(esb)), node(nest)))]);
-    const r = findInstances(g);
-    expect(r.map((d) => d.root.proc.pid)).toEqual([vite.pid, nest.pid]);
-    expect(pidsOf(r[0])).toEqual([vite.pid, esb.pid]);
-    expect(pidsOf(r[1])).toEqual([nest.pid]);
+    const r = splitInstances(g);
+    expect(r.instances.map((d) => d.root.proc.pid)).toEqual([vite.pid, nest.pid]);
+    expect(pidsOf(r.instances[0])).toEqual([vite.pid, esb.pid]);
+    expect(pidsOf(r.instances[1])).toEqual([nest.pid]);
+    expect(r.launchers.map((p) => p.pid)).toEqual([npm.pid, conc.pid]);
   });
 
-  it('lanceur avec un seul enfant serveur : pas de découpage', () => {
-    const conc = proc('node', 'node /x/node_modules/.bin/concurrently vite');
+  it('wrappers sh -c dans l\'arbre : lanceurs, quel que soit le shell', () => {
+    const npm = proc('npm run dev', 'npm run dev');
+    const sh1 = proc('sh', 'sh -c concurrently vite "nest start"');
+    const conc = proc('node', 'node /x/node_modules/.bin/concurrently vite nest start');
+    const sh2 = proc('dash', '/bin/sh -c vite; true');
     const vite = proc('node', 'node /x/node_modules/.bin/vite');
-    const r = findInstances(group('project:/x', 'project', [node(conc, node(vite))]));
-    expect(r).toHaveLength(1);
-    expect(r[0].root.proc.pid).toBe(conc.pid);
+    const sh3 = proc('bash', 'bash -c nest start; true');
+    const nest = proc('node', 'node /x/node_modules/.bin/nest start');
+    const g = group('project:/x', 'project', [node(npm, node(sh1, node(conc, node(sh2, node(vite)), node(sh3, node(nest)))))]);
+    const r = splitInstances(g);
+    expect(r.instances.map((d) => d.root.proc.pid)).toEqual([vite.pid, nest.pid]);
+    expect(r.launchers.map((p) => p.pid)).toEqual([npm.pid, sh1.pid, conc.pid, sh2.pid, sh3.pid]);
+  });
+
+  it('processus non reconnu sans instance en dessous : sa propre instance', () => {
+    const conc = proc('node', 'node /x/node_modules/.bin/concurrently vite "node scripts/x.js"');
+    const vite = proc('node', 'node /x/node_modules/.bin/vite');
+    const x = proc('node', 'node scripts/x.js');
+    const xc = proc('node', 'node scripts/child.js');
+    const r = splitInstances(group('project:/x', 'project', [node(conc, node(vite), node(x, node(xc)))]));
+    expect(r.instances.map((d) => d.root.proc.pid)).toEqual([vite.pid, x.pid]);
+    expect(pidsOf(r.instances[1])).toEqual([x.pid, xc.pid]);
+    expect(r.launchers.map((p) => p.pid)).toEqual([conc.pid]);
+  });
+
+  it('racine non reconnue seule : une instance', () => {
+    const s = proc('node', 'node server.js');
+    const r = splitInstances(group('project:/x', 'project', [node(s)]));
+    expect(r.instances.map((d) => d.root.proc.pid)).toEqual([s.pid]);
+    expect(r.launchers).toEqual([]);
+  });
+
+  it('hasInstanceBelow externe : un lanceur dont les serveurs sont hors de son sous-arbre (sh dans un autre groupe)', () => {
+    const npm = proc('npm run dev', 'npm run dev');
+    const conc = proc('node', 'node /x/node_modules/.bin/concurrently vite nest start');
+    const vite = proc('node', 'node /x/node_modules/.bin/vite');
+    const g = group('project:/x', 'project', [node(npm, node(conc)), node(vite)]);
+    expect(splitInstances(g).instances).toHaveLength(2); // sans information externe, npm+concurrently = instance
+    const below = new Set([npm.pid, conc.pid]);
+    const r = splitInstances(g, (pid) => below.has(pid));
+    expect(r.instances.map((d) => d.root.proc.pid)).toEqual([vite.pid]);
+    expect(r.launchers.map((p) => p.pid)).toEqual([npm.pid, conc.pid]);
   });
 
   it('plusieurs racines dans un groupe projet = plusieurs instances', () => {
@@ -44,17 +83,23 @@ describe('findInstances', () => {
     expect(findInstances(group('project:/x', 'project', [node(a), node(b)]))).toHaveLength(2);
   });
 
-  it('groupe non-projet = une seule instance avec tous les processus', () => {
-    const c1 = proc('chrome', '/opt/google/chrome/chrome');
-    const c2 = proc('chrome', '/opt/google/chrome/chrome --type=renderer');
-    const c3 = proc('chrome', '/opt/google/chrome/chrome --type=gpu');
-    const r = findInstances(group('app:chrome', 'app', [node(c1, node(c2)), node(c3)]));
-    expect(r).toHaveLength(1);
-    expect(r[0].root.proc.pid).toBe(c1.pid);
-    expect(pidsOf(r[0]).sort()).toEqual([c1.pid, c2.pid, c3.pid].sort());
+  it('groupe non-projet = une seule instance, racine = la plus ancienne (startTicks puis pid)', () => {
+    const c1 = proc('chrome', '/opt/google/chrome/chrome', { startTicks: 500 });
+    const c2 = proc('chrome', '/opt/google/chrome/chrome --type=renderer', { startTicks: 600 });
+    const c3 = proc('chrome', '/opt/google/chrome/chrome --type=gpu', { startTicks: 100 });
+    // buildGroups trie les racines par mémoire : la plus ancienne n'est pas forcément la première
+    const r = splitInstances(group('app:chrome', 'app', [node(c1, node(c2)), node(c3)]));
+    expect(r.instances).toHaveLength(1);
+    expect(r.instances[0].root.proc.pid).toBe(c3.pid);
+    expect(pidsOf(r.instances[0])[0]).toBe(c3.pid);
+    expect(pidsOf(r.instances[0]).sort()).toEqual([c1.pid, c2.pid, c3.pid].sort());
+    expect(r.launchers).toEqual([]);
+    const a = proc('sh', 'sh', { pid: 9002, startTicks: 7 });
+    const b = proc('sh', 'sh', { pid: 9001, startTicks: 7 });
+    expect(findInstances(group('command:sh', 'command', [node(a), node(b)]))[0].root.proc.pid).toBe(9001);
   });
 
   it('groupe vide ou « Autres » : aucune instance', () => {
-    expect(findInstances(group('others', 'others', []))).toEqual([]);
+    expect(splitInstances(group('others', 'others', []))).toEqual({ instances: [], launchers: [] });
   });
 });

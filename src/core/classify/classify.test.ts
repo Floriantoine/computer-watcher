@@ -40,7 +40,7 @@ describe('decide', () => {
 
 describe('classifyGroups', () => {
   const ctx = (over: Partial<ClassifyContext> = {}): ClassifyContext => ({
-    overrides: {}, ports: new Map(), pkg: () => null, isProtected: () => false, home: '/home/u', ...over,
+    overrides: {}, ports: new Map(), pkg: () => null, isProtected: () => false, ...over,
   });
   const npmVite = (ageSec = 100) => {
     const npm = proc('npm run dev', 'npm run dev', { ageSec });
@@ -49,7 +49,7 @@ describe('classifyGroups', () => {
     return { npm, vite, esb, tree: node(npm, node(vite, node(esb))) };
   };
 
-  it('npm → vite → esbuild : une instance front, totaux et clé', () => {
+  it('npm → vite → esbuild : une instance front enracinée sur vite, npm lanceur', () => {
     const { npm, vite, esb, tree } = npmVite(42);
     const g = group('project:/home/u/acme', 'project', [tree]);
     const r = classifyGroups([g], ctx()).get(g.id)!;
@@ -57,10 +57,11 @@ describe('classifyGroups', () => {
     expect(r.instances).toHaveLength(1);
     const i = r.instances[0];
     expect(i).toMatchObject({
-      key: `project:/home/u/acme#${npm.pid}:${npm.startTicks}`, groupId: g.id, project: '/home/u/acme',
-      category: 'front', source: 'command', signature: 'vite', label: 'vite', rootPid: npm.pid, rootStartTicks: npm.startTicks,
-      pids: [npm.pid, vite.pid, esb.pid], ports: [], ageSec: 42, rssKB: 4000, swapKB: 50, cpuPercent: 5, duplicate: false, protected: false,
+      key: `project:/home/u/acme#${vite.pid}:${vite.startTicks}`, groupId: g.id, project: '/home/u/acme',
+      category: 'front', source: 'command', signature: 'vite', label: 'vite', rootPid: vite.pid, rootStartTicks: vite.startTicks,
+      pids: [vite.pid, esb.pid], ports: [], ageSec: 42, rssKB: 3000, swapKB: 50, cpuPercent: 4, duplicate: false, protected: false,
     });
+    expect(r.launcherPids).toEqual([npm.pid]);
   });
 
   it('concurrently "vite" "nest start" : front + back', () => {
@@ -73,6 +74,7 @@ describe('classifyGroups', () => {
     expect(r.instances.map((i) => [i.category, i.label])).toEqual([['front', 'vite'], ['back', 'nest start']]);
     expect(r.categories).toEqual(['front', 'back']);
     expect(r.instances.every((i) => !i.duplicate)).toBe(true);
+    expect(r.launcherPids).toEqual([npm.pid, conc.pid]);
   });
 
   it('app:chrome : une instance browser, source name', () => {
@@ -101,8 +103,8 @@ describe('classifyGroups', () => {
     const g = group('project:/home/u/acme', 'project', [young.tree, old.tree]);
     const r = classifyGroups([g], ctx()).get(g.id)!;
     const byRoot = new Map(r.instances.map((i) => [i.rootPid, i]));
-    expect(byRoot.get(old.npm.pid)!.duplicate).toBe(false);
-    expect(byRoot.get(young.npm.pid)!.duplicate).toBe(true);
+    expect(byRoot.get(old.vite.pid)!.duplicate).toBe(false);
+    expect(byRoot.get(young.vite.pid)!.duplicate).toBe(true);
     expect(r.categories).toEqual(['front']);
   });
 
@@ -162,7 +164,7 @@ describe('classifyGroups', () => {
     const sub = group('app:chrome', 'app', [node(c)]);
     const others = { ...group('others', 'others', []), subgroups: [sub] };
     const m = classifyGroups([others], ctx());
-    expect(m.get('others')).toEqual({ categories: [], instances: [] });
+    expect(m.get('others')).toEqual({ categories: [], instances: [], launcherPids: [] });
     expect(m.get('app:chrome')!.categories).toEqual(['browser']);
   });
 
@@ -170,5 +172,85 @@ describe('classifyGroups', () => {
     const p = proc('foo', '/usr/bin/foo --bar');
     const g = group('command:foo', 'command', [node(p)]);
     expect(classifyGroups([g], ctx()).get(g.id)!).toMatchObject({ categories: ['unknown'], instances: [{ category: 'unknown', source: 'unknown' }] });
+  });
+
+  const frontBackPkg = () => ({ front: true, back: true, scripts: { dev: 'concurrently vite "nest start"' } });
+
+  it('wrappers sh -c dans le groupe projet : exactement front + back, sans doublon', () => {
+    const npm = proc('npm run dev', 'npm run dev', { ageSec: 900 });
+    const sh1 = proc('sh', 'sh -c concurrently vite "nest start"', { ageSec: 900 });
+    const conc = proc('node', 'node /x/node_modules/.bin/concurrently vite nest start', { ageSec: 900 });
+    const sh2 = proc('sh', 'sh -c vite; true', { ageSec: 899 });
+    const vite = proc('node', 'node /x/node_modules/.bin/vite', { ageSec: 899 });
+    const sh3 = proc('sh', 'sh -c nest start; true', { ageSec: 899 });
+    const nest = proc('node', 'node /x/node_modules/.bin/nest start', { ageSec: 899 });
+    const g = group('project:/x', 'project', [node(npm, node(sh1, node(conc, node(sh2, node(vite)), node(sh3, node(nest)))))]);
+    const r = classifyGroups([g], ctx({ pkg: frontBackPkg })).get(g.id)!;
+    expect(r.instances.map((i) => [i.category, i.label, i.duplicate])).toEqual([['front', 'vite', false], ['back', 'nest start', false]]);
+    expect(r.categories).toEqual(['front', 'back']);
+    expect(r.launcherPids).toEqual([npm.pid, sh1.pid, conc.pid, sh2.pid, sh3.pid]);
+  });
+
+  it('forme réelle : sh -c dans command:sh, serveurs racines séparées du groupe projet', () => {
+    const npm = proc('npm run dev', 'npm run dev', { ageSec: 900 });
+    const conc = proc('node', 'node /x/node_modules/.bin/concurrently vite nest start', { ageSec: 900 });
+    const sh2 = proc('sh', 'sh -c vite; true', { ageSec: 899, cwd: '/x' });
+    const sh3 = proc('sh', 'sh -c nest start; true', { ageSec: 899, cwd: '/x' });
+    const vite = proc('node', 'node /x/node_modules/.bin/vite', { ageSec: 899, ppid: sh2.pid });
+    const nest = proc('node', 'node /x/node_modules/.bin/nest start', { ageSec: 899, ppid: sh3.pid });
+    const projTree = node(npm, node(conc));
+    sh2.ppid = conc.pid; sh3.ppid = conc.pid;
+    const g = group('project:/x', 'project', [projTree, node(vite), node(nest)]);
+    const sh = group('command:sh', 'command', [node(sh2), node(sh3)]);
+    const m = classifyGroups([g, sh], ctx({ pkg: frontBackPkg }));
+    const r = m.get(g.id)!;
+    expect(r.instances.map((i) => [i.category, i.label, i.duplicate])).toEqual([['front', 'vite', false], ['back', 'nest start', false]]);
+    expect(r.launcherPids).toEqual([npm.pid, conc.pid]);
+  });
+
+  it('concurrently + node scripts/x.js : x.js reste sa propre instance', () => {
+    const npm = proc('npm run dev', 'npm run dev');
+    const conc = proc('node', 'node /x/node_modules/.bin/concurrently vite nest start "node scripts/x.js"');
+    const vite = proc('node', 'node /x/node_modules/.bin/vite');
+    const nest = proc('node', 'node /x/node_modules/.bin/nest start');
+    const x = proc('node', 'node scripts/x.js');
+    const g = group('project:/x', 'project', [node(npm, node(conc, node(vite), node(nest), node(x)))]);
+    const r = classifyGroups([g], ctx()).get(g.id)!;
+    expect(r.instances.map((i) => [i.category, i.rootPid, i.pids])).toEqual([
+      ['front', vite.pid, [vite.pid]], ['back', nest.pid, [nest.pid]], ['unknown', x.pid, [x.pid]],
+    ]);
+    expect(r.launcherPids).toEqual([npm.pid, conc.pid]);
+  });
+
+  it('la clé de l\'instance vite ne change pas quand nest disparaît', () => {
+    const npm = proc('npm run dev', 'npm run dev');
+    const conc = proc('node', 'node /x/node_modules/.bin/concurrently vite nest start');
+    const vite = proc('node', 'node /x/node_modules/.bin/vite');
+    const nest = proc('node', 'node /x/node_modules/.bin/nest start');
+    const before = classifyGroups([group('project:/x', 'project', [node(npm, node(conc, node(vite), node(nest)))])], ctx()).get('project:/x')!;
+    const keyBefore = before.instances.find((i) => i.category === 'front')!.key;
+    const after = classifyGroups([group('project:/x', 'project', [node(npm, node(conc, node(vite)))])], ctx()).get('project:/x')!;
+    expect(after.instances.map((i) => i.key)).toEqual([keyBefore]);
+    expect(keyBefore).toBe(`project:/x#${vite.pid}:${vite.startTicks}`);
+  });
+
+  it('doublons : départage déterministe (ageSec, puis startTicks, puis pid)', () => {
+    const v = (pid: number, startTicks: number) => proc('node', 'node /x/node_modules/.bin/vite', { pid, startTicks, ageSec: 50 });
+    const run = (roots: ReturnType<typeof v>[]) => {
+      const r = classifyGroups([group('project:/x', 'project', roots.map((p) => node(p)))], ctx()).get('project:/x')!;
+      return r.instances.filter((i) => !i.duplicate).map((i) => i.rootPid);
+    };
+    const a = v(8001, 300); const b = v(8002, 200);
+    expect(run([a, b])).toEqual([8002]);
+    expect(run([b, a])).toEqual([8002]);
+    const c = v(8004, 300); const d = v(8003, 300);
+    expect(run([c, d])).toEqual([8003]);
+    expect(run([d, c])).toEqual([8003]);
+  });
+
+  it('groupes non-projet : launcherPids vide', () => {
+    const c = proc('chrome', '/opt/google/chrome/chrome');
+    const g = group('app:chrome', 'app', [node(c)]);
+    expect(classifyGroups([g], ctx()).get(g.id)!.launcherPids).toEqual([]);
   });
 });
