@@ -17,10 +17,13 @@ import { recordSeparate, stickyIds } from '../core/grouping/stickyCards';
 import { killRequest, planKill, sendSignals } from '../core/kill';
 import { compileProtection } from '../core/protection';
 import { formatAppEvent } from '../core/history/events';
-import { appEventsPath, dataDir, focusStatePath } from '../core/paths';
+import { appEventsPath, dataDir, focusStatePath, forecastSnoozePath } from '../core/paths';
 import { alertIdFromArgv } from '../core/alerts';
 import { buildSnapshot, flattenGroup, groupProcs, instanceTargets, isWatch, othersFollowed, type Classification, type FullSnapshot } from '../core/snapshot';
 import type { ConfigState, Group, KillResult, ProcInfo, RecorderState, Watch } from '../core/types';
+import { createFreeOpener, wantsFree } from './launchArgs';
+import { SNOOZE_MS } from '../core/forecast/forecast';
+import { writeSnooze } from '../core/forecast/snooze';
 import { createAlertOpener, createFocusWriter, initSeenUpTo, keepSeenUpTo, markSeen, unseenFilter } from './alerts';
 import { installDesktopEntry } from './desktopEntry';
 import { createEarlyoomApplier, earlyoomStatus } from './earlyoom';
@@ -86,10 +89,10 @@ const focusWriter = createFocusWriter({
 const alertOpener = createAlertOpener((id) => {
   if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send('alert:open', id);
 });
-{
-  const id = alertIdFromArgv(process.argv);
-  if (id !== null) alertOpener.open(id);
-}
+// « Libérer de la mémoire » (`--free`) : le renderer ouvre le kill groupé pré-rempli (rien n'est tué sans confirmation).
+const freeOpener = createFreeOpener(() => {
+  if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send('free');
+});
 const history = createHistoryReader(data, () => config.recorder);
 let systemdOk = false;
 
@@ -244,6 +247,13 @@ function takeSnapshot(): FullSnapshot {
 let last: FullSnapshot | null = null;
 let watch: Watch = { groupId: null, query: '' };
 let mainWin: BrowserWindow | null = null;
+// Demandes du lancement (`--alert=<id>`, `--free`) : gardées jusqu'à ce que le renderer les prenne. Après la déclaration de
+// mainWin (l'envoi immédiat la lit : avant, ReferenceError au démarrage).
+{
+  const id = alertIdFromArgv(process.argv);
+  if (id !== null) alertOpener.open(id);
+}
+if (wantsFree(process.argv)) freeOpener.open();
 
 function send(): void {
   if (!mainWin || mainWin.isDestroyed() || !last) return;
@@ -519,6 +529,14 @@ ipcMain.handle('alerts:seenAll', () => {
   return ts === null ? configState() : applySeen({ upTo: ts });
 });
 ipcMain.handle('alerts:takePending', () => alertOpener.take());
+ipcMain.handle('free:takePending', () => freeOpener.take());
+// « Ignorer 30 min » du pop-up de prévision : fichier d'état lu par le service avant toute alerte de prévision.
+ipcMain.handle('forecast:snooze', () => {
+  const at = Date.now();
+  const until = at + SNOOZE_MS;
+  writeSnooze(forecastSnoozePath(data), until, at);
+  return until;
+});
 
 /** Montre la fenêtre (la recrée si elle a été fermée), la restaure et la focalise. */
 function showWindow(): void {
@@ -531,17 +549,10 @@ function showWindow(): void {
   mainWin.focus();
 }
 
-/**
- * « Libérer de la mémoire… » du menu de la barre des tâches : montre la fenêtre puis demande au renderer d'ouvrir le
- * kill groupé pré-rempli (canal 'free', attendu après le chargement si la fenêtre vient d'être recréée).
- * Point d'accroche de la piste E (`openFree`, `onFree` du preload) : la fusion les relie.
- */
-function openFreeMemory(): void {
+/** Montre la fenêtre sur « Libérer de la mémoire » (barre des tâches, `--free`). */
+function openFree(): void {
   showWindow();
-  const wc = mainWin?.webContents;
-  if (!wc) return;
-  if (wc.isLoading()) wc.once('did-finish-load', () => wc.send('free'));
-  else wc.send('free');
+  freeOpener.open();
 }
 
 // Icône dans la barre des tâches : seulement si le bureau a une zone de notification (StatusNotifierWatcher), sinon
@@ -576,7 +587,7 @@ async function doSyncTray(): Promise<void> {
     setInterval: (fn, ms) => setInterval(fn, ms),
     clearInterval: (h) => clearInterval(h as NodeJS.Timeout),
     onOpen: showWindow,
-    onFree: openFreeMemory,
+    onFree: openFree,
     onQuit: () => {
       quitting = true;
       app.quit();
@@ -603,7 +614,8 @@ ipcMain.handle('tray:available', async () => {
 });
 
 app.on('second-instance', (_e, argv) => {
-  showWindow();
+  if (wantsFree(argv)) openFree();
+  else showWindow();
   const id = alertIdFromArgv(argv);
   if (id !== null) alertOpener.open(id);
 });

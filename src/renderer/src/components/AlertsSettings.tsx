@@ -1,18 +1,19 @@
 import { useEffect, useState, type CSSProperties } from 'react';
-import { BellRing, FolderOpen, Gauge, MonitorSmartphone, Skull, TrendingUp, type LucideIcon } from 'lucide-react';
+import { BellRing, FolderOpen, Gauge, Hourglass, MonitorSmartphone, Skull, TrendingUp, type LucideIcon } from 'lucide-react';
 import type { AlertType } from '../../../core/alerts';
-import type { Config } from '../../../core/types';
-import { CHANNEL_LABELS, parseIntervalInput, SETTINGS_ALERT_TYPES, withChannel, withInterval } from '../alertsSettings';
+import type { Config, RecorderState } from '../../../core/types';
+import { CHANNEL_LABELS, forecastNote, parseIntervalInput, SETTINGS_ALERT_TYPES, withChannel, withInterval } from '../alertsSettings';
 import { eventMarkers } from '../metrics';
 import type { FormState } from '../settingsNav';
 import { Card, NumberField, Row, SaveBar } from './settingsUi';
 import '../alerts.css';
 
-const ICONS: Partial<Record<AlertType, LucideIcon>> = { earlyoom_kill: Skull, leak: TrendingUp, tmpfs: FolderOpen, pressure: Gauge };
+const ICONS: Partial<Record<AlertType, LucideIcon>> = { earlyoom_kill: Skull, leak: TrendingUp, tmpfs: FolderOpen, pressure: Gauge, forecast: Hourglass };
 const colorOf = (type: AlertType) => eventMarkers([{ ts: 0, type, groupKey: null, groupLabel: null, detail: {} }])[0]!.color;
 
 /** Réglages › Alertes : canal par type (pop-up et bureau / pop-up seulement / rien), anti-spam du bureau. */
-export function AlertsSettings({ config, onSave, onFormState }: { config: Config; onSave: (c: Config) => void; onFormState?: (s: FormState) => void }) {
+export function AlertsSettings({ config, onSave, onFormState, recorder = null }: { config: Config; onSave: (c: Config) => void; onFormState?: (s: FormState) => void; recorder?: RecorderState | null }) {
+  const fNote = forecastNote(recorder);
   const [interval, setIntervalText] = useState(String(config.alerts.desktopMinIntervalMin));
   const [error, setError] = useState<string | null>(null);
   useEffect(() => setIntervalText(String(config.alerts.desktopMinIntervalMin)), [config.alerts.desktopMinIntervalMin]);
@@ -43,6 +44,9 @@ export function AlertsSettings({ config, onSave, onFormState }: { config: Config
                 <span className="alert-type" style={{ '--alert': colorOf(type) } as CSSProperties}>
                   <Icon size={14} strokeWidth={2.2} />
                   {label}
+                  {type === 'forecast' && fNote && (
+                    <span className="alert-type-note" data-testid="forecast-note">{fNote}</span>
+                  )}
                 </span>
                 <div className="range-selector" role="radiogroup" aria-label={`Canal : ${label}`}>
                   {CHANNEL_LABELS.map(([ch, chLabel]) => (

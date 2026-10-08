@@ -1,9 +1,10 @@
-import { expect, test } from 'vitest';
+import { describe, expect, test } from 'vitest';
 import { DEFAULT_CONFIG, validateConfig } from '../../core/config';
-import { parseIntervalInput, SETTINGS_ALERT_TYPES, withChannel, withInterval } from './alertsSettings';
+import { forecastNote, parseIntervalInput, SETTINGS_ALERT_TYPES, withChannel, withInterval } from './alertsSettings';
+import type { RecorderState } from '../../core/types';
 
-test('types réglables : ceux qui existent aujourd’hui (la prévision ② s’ajoutera ici)', () => {
-  expect(SETTINGS_ALERT_TYPES.map((t) => t.type)).toEqual(['earlyoom_kill', 'leak', 'tmpfs', 'pressure']);
+test('types réglables : ceux qui existent aujourd’hui, prévision ② comprise', () => {
+  expect(SETTINGS_ALERT_TYPES.map((t) => t.type)).toEqual(['earlyoom_kill', 'leak', 'tmpfs', 'pressure', 'forecast']);
 });
 
 test('withChannel : change un seul type, config toujours valide', () => {
@@ -25,4 +26,21 @@ test.each([
 
 test('withInterval', () => {
   expect(withInterval(DEFAULT_CONFIG, 30).alerts.desktopMinIntervalMin).toBe(30);
+});
+
+describe('forecastNote : état de la prévision à côté de sa ligne', () => {
+  const rec = (running: boolean, forecast?: 'warming' | 'ok' | 'unavailable'): RecorderState => ({
+    available: true, enabled: true, running,
+    status: { pid: 1, startedAt: 0, lastSampleAt: 0, lastError: null, earlyoomSource: 'ok', dbSizeBytes: 0, forecast },
+  });
+  test.each([
+    [null, null],
+    [rec(true, 'ok'), null],
+    [rec(true), null],
+    [rec(false, 'ok'), "Prévision indisponible : service d'enregistrement arrêté"],
+    [rec(true, 'unavailable'), 'Prévision indisponible : moins de 5 mesures sur les 5 dernières minutes'],
+    [rec(true, 'warming'), 'Prévision en préparation (5 min de mesures)'],
+  ])('%#', (r, note) => {
+    expect(forecastNote(r)).toBe(note);
+  });
 });

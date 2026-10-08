@@ -7,13 +7,15 @@ import {
   bulkRequest,
   PRESETS,
   checkedLive,
-  defaultSelection,
+  applyInitialPreset,
+  initialSelection,
+  pickSelection,
+  toggleSelection,
   fetchInactive,
   includeLaunchers,
-  presetSelection,
   presetState,
-  toggleKey,
   type BulkRequest,
+  type BulkSelection,
   type InactiveState,
   type Preset,
 } from '../bulkKill';
@@ -38,15 +40,20 @@ interface Props {
   nameOf: (inst: InstanceSummary) => string;
   onConfirm: (req: BulkRequest) => void;
   onCancel: () => void;
+  /** Raccourci appliqué une fois son état connu (« Libérer » : quand l'historique d'1 h est lu) ; rien de coché avant. */
+  initialPreset?: Preset;
+  /** Garder l'ordre reçu (« Libérer » : groupes qui grossissent d'abord) au lieu du tri par catégorie et âge. */
+  ordered?: boolean;
 }
 
 /** Confirmation d'un kill groupé : liste cochable, raccourcis de pré-sélection, « Tuer (n) ». */
-export function BulkKillDialog({ title, instances, launchersOf, liveKeys, pendingPids, nameOf, onConfirm, onCancel }: Props) {
+export function BulkKillDialog({ title, instances, launchersOf, liveKeys, pendingPids, nameOf, onConfirm, onCancel, initialPreset, ordered }: Props) {
   // Pendant la sortie animée, le dialogue ne doit plus déclencher d'action (pas de double envoi).
   const isPresent = useIsPresent();
-  const list = useMemo(() => sortInstances(instances), [instances]);
-  const [selected, setSelected] = useState<Set<string>>(() => defaultSelection(instances, pendingPids));
-  const [preset, setPreset] = useState<Preset | null>(null);
+  const list = useMemo(() => (ordered ? instances : sortInstances(instances)), [instances, ordered]);
+  // raccourci initial : appliqué une seule fois, et jamais par-dessus un choix fait à la main (case ou raccourci)
+  const [sel, setSel] = useState<BulkSelection>(() => initialSelection(instances, pendingPids, initialPreset));
+  const { selected, preset } = sel;
   const [inactive, setInactive] = useState<InactiveState>({});
 
   useEffect(() => {
@@ -77,12 +84,10 @@ export function BulkKillDialog({ title, instances, launchersOf, liveKeys, pendin
   useFocusTrap(box);
   const protectedCount = list.filter((i) => i.protected).length;
 
-  const pick = (p: Preset) => {
-    const next = presetSelection(list, p, inactive);
-    if (!next) return;
-    setPreset(p);
-    setSelected(next);
-  };
+  const pick = (p: Preset) => setSel((s) => pickSelection(s, list, p, inactive));
+  useEffect(() => {
+    setSel((s) => applyInitialPreset(s, list, initialPreset, inactive));
+  }, [initialPreset, inactive, list]);
   const guard = (fn: () => void) => () => {
     if (isPresent) fn();
   };
@@ -174,10 +179,7 @@ export function BulkKillDialog({ title, instances, launchersOf, liveKeys, pendin
                 title={gone ? 'Instance disparue depuis l\'ouverture : ignorée' : undefined}
               >
                 <span role="cell">
-                  <input id={id} type="checkbox" checked={!gone && selected.has(i.key)} disabled={gone} onChange={() => {
-                      setPreset(null);
-                      setSelected((s) => toggleKey(s, i.key));
-                    }} />
+                  <input id={id} type="checkbox" checked={!gone && selected.has(i.key)} disabled={gone} onChange={() => setSel((s) => toggleSelection(s, i.key))} />
                 </span>
                 <span className="bulk-proj" role="cell" title={i.project ?? undefined}>{nameOf(i)}</span>
                 <span className="inst-cat" role="cell">

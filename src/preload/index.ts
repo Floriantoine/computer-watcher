@@ -84,6 +84,22 @@ const api = {
     /** Le bureau a-t-il une zone de notification (StatusNotifierWatcher) ? Sinon fermer la fenêtre quitte l'app. */
     available: (): Promise<boolean> => ipcRenderer.invoke('tray:available'),
   },
+  forecast: {
+    /** « Ignorer 30 min » d'une alerte de prévision : le service n'en envoie plus avant cette heure (ms) renvoyée. */
+    snooze: (): Promise<number> => ipcRenderer.invoke('forecast:snooze'),
+  },
+  free: {
+    /** « Libérer de la mémoire » demandé (`--free`, barre des tâches) et pas encore pris : une seule fois. */
+    takePending: (): Promise<boolean> => ipcRenderer.invoke('free:takePending'),
+    /** « Libérer de la mémoire » demandé alors que l'app tournait déjà. */
+    onFree(cb: () => void): () => void {
+      const handler = () => cb();
+      ipcRenderer.on('free', handler);
+      return () => {
+        ipcRenderer.removeListener('free', handler);
+      };
+    },
+  },
   tmp: {
     /** Plus gros dossiers de /tmp à cet instant (lecture seule, au plus 100 000 entrées ou 2 s). */
     topDirs: (): Promise<TmpUsage> => ipcRenderer.invoke('tmp:topDirs'),

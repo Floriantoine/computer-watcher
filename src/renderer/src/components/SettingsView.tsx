@@ -520,7 +520,7 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
             </>,
           )}
 
-          {panel('alerts', undefined, <AlertsSettings config={config} onSave={onSave} onFormState={setAlertsForm} />)}
+          {panel('alerts', undefined, <AlertsSettings config={config} onSave={onSave} onFormState={setAlertsForm} recorder={rec} />)}
 
           {panel(
             'recorder',

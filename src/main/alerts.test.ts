@@ -99,8 +99,21 @@ describe('createAlertOpener', () => {
     const send = vi.fn();
     const o = createAlertOpener(send);
     o.open(42);
-    expect(send).toHaveBeenCalledWith(42); // envoyée aussi (perdue si la page charge encore)
     expect(o.take()).toBe(42);
     expect(o.take()).toBeNull();
+  });
+
+  test('démarrage à froid (--alert=<id>) : envoi différé et protégé, jamais synchrone', async () => {
+    // au lancement, open() est appelé pendant l'évaluation du module : la fenêtre peut ne pas encore exister
+    // (ReferenceError « mainWin before initialization » qui faisait planter le main)
+    const send = vi.fn(() => {
+      throw new ReferenceError("Cannot access 'mainWin' before initialization");
+    });
+    const o = createAlertOpener(send);
+    expect(() => o.open(7)).not.toThrow();
+    expect(send).not.toHaveBeenCalled();
+    await Promise.resolve();
+    expect(send).toHaveBeenCalledWith(7); // envoyée aussi (perdue si la page charge encore)
+    expect(o.take()).toBe(7);
   });
 });
