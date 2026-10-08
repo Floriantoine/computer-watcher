@@ -26,6 +26,16 @@ const has = (c: Ctx, ...xs: string[]) => c.rest.some((a) => xs.includes(a));
 const is = (c: Ctx, ...xs: string[]) => xs.includes(c.cmd);
 const SERVER_ENTRY = /(^|\/)(src|dist|build)\/(main|server|index|app)(\.[cm]?[jt]s)?$/;
 const BARE_ENTRY = /(^|\/)(main|server|index|app)\.[cm]?[jt]s$/;
+// Sous-commande vite : premier argument non-option, en sautant les valeurs d'options connues.
+const VITE_VALUE_OPTS = new Set(['--mode', '-m', '--config', '-c', '--outDir', '--base', '--host', '--port', '--logLevel', '-l', '--root']);
+const viteSub = (c: Ctx): string | undefined => {
+  for (let i = 0; i < c.rawRest.length; i++) {
+    const a = c.rawRest[i];
+    if (a.startsWith('-')) { if (!a.includes('=') && VITE_VALUE_OPTS.has(a)) i++; continue; }
+    return a;
+  }
+  return undefined;
+};
 const BROWSER = /^(chrome|chromium|chromium-browser|google-chrome|firefox|brave|msedge)([-_].*)?$/;
 
 export const COMMAND_RULES: Rule[] = [
@@ -36,14 +46,14 @@ export const COMMAND_RULES: Rule[] = [
   { category: 'test', label: (c) => c.cmd, test: (c) => is(c, 'vitest', 'jest', 'cypress', 'pytest', 'mocha', 'karma') },
   { category: 'test', label: 'playwright test', test: (c) => (c.cmd === 'playwright' || /(^|\/)playwright(-core)?\/cli(\.[cm]?js)?$/.test(c.rawCmd)) && c.rest[0] === 'test' },
   // build
-  { category: 'build', label: 'vite build', test: (c) => c.cmd === 'vite' && (has(c, 'build') || has(c, 'optimize')) },
+  { category: 'build', label: 'vite build', test: (c) => c.cmd === 'vite' && (viteSub(c) === 'build' || viteSub(c) === 'optimize') },
   { category: 'build', label: 'tsc --watch', test: (c) => c.cmd === 'tsc' && has(c, '-w', '--watch') },
   { category: 'build', label: 'esbuild --watch', test: (c) => c.cmd === 'esbuild' && c.rest.some((a) => a === '--watch' || a.startsWith('--watch=')) },
   { category: 'build', label: 'tsserver', test: (c) => /(^|\/)tsserver(\.js)?$/.test(c.rawCmd) || c.cmd === 'tsserver' },
   { category: 'build', label: (c) => c.cmd, test: (c) => is(c, 'eslint_d', 'prettierd', 'typescript-language-server', 'gopls', 'pyright', 'pyright-langserver', 'rust-analyzer', 'turbo') },
   { category: 'build', label: 'nx daemon', test: (c) => c.cmd === 'nx' && has(c, 'daemon') },
   // front
-  { category: 'front', label: 'vite preview', test: (c) => c.cmd === 'vite' && has(c, 'preview') },
+  { category: 'front', label: 'vite preview', test: (c) => c.cmd === 'vite' && viteSub(c) === 'preview' },
   { category: 'front', label: 'vite', test: (c) => c.cmd === 'vite' },
   { category: 'front', label: (c) => `next ${c.rest[0]}`, test: (c) => c.cmd === 'next' && (c.rest[0] === 'dev' || c.rest[0] === 'start') },
   { category: 'front', label: 'next dev', test: (c) => c.cmd.startsWith('next-server') },
