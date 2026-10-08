@@ -1,7 +1,7 @@
 import { ChevronRight, X } from 'lucide-react';
 import type { Culprit } from '../../../core/types';
 import { formatKB } from '../format';
-import { formatInstant, REST_LABELS, REST_TONES, type RestSplit } from '../metrics';
+import { formatInstant, REST_HINTS, REST_LABELS, REST_TONES, type RestSplit } from '../metrics';
 import { GroupIcon } from './ui';
 
 interface Props {
@@ -63,7 +63,7 @@ export function CulpritsPanel({ ts, culprits, breakdown, canOpen, onOpenGroup, o
           <h4>Hors groupes listés</h4>
           <ul>
             {(['others', 'shmem', 'kernel'] as const).map((k) => (
-              <li key={k}>
+              <li key={k} title={REST_HINTS[k]}>
                 <i style={{ background: REST_TONES[k] }} />
                 <span className="name">{REST_LABELS[k]}</span>
                 <span className="mono total">{breakdown[k] === null ? '—' : formatKB(breakdown[k])}</span>

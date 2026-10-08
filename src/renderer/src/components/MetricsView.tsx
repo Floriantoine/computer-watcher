@@ -6,7 +6,7 @@ import { formatKB } from '../format';
 import { useHistory } from '../history';
 import { ipcErrorMessage } from '../viewModel';
 import {
-  breakdownAt, eventMarkers, fetchMetrics, formatInstant, INVESTIGATION_LAYERS, investigationSeries, PRESET_MS, refreshMsFor, REST_KEYS, REST_TONES,
+  breakdownAt, eventMarkers, fetchMetrics, formatInstant, INVESTIGATION_LAYERS, investigationSeries, PRESET_MS, refreshMsFor, REST_HINTS, REST_KEYS, REST_TONES,
 } from '../metrics';
 import { useChartZoom, ZoomChip } from '../chartZoom';
 import { AlertsPanel } from './AlertsPanel';
@@ -26,6 +26,9 @@ interface Props {
 
 /** Teintes des couches de l'enquête (de la plus grosse à la 8e) ; les trois couches du Reste ont les leurs, en pointillés. */
 const LAYER_TONES: ChartTone[] = ['#7c5cff', '#ff5c8a', '#22d3a6', '#ffb547', '#3dd6ff', '#ff8a3d', '#c084fc', '#a3e635'];
+const REST_HINT_BY_KEY = new Map<string, string>([
+  [REST_KEYS.others, REST_HINTS.others], [REST_KEYS.shmem, REST_HINTS.shmem], [REST_KEYS.kernel, REST_HINTS.kernel],
+]);
 const REST_TONE_BY_KEY = new Map<string, ChartTone>([
   [REST_KEYS.others, REST_TONES.others], [REST_KEYS.shmem, REST_TONES.shmem], [REST_KEYS.kernel, REST_TONES.kernel],
 ]);
@@ -212,7 +215,7 @@ export function MetricsView({ at, canOpen, onOpenGroup }: Props) {
             <>
               <div className="inv-legend" onMouseLeave={() => setHoverKey(null)}>
                 {inv.series.map((s, i) => (
-                  <span key={i} className={focusSeries !== null && focusSeries !== i ? 'dim' : ''} onMouseEnter={() => setHoverKey(inv.keys[i])}>
+                  <span key={i} className={focusSeries !== null && focusSeries !== i ? 'dim' : ''} title={REST_HINT_BY_KEY.get(inv.keys[i])} onMouseEnter={() => setHoverKey(inv.keys[i])}>
                     <i style={{ background: s.tone }} />{s.label}
                   </span>
                 ))}

@@ -1,32 +1,36 @@
 import { describe, expect, test } from 'vitest';
 import {
-  alertsFrom, breakdownAt, eventMarkers, fetchMetrics, formatInstant, investigationSeries, refreshMsFor, REST_KEYS, REST_LABELS, splitRest, wheelPan, wheelZoom,
+  alertsFrom, breakdownAt, eventMarkers, fetchMetrics, formatInstant, investigationSeries, refreshMsFor, REST_HINTS, REST_KEYS, REST_LABELS, splitRest, wheelPan, wheelZoom,
   dragPan, toZoom, zoomRange,
 } from './metrics';
 
 const G = 1_048_576;
 
 describe('splitRest (en Go)', () => {
-  test('a) cas nominal : noyau = total − groupes − shmem, autres = total − top − shmem − noyau', () => {
+  test('a) autres = somme réelle des groupes hors top (groupes − top), noyau = total − groupes − shmem', () => {
     expect(splitRest(10 * G, 4 * G, 6 * G, 3 * G)).toEqual({ others: 2 * G, shmem: 3 * G, kernel: 1 * G });
   });
-  test('b) shmem (12) > total (10) : couches nulles plutôt que négatives', () => {
-    expect(splitRest(10 * G, 4 * G, 6 * G, 12 * G)).toEqual({ others: 0, shmem: 12 * G, kernel: 0 });
+  test('b) shmem (12) > total (10) : noyau 0, autres inchangés', () => {
+    expect(splitRest(10 * G, 4 * G, 6 * G, 12 * G)).toEqual({ others: 2 * G, shmem: 12 * G, kernel: 0 });
   });
-  test('c) somme des groupes (11) > total (10), RSS double compté : noyau 0', () => {
-    expect(splitRest(10 * G, 4 * G, 11 * G, 1 * G)).toEqual({ others: 5 * G, shmem: 1 * G, kernel: 0 });
+  test('c) groupes (11) > total (10), RSS double compté : noyau 0, autres = vraie somme hors top (7)', () => {
+    expect(splitRest(10 * G, 4 * G, 11 * G, 1 * G)).toEqual({ others: 7 * G, shmem: 1 * G, kernel: 0 });
   });
-  test('d) shmem inconnu (avant v4) : shmem null, noyau = total − groupes', () => {
-    expect(splitRest(10 * G, 4 * G, 6 * G, null)).toEqual({ others: 2 * G, shmem: null, kernel: 4 * G });
+  test('d) shmem inconnu (avant v4) : noyau inconnu (n’absorbe pas Shmem), autres connus', () => {
+    expect(splitRest(10 * G, 4 * G, 6 * G, null)).toEqual({ others: 2 * G, shmem: null, kernel: null });
   });
-  test('e) total inconnu : autres et noyau null, shmem conservé', () => {
-    expect(splitRest(null, 4 * G, 6 * G, 3 * G)).toEqual({ others: null, shmem: 3 * G, kernel: null });
+  test('e) total inconnu : noyau null, autres et shmem conservés', () => {
+    expect(splitRest(null, 4 * G, 6 * G, 3 * G)).toEqual({ others: 2 * G, shmem: 3 * G, kernel: null });
   });
-  test('f) groupes inconnus : noyau null, autres = total − top − shmem', () => {
-    expect(splitRest(10 * G, 4 * G, null, 3 * G)).toEqual({ others: 3 * G, shmem: 3 * G, kernel: null });
+  test('f) groupes inconnus : autres et noyau null, sauf si les séries hors top sont chargées', () => {
+    expect(splitRest(10 * G, 4 * G, null, 3 * G)).toEqual({ others: null, shmem: 3 * G, kernel: null });
+    expect(splitRest(10 * G, 4 * G, null, 3 * G, 5 * G)).toEqual({ others: 5 * G, shmem: 3 * G, kernel: null });
+  });
+  test('g) somme des séries hors top chargées prioritaire sur groupes − top', () => {
+    expect(splitRest(10 * G, 4 * G, 6 * G, 1 * G, 2.5 * G).others).toBe(2.5 * G);
   });
   test('jamais de NaN ni de négatif', () => {
-    for (const args of [[0, 5, 9, 9], [1, 0, null, null], [null, 0, null, null], [3, 7, 1, 0]] as [number | null, number, number | null, number | null][]) {
+    for (const args of [[0, 5, 3, 9], [1, 0, null, null], [null, 0, null, null], [3, 7, 1, 0]] as [number | null, number, number | null, number | null][]) {
       for (const v of Object.values(splitRest(...args))) {
         if (v !== null) {
           expect(Number.isNaN(v)).toBe(false);
@@ -37,20 +41,23 @@ describe('splitRest (en Go)', () => {
   });
 });
 
-test('investigationSeries : top n, puis autres groupes, fichiers en mémoire, noyau (clés et libellés fixes)', () => {
+test('investigationSeries : top n, puis autres groupes, fichiers en mémoire, noyau (estimation)', () => {
   const series = Array.from({ length: 10 }, (_, i) => ({ key: `g${i}`, label: `G${i}`, kind: 'app' as const, memKB: [100 - i, 100 - i] }));
-  const h = { ts: [0, 1], series };
-  // top 8 = 100 + 99 + ... + 93 = 772 ; groupes = 945 ; total 2000 ; shmem 500
-  const r = investigationSeries(h, 8, { usedKB: [2000, null], shmemKB: [500, 500], groupsKB: [945, 945] });
+  const totals = { usedKB: [2000, null], shmemKB: [500, 500], groupsKB: [955, 955] };
+  // top 8 = 100 + … + 93 = 772 ; hors top chargés : 92 + 91 = 183
+  const r = investigationSeries({ ts: [0, 1], series }, 8, totals);
   expect(r.layers.map((l) => l.key)).toEqual([...series.slice(0, 8).map((s) => s.key), REST_KEYS.others, REST_KEYS.shmem, REST_KEYS.kernel]);
   expect(r.layers.slice(8).map((l) => l.label)).toEqual([REST_LABELS.others, REST_LABELS.shmem, REST_LABELS.kernel]);
-  expect(REST_LABELS).toEqual({ others: 'Autres groupes', shmem: 'Fichiers en mémoire (/tmp, shm)', kernel: 'Noyau et caches' });
+  expect(REST_LABELS).toEqual({ others: 'Autres groupes', shmem: 'Fichiers en mémoire (/tmp, shm)', kernel: 'Noyau et caches (estimation)' });
+  expect(REST_HINTS.kernel).toMatch(/pages partagées/);
+  expect(REST_HINTS.kernel).toMatch(/minimum/);
   const [others, shmem, kernel] = r.layers.slice(8).map((l) => l.values);
-  expect(kernel).toEqual([555, null]); // 2000 − 945 − 500
-  expect(others).toEqual([173, null]); // 2000 − 772 − 500 − 555
+  expect(others).toEqual([183, 183]); // vraie somme des séries hors top
   expect(shmem).toEqual([500, 500]);
-  // top + autres + shmem + noyau = total
-  expect(772 + 173 + 500 + 555).toBe(2000);
+  expect(kernel).toEqual([545, null]); // 2000 − 955 − 500
+  // seulement le top chargé (cas de l'app) : autres = groupes − top
+  const topOnly = investigationSeries({ ts: [0, 1], series: series.slice(0, 8) }, 8, totals);
+  expect(topOnly.layers.find((l) => l.key === REST_KEYS.others)!.values).toEqual([183, 183]);
 });
 
 test('breakdownAt : point le plus proche, null hors plage', () => {
