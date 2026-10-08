@@ -1,8 +1,10 @@
 // src/core/grouping/buildGroups.ts
 import type { Group, GroupKind, ProcInfo, ProcNode } from '../types';
+import { baseName, programIndex, splitArgs } from '../classify/argv';
+import { isMcpServer } from '../classify/rules';
 import { isUnderAny } from './claudeDirs';
 import { projectLabel } from './projectRoot';
-import { APP_NAMES, CLAUDE_NAME, DEV_TOOL, appLabel } from './rules';
+import { APP_NAMES, CLAUDE_NAME, DEV_TOOL, SHELL_NAMES, appLabel, isTestBrowser } from './rules';
 
 export interface GroupingOptions {
   home: string;
@@ -59,11 +61,104 @@ export function buildGroups(procs: ProcInfo[], opts: GroupingOptions): Group[] {
     }
   };
 
-  // 1. Sessions Claude : chaque claude de premier niveau et tous ses descendants
+  const dirs = opts.claudeDirs ?? [];
+  const homeDir = trimSlash(opts.home);
+  /** Dossier de projet réel : ni `/`, ni le dossier personnel, ni la config de Claude, ni un dossier supprimé. */
+  const inRealProject = (p: ProcInfo): boolean => {
+    if (p.cwd === null || p.cwdDeleted || isUnderAny(p.cwd, dirs)) return false;
+    const root = opts.projectRootOf(p.cwd);
+    if (root === null) return false;
+    const r = trimSlash(root);
+    return r !== '/' && r !== homeDir && !isUnderAny(r, dirs);
+  };
+  /**
+   * Outil Claude : serveur MCP, ou programme pris dans ~/.claude (hook, outil de plugin : `node ~/.claude/plugins/…/x.js`).
+   * Seul le programme significatif compte : les shells de l'outil Bash ont tous `source ~/.claude/shell-snapshots/…` en argument.
+   */
+  const isClaudeTool = (p: ProcInfo): boolean => {
+    if (isMcpServer(p.name, p.cmdline)) return true;
+    if (dirs.length === 0) return false;
+    const raw = splitArgs(p.cmdline);
+    return isUnderAny(raw[Math.max(0, programIndex(raw.map(baseName)))] ?? null, dirs);
+  };
+  /**
+   * Shell de l'outil Bash : un shell connu dont la ligne de commande charge `<config Claude>/shell-snapshots/…`. Tout autre
+   * shell enfant direct de claude (serveur MCP lancé par `bash -c`, shell inconnu) est un outil Claude et y reste.
+   */
+  const isBashToolShell = (p: ProcInfo): boolean =>
+    SHELL_NAMES.has(p.name) && (p.cmdline.includes('/.claude/shell-snapshots/') || dirs.some((d) => p.cmdline.includes(`${d}/shell-snapshots/`)));
+  // Ancêtres d'un claude (lanceur npx, script Agent SDK…) : jamais déplacés, sinon « Tuer le groupe » de leur carte
+  // projet atteindrait la session imbriquée (npm transmet SIGTERM à son enfant).
+  const aboveClaude = new Set<number>();
   for (const p of procs) {
-    if (p.name === CLAUDE_NAME && !hasAncestor(p, (a) => a.name === CLAUDE_NAME)) {
-      meta.set('claude', { kind: 'claude', label: 'Claude' });
-      assignTree(p, 'claude', () => false);
+    if (p.name !== CLAUDE_NAME) continue;
+    let cur = p.ppid !== p.pid ? byPid.get(p.ppid) : undefined;
+    while (cur && !aboveClaude.has(cur.pid)) {
+      aboveClaude.add(cur.pid);
+      cur = cur.ppid !== cur.pid ? byPid.get(cur.ppid) : undefined;
+    }
+  }
+  const claudeLaunched = new Set<number>();
+  const movedRoots: ProcInfo[] = [];
+
+  /** Groupe d'un outil de dev d'après son dossier de travail : projet, dossier supprimé, ou sa commande sans cwd. */
+  const devToolKey = (p: ProcInfo): string => {
+    if (p.cwdDeleted) {
+      meta.set('deleted', { kind: 'deleted', label: '(dossier supprimé)' });
+      return 'deleted';
+    }
+    if (p.cwd === null) {
+      const key = `command:${p.name}`;
+      meta.set(key, { kind: 'command', label: p.name });
+      return key;
+    }
+    const root = opts.projectRootOf(p.cwd) ?? p.cwd;
+    const key = `project:${root}`;
+    meta.set(key, { kind: 'project', label: projectLabel(root, opts.home) });
+    return key;
+  };
+
+  // 1. Sessions Claude : chaque claude de premier niveau et ses descendants (sessions imbriquées comprises, quelle que soit
+  // leur forme). Exception : un outil de dev lancé dans un vrai projet sous un shell de l'outil Bash sort de la carte
+  // Claude avec son sous-arbre (1 bis), marqué « lancé par Claude ». Restent dans Claude avec tout leur sous-arbre : les
+  // enfants directs de claude autres que les shells de l'outil Bash (c'est ainsi que Claude lance ses serveurs MCP), les
+  // serveurs MCP reconnus à leur nom, les programmes de ~/.claude et les ancêtres d'un claude.
+  for (const p of procs) {
+    if (p.name !== CLAUDE_NAME || hasAncestor(p, (a) => a.name === CLAUDE_NAME)) continue;
+    meta.set('claude', { kind: 'claude', label: 'Claude' });
+    const stack: { p: ProcInfo; tool: boolean }[] = [{ p, tool: false }];
+    while (stack.length) {
+      const { p: c, tool } = stack.pop()!;
+      if (keyOf.has(c.pid)) continue;
+      let inTool = tool;
+      if (c !== p && !inTool) {
+        const directChild = byPid.get(c.ppid)?.name === CLAUDE_NAME;
+        inTool = (directChild && !isBashToolShell(c)) || isClaudeTool(c);
+        if (!inTool && !aboveClaude.has(c.pid) && DEV_TOOL.test(c.name) && inRealProject(c)) {
+          movedRoots.push(c);
+          continue;
+        }
+      }
+      keyOf.set(c.pid, 'claude');
+      for (const k of children.get(c.pid) ?? []) stack.push({ p: k, tool: inTool });
+    }
+  }
+
+  // 1 bis. Chaque outil sorti de Claude emmène son sous-arbre dans son projet, tel qu'il était sous Claude (`sh -c`
+  // intermédiaires, workers, navigateurs de test) : avant les applis, pour qu'un chromium de test ne rejoigne pas la
+  // carte Chrome de l'utilisateur (ni son kill). Il n'a aucun claude en dessous (voir aboveClaude). Arrêt à une vraie
+  // appli (navigateur ouvert par `vite --open`) : l'étape 2 la range dans sa carte.
+  for (const root of movedRoots) {
+    const key = devToolKey(root);
+    const stack: { p: ProcInfo; inBrowser: boolean }[] = [{ p: root, inBrowser: false }];
+    while (stack.length) {
+      const { p: c, inBrowser } = stack.pop()!;
+      if (keyOf.has(c.pid)) continue;
+      const app = APP_NAMES.has(c.name);
+      if (app && !inBrowser && !isTestBrowser(c.cmdline)) continue;
+      keyOf.set(c.pid, key);
+      claudeLaunched.add(c.pid);
+      for (const k of children.get(c.pid) ?? []) stack.push({ p: k, inBrowser: inBrowser || app });
     }
   }
 
@@ -78,7 +173,6 @@ export function buildGroups(procs: ProcInfo[], opts: GroupingOptions): Group[] {
   // 2 bis. Outils Claude détachés (serveur du compagnon visuel, MCP, outils de plugins lancés à part) : dossier de
   // travail sous ~/.claude (ou $CLAUDE_CONFIG_DIR), même sans session claude parmi leurs ancêtres. Après les applis :
   // un shell de terminal ou d'éditeur ouvert dans ~/.claude reste dans son appli (seuls les non-affectés sont pris).
-  const dirs = opts.claudeDirs ?? [];
   if (dirs.length) {
     for (const p of procs) {
       if (keyOf.has(p.pid) || p.cwdDeleted || !isUnderAny(p.cwd, dirs)) continue;
@@ -90,19 +184,7 @@ export function buildGroups(procs: ProcInfo[], opts: GroupingOptions): Group[] {
   // 3. Outils de dev : par projet
   for (const p of procs) {
     if (keyOf.has(p.pid) || !DEV_TOOL.test(p.name)) continue;
-    let key: string;
-    if (p.cwdDeleted) {
-      key = 'deleted';
-      meta.set(key, { kind: 'deleted', label: '(dossier supprimé)' });
-    } else if (p.cwd === null) {
-      key = `command:${p.name}`;
-      meta.set(key, { kind: 'command', label: p.name });
-    } else {
-      const root = opts.projectRootOf(p.cwd) ?? p.cwd;
-      key = `project:${root}`;
-      meta.set(key, { kind: 'project', label: projectLabel(root, opts.home) });
-    }
-    keyOf.set(p.pid, key);
+    keyOf.set(p.pid, devToolKey(p));
   }
 
   // 4. Le reste : par nom
@@ -121,7 +203,14 @@ export function buildGroups(procs: ProcInfo[], opts: GroupingOptions): Group[] {
     members.set(key, list);
   }
 
-  const groups = [...members].map(([key, list]) => makeGroup(key, meta.get(key)!, list, opts));
+  const groups = [...members].map(([key, list]) => {
+    const g = makeGroup(key, meta.get(key)!, list, opts);
+    if (claudeLaunched.size) {
+      const launched = list.filter((p) => claudeLaunched.has(p.pid)).map((p) => p.pid);
+      if (launched.length) g.launchedByClaude = launched;
+    }
+    return g;
+  });
   return applyOthers(groups, opts.othersThreshold, opts.keepSeparate, opts.home);
 }
 

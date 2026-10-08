@@ -2,11 +2,11 @@ import { memo, type MouseEvent, type Ref } from 'react';
 import { motion, useIsPresent } from 'motion/react';
 import { ChevronDown, ChevronUp, Lock } from 'lucide-react';
 import type { GroupSummary as Group, MemoryMetric } from '../../../core/types';
-import { hasDuplicate, instancesLine, primaryTag } from '../categoryFilter';
+import { hasClaudeLaunched, hasDuplicate, instancesLine, primaryTag } from '../categoryFilter';
 import { formatAge, formatCpu, formatKB } from '../format';
 import { fallbackTitle, memLabel, memTileLabel } from '../memMetric';
 import { othersPreview, othersPreviewEqual } from '../othersFold';
-import { CategoryTag, DuplicateBadge } from './CategoryTag';
+import { CategoryTag, ClaudeLaunchedBadge, DuplicateBadge } from './CategoryTag';
 import { barWidth } from '../motionBudget';
 import { cardDisplayEqual, sameSeries } from '../renderEquality';
 import { cardTone } from '../theme';
@@ -120,6 +120,7 @@ function GroupCardImpl({ group, memTotalKB, spark, stuck, pending, leak, layoutK
             )}
             {tag && <CategoryTag category={tag.category} port={tag.port} />}
             {!line && hasDuplicate(group) && <DuplicateBadge />}
+            {!line && hasClaudeLaunched(group) && <ClaudeLaunchedBadge />}
             {leak && <LeakBadge onClick={stop(() => actions.leak(group.id))} />}
           </div>
           <div className="sub" title={sub}>{sub}</div>
@@ -135,6 +136,7 @@ function GroupCardImpl({ group, memTotalKB, spark, stuck, pending, leak, layoutK
         <div className="instances-row">
           <span className="instances-line mono" data-testid="instances-line" title={line}>{line}</span>
           {hasDuplicate(group) && <DuplicateBadge />}
+          {hasClaudeLaunched(group) && <ClaudeLaunchedBadge />}
         </div>
       )}
       <Sparkline values={spark} tone={cardTone(pct)} height={28} />

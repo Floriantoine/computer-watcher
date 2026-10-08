@@ -53,10 +53,86 @@ describe('classifyGroups', () => {
     return { npm, vite, esb, tree: node(npm, node(vite, node(esb))) };
   };
 
+  it('lancé par Claude : claude → zsh -c → npx jest dans acme/backend → instance Tests du projet, marquée ; lanceur npx hors instance', () => {
+    const P = '/home/u/acme/backend';
+    const procs = [
+      proc('claude', 'claude', { pid: 9001, cwd: P }),
+      proc('zsh', '/usr/bin/zsh -c source /home/u/.claude/shell-snapshots/s.sh && eval npx jest', { pid: 9002, ppid: 9001, cwd: P }),
+      proc('npm exec jest', 'npm exec jest', { pid: 9003, ppid: 9002, cwd: P }),
+      proc('node', `node ${P}/node_modules/.bin/jest`, { pid: 9004, ppid: 9003, cwd: P }),
+      proc('node', `node ${P}/node_modules/jest-worker/build/processChild.js`, { pid: 9005, ppid: 9004, cwd: P }),
+    ];
+    const groups = buildGroups(procs, {
+      home: '/home/u', currentUid: 1000, isProtected: () => false, othersThreshold: { memMB: 0, cpuPercent: 0 },
+      projectRootOf: (cwd) => (cwd.startsWith(P) ? P : null), claudeDirs: ['/home/u/.claude'],
+    });
+    const cls = classifyGroups(groups, ctx());
+    const project = cls.get(`project:${P}`)!;
+    expect(project.instances).toHaveLength(1);
+    expect(project.instances[0]).toMatchObject({ category: 'test', label: 'jest', rootPid: 9004, launchedBy: 'claude' });
+    expect(project.launcherPids).toEqual([9003]);
+    expect(cls.get('claude')!.instances[0]!.launchedBy).toBeUndefined();
+    expect(cls.get('claude')!.instances[0]!.pids.sort()).toEqual([9001, 9002]);
+  });
+
+  it('lancé par Claude : npx jest → sh -c → jest → worker, sous-arbre entier dans le projet ; npx et sh lanceurs, une instance Tests', () => {
+    const P = '/home/u/acme/backend';
+    const procs = [
+      proc('claude', 'claude', { pid: 9101, cwd: P }),
+      proc('zsh', '/usr/bin/zsh -c source /home/u/.claude/shell-snapshots/s.sh && eval npx jest', { pid: 9102, ppid: 9101, cwd: P }),
+      proc('npm exec jest', 'npm exec jest', { pid: 9103, ppid: 9102, cwd: P }),
+      proc('sh', 'sh -c jest', { pid: 9104, ppid: 9103, cwd: P }),
+      proc('node', `node ${P}/node_modules/.bin/jest`, { pid: 9105, ppid: 9104, cwd: P }),
+      proc('node', `node ${P}/node_modules/jest-worker/build/processChild.js`, { pid: 9106, ppid: 9105, cwd: P }),
+    ];
+    const groups = buildGroups(procs, {
+      home: '/home/u', currentUid: 1000, isProtected: () => false, othersThreshold: { memMB: 0, cpuPercent: 0 },
+      projectRootOf: (cwd) => (cwd.startsWith(P) ? P : null), claudeDirs: ['/home/u/.claude'],
+    });
+    const project = classifyGroups(groups, ctx()).get(`project:${P}`)!;
+    expect(project.instances).toHaveLength(1);
+    expect(project.instances[0]).toMatchObject({ category: 'test', rootPid: 9105, launchedBy: 'claude' });
+    expect(project.instances[0]!.pids.sort()).toEqual([9105, 9106]);
+    expect(project.launcherPids.sort()).toEqual([9103, 9104]);
+  });
+
+  it('processus qui change de groupe entre deux relevés : clé d’instance stable dans son nouveau groupe', () => {
+    const P = '/home/u/acme/backend';
+    const o = {
+      home: '/home/u', currentUid: 1000, isProtected: () => false, othersThreshold: { memMB: 0, cpuPercent: 0 },
+      projectRootOf: (cwd: string) => (cwd.startsWith(P) ? P : null), claudeDirs: ['/home/u/.claude'],
+    };
+    const claude = proc('claude', 'claude', { pid: 9201, cwd: P });
+    const zsh = proc('zsh', '/usr/bin/zsh -c source /home/u/.claude/shell-snapshots/s.sh && eval npm run dev', { pid: 9202, ppid: 9201, cwd: P });
+    const npm = proc('npm run dev', 'npm run dev', { pid: 9203, ppid: 9202, cwd: P });
+    const vite = proc('node', `node ${P}/node_modules/.bin/vite`, { pid: 9204, ppid: 9203, cwd: P });
+    const keyOf = (procs: ReturnType<typeof proc>[], memo: NonNullable<ClassifyContext['memo']>) => {
+      const cls = classifyGroups(buildGroups(procs, o), ctx({ memo }));
+      return cls.get(`project:${P}`)!.instances.find((i) => i.rootPid === 9204)!;
+    };
+    const memo: NonNullable<ClassifyContext['memo']> = new Map();
+    // 1. sous la session Claude  2. relevé suivant identique  3. session fermée : npm rattaché à systemd (step 3)
+    const k1 = keyOf([claude, zsh, npm, vite], memo);
+    const k2 = keyOf([{ ...claude }, { ...zsh }, { ...npm }, { ...vite }], memo);
+    const k3 = keyOf([{ ...npm, ppid: 1 }, { ...vite }], memo);
+    expect(k1.key).toBe(`project:${P}#9204:${vite.startTicks}`);
+    expect(k2.key).toBe(k1.key);
+    expect(k3.key).toBe(k1.key);
+    expect([k1.launchedBy, k2.launchedBy, k3.launchedBy]).toEqual(['claude', 'claude', undefined]);
+    expect(k3.category).toBe('front');
+  });
+
+  it('serveur de dev lancé à la main : instance non marquée', () => {
+    const { tree } = npmVite();
+    const inst = classifyGroups([group('project:/home/u/acme', 'project', [tree])], ctx()).get('project:/home/u/acme')!.instances[0]!;
+    expect(inst.launchedBy).toBeUndefined();
+    expect('launchedBy' in inst).toBe(false);
+  });
+
   it('cache des décisions : même résultat, réutilisé tant que l\'appelant ne le vide pas, entrées disparues retirées', () => {
     const { tree } = npmVite(42);
     const g = group('project:/home/u/acme', 'project', [tree]);
-    const memo = new Map();
+    const memo: NonNullable<ClassifyContext['memo']> = new Map();
     const plain = classifyGroups([g], ctx()).get(g.id)!;
     expect(classifyGroups([g], ctx({ memo })).get(g.id)).toEqual(plain);
     expect(memo.size).toBe(1);
@@ -74,7 +150,7 @@ describe('classifyGroups', () => {
     const srv = proc('node', 'node tools/serve.mjs');
     const helper = proc('node', 'node tools/helper.js');
     const esb = proc('esbuild', '/x/node_modules/@esbuild/linux-x64/bin/esbuild src/main.ts --bundle --watch');
-    const memo = new Map();
+    const memo: NonNullable<ClassifyContext['memo']> = new Map();
     const before = classifyGroups([group('project:/x', 'project', [node(srv, node(helper))])], ctx({ memo })).get('project:/x')!;
     expect(before.instances[0]!.category).not.toBe('build');
     const after = classifyGroups([group('project:/x', 'project', [node(srv, node(esb))])], ctx({ memo })).get('project:/x')!;

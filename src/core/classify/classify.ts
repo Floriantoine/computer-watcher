@@ -93,6 +93,7 @@ function classifyGroup(group: Group, ctx: ClassifyContext, hasInstanceBelow: (pi
   const isProject = group.kind === 'project' || group.kind === 'deleted';
   const projectRoot = group.kind === 'project' && group.id.startsWith(PROJECT_PREFIX) ? group.id.slice(PROJECT_PREFIX.length) : null;
   const split = splitInstances(group, hasInstanceBelow);
+  const launched = group.launchedByClaude?.length ? new Set(group.launchedByClaude) : null;
   const instances: InstanceSummary[] = split.instances.map(({ root, procs }) => {
     const rp = root.proc;
     const portSet = new Set<number>();
@@ -116,12 +117,15 @@ function classifyGroup(group: Group, ctx: ClassifyContext, hasInstanceBelow: (pi
       rssKB += p.rssKB; swapKB += p.swapKB; cpuPercent += p.cpuPercent;
       if (!prot && ctx.isProtected(p.name)) prot = true;
     }
-    return {
+    const inst: InstanceSummary = {
       key: `${group.id}#${rp.pid}:${rp.startTicks}`, groupId: group.id, project: projectRoot,
       category: dec.category, source: dec.source,
       signature: dec.signature, label: dec.label, rootPid: rp.pid, rootStartTicks: rp.startTicks,
       pids: procs.map((p) => p.pid), ports, ageSec: rp.ageSec, rssKB, swapKB, cpuPercent, duplicate: false, protected: prot,
     };
+    // Racine sortie d'une session Claude (voir buildGroups, règle 1) : étiquette « lancé par Claude ».
+    if (launched?.has(rp.pid)) inst.launchedBy = 'claude';
+    return inst;
   });
 
   // Doublons : dans un même projet, même catégorie parmi front/back/worker/db ET même commande (signature)

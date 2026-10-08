@@ -35,12 +35,60 @@ const viteSub = (c: Ctx): string | undefined => {
   }
   return undefined;
 };
+const MCP_NAME = /^(.+-mcp|mcp-server-.+)$/;
+const MCP_CLI = /(^|\/)@[^/]+\/mcp\/cli(\.[cm]?js)?$/;
+/** Paquet MCP lancé par npx, pnpm dlx, bunx, uvx, uv run (version ôtée) : `@upstash/context7-mcp`, `@playwright/mcp`, `mcp-server-fetch`. */
+const MCP_PACKAGE = /^(@modelcontextprotocol\/.+|@[^/]+\/mcp|(@[^/]+\/)?(.+-mcp|mcp-server(-.+)?|.+-mcp-server))$/;
+const SHELLS = new Set(['sh', 'bash', 'dash', 'zsh', 'fish', 'ksh']);
+/** Options de lanceur qui prennent une valeur (sautée) ; -p/--package/--from : la valeur est le paquet lancé. */
+const LAUNCHER_VALUE_OPTS = new Set(['--with', '--python', '--index', '--index-url', '--registry', '--cache', '--directory', '--project', '-w', '--workspace']);
+const LAUNCHER_PACKAGE_OPTS = new Set(['-p', '--package', '--from']);
+
+/** Paquets lancés par un lanceur (`npx`, `npm exec`, `pnpm dlx`, `bunx`, `uvx`, `uv run`, `uv tool run|uvx`) ; null si ce n'en est pas un. */
+function launchedPackages(c: Ctx): string[] | null {
+  let rest = c.rawRest;
+  if (['npx', 'pnpx', 'bunx', 'uvx'].includes(c.cmd)) { /* paquet juste après */ }
+  else if (['npm', 'pnpm', 'yarn', 'bun'].includes(c.cmd) && ['exec', 'dlx', 'x'].includes(rest[0] ?? '')) rest = rest.slice(1);
+  else if (c.cmd === 'uv' && rest[0] === 'run') rest = rest.slice(1);
+  else if (c.cmd === 'uv' && rest[0] === 'tool' && ['run', 'uvx'].includes(rest[1] ?? '')) rest = rest.slice(2);
+  else return null;
+  const out: string[] = [];
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
+    if (a === '--') continue;
+    if (a.startsWith('-')) {
+      const [opt, val] = a.split('=', 2);
+      if (LAUNCHER_PACKAGE_OPTS.has(opt)) { const v = val ?? rest[++i]; if (v) out.push(v); }
+      else if (LAUNCHER_VALUE_OPTS.has(opt) && val === undefined) i++;
+      continue;
+    }
+    out.push(a);
+    break;
+  }
+  return out;
+}
+
+const stripVersion = (pkg: string): string => pkg.replace(/(.)@[^/@]*$/, '$1');
+
+/**
+ * Serveur MCP : programme significatif `*-mcp`, `mcp-server-*` ou `@x/mcp/cli`, ou paquet MCP lancé par un lanceur
+ * (`npm exec @upstash/context7-mcp`, `uvx mcp-server-fetch`, `npx @modelcontextprotocol/server-…`) : seul le paquet lancé
+ * compte, pas ses arguments. Jamais la ligne de commande d'un shell (celles de l'outil Bash contiennent n'importe quoi).
+ */
+export function isMcpServer(name: string, cmdline: string): boolean {
+  const c = ctxOf(name, cmdline);
+  if (SHELLS.has(c.cmd)) return false;
+  if (MCP_NAME.test(c.cmd) || MCP_CLI.test(c.rawCmd)) return true;
+  const pkgs = launchedPackages(c);
+  return pkgs !== null && pkgs.some((p) => MCP_PACKAGE.test(stripVersion(p)));
+}
+
 const BROWSER = /^(chrome|chromium|chromium-browser|google-chrome|firefox|brave|msedge)([-_].*)?$/;
 
 export const COMMAND_RULES: Rule[] = [
   // ai d'abord : « claude » et serveurs MCP
   { category: 'ai', label: 'claude', test: (c) => is(c, 'claude', 'claude-desktop') || c.name === 'claude' || c.name === 'claude-desktop' },
-  { category: 'ai', label: (c) => (c.cmd === 'cli' ? c.rawCmd.split('/').slice(-3, -1).join('/') : stripExt(c.cmd)), test: (c) => /^(.+-mcp|mcp-server-.+)$/.test(c.cmd) || /(^|\/)@[^/]+\/mcp\/cli(\.[cm]?js)?$/.test(c.rawCmd) },
+  { category: 'ai', label: (c) => (c.cmd === 'cli' ? c.rawCmd.split('/').slice(-3, -1).join('/') : stripExt(c.cmd)), test: (c) => MCP_NAME.test(c.cmd) || MCP_CLI.test(c.rawCmd) },
   // test avant front (vitest) et build
   { category: 'test', label: (c) => c.cmd, test: (c) => is(c, 'vitest', 'jest', 'cypress', 'pytest', 'mocha', 'karma') },
   { category: 'test', label: 'playwright test', test: (c) => (c.cmd === 'playwright' || /(^|\/)playwright(-core)?\/cli(\.[cm]?js)?$/.test(c.rawCmd)) && c.rest[0] === 'test' },

@@ -177,5 +177,6 @@ describe('instanceRowEqual', () => {
     expect(instanceRowEqual(base, { ...base, menuOpen: true })).toBe(false);
     expect(instanceRowEqual(base, { ...base, pending: true })).toBe(false);
     expect(instanceRowEqual(base, { ...base, inst: { ...base.inst, protected: true } })).toBe(false);
+    expect(instanceRowEqual(base, { ...base, inst: { ...base.inst, launchedBy: 'claude' } })).toBe(false);
   });
 });

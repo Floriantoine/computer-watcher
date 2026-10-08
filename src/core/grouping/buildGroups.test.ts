@@ -234,3 +234,214 @@ describe('règle 1 bis : outils Claude détachés (dossier de travail sous ~/.cl
     expect(groups.some((g) => g.id === 'claude')).toBe(false);
   });
 });
+
+describe('règle 1 ter : outils de dev lancés par Claude dans un projet', () => {
+  const claudeDirs = ['/home/u/.claude'];
+  const roots: Record<string, string> = { '/home/u/acme/backend': '/home/u/acme/backend', '/home/u/beta': '/home/u/beta', '/home/u/beta-mcp': '/home/u/beta-mcp', '/home/u': '/home/u' };
+  const projectRootOf = (cwd: string): string | null => {
+    for (let d = cwd; d && d !== '/'; d = d.slice(0, d.lastIndexOf('/')) || '/') if (roots[d]) return roots[d];
+    if (cwd.startsWith('/home/u/.claude/plugins/')) return '/home/u/.claude/plugins/cache/x';
+    return null;
+  };
+  const o = opts({ claudeDirs, projectRootOf });
+  const A = '/home/u/acme/backend';
+  const B = '/home/u/beta';
+  /** Shell de l'outil Bash : ligne de commande réelle (source du snapshot sous ~/.claude). */
+  const bash = (cmd: string) => `/usr/bin/zsh -c source /home/u/.claude/shell-snapshots/snapshot-zsh-1.sh 2>/dev/null || true && eval ${cmd}`;
+  const session = (...rest: ProcInfo[]): ProcInfo[] => [
+    proc({ pid: 10, name: 'warp' }),
+    proc({ pid: 11, name: 'zsh', ppid: 10, cwd: A }),
+    proc({ pid: 20, name: 'claude', ppid: 11, cwd: A, rssKB: 400 * 1024 }),
+    ...rest,
+  ];
+  /** Session avec un shell de l'outil Bash (pid 30) dans `cwd` ; `rest` sous ce shell ou ailleurs. */
+  const shellSession = (cwd: string, cmd: string, ...rest: ProcInfo[]) =>
+    session(proc({ pid: 30, name: 'zsh', ppid: 20, cwd, cmdline: bash(cmd), rssKB: 10 * 1024 }), ...rest);
+
+  test('claude → zsh -c → npx jest : jest et npx vont dans le projet, marqués lancés par Claude ; zsh reste dans Claude', () => {
+    const groups = buildGroups(shellSession(A, 'npx jest',
+      proc({ pid: 31, name: 'npm exec jest', ppid: 30, cwd: A, cmdline: 'npm exec jest' }),
+      proc({ pid: 32, name: 'node', ppid: 31, cwd: A, cmdline: `node ${A}/node_modules/.bin/jest`, rssKB: 300 * 1024 }),
+    ), o);
+    expect(byId(groups, 'claude').pids.sort()).toEqual([20, 30]);
+    const project = byId(groups, `project:${A}`);
+    expect(project.pids.sort()).toEqual([31, 32]);
+    expect(project.launchedByClaude?.sort()).toEqual([31, 32]);
+  });
+
+  test('le total de Claude n’inclut plus les processus déplacés', () => {
+    const groups = buildGroups(shellSession(B, 'npm run dev',
+      proc({ pid: 31, name: 'node', ppid: 30, cwd: B, cmdline: 'node node_modules/.bin/vite', rssKB: 500 * 1024 }),
+    ), o);
+    expect(byId(groups, 'claude').rssKB).toBe(410 * 1024);
+    expect(byId(groups, `project:${B}`).rssKB).toBe(500 * 1024);
+    const all = groups.flatMap((g) => [g, ...g.subgroups]).filter((g) => g.kind !== 'others');
+    expect(all.flatMap((g) => g.pids).filter((p) => p === 31)).toHaveLength(1);
+  });
+
+  test('enfant direct de claude (serveur MCP, reconnu ou non) : reste dans Claude avec ses enfants', () => {
+    const groups = buildGroups(session(
+      proc({ pid: 30, name: 'node', ppid: 20, cwd: A, cmdline: 'node /home/u/.npm/_npx/a/node_modules/.bin/mcp-server-fs /home/u/acme' }),
+      proc({ pid: 31, name: 'npm exec @upst', ppid: 20, cwd: A, cmdline: 'npm exec @upstash/context7-mcp' }),
+      proc({ pid: 32, name: 'node', ppid: 31, cwd: A, cmdline: 'node /home/u/.npm/_npx/b/node_modules/.bin/context7-mcp' }),
+      proc({ pid: 33, name: 'node', ppid: 20, cwd: A, cmdline: 'node /home/u/tools/server/build/index.js' }),
+      proc({ pid: 34, name: 'node', ppid: 33, cwd: A, cmdline: 'node helper.js' }),
+      proc({ pid: 35, name: 'npm exec mcp-r', ppid: 20, cwd: A, cmdline: 'npm exec mcp-remote https://mcp.example.com/sse' }),
+      proc({ pid: 36, name: 'node', ppid: 35, cwd: A, cmdline: 'node /home/u/.npm/_npx/c/node_modules/.bin/mcp-remote https://mcp.example.com/sse' }),
+      proc({ pid: 37, name: 'python3', ppid: 20, cwd: A, cmdline: 'python3 -m my_server' }),
+    ), o);
+    expect(byId(groups, 'claude').pids.sort()).toEqual([20, 30, 31, 32, 33, 34, 35, 36, 37]);
+    expect(groups.find((g) => g.id.startsWith('project:'))).toBeUndefined();
+  });
+
+  test('serveur MCP reconnu à son nom sous un shell : reste dans Claude, enfants compris', () => {
+    const groups = buildGroups(shellSession(A, 'npx @playwright/mcp',
+      proc({ pid: 31, name: 'node', ppid: 30, cwd: A, cmdline: 'node /home/u/.npm/_npx/c/node_modules/@playwright/mcp/cli.js' }),
+      proc({ pid: 32, name: 'node', ppid: 31, cwd: A, cmdline: 'node helper.js' }),
+    ), o);
+    expect(byId(groups, 'claude').pids.sort()).toEqual([20, 30, 31, 32]);
+  });
+
+  test('projet nommé *-mcp, ligne de commande du shell qui parle de mcp : le serveur de dev part quand même dans le projet', () => {
+    const P = '/home/u/beta-mcp';
+    const groups = buildGroups(shellSession(P, `cd ${P} && npm run dev -- --mode mcp`,
+      proc({ pid: 31, name: 'npm run dev', ppid: 30, cwd: P, cmdline: 'npm run dev -- --mode mcp' }),
+      proc({ pid: 32, name: 'node', ppid: 31, cwd: P, cmdline: `node ${P}/node_modules/.bin/vite --mode mcp` }),
+      proc({ pid: 33, name: 'npm exec vitest', ppid: 30, cwd: P, cmdline: 'npm exec vitest run mcp' }),
+    ), o);
+    expect(byId(groups, 'claude').pids.sort()).toEqual([20, 30]);
+    expect(byId(groups, `project:${P}`).pids.sort()).toEqual([31, 32, 33]);
+  });
+
+  test('node lancé depuis le dossier personnel : reste dans Claude', () => {
+    const groups = buildGroups(shellSession('/home/u', 'node -e 1', proc({ pid: 31, name: 'node', ppid: 30, cwd: '/home/u', cmdline: 'node -e 1' })), o);
+    expect(byId(groups, 'claude').pids).toContain(31);
+  });
+
+  test('node sous ~/.claude/plugins (outil de plugin) : reste dans Claude', () => {
+    const groups = buildGroups(shellSession(A, 'node server.cjs', proc({ pid: 31, name: 'node', ppid: 30, cwd: '/home/u/.claude/plugins/cache/x/server', cmdline: 'node server.cjs' })), o);
+    expect(byId(groups, 'claude').pids).toContain(31);
+  });
+
+  test('script d’outil Claude (programme sous ~/.claude) lancé dans le projet : reste dans Claude', () => {
+    const groups = buildGroups(shellSession(B, 'hook', proc({ pid: 31, name: 'node', ppid: 30, cwd: B, cmdline: 'node /home/u/.claude/plugins/cache/x/hooks/run.js' })), o);
+    expect(byId(groups, 'claude').pids).toContain(31);
+  });
+
+  test('outil non-dev (git, rg) dans le projet : reste dans Claude', () => {
+    const groups = buildGroups(shellSession(B, 'rg foo', proc({ pid: 31, name: 'rg', ppid: 30, cwd: B, cmdline: 'rg foo' })), o);
+    expect(byId(groups, 'claude').pids).toContain(31);
+  });
+
+  test('dossier supprimé : ce n’est pas une racine de projet, le processus reste dans Claude', () => {
+    const groups = buildGroups(shellSession('/tmp/tmp.x', 'node vite', proc({ pid: 31, name: 'node', ppid: 30, cwd: '/home/u/beta/.worktrees/x', cwdDeleted: true, cmdline: 'node vite' })), o);
+    expect(byId(groups, 'claude').pids).toContain(31);
+    expect(groups.find((g) => g.id === 'deleted')).toBeUndefined();
+  });
+
+  test('claude → zsh → node playwright test → chromium et ses renderers : tout le sous-arbre dans le projet, pas dans Chrome', () => {
+    const groups = buildGroups(shellSession(B, 'npx playwright test',
+      proc({ pid: 31, name: 'node', ppid: 30, cwd: B, cmdline: `node ${B}/node_modules/.bin/playwright test` }),
+      proc({ pid: 32, name: 'chrome', ppid: 31, cwd: B, cmdline: '/home/u/.cache/ms-playwright/chromium-1/chrome-linux/chrome --headless' }),
+      proc({ pid: 33, name: 'chrome', ppid: 32, cwd: B, cmdline: '/home/u/.cache/ms-playwright/chromium-1/chrome-linux/chrome --type=renderer' }),
+      proc({ pid: 34, name: 'chrome', ppid: 32, cwd: B, cmdline: '/home/u/.cache/ms-playwright/chromium-1/chrome-linux/chrome --type=gpu-process' }),
+      proc({ pid: 40, name: 'chrome', ppid: 1, cmdline: '/opt/google/chrome/chrome' }),
+    ), o);
+    const project = byId(groups, `project:${B}`);
+    expect(project.pids.sort()).toEqual([31, 32, 33, 34]);
+    expect(project.launchedByClaude?.sort()).toEqual([31, 32, 33, 34]);
+    expect(byId(groups, 'app:chrome').pids).toEqual([40]);
+    expect(byId(groups, 'claude').pids.sort()).toEqual([20, 30]);
+  });
+
+  test('navigateur de test du système (--remote-debugging-pipe) : lui et ses sous-processus restent avec le projet', () => {
+    const groups = buildGroups(shellSession(B, 'node e2e.js',
+      proc({ pid: 31, name: 'node', ppid: 30, cwd: B, cmdline: 'node e2e.js' }),
+      proc({ pid: 32, name: 'chrome', ppid: 31, cwd: B, cmdline: '/opt/google/chrome/chrome --enable-automation --remote-debugging-pipe about:blank' }),
+      proc({ pid: 33, name: 'chrome', ppid: 32, cwd: B, cmdline: '/opt/google/chrome/chrome --type=renderer' }),
+      proc({ pid: 34, name: 'firefox', ppid: 31, cwd: B, cmdline: '/usr/lib/firefox/firefox -juggler-pipe -silent' }),
+    ), o);
+    expect(byId(groups, `project:${B}`).pids.sort()).toEqual([31, 32, 33, 34]);
+  });
+
+  test('vite --open → firefox ordinaire : le navigateur va dans sa carte d’appli, pas dans le projet', () => {
+    const groups = buildGroups(shellSession(B, 'npm run dev',
+      proc({ pid: 31, name: 'node', ppid: 30, cwd: B, cmdline: `node ${B}/node_modules/.bin/vite --open` }),
+      proc({ pid: 32, name: 'firefox', ppid: 31, cwd: B, cmdline: '/usr/lib/firefox/firefox http://localhost:5173/' }),
+      proc({ pid: 33, name: 'firefox', ppid: 32, cwd: B, cmdline: '/usr/lib/firefox/firefox -contentproc -childID 1' }),
+    ), o);
+    expect(byId(groups, `project:${B}`).pids).toEqual([31]);
+    expect(byId(groups, 'app:firefox').pids.sort()).toEqual([32, 33]);
+    expect(byId(groups, 'app:firefox').launchedByClaude).toBeUndefined();
+  });
+
+  test('claude lancé par npx sous un shell : le lanceur reste dans Claude (jamais de carte projet qui tuerait la session) ; la session imbriquée suit la même règle', () => {
+    const groups = buildGroups(shellSession(A, 'npx @anthropic-ai/claude-code',
+      proc({ pid: 31, name: 'npm exec @anth', ppid: 30, cwd: A, cmdline: 'npm exec @anthropic-ai/claude-code' }),
+      proc({ pid: 32, name: 'claude', ppid: 31, cwd: A }),
+      proc({ pid: 33, name: 'npm exec @upst', ppid: 32, cwd: A, cmdline: 'npm exec @upstash/context7-mcp' }),
+      proc({ pid: 34, name: 'zsh', ppid: 32, cwd: A, cmdline: bash('npm run dev') }),
+      proc({ pid: 35, name: 'node', ppid: 34, cwd: A, cmdline: 'node node_modules/.bin/vite' }),
+    ), o);
+    expect(byId(groups, 'claude').pids.sort()).toEqual([20, 30, 31, 32, 33, 34]);
+    expect(byId(groups, `project:${A}`).pids).toEqual([35]);
+    expect(byId(groups, `project:${A}`).launchedByClaude).toEqual([35]);
+  });
+
+  test('script Agent SDK (node agent.js → claude) : le script reste dans Claude, les outils de la session imbriquée partent', () => {
+    const groups = buildGroups(shellSession(B, 'node agent.js',
+      proc({ pid: 31, name: 'node', ppid: 30, cwd: B, cmdline: 'node agent.js' }),
+      proc({ pid: 32, name: 'claude', ppid: 31, cwd: B }),
+      proc({ pid: 34, name: 'zsh', ppid: 32, cwd: B, cmdline: bash('npx vitest') }),
+      proc({ pid: 35, name: 'npm exec vitest', ppid: 34, cwd: B, cmdline: 'npm exec vitest' }),
+    ), o);
+    expect(byId(groups, 'claude').pids.sort()).toEqual([20, 30, 31, 32, 34]);
+    expect(byId(groups, `project:${B}`).pids).toEqual([35]);
+  });
+
+  test('claude lancé directement depuis un shell de l’outil Bash : ses outils de dev partent aussi', () => {
+    const groups = buildGroups(shellSession(B, 'claude -p x',
+      proc({ pid: 32, name: 'claude', ppid: 30, cwd: B }),
+      proc({ pid: 33, name: 'node', ppid: 32, cwd: B, cmdline: 'node /home/u/tools/server/build/index.js' }),
+      proc({ pid: 34, name: 'zsh', ppid: 32, cwd: B, cmdline: bash('npm run dev') }),
+      proc({ pid: 35, name: 'node', ppid: 34, cwd: B, cmdline: 'node node_modules/.bin/vite' }),
+    ), o);
+    expect(byId(groups, 'claude').pids.sort()).toEqual([20, 30, 32, 33, 34]);
+    expect(byId(groups, `project:${B}`).pids).toEqual([35]);
+  });
+
+  test('shell enfant direct de claude sans le marqueur de l’outil Bash (MCP via bash -c, shell inconnu) : reste dans Claude', () => {
+    const groups = buildGroups(session(
+      proc({ pid: 30, name: 'bash', ppid: 20, cwd: A, cmdline: 'bash -c source .env && node build/index.js' }),
+      proc({ pid: 31, name: 'node', ppid: 30, cwd: A, cmdline: 'node build/index.js' }),
+      proc({ pid: 32, name: 'nu', ppid: 20, cwd: A, cmdline: 'nu -c npm run dev' }),
+      proc({ pid: 33, name: 'node', ppid: 32, cwd: A, cmdline: 'node node_modules/.bin/vite' }),
+    ), o);
+    expect(byId(groups, 'claude').pids.sort()).toEqual([20, 30, 31, 32, 33]);
+    expect(groups.find((g) => g.id.startsWith('project:'))).toBeUndefined();
+  });
+
+  test('claude → zsh → npx jest → sh -c → node worker : tout dans le projet, rien dans command:sh', () => {
+    const groups = buildGroups(shellSession(A, 'npx jest',
+      proc({ pid: 31, name: 'npm exec jest', ppid: 30, cwd: A, cmdline: 'npm exec jest' }),
+      proc({ pid: 32, name: 'sh', ppid: 31, cwd: A, cmdline: 'sh -c jest' }),
+      proc({ pid: 33, name: 'node', ppid: 32, cwd: A, cmdline: `node ${A}/node_modules/.bin/jest` }),
+      proc({ pid: 34, name: 'node', ppid: 33, cwd: A, cmdline: `node ${A}/node_modules/jest-worker/build/processChild.js` }),
+    ), o);
+    expect(byId(groups, `project:${A}`).pids.sort()).toEqual([31, 32, 33, 34]);
+    expect(groups.find((g) => g.id === 'command:sh')).toBeUndefined();
+    expect(byId(groups, 'claude').pids.sort()).toEqual([20, 30]);
+  });
+
+  test('serveur de dev lancé à la main (Warp → zsh → npm run dev) : pas marqué', () => {
+    const groups = buildGroups([
+      proc({ pid: 10, name: 'warp' }),
+      proc({ pid: 11, name: 'zsh', ppid: 10, cwd: B }),
+      proc({ pid: 12, name: 'npm run dev', ppid: 11, cwd: B, cmdline: 'npm run dev' }),
+      proc({ pid: 13, name: 'node', ppid: 12, cwd: B, cmdline: 'node node_modules/.bin/vite' }),
+    ], o);
+    const project = byId(groups, `project:${B}`);
+    expect(project.pids.sort()).toEqual([12, 13]);
+    expect(project.launchedByClaude).toBeUndefined();
+  });
+});
