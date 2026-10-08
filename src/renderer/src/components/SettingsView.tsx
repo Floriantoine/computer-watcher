@@ -6,6 +6,7 @@ import type { Config, ConfigState, MemoryMetric, RecorderState } from '../../../
 import { CATEGORY_META } from '../categories';
 import { overrideRows, withDetectPorts, withoutOverride } from '../classifySettings';
 import { useFocusTrap } from '../focusTrap';
+import { AlertsSettings } from './AlertsSettings';
 import { formatKB } from '../format';
 import { recorderToForm, validateRecorderForm, type RecorderErrors, type RecorderForm } from '../recorderForm';
 
@@ -280,6 +281,8 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
           <p className="hint">Crée un raccourci proc-watch dans le menu de ton bureau (version AppImage ou .deb).</p>
           <button onClick={onInstallDesktop}>Ajouter au menu des applications</button>
         </section>
+
+        <AlertsSettings config={config} onSave={onSave} />
 
         <section data-testid="recorder-panel">
           <h3><HardDrive size={15} strokeWidth={2} />Enregistrement</h3>

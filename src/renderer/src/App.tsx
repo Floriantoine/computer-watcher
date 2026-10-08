@@ -3,6 +3,7 @@ import { AnimatePresence, MotionConfig, motion, useIsPresent } from 'motion/reac
 import { compileProtection } from '../../core/protection';
 import type { Category, Config, ConfigState, GroupSummary, InstanceSummary, KillResult, KillSignal, KillTarget, ProcNode, Snapshot } from '../../core/types';
 import { bulkDialogTitle, chunkTargets, runBulkKill, type BulkRequest } from './bulkKill';
+import { AlertPopups, useAlertPopups } from './components/AlertPopups';
 import { BulkKillDialog } from './components/BulkKillDialog';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { DetailView } from './components/DetailView';
@@ -45,6 +46,11 @@ export function App() {
   const bulkInFlight = useRef(false);
 
   const live = useRef(new LiveBuffer());
+  const alertPopups = useAlertPopups({
+    alerts: configState?.config.alerts,
+    onState: setConfigState,
+    onOpenAlert: (e) => setRoute({ view: 'metrics', at: e.ts }),
+  });
 
   useEffect(() => {
     window.procWatch.getConfig().then(setConfigState, (e: unknown) => setConfigError(ipcErrorMessage(e)));
@@ -275,7 +281,7 @@ export function App() {
   return (
     <MotionConfig reducedMotion={reducedEffects ? 'always' : 'user'}>
       <div data-testid="snapshot-ready">
-        <TopNav route={route} onNavigate={setRoute} />
+        <TopNav route={route} onNavigate={setRoute} unseen={alertPopups.pending.length} />
         <SystemBar system={snapshot.system} sparks={sparks} />
         <AnimatePresence mode="wait" initial={false}>
           <RouteFade key={routeKey}>
@@ -378,6 +384,14 @@ export function App() {
           )}
         </AnimatePresence>
         <Toasts toasts={toasts} />
+        <AlertPopups
+          pending={alertPopups.pending}
+          onClose={alertPopups.close}
+          onCloseAll={alertPopups.closeAll}
+          groupPresent={(key) => groupIds.has(key)}
+          onOpenGroup={(key) => setRoute({ view: 'detail', groupId: key })}
+          onOpenInstant={(ts) => setRoute({ view: 'metrics', at: ts })}
+        />
       </div>
     </MotionConfig>
   );
