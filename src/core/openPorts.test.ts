@@ -47,9 +47,22 @@ describe('openPorts', () => {
     });
   });
 
-  it('processus d\'un groupe app sans instance : instanceKey null, libellé du groupe', () => {
+  it('processus d\'un groupe app sans instance : instanceKey null, libellé du processus, groupe à part', () => {
     const row = info.ports.find((p) => p.port === 9229)!;
-    expect(row).toMatchObject({ pid: 30, startTicks: 300, groupId: 'code', instanceKey: null, category: null, project: null, label: 'VS Code', ageSec: 7200 });
+    expect(row).toMatchObject({ pid: 30, startTicks: 300, groupId: 'code', groupLabel: 'VS Code', instanceKey: null, category: null, project: null, label: 'code', ageSec: 7200 });
+  });
+
+  it('hors projet, un descendant qui écoute n\'est pas son instance (serveur lancé depuis une session Claude) : processus seul', () => {
+    const claude = proc('claude', 'claude', { pid: 60, ageSec: 86400 });
+    const tool = proc('node', 'node server.js', { pid: 61, ageSec: 5 });
+    const g = { ...group('claude', 'claude', [node(claude, node(tool))]), label: 'Claude' };
+    const cls = new Map<string, GroupClassification>([
+      ['claude', { categories: ['ai'], instances: [inst('claude', 60, [60, 61], { category: 'ai', project: null, label: 'claude', ageSec: 86400 })], launcherPids: [] }],
+    ]);
+    const r = openPorts({ ...full, groups: [g], classification: cls }, new Map([[61, [5200]], [60, [9000]]]), [], 1000).ports;
+    expect(r.find((x) => x.port === 5200)).toMatchObject({ pid: 61, instanceKey: null, category: null, label: 'node', ageSec: 5, groupLabel: 'Claude' });
+    // la racine de l'instance qui écoute elle-même : l'instance
+    expect(r.find((x) => x.port === 9000)).toMatchObject({ pid: 60, instanceKey: 'claude#60:600', category: 'ai' });
   });
 
   it('sous-groupe de « Autres » : son propre id de groupe', () => {

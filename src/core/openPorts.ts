@@ -10,11 +10,14 @@ export interface OpenPort {
   /** Groupe le plus précis du processus (sous-groupe de « Autres » compris) */
   groupId: string;
   groupLabel: string;
-  /** Instance classée qui contient le processus ; null sinon (groupe app, « Autres » replié…) */
+  /**
+   * Instance désignée : celle qui contient le processus dans un groupe projet / dossier supprimé, ou dont il est la racine ailleurs ;
+   * null sinon (« Libérer » ne vise alors que ce processus).
+   */
   instanceKey: string | null;
   category: Category | null;
   project: string | null;
-  /** Libellé de l'instance, sinon celui du groupe */
+  /** Libellé de l'instance, sinon nom du processus (le groupe est dans `groupLabel`) */
   label: string;
   /** Ancienneté de l'instance, sinon du processus */
   ageSec: number;
@@ -46,12 +49,16 @@ export function openPorts(full: FullSnapshot, portsByPid: ReadonlyMap<number, nu
       for (const { proc: p, children } of nodes) {
         const list = p.uid === currentUid ? portsByPid.get(p.pid) : undefined;
         if (list?.length) {
-          const inst = instOf.get(p.pid);
+          // Dans un projet (ou dossier supprimé), une instance est un outil de dev : tout processus de l'instance la désigne.
+          // Ailleurs (session Claude, navigateur…), seul le processus racine désigne son instance : un serveur lancé depuis une
+          // session Claude ne doit pas proposer de tuer la session.
+          const found = instOf.get(p.pid);
+          const inst = found && (g.kind === 'project' || g.kind === 'deleted' || found.rootPid === p.pid) ? found : undefined;
           for (const port of list) {
             ports.push({
               port, pid: p.pid, startTicks: p.startTicks, groupId: g.id, groupLabel: g.label,
               instanceKey: inst?.key ?? null, category: inst?.category ?? null, project: inst?.project ?? null,
-              label: inst?.label ?? g.label, ageSec: inst?.ageSec ?? p.ageSec, protected: (inst?.protected ?? false) || g.protected,
+              label: inst?.label ?? p.name, ageSec: inst?.ageSec ?? p.ageSec, protected: (inst?.protected ?? false) || g.protected,
             });
           }
         }
