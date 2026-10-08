@@ -121,7 +121,7 @@ export function leakCandidates(
   now: number,
   minMinutes: number,
   minGrowthMB: number,
-): { groupId: number; key: string; label: string; growthKB: number }[] {
+): { groupId: number; key: string; label: string; growthKB: number; memKB: number }[] {
   const end = Math.floor(now / M) * M;
   const from = end - (minMinutes + 1) * M;
   // « Petits groupes » (kind others) exclu : somme de groupes qui apparaissent et disparaissent, pas une fuite
@@ -141,11 +141,11 @@ export function leakCandidates(
     e.series.push(r.mem);
     byGroup.set(r.gid, e);
   }
-  const out: { groupId: number; key: string; label: string; growthKB: number }[] = [];
+  const out: { groupId: number; key: string; label: string; growthKB: number; memKB: number }[] = [];
   for (const [gid, e] of byGroup) {
     if (recent.has(gid)) continue;
     const r = detectLeak(e.series, minMinutes, minGrowthMB * 1024);
-    if (r.leak) out.push({ groupId: gid, key: e.key, label: e.label, growthKB: r.growthKB });
+    if (r.leak) out.push({ groupId: gid, key: e.key, label: e.label, growthKB: r.growthKB, memKB: e.series[e.series.length - 1] });
   }
   return out;
 }

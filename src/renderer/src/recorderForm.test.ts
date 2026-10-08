@@ -34,6 +34,20 @@ test('leakTimes garde le dernier événement leak par groupe', () => {
     { ts: 9, type: 'leak', groupKey: 'a' },
     { ts: 7, type: 'gap', groupKey: 'b' },
     { ts: 3, type: 'leak', groupKey: null },
-  ]);
+  ], 9);
   expect([...m]).toEqual([['a', 9]]);
+});
+
+test('leakTimes : badge retiré si la fuite n\'a pas été relancée depuis 70 min', () => {
+  const M = 60_000;
+  const ev = [{ ts: 0, type: 'leak', groupKey: 'a' }];
+  expect(leakTimes(ev, 69 * M).has('a')).toBe(true);
+  expect(leakTimes(ev, 71 * M).has('a')).toBe(false);
+});
+
+test('leakTimes : badge retiré si la mémoire a perdu plus de la moitié de la hausse', () => {
+  const ev = [{ ts: 0, type: 'leak', groupKey: 'a', detail: { growthKB: 1000, memKB: 3000 } }];
+  expect(leakTimes(ev, 1, () => 2600).has('a')).toBe(true);
+  expect(leakTimes(ev, 1, () => 2400).has('a')).toBe(false);
+  expect(leakTimes(ev, 1, () => undefined).has('a')).toBe(true); // groupe absent du snapshot : on garde
 });

@@ -83,7 +83,10 @@ export function App() {
   };
 
   const events24h = useHistory(() => window.procWatch.history.events('24h'), [], 60_000);
-  const leakAt = useMemo(() => leakTimes(events24h), [events24h]);
+  const leakAt = useMemo(() => {
+    const mem = new Map((snapshot?.groups ?? []).map((g) => [g.id, g.rssKB + g.swapKB]));
+    return leakTimes(events24h, snapshot?.takenAt ?? Date.now(), (k) => mem.get(k));
+  }, [events24h, snapshot]);
 
   const groupIds = useMemo(() => new Set(snapshot?.groupIds ?? []), [snapshot]);
 

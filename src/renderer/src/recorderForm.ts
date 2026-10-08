@@ -31,8 +31,30 @@ export function validateRecorderForm(form: RecorderForm, enabled: boolean): { va
 }
 
 /** Clé stable des groupes en fuite : l'événement le plus récent par groupe (ts), pour ne pas re-rendre les cartes à chaque rafraîchissement. */
-export function leakTimes(events: { ts: number; type: string; groupKey: string | null }[] | undefined): Map<string, number> {
+/** Le recorder relance l'alerte au plus une fois par heure tant que la hausse continue. */
+export const LEAK_BADGE_MS = 70 * 60_000;
+
+/**
+ * Groupes à badger « fuite ? » : dernier événement leak par groupe, s'il a été relancé il y a moins de 70 min
+ * et si la mémoire actuelle n'a pas perdu plus de la moitié de la hausse signalée (memKB enregistré depuis le correctif).
+ */
+export function leakTimes(
+  events: { ts: number; type: string; groupKey: string | null; detail?: Record<string, unknown> }[] | undefined,
+  now: number,
+  memOf?: (key: string) => number | undefined,
+): Map<string, number> {
+  const last = new Map<string, { ts: number; detail?: Record<string, unknown> }>();
+  for (const e of events ?? []) {
+    if (e.type === 'leak' && e.groupKey && e.ts > (last.get(e.groupKey)?.ts ?? -1)) last.set(e.groupKey, e);
+  }
   const m = new Map<string, number>();
-  for (const e of events ?? []) if (e.type === 'leak' && e.groupKey && e.ts > (m.get(e.groupKey) ?? -1)) m.set(e.groupKey, e.ts);
+  for (const [key, e] of last) {
+    if (now - e.ts > LEAK_BADGE_MS) continue;
+    const memKB = Number(e.detail?.memKB);
+    const growthKB = Number(e.detail?.growthKB);
+    const cur = memOf?.(key);
+    if (cur !== undefined && Number.isFinite(memKB) && Number.isFinite(growthKB) && cur < memKB - growthKB / 2) continue;
+    m.set(key, e.ts);
+  }
   return m;
 }

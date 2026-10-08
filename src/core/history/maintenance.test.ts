@@ -70,7 +70,7 @@ test('leakCandidates : groupe en montée sur 61 minutes, pas deux fois dans l\'h
     db.prepare('INSERT INTO group_minute VALUES (?,?,?,?,?,?)').run(i * M, 2, 5000, 0, 0, 0);
   }
   const now = 61 * M;
-  expect(leakCandidates(db, now, 60, 300)).toEqual([{ groupId: 1, key: 'project:/a', label: 'a', growthKB: 600 * 1024 }]);
+  expect(leakCandidates(db, now, 60, 300)).toEqual([{ groupId: 1, key: 'project:/a', label: 'a', growthKB: 600 * 1024, memKB: 1000 + 600 * 1024 }]);
   db.prepare("INSERT INTO events(ts,type,group_id) VALUES (?, 'leak', 1)").run(now - 10 * M);
   expect(leakCandidates(db, now, 60, 300)).toEqual([]);
 });
