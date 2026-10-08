@@ -73,6 +73,7 @@ describe('procRowDisplayEqual (arbre du détail)', () => {
     expect(procRowDisplayEqual(p(), p({ pssDenied: true }))).toBe(false);
     expect(procRowDisplayEqual(p({ pssDenied: true }), p({ pssDenied: true }))).toBe(true);
     expect(procRowDisplayEqual(p(), p({ pssDenied: false }))).toBe(true);
+    expect(procRowDisplayEqual(p(), p({ pssPending: true }))).toBe(false); // « PSS pas encore lu »
   });
 });
 

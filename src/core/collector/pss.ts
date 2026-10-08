@@ -122,14 +122,14 @@ export class PssCache {
 }
 
 /**
- * number → rssKB = PSS ; 'denied' → pssDenied: true (rssKB inchangé) ; absent → inchangé (même objet), ou
- * pssPending: true si le processus fait partie des cibles (`targets`) mais n'a pas encore été lu.
+ * number → rssKB = PSS ; 'denied' → pssDenied: true (rssKB inchangé) ; absent → pssPending: true si markMissing
+ * (mode PSS : pas encore lu, non ciblé, ou apparu depuis la passe précédente), sinon inchangé (même objet).
  */
-export function applyPss(procs: ProcInfo[], pss: ReadonlyMap<number, PssValue>, targets?: ReadonlySet<number>): ProcInfo[] {
-  if (pss.size === 0 && !targets?.size) return procs;
+export function applyPss(procs: ProcInfo[], pss: ReadonlyMap<number, PssValue>, markMissing = false): ProcInfo[] {
+  if (pss.size === 0 && !markMissing) return procs;
   return procs.map((p) => {
     const v = pss.get(p.pid);
-    if (v === undefined) return targets?.has(p.pid) ? { ...p, pssPending: true } : p;
+    if (v === undefined) return markMissing ? { ...p, pssPending: true } : p;
     return v === 'denied' ? { ...p, pssDenied: true } : { ...p, rssKB: v };
   });
 }

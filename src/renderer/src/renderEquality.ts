@@ -58,6 +58,7 @@ export function procRowDisplayEqual(a: ProcInfo, b: ProcInfo): boolean {
     a.cwd === b.cwd &&
     a.cwdDeleted === b.cwdDeleted &&
     !!a.pssDenied === !!b.pssDenied &&
+    !!a.pssPending === !!b.pssPending &&
     formatCpu(a.cpuPercent) === formatCpu(b.cpuPercent) &&
     formatKB(a.rssKB) === formatKB(b.rssKB) &&
     formatKB(a.swapKB) === formatKB(b.swapKB) &&

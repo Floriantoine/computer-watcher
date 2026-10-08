@@ -165,12 +165,14 @@ const proc = (pid: number, extra: Partial<ProcInfo> = {}): ProcInfo => ({
   rssKB: 1000, swapKB: 50, cwd: null, cwdDeleted: false, ...extra,
 });
 
-test('applyPss : processus ciblé pas encore lu → pssPending (rssKB reste le RSS) ; non ciblé → même objet', () => {
+test('applyPss en mode PSS (markMissing) : tout processus sans valeur → pssPending (non ciblé, apparu entre deux passes) ; sans markMissing → même objet', () => {
   const a = proc(1);
   const b = proc(2);
-  const out = applyPss([a, b], new Map(), new Set([1]));
-  expect(out[0]).toEqual({ ...a, pssPending: true });
-  expect(out[1]).toBe(b);
+  const out = applyPss([a, b], new Map([[1, 300]]), true);
+  expect(out[0]).toEqual({ ...a, rssKB: 300 });
+  expect(out[1]).toEqual({ ...b, pssPending: true });
+  expect(applyPss([a, b], new Map(), true).every((p) => p.pssPending)).toBe(true); // aucune valeur (premier tick)
+  expect(applyPss([a, b], new Map())[1]).toBe(b);
 });
 
 test('applyPss : nombre → rssKB remplacé (swap inchangé) ; denied → pssDenied ; absent → même objet', () => {

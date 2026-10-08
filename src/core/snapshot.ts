@@ -15,6 +15,16 @@ export function summarizeGroup(g: Group, cls?: Classification, pss = false): Gro
   return out;
 }
 
+/** « Autres » replié : sans ses sous-groupes, mais le compte des processus restés en RSS porte sur le groupe complet. */
+function foldedOthers(g: Group, cls: Classification, pss: boolean): GroupSummary {
+  const out = summarizeGroup({ ...g, subgroups: [] }, cls);
+  if (pss) {
+    const n = rssFallbackCount(g);
+    if (n > 0) out.pssFallback = n;
+  }
+  return out;
+}
+
 /** Processus d'un groupe (sous-groupes compris) dont la mémoire est restée en RSS en mode PSS. */
 function rssFallbackCount(g: Group): number {
   let n = 0;
@@ -100,7 +110,7 @@ export function buildSnapshot(full: FullSnapshot, watch: Watch): Snapshot {
     currentUid: full.currentUid,
     system: full.system,
     groups: full.groups.map((g) =>
-      g.kind === 'others' && !inOthers(g) ? summarizeGroup({ ...g, subgroups: [] }, full.classification, pss) : summarizeGroup(g, full.classification, pss),
+      g.kind === 'others' && !inOthers(g) ? foldedOthers(g, full.classification, pss) : summarizeGroup(g, full.classification, pss),
     ),
     groupIds: full.groups.flatMap((g) => [g.id, ...g.subgroups.map((s) => s.id)]),
     query,

@@ -108,6 +108,10 @@ describe('buildSnapshot', () => {
     expect(pss.groups[1]!.pssFallback).toBeUndefined();
     expect(pss.groups[2]!.pssFallback).toBe(1);
     expect(pss.groups[2]!.subgroups[0]!.pssFallback).toBe(1);
+    // « Autres » replié : sous-groupes non envoyés, mais le compte porte sur le groupe complet (« PSS* » sur la carte)
+    const folded = buildSnapshot({ ...base, groups: mixed, memMetric: 'pss' }, { groupId: null, query: '' });
+    expect(folded.groups[2]!.subgroups).toEqual([]);
+    expect(folded.groups[2]!.pssFallback).toBe(1);
     const rss = buildSnapshot({ ...base, groups: mixed }, { groupId: null, query: '' });
     expect(rss.groups[0]!.pssFallback).toBeUndefined();
   });

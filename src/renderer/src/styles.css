@@ -830,3 +830,5 @@ table.group-list tr.others-loading-row td { padding-left: 34px; color: var(--mut
 .mem-metric-row { display: flex; align-items: center; gap: 10px; color: var(--text-2); margin-bottom: 8px; }
 .mem-metric button { padding: 4px 12px; font-size: 12px; }
 table.tree .pss-denied { text-decoration: underline dotted var(--muted); text-underline-offset: 3px; cursor: help; }
+.big-row { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.mem-flag { font-size: 11px; color: var(--muted); cursor: help; }

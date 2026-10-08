@@ -11,6 +11,8 @@ test('procMemTitle : infobulle de repli seulement en PSS pour un processus illis
   expect(procMemTitle({ pssDenied: true }, 'pss')).toBe('RSS (PSS illisible)');
   expect(procMemTitle({ pssDenied: false }, 'pss')).toBeUndefined();
   expect(procMemTitle({}, 'pss')).toBeUndefined();
+  expect(procMemTitle({ pssPending: true }, 'pss')).toBe('PSS pas encore lu');
+  expect(procMemTitle({ pssPending: true }, 'rss')).toBeUndefined();
 });
 
 test('leakMemOf : pas de comparaison avec la mémoire enregistrée (RSS) en PSS', () => {
@@ -27,8 +29,8 @@ test('memTileLabel / fallbackTitle : « PSS* » et infobulle quand des processus
   expect(memTileLabel('pss', {})).toBe('PSS');
   expect(memTileLabel('pss', { pssFallback: 0 })).toBe('PSS');
   expect(memTileLabel('pss', { pssFallback: 2 })).toBe('PSS*');
-  expect(fallbackTitle('pss', { pssFallback: 2 })).toBe('2 processus en RSS (PSS illisible)');
-  expect(fallbackTitle('pss', { pssFallback: 1 })).toBe('1 processus en RSS (PSS illisible)');
+  expect(fallbackTitle('pss', { pssFallback: 2 })).toBe('2 processus en RSS (PSS illisible ou pas encore lu)');
+  expect(fallbackTitle('pss', { pssFallback: 1 })).toBe('1 processus en RSS (PSS illisible ou pas encore lu)');
   expect(fallbackTitle('pss', {})).toBeUndefined();
   expect(fallbackTitle('rss', { pssFallback: 2 })).toBeUndefined();
 });

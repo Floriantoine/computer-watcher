@@ -157,7 +157,7 @@ function withPss(procs: ProcInfo[], now: number): ProcInfo[] {
     pssCache.clear();
     return procs;
   }
-  if (!last) return procs;
+  if (!last) return applyPss(procs, new Map(), true); // premier tick : tout reste en RSS, signalé
   // Sous-groupes de « Autres » au-dessus du seuil en RSS : ils n'y sont que grâce à leur PSS, qu'il faut donc garder à jour.
   let rss: Map<number, number> | undefined;
   const overInRss = (sub: Group) => {
@@ -167,7 +167,7 @@ function withPss(procs: ProcInfo[], now: number): ProcInfo[] {
     return kb >= config.othersThreshold.memMB * 1024;
   };
   const targets = pssTargets(last.groups, othersFollowed(last.groups, watch), overInRss);
-  return applyPss(procs, pssCache.update(targets, now), new Set(targets.map((p) => p.pid)));
+  return applyPss(procs, pssCache.update(targets, now), true);
 }
 
 function takeSnapshot(): FullSnapshot {
