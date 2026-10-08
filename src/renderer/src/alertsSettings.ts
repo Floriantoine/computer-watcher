@@ -1,6 +1,6 @@
 // Réglages › Alertes (logique pure) : canal par type, intervalle anti-spam des notifications du bureau.
 import { DESKTOP_INTERVAL_BOUNDS, type AlertChannel, type AlertType } from '../../core/alerts';
-import type { Config } from '../../core/types';
+import type { Config, RecorderState } from '../../core/types';
 
 /** Types réglables aujourd'hui (les règles ⑥ ajouteront `rule_action` / `rule_dry_run`). */
 export const SETTINGS_ALERT_TYPES: { type: AlertType; label: string }[] = [
@@ -10,6 +10,16 @@ export const SETTINGS_ALERT_TYPES: { type: AlertType; label: string }[] = [
   { type: 'pressure', label: 'Pression mémoire' },
   { type: 'forecast', label: 'Mémoire bientôt épuisée (prévision)' },
 ];
+
+/** État de la prévision ② affiché à côté de sa ligne ; null quand elle fonctionne (ou état inconnu). */
+export function forecastNote(rec: RecorderState | null): string | null {
+  if (!rec) return null;
+  if (!rec.running) return "Prévision indisponible : service d'enregistrement arrêté";
+  const f = rec.status?.forecast;
+  if (f === 'unavailable') return 'Prévision indisponible : moins de 5 mesures sur les 5 dernières minutes';
+  if (f === 'warming') return 'Prévision en préparation (5 min de mesures)';
+  return null;
+}
 
 export const CHANNEL_LABELS: [AlertChannel, string][] = [['both', 'Pop-up et bureau'], ['popup', 'Pop-up seulement'], ['none', 'Rien']];
 

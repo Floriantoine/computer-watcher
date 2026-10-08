@@ -60,6 +60,11 @@ export function popupAction(e: AlertEvent, groupPresent: (key: string) => boolea
   return { kind: 'instant', label: 'Voir l’instant', ts: e.ts };
 }
 
+/** Second bouton d'un pop-up : « Ignorer 30 min » pour la prévision (même effet que dans la notification du bureau). */
+export function popupSnooze(e: AlertEvent): string | null {
+  return e.type === 'forecast' ? 'Ignorer 30 min' : null;
+}
+
 /**
  * Cible du bouton d'action, calculée au clic (le groupe a pu disparaître depuis l'affichage) : sinon Métriques à l'instant.
  * 'free' : kill groupé « Libérer de la mémoire » pré-rempli (prévision ②).

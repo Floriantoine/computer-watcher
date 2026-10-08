@@ -16,6 +16,13 @@ export const PRESETS: { id: Preset; label: string }[] = [
   { id: 'free', label: 'Inactives > 1 h + doublons' },
 ];
 
+/** Pourquoi une demande « Libérer » ne peut pas ouvrir le dialogue maintenant (toast), ou null. */
+export function freeBlockedReason(s: { sending: boolean; dialogOpen: boolean }): string | null {
+  if (s.sending) return 'Libérer de la mémoire : un kill groupé est en cours d’envoi, réessayer dans un instant';
+  if (s.dialogOpen) return 'Libérer de la mémoire : un dialogue de kill groupé est déjà ouvert';
+  return null;
+}
+
 /**
  * « Libérer de la mémoire » (prévision ②) : instances des groupes projet / supprimé tuables ; celles des groupes qui
  * grossissent (`growing`, clés de groupe dans cet ordre) d'abord, puis l'ordre d'origine.
@@ -83,6 +90,35 @@ export function presetState(preset: Preset, inactive: InactiveState): { enabled:
   if (set === 'error') return { enabled: false, reason: 'Historique indisponible (erreur)' };
   if (set === null) return { enabled: false, reason: "Pas d'historique : le service d'enregistrement est arrêté ou n'a encore rien enregistré" };
   return { enabled: true };
+}
+
+/**
+ * Sélection du dialogue groupé. `userMade` : l'utilisateur a coché, décoché ou choisi un raccourci ; la pré-sélection
+ * initiale ne l'écrase alors jamais. `applied` : raccourci initial déjà appliqué (une seule fois).
+ */
+export interface BulkSelection { selected: ReadonlySet<string>; preset: Preset | null; userMade: boolean; applied: boolean }
+
+/** À l'ouverture : avec un raccourci initial, rien de coché tant qu'il n'est pas applicable ; sinon `defaultSelection`. */
+export function initialSelection(list: readonly InstanceSummary[], pendingPids: { has(pid: number): boolean } | undefined, initialPreset?: Preset): BulkSelection {
+  return initialPreset
+    ? { selected: new Set(), preset: null, userMade: false, applied: false }
+    : { selected: defaultSelection(list, pendingPids), preset: null, userMade: false, applied: true };
+}
+
+export function toggleSelection(s: BulkSelection, key: string): BulkSelection {
+  return { ...s, selected: toggleKey(s.selected, key), preset: null, userMade: true };
+}
+
+export function pickSelection(s: BulkSelection, list: readonly InstanceSummary[], preset: Preset, inactive: InactiveState): BulkSelection {
+  const next = presetSelection(list, preset, inactive);
+  return next ? { ...s, selected: next, preset, userMade: true } : s;
+}
+
+/** Applique le raccourci initial dès qu'il est disponible, une seule fois, et jamais par-dessus un choix de l'utilisateur. */
+export function applyInitialPreset(s: BulkSelection, list: readonly InstanceSummary[], initialPreset: Preset | undefined, inactive: InactiveState): BulkSelection {
+  if (s.applied || s.userMade || !initialPreset || !presetState(initialPreset, inactive).enabled) return s;
+  const next = presetSelection(list, initialPreset, inactive);
+  return next ? { ...s, selected: next, preset: initialPreset, applied: true } : s;
 }
 
 /** Clés cochées encore présentes au dernier snapshot, dans l'ordre de la liste. */

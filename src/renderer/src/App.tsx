@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { AnimatePresence, MotionConfig, motion, useIsPresent } from 'motion/react';
 import { compileProtection } from '../../core/protection';
 import type { Category, Config, ConfigState, Culprit, GroupSummary, InstanceSummary, KillResult, KillSignal, KillTarget, ProcNode, Snapshot } from '../../core/types';
-import { bulkDialogTitle, chunkTargets, freeCandidates, runBulkKill, type BulkRequest, type Preset } from './bulkKill';
+import { bulkDialogTitle, chunkTargets, freeBlockedReason, freeCandidates, runBulkKill, type BulkRequest, type Preset } from './bulkKill';
 import { AlertPopups, useAlertPopups } from './components/AlertPopups';
 import { BulkKillDialog } from './components/BulkKillDialog';
 import { ConfirmDialog } from './components/ConfirmDialog';
@@ -47,6 +47,8 @@ export function App() {
   // « Libérer de la mémoire » demandé (alerte de prévision, `--free`) : traité dès qu'un snapshot est là.
   const [freeRequest, setFreeRequest] = useState(0);
   const requestFree = useCallback(() => setFreeRequest((n) => n + 1), []);
+  const bulkRef = useRef(bulk);
+  bulkRef.current = bulk;
   const bulkInFlight = useRef(false);
 
   const live = useRef(new LiveBuffer());
@@ -190,6 +192,14 @@ export function App() {
     else void sendKill(req.targets, 'SIGTERM');
   }
 
+  // « Ignorer 30 min » du pop-up de prévision : le service n'alerte plus pendant 30 min, puis le pop-up se ferme.
+  const closeAlert = alertPopups.close;
+  const snoozeForecast = useCallback(
+    (id: number) => {
+      void window.procWatch.forecast.snooze().then(() => closeAlert(id), () => {});
+    },
+    [closeAlert],
+  );
   useEffect(() => {
     window.procWatch.free.takePending().then((p) => p && requestFree(), () => {});
     return window.procWatch.free.onFree(() => {
@@ -211,8 +221,12 @@ export function App() {
           pushToast('Rien à proposer : aucune instance de projet', 'info');
           return;
         }
-        if (bulkInFlight.current) return;
-        setBulk((b) => b ?? { instances, title: 'Libérer de la mémoire', initialPreset: 'free', ordered: true });
+        const blocked = freeBlockedReason({ sending: bulkInFlight.current, dialogOpen: bulkRef.current !== null });
+        if (blocked) {
+          pushToast(blocked, 'info');
+          return;
+        }
+        setBulk({ instances, title: 'Libérer de la mémoire', initialPreset: 'free', ordered: true });
       });
   }, [freeRequest, snapshot]);
 
@@ -429,6 +443,7 @@ export function App() {
           groupPresent={groupPresent}
           onNavigate={setRoute}
           onFree={requestFree}
+          onSnooze={snoozeForecast}
         />
       </div>
     </MotionConfig>

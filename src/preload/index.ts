@@ -80,6 +80,10 @@ const api = {
       };
     },
   },
+  forecast: {
+    /** « Ignorer 30 min » d'une alerte de prévision : le service n'en envoie plus avant cette heure (ms) renvoyée. */
+    snooze: (): Promise<number> => ipcRenderer.invoke('forecast:snooze'),
+  },
   free: {
     /** « Libérer de la mémoire » demandé (`--free`, barre des tâches) et pas encore pris : une seule fois. */
     takePending: (): Promise<boolean> => ipcRenderer.invoke('free:takePending'),

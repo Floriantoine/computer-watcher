@@ -9,6 +9,11 @@ import {
   fetchInactive,
   fetchTargets,
   freeCandidates,
+  freeBlockedReason,
+  applyInitialPreset,
+  initialSelection,
+  pickSelection,
+  toggleSelection,
   PRESETS,
   includeLaunchers,
   killBatches,
@@ -410,4 +415,58 @@ describe('« Libérer de la mémoire » (prévision ②)', () => {
     expect(presetState('free', { h1: null })).toEqual({ enabled: true });
     expect(PRESETS.find((p) => p.id === 'free')?.label).toBe('Inactives > 1 h + doublons');
   });
+});
+
+describe('sélection du dialogue : un choix fait à la main n’est jamais écrasé par la pré-sélection', () => {
+  const a = inst('front', { ageSec: 7200 });
+  const b = inst('front', { duplicate: true });
+  const c = inst('front');
+  const list = [a, b, c];
+
+  test('raccourci initial : rien de coché avant, appliqué quand l’historique arrive, une seule fois', () => {
+    let s = initialSelection(list, undefined, 'free');
+    expect([...s.selected]).toEqual([]);
+    s = applyInitialPreset(s, list, 'free', {});
+    expect([...s.selected]).toEqual([]); // historique en lecture
+    s = applyInitialPreset(s, list, 'free', { h1: new Set([a.key]) });
+    expect(s.selected).toEqual(new Set([a.key, b.key]));
+    expect(s.preset).toBe('free');
+    // d1 arrive plus tard : rien ne change (déjà appliqué)
+    const again = applyInitialPreset({ ...s, selected: new Set([c.key]) }, list, 'free', { h1: new Set([a.key]), d1: null });
+    expect(again.selected).toEqual(new Set([c.key]));
+  });
+
+  test('case cochée à la main pendant la lecture de l’historique : la pré-sélection ne l’écrase pas ensuite', () => {
+    let s = initialSelection(list, undefined, 'free');
+    s = toggleSelection(s, c.key);
+    expect(s.userMade).toBe(true);
+    s = applyInitialPreset(s, list, 'free', { h1: new Set([a.key]) });
+    expect(s.selected).toEqual(new Set([c.key]));
+    expect(s.preset).toBeNull();
+  });
+
+  test('case décochée à la main : idem', () => {
+    let s = initialSelection(list, undefined, 'free');
+    s = toggleSelection(toggleSelection(s, c.key), c.key);
+    s = applyInitialPreset(s, list, 'free', { h1: new Set([a.key]) });
+    expect([...s.selected]).toEqual([]);
+  });
+
+  test('raccourci choisi à la main : choix de l’utilisateur, pas d’écrasement', () => {
+    let s = initialSelection(list, undefined, 'free');
+    s = pickSelection(s, list, 'duplicates', {});
+    expect(s).toMatchObject({ preset: 'duplicates', userMade: true });
+    s = applyInitialPreset(s, list, 'free', { h1: new Set([a.key]) });
+    expect(s.selected).toEqual(new Set([b.key]));
+  });
+
+  test('sans raccourci initial : sélection par défaut (toutes sauf protégées)', () => {
+    expect(initialSelection(list, undefined).selected).toEqual(new Set([a.key, b.key, c.key]));
+  });
+});
+
+test('freeBlockedReason : « Libérer » demandé pendant un envoi groupé ou avec un dialogue ouvert → raison affichée', () => {
+  expect(freeBlockedReason({ sending: false, dialogOpen: false })).toBeNull();
+  expect(freeBlockedReason({ sending: true, dialogOpen: false })).toBe('Libérer de la mémoire : un kill groupé est en cours d’envoi, réessayer dans un instant');
+  expect(freeBlockedReason({ sending: false, dialogOpen: true })).toBe('Libérer de la mémoire : un dialogue de kill groupé est déjà ouvert');
 });

@@ -17,11 +17,13 @@ import { recordSeparate, stickyIds } from '../core/grouping/stickyCards';
 import { killRequest, planKill, sendSignals } from '../core/kill';
 import { compileProtection } from '../core/protection';
 import { formatAppEvent } from '../core/history/events';
-import { appEventsPath, dataDir, focusStatePath } from '../core/paths';
+import { appEventsPath, dataDir, focusStatePath, forecastSnoozePath } from '../core/paths';
 import { alertIdFromArgv } from '../core/alerts';
 import { buildSnapshot, flattenGroup, groupProcs, instanceTargets, isWatch, othersFollowed, type Classification, type FullSnapshot } from '../core/snapshot';
 import type { ConfigState, Group, KillResult, ProcInfo, RecorderState, Watch } from '../core/types';
 import { createFreeOpener, wantsFree } from './launchArgs';
+import { SNOOZE_MS } from '../core/forecast/forecast';
+import { writeSnooze } from '../core/forecast/snooze';
 import { createAlertOpener, createFocusWriter, initSeenUpTo, keepSeenUpTo, markSeen, unseenFilter } from './alerts';
 import { installDesktopEntry } from './desktopEntry';
 import { createEarlyoomApplier, earlyoomStatus } from './earlyoom';
@@ -506,6 +508,12 @@ ipcMain.handle('alerts:seenAll', () => {
 });
 ipcMain.handle('alerts:takePending', () => alertOpener.take());
 ipcMain.handle('free:takePending', () => freeOpener.take());
+// « Ignorer 30 min » du pop-up de prévision : fichier d'état lu par le service avant toute alerte de prévision.
+ipcMain.handle('forecast:snooze', () => {
+  const until = Date.now() + SNOOZE_MS;
+  writeSnooze(forecastSnoozePath(data), until);
+  return until;
+});
 
 /** Montre la fenêtre (la recrée si elle a été fermée), la restaure et la focalise. */
 function showWindow(): void {
