@@ -21,6 +21,8 @@ export interface ProcSample {
 export interface ProcInfo extends ProcSample {
   /** % d'un cœur, comme top */
   cpuPercent: number;
+  /** Mode PSS : PSS demandé mais illisible (autre utilisateur, hidepid…) ; rssKB reste alors le RSS. */
+  pssDenied?: boolean;
 }
 
 export interface SystemInfo {
@@ -93,6 +95,8 @@ export interface Snapshot {
   watched: string | null;
   /** Arbre du groupe suivi (`Watch.groupId`), null si aucun ou s'il n'existe plus */
   detail: { groupId: string; roots: ProcNode[] } | null;
+  /** Mémoire affichée : 'pss' → les rssKB des processus et des groupes sont des PSS (repli RSS signalé par pssDenied). */
+  memMetric: MemoryMetric;
 }
 
 export interface RecorderConfig {
@@ -108,9 +112,14 @@ export interface RecorderConfig {
   leakMinGrowthMB: number;
 }
 
+/** Mémoire affichée en direct : RSS (rapide) ou PSS (mémoire partagée répartie, lue dans smaps_rollup). */
+export type MemoryMetric = 'rss' | 'pss';
+
 export interface UiConfig {
   /** « Effets visuels réduits » : pas de flou, animations minimales */
   reducedEffects: boolean;
+  /** Absent d'une config existante → 'rss'. L'historique reste toujours en RSS. */
+  memoryMetric: MemoryMetric;
 }
 
 export type { Category } from './classify/categories';

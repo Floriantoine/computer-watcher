@@ -1,5 +1,5 @@
 import type { GroupClassification } from './classify/classify';
-import type { Group, GroupSummary, InstanceTargets, KillTarget, ProcInfo, ProcNode, Snapshot, SystemInfo, Watch } from './types';
+import type { Group, GroupSummary, InstanceTargets, KillTarget, MemoryMetric, ProcInfo, ProcNode, Snapshot, SystemInfo, Watch } from './types';
 
 export type Classification = Map<string, GroupClassification>;
 
@@ -63,6 +63,8 @@ export interface FullSnapshot {
   groups: Group[];
   /** Classement par id de groupe (sous-groupes de « Autres » compris), lanceurs compris. */
   classification: Classification;
+  /** Mémoire des processus et groupes : PSS si 'pss' (absent → 'rss'). */
+  memMetric?: MemoryMetric;
 }
 
 /**
@@ -85,6 +87,7 @@ export function buildSnapshot(full: FullSnapshot, watch: Watch): Snapshot {
     matches: query ? full.groups.filter((g) => groupMatches(g, query)).map((g) => g.id) : null,
     watched: watch.groupId,
     detail: followed ? { groupId: followed.id, roots: followed.roots } : null,
+    memMetric: full.memMetric ?? 'rss',
   };
 }
 

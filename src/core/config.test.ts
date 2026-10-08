@@ -130,15 +130,21 @@ test('recorder.groupMinMemMB : 20 Mo par défaut, ajouté si absent (config d\'u
 });
 
 describe('section ui', () => {
-  test('par défaut : effets visuels complets', () => {
-    expect(DEFAULT_CONFIG.ui).toEqual({ reducedEffects: false });
+  test('par défaut : effets visuels complets, mémoire en RSS', () => {
+    expect(DEFAULT_CONFIG.ui).toEqual({ reducedEffects: false, memoryMetric: 'rss' });
   });
   test('config sans section ui : valide, défaut ajouté', () => {
     const { ui: _u, ...old } = DEFAULT_CONFIG;
-    expect(validateConfig(old)?.ui).toEqual({ reducedEffects: false });
+    expect(validateConfig(old)?.ui).toEqual({ reducedEffects: false, memoryMetric: 'rss' });
   });
-  test('reducedEffects conservé', () => {
-    expect(validateConfig({ ...DEFAULT_CONFIG, ui: { reducedEffects: true } })?.ui).toEqual({ reducedEffects: true });
+  test('reducedEffects conservé ; ui sans memoryMetric (config existante) → rss', () => {
+    expect(validateConfig({ ...DEFAULT_CONFIG, ui: { reducedEffects: true } })?.ui).toEqual({ reducedEffects: true, memoryMetric: 'rss' });
+  });
+  test('memoryMetric « pss » conservé', () => {
+    expect(validateConfig({ ...DEFAULT_CONFIG, ui: { reducedEffects: false, memoryMetric: 'pss' } })?.ui).toEqual({ reducedEffects: false, memoryMetric: 'pss' });
+  });
+  test.each([['PSS'], [1], [null], ['']])('memoryMetric = %j → config invalide', (memoryMetric) => {
+    expect(validateConfig({ ...DEFAULT_CONFIG, ui: { reducedEffects: false, memoryMetric } })).toBeNull();
   });
   test.each([[null], ['oui'], [{}], [{ reducedEffects: 'true' }]])('ui = %j → config invalide', (ui) => {
     expect(validateConfig({ ...DEFAULT_CONFIG, ui })).toBeNull();

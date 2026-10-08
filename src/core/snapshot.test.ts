@@ -97,6 +97,11 @@ describe('buildSnapshot', () => {
     expect(buildSnapshot(base, { groupId: null, query: '', othersOpen: true }).detail).toBeNull();
   });
 
+  test('memMetric recopié du snapshot complet (rss par défaut)', () => {
+    expect(buildSnapshot({ ...base, memMetric: 'pss' }, { groupId: null, query: '' }).memMetric).toBe('pss');
+    expect(buildSnapshot(base, { groupId: null, query: '' }).memMetric).toBe('rss');
+  });
+
   test('groupe suivi : son arbre seulement, y compris un sous-groupe d\'« Autres »', () => {
     expect(buildSnapshot(base, { groupId: 'a', query: '' }).detail).toEqual({ groupId: 'a', roots: groups[0]!.roots });
     expect(buildSnapshot(base, { groupId: 'c', query: '' }).detail).toEqual({ groupId: 'c', roots: inner.roots });

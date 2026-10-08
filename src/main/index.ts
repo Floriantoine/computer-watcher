@@ -6,6 +6,7 @@ import { classifyGroups, type InstanceDecision } from '../core/classify/classify
 import { readPackageHints } from '../core/classify/packageJson';
 import { CpuTracker } from '../core/collector/cpuTracker';
 import { readListeningPorts } from '../core/collector/ports';
+import { applyPss, PssCache, pssTargets } from '../core/collector/pss';
 import { readProcesses, type CwdEntry, type StatusEntry } from '../core/collector/readProcesses';
 import { readSystem } from '../core/collector/readSystem';
 import { configDir, loadConfig, saveConfig, validateConfig } from '../core/config';
@@ -17,7 +18,7 @@ import { compileProtection } from '../core/protection';
 import { formatAppEvent } from '../core/history/events';
 import { appEventsPath, dataDir } from '../core/paths';
 import { buildSnapshot, flattenGroup, groupProcs, instanceTargets, isWatch, othersFollowed, type Classification, type FullSnapshot } from '../core/snapshot';
-import type { ConfigState, Group, KillResult, RecorderState, Watch } from '../core/types';
+import type { ConfigState, Group, KillResult, ProcInfo, RecorderState, Watch } from '../core/types';
 import { installDesktopEntry } from './desktopEntry';
 import { clearHistory, createHistoryReader } from './history';
 import { pollDelay, type WindowActivity } from './pollPolicy';
@@ -144,6 +145,27 @@ function classify(groups: Group[], now: number): Classification {
   return lastClassification;
 }
 
+// Option PSS : smaps_rollup des processus des groupes affichés (d'après le snapshot précédent), au plus toutes les 10 s.
+const pssCache = new PssCache();
+
+/** Mode PSS : remplace le RSS par le PSS des processus affichés ; sinon aucun accès à smaps_rollup. */
+function withPss(procs: ProcInfo[], now: number): ProcInfo[] {
+  if (config.ui.memoryMetric !== 'pss') {
+    pssCache.clear();
+    return procs;
+  }
+  if (!last) return procs;
+  // Sous-groupes de « Autres » au-dessus du seuil en RSS : ils n'y sont que grâce à leur PSS, qu'il faut donc garder à jour.
+  let rss: Map<number, number> | undefined;
+  const overInRss = (sub: Group) => {
+    rss ??= new Map(procs.map((p) => [p.pid, p.rssKB]));
+    let kb = 0;
+    for (const p of flattenGroup(sub)) kb += (rss.get(p.pid) ?? p.rssKB) + p.swapKB;
+    return kb >= config.othersThreshold.memMB * 1024;
+  };
+  return applyPss(procs, pssCache.update(pssTargets(last.groups, othersFollowed(last.groups, watch), overInRss), now));
+}
+
 function takeSnapshot(): FullSnapshot {
   const now = Date.now();
   const samples = readProcesses('/proc', {
@@ -151,7 +173,7 @@ function takeSnapshot(): FullSnapshot {
     cwdCache: { entries: cwdEntries, now, maxAgeMs: CWD_MAX_AGE_MS },
     statusCache: { entries: statusEntries, now, maxAgeMs: STATUS_MAX_AGE_MS },
   });
-  const procs = tracker.update(samples, now);
+  const procs = withPss(tracker.update(samples, now), now);
   const sticky = stickyIds(separateSeen, now, CARD_HOLD_MS);
   const groups = buildGroups(procs, {
     home: homedir(),
@@ -164,7 +186,7 @@ function takeSnapshot(): FullSnapshot {
   recordSeparate(separateSeen, groups, now, (g) => isOverThreshold(g, config.othersThreshold));
   refreshPorts(groups, now);
   const classification = classify(groups, now);
-  return { takenAt: Date.now(), currentUid: uid, system: readSystem(), groups, classification };
+  return { takenAt: Date.now(), currentUid: uid, system: readSystem(), groups, classification, memMetric: config.ui.memoryMetric };
 }
 
 /** Dernier snapshot complet (arbres compris) : sert au kill de groupe et aux réponses immédiates à `watch`. */

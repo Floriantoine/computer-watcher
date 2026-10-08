@@ -12,7 +12,7 @@ export const DEFAULT_RECORDER: RecorderConfig = {
   leakMinGrowthMB: 300,
 };
 
-export const DEFAULT_UI: UiConfig = { reducedEffects: false };
+export const DEFAULT_UI: UiConfig = { reducedEffects: false, memoryMetric: 'rss' };
 
 export const DEFAULT_CLASSIFY: ClassifyConfig = { detectPorts: true, overrides: {} };
 

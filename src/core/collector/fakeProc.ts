@@ -46,6 +46,11 @@ export function addProc(root: string, p: FakeProc): void {
   if (p.cwd !== null) symlinkSync(p.cwd ?? '/', join(dir, 'cwd'));
 }
 
+/** Écrit /proc/<pid>/smaps_rollup (processus déjà créé par addProc). */
+export function writeSmapsRollup(root: string, pid: number, text: string): void {
+  writeFileSync(join(root, String(pid), 'smaps_rollup'), text);
+}
+
 /** Écrit /proc/net/tcp (ou tcp6) factice ; `lines` = lignes de données (l'en-tête est ajouté). */
 export function writeNetTcp(root: string, lines: string[], file: 'tcp' | 'tcp6' = 'tcp'): void {
   mkdirSync(join(root, 'net'), { recursive: true });

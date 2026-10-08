@@ -39,7 +39,9 @@ function validateUi(raw: unknown): UiConfig | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const r = raw as Record<string, unknown>;
   if (typeof r.reducedEffects !== 'boolean') return null;
-  return { reducedEffects: r.reducedEffects };
+  const memoryMetric = r.memoryMetric === undefined ? 'rss' : r.memoryMetric;
+  if (memoryMetric !== 'rss' && memoryMetric !== 'pss') return null;
+  return { reducedEffects: r.reducedEffects, memoryMetric };
 }
 
 export const MAX_OVERRIDES = 500;
