@@ -8,7 +8,7 @@ Né d'un PC gelé dix minutes par 19 Go de swap : vieilles sessions de terminal,
 
 ## Ce que ça fait
 
-- **Groupes lisibles** : une carte par appli (Chrome, Spotify…), par projet de dev (tous les `node`, `vite`, `esbuild`… d'un même dépôt), une carte « Claude » qui rassemble toutes les sessions Claude Code (chaque session est une racine de l'arbre de détail), et le reste par nom de commande. Les petits groupes sont rangés dans « Autres », sauf les projets, toujours visibles.
+- **Groupes lisibles** : une carte par appli (Chrome, Spotify…), par projet de dev (tous les `node`, `vite`, `esbuild`… d'un même dépôt), une carte « Claude » qui rassemble toutes les sessions Claude Code (chaque session est une racine de l'arbre de détail) ; les outils lancés depuis `~/.claude` (ou `$CLAUDE_CONFIG_DIR`) rejoignent aussi le groupe Claude, même détachés de leur session, et le reste par nom de commande. Les petits groupes sont rangés dans « Autres », sauf les projets, toujours visibles.
 - **Classement des instances** : chaque serveur de dev est reconnu (Front, Back, BDD, Worker, Tests, Outils…), avec son port en écoute et un badge « en double » s'il tourne deux fois. Filtres par catégorie, « Tuer la sélection », « Tuer le front », « Tout arrêter »… (voir plus bas).
 - **Ancienneté** de chaque groupe et de chaque processus, en orange au-delà d'un jour.
 - **Bandeau système** : RAM, swap, pression mémoire (PSI), charge.
