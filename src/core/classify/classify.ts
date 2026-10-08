@@ -86,6 +86,7 @@ function procsHash(procs: ProcInfo[]): string {
 }
 
 const PROJECT_PREFIX = 'project:';
+const CLAUDE_MATCH: CommandMatch = { category: 'ai', label: 'claude' };
 const DUPLICATE_SOURCES: ReadonlySet<InstanceSummary['source']> = new Set(['manual', 'command', 'port']);
 
 function classifyGroup(group: Group, ctx: ClassifyContext, hasInstanceBelow: (pid: number) => boolean, used: Set<string> | null): GroupClassification {
@@ -100,7 +101,8 @@ function classifyGroup(group: Group, ctx: ClassifyContext, hasInstanceBelow: (pi
     const memoKey = `${group.id}#${rp.pid}:${rp.startTicks}|${procs.length}:${procsHash(procs)}`;
     let dec = ctx.memo?.get(memoKey);
     if (!dec) {
-      const match = isProject ? matchCommand(procs) : classifyByName(rp.name, rp.cmdline);
+      // Groupe Claude : toujours IA, même quand sa plus vieille racine est un outil détaché (node server.cjs…).
+      const match = isProject ? matchCommand(procs) : group.kind === 'claude' ? CLAUDE_MATCH : classifyByName(rp.name, rp.cmdline);
       const signature = signatureOf(procs, match, projectRoot);
       const overrideKey = `${projectRoot ?? group.id}|${signature}`;
       const pkg = projectRoot !== null && match === null ? ctx.pkg(projectRoot) : null;

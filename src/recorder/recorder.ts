@@ -7,6 +7,7 @@ import { readProcesses } from '../core/collector/readProcesses';
 import { readSystem } from '../core/collector/readSystem';
 import { loadConfig } from '../core/config';
 import { buildGroups } from '../core/grouping/buildGroups';
+import { claudeDirs } from '../core/grouping/claudeDirs';
 import { createProjectRootCache } from '../core/grouping/projectRootCache';
 import { DEV_TOOL } from '../core/grouping/rules';
 import { historyBackups, openHistoryDb } from '../core/history/db';
@@ -53,6 +54,8 @@ export function createRecorder(deps: RecorderDeps): Recorder {
   const cmdlineCache = new Map<string, string>();
   const projectRootOf = createProjectRootCache();
   const wantCwd = (name: string) => DEV_TOOL.test(name);
+  // Outils Claude détachés : rangés dans Claude (seuls les outils de dev ont leur dossier de travail lu ici).
+  const claudeConfigDirs = claudeDirs();
   let cfg: RecorderConfig = loadConfig(deps.configDir).config.recorder;
   let db: DatabaseSync | null = null;
   let writer: HistoryWriter | null = null;
@@ -148,6 +151,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
           isProtected: () => false,
           othersThreshold: { memMB: 0, cpuPercent: 0 },
           projectRootOf,
+          claudeDirs: claudeConfigDirs,
         });
         const cpuPercent = procs.reduce((s, p) => s + p.cpuPercent, 0) / ncpu;
         writer.writeTick({ ts, system, cpuPercent, groups, procs }, cfg);

@@ -169,3 +169,51 @@ test('cycle de ppid : le groupe est quand même construit', () => {
   expect(g.procCount).toBe(2);
   expect(g.roots.length).toBeGreaterThan(0);
 });
+
+describe('règle 1 bis : outils Claude détachés (dossier de travail sous ~/.claude)', () => {
+  const PLUGIN = '/home/u/.claude/plugins/cache/superpowers/6.4.1';
+  const detached = () => [
+    proc({ pid: 1500, name: 'systemd', cmdline: '/usr/lib/systemd/systemd --user', cwd: '/home/u' }),
+    proc({ pid: 4000, name: 'node', ppid: 1500, cmdline: 'node server.cjs', cwd: PLUGIN }),
+    proc({ pid: 4001, name: 'node', ppid: 4000, cmdline: 'node worker.js', cwd: '/tmp' }),
+  ];
+  const claudeDirs = ['/home/u/.claude'];
+
+  test('node server.cjs (parent systemd --user) et son enfant → groupe Claude, aucun projet', () => {
+    const groups = buildGroups(detached(), opts({ claudeDirs }));
+    const claude = byId(groups, 'claude');
+    expect(claude).toMatchObject({ kind: 'claude', label: 'Claude' });
+    expect(claude.pids.sort()).toEqual([4000, 4001]);
+    expect(groups.some((g) => g.kind === 'project')).toBe(false);
+  });
+
+  test('sans claudeDirs : comportement actuel (carte projet « 6.4.1 »)', () => {
+    const groups = buildGroups(detached(), opts());
+    expect(byId(groups, `project:${PLUGIN}`).pids).toEqual([4000]);
+    expect(byId(groups, 'project:/tmp').pids).toEqual([4001]); // l'enfant suit son propre dossier
+    expect(groups.some((g) => g.id === 'claude')).toBe(false);
+  });
+
+  test('dossier de travail supprimé : pas déplacé', () => {
+    const procs = detached().map((p) => (p.pid === 4000 ? { ...p, cwdDeleted: true } : p));
+    const groups = buildGroups(procs, opts({ claudeDirs }));
+    expect(groups.some((g) => g.id === 'claude')).toBe(false);
+  });
+
+  test('une vraie session claude et l\'outil détaché : un seul groupe Claude', () => {
+    const groups = buildGroups([
+      ...detached(),
+      proc({ pid: 20, name: 'claude', ppid: 1500, cwd: '/home/u/proj' }),
+      proc({ pid: 21, name: 'node', ppid: 20, cwd: '/home/u/proj', cmdline: 'node mcp' }),
+    ], opts({ claudeDirs }));
+    const claude = groups.filter((g) => g.id === 'claude');
+    expect(claude).toHaveLength(1);
+    expect(claude[0]!.pids.sort((a, b) => a - b)).toEqual([20, 21, 4000, 4001]);
+    expect(claude[0]!.roots.map((r) => r.proc.pid).sort((a, b) => a - b)).toEqual([20, 4000]);
+  });
+
+  test('un processus sous ~/.claude-backup reste où il était', () => {
+    const groups = buildGroups([proc({ pid: 50, name: 'node', cwd: '/home/u/.claude-backup/x' })], opts({ claudeDirs }));
+    expect(groups.some((g) => g.id === 'claude')).toBe(false);
+  });
+});

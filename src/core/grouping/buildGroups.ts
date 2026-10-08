@@ -1,5 +1,6 @@
 // src/core/grouping/buildGroups.ts
 import type { Group, GroupKind, ProcInfo, ProcNode } from '../types';
+import { isUnderAny } from './claudeDirs';
 import { projectLabel } from './projectRoot';
 import { APP_NAMES, CLAUDE_NAME, DEV_TOOL, appLabel } from './rules';
 
@@ -11,6 +12,8 @@ export interface GroupingOptions {
   projectRootOf: (cwd: string) => string | null;
   /** Groupes à ne pas ranger dans « Autres » même sous les seuils (hystérésis des cartes, voir stickyCards). */
   keepSeparate?: (id: string) => boolean;
+  /** Dossiers de config de Claude (voir claudeDirs) : un processus qui y travaille rejoint le groupe Claude. */
+  claudeDirs?: readonly string[];
 }
 
 interface Meta {
@@ -59,6 +62,17 @@ export function buildGroups(procs: ProcInfo[], opts: GroupingOptions): Group[] {
   // 1. Sessions Claude : chaque claude de premier niveau et tous ses descendants
   for (const p of procs) {
     if (p.name === CLAUDE_NAME && !hasAncestor(p, (a) => a.name === CLAUDE_NAME)) {
+      meta.set('claude', { kind: 'claude', label: 'Claude' });
+      assignTree(p, 'claude', () => false);
+    }
+  }
+
+  // 1 bis. Outils Claude détachés (serveur du compagnon visuel, MCP, outils de plugins lancés à part) : dossier de
+  // travail sous ~/.claude (ou $CLAUDE_CONFIG_DIR), même sans session claude parmi leurs ancêtres.
+  const dirs = opts.claudeDirs ?? [];
+  if (dirs.length) {
+    for (const p of procs) {
+      if (keyOf.has(p.pid) || p.cwdDeleted || !isUnderAny(p.cwd, dirs)) continue;
       meta.set('claude', { kind: 'claude', label: 'Claude' });
       assignTree(p, 'claude', () => false);
     }

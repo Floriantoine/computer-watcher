@@ -350,6 +350,17 @@ describe('classifyGroups', () => {
     expect(r.categories).toEqual(['back']);
   });
 
+  it('groupe claude dont la seule racine est un outil détaché (node server.cjs) → IA ; correction manuelle prioritaire', () => {
+    const srv = proc('node', 'node server.cjs', { cwd: '/home/u/.claude/plugins/cache/superpowers/6.4.1' });
+    const g = group('claude', 'claude', [node(srv)]);
+    const auto = classifyGroups([g], ctx()).get(g.id)!;
+    expect(auto.instances[0]).toMatchObject({ category: 'ai' });
+    expect(auto.categories).toEqual(['ai']);
+    const sig = auto.instances[0].signature;
+    const r = classifyGroups([g], ctx({ overrides: { [`claude|${sig}`]: 'back' } })).get(g.id)!;
+    expect(r.instances[0]).toMatchObject({ category: 'back', source: 'manual' });
+  });
+
   it('groupes non-projet : launcherPids vide', () => {
     const c = proc('chrome', '/opt/google/chrome/chrome');
     const g = group('app:chrome', 'app', [node(c)]);

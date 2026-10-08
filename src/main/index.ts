@@ -11,6 +11,7 @@ import { readProcesses, type CwdEntry, type StatusEntry } from '../core/collecto
 import { readSystem } from '../core/collector/readSystem';
 import { configDir, loadConfig, saveConfig, validateConfig } from '../core/config';
 import { buildGroups, isOverThreshold } from '../core/grouping/buildGroups';
+import { claudeDirs } from '../core/grouping/claudeDirs';
 import { createProjectRootCache } from '../core/grouping/projectRootCache';
 import { recordSeparate, stickyIds } from '../core/grouping/stickyCards';
 import { killRequest, planKill, sendSignals } from '../core/kill';
@@ -39,6 +40,8 @@ const tracker = new CpuTracker();
 const uid = process.getuid!();
 
 const projectRootOf = createProjectRootCache();
+/** Dossiers de config de Claude : les processus qui y travaillent (outils détachés) rejoignent le groupe Claude. */
+const claudeConfigDirs = claudeDirs();
 
 const data = dataDir();
 const history = createHistoryReader(data, () => config.recorder);
@@ -182,6 +185,7 @@ function takeSnapshot(): FullSnapshot {
     othersThreshold: config.othersThreshold,
     projectRootOf,
     keepSeparate: (id) => sticky.has(id),
+    claudeDirs: claudeConfigDirs,
   });
   recordSeparate(separateSeen, groups, now, (g) => isOverThreshold(g, config.othersThreshold));
   refreshPorts(groups, now);
