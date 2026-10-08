@@ -42,7 +42,7 @@ export function TmpDirsList() {
           <div className="sub">Fichiers à la racine : {atLeast}{formatKB(usage.rootFilesKB)}</div>
           {usage.truncated && (
             <div className="sub partial">
-              Parcours partiel (arrêté à {TMP_SCAN_LIMITS.maxEntries.toLocaleString('fr-FR')} entrées ou {TMP_SCAN_LIMITS.budgetMs / 1000} s) : tailles « au moins »
+              Parcours partiel (arrêté à {TMP_SCAN_LIMITS.maxEntries.toLocaleString('fr-FR')} entrées ou {TMP_SCAN_LIMITS.budgetMs / 1000} s) : tailles « au moins », classement approximatif
             </div>
           )}
           {usage.skipped > 0 && (

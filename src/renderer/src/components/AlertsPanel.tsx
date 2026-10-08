@@ -45,7 +45,7 @@ export function AlertsPanel({ events, onPick, onHover }: Props) {
                       className={`tmpfs-toggle${open ? ' on' : ''}`}
                       data-testid="tmpfs-toggle"
                       aria-expanded={open}
-                      title="Plus gros dossiers de /tmp à cet instant"
+                      title="Plus gros dossiers de /tmp maintenant (pas à l’instant de l’alerte)"
                       onClick={(e) => {
                         e.stopPropagation();
                         setTmpOpen(open ? null : a.ts);
