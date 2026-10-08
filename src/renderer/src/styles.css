@@ -379,7 +379,7 @@ table.tree td.act { width: 1%; text-align: right; }
 .bulk-note { margin: -4px 0 0; display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--label); }
 .bulk-rows {
   display: grid;
-  grid-template-columns: 20px minmax(70px, max-content) minmax(90px, max-content) minmax(0, 1fr) minmax(48px, max-content) 58px 72px 48px;
+  grid-template-columns: 20px minmax(70px, max-content) minmax(90px, max-content) minmax(0, 1fr) minmax(48px, max-content) 58px 72px max-content;
   column-gap: 12px;
   overflow: auto;
   min-height: 0;
@@ -400,7 +400,7 @@ table.tree td.act { width: 1%; text-align: right; }
   min-width: 0;
   cursor: pointer;
 }
-.bulk-row.bulk-head { position: sticky; top: 0; z-index: 1; background: var(--surface-solid); padding: 6px 0 5px; border-top: 0; font-size: 11px; font-weight: 500; color: var(--label); cursor: default; }
+.bulk-row.bulk-head { position: sticky; top: 0; z-index: 1; background: var(--surface-solid); padding: 6px 0 5px; border-top: 0; font-size: 11px; font-weight: 500; color: var(--label); cursor: default; white-space: nowrap; }
 .bulk-row .num { text-align: right; font-variant-numeric: tabular-nums; }
 .bulk-row input[type='checkbox'] { margin: 0; accent-color: var(--danger); cursor: pointer; }
 .bulk-row.gone { opacity: 0.45; cursor: default; }

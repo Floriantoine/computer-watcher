@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { motion, useIsPresent } from 'motion/react';
 import { Info, Lock, Skull } from 'lucide-react';
 import type { InstanceSummary } from '../../../core/types';
@@ -12,9 +12,11 @@ import {
   presetSelection,
   presetState,
   toggleKey,
+  type BulkRequest,
   type InactiveState,
   type Preset,
 } from '../bulkKill';
+import { useFocusTrap } from '../focusTrap';
 import { CATEGORY_META } from '../categories';
 import { formatAge, formatCpu, formatKB } from '../format';
 import { sortInstances } from '../instances';
@@ -33,7 +35,7 @@ interface Props {
   /** Pids ayant déjà reçu SIGTERM à l'ouverture (instances décochées par défaut). */
   pendingPids: { has(pid: number): boolean };
   nameOf: (inst: InstanceSummary) => string;
-  onConfirm: (keys: string[], withLaunchers: boolean) => void;
+  onConfirm: (req: BulkRequest) => void;
   onCancel: () => void;
 }
 
@@ -50,7 +52,7 @@ export function BulkKillDialog({ title, instances, launchersOf, liveKeys, pendin
     let alive = true;
     const keys = instances.map((i) => i.key);
     const ask = (since: number) =>
-      fetchInactive(keys, Date.now() - since, (k, s) => window.procWatch.classify.inactive(k, s)).catch(() => null);
+      fetchInactive(keys, Date.now() - since, (k, s) => window.procWatch.classify.inactive(k, s)).catch(() => 'error' as const);
     void ask(INACTIVE_SINCE_MS.inactive1h).then((h1) => alive && setInactive((s) => ({ ...s, h1 })));
     void ask(INACTIVE_SINCE_MS.inactive1d).then((d1) => alive && setInactive((s) => ({ ...s, d1 })));
     return () => {
@@ -68,7 +70,10 @@ export function BulkKillDialog({ title, instances, launchersOf, liveKeys, pendin
 
   const checked = checkedLive(list, selected, liveKeys);
   const withLaunchers = includeLaunchers(launchersOf, list, selected, liveKeys);
-  const noHistory = inactive.h1 === null || inactive.d1 === null;
+  const historyError = inactive.h1 === 'error' || inactive.d1 === 'error';
+  const noHistory = !historyError && (inactive.h1 === null || inactive.d1 === null);
+  const box = useRef<HTMLDivElement>(null);
+  useFocusTrap(box);
   const protectedCount = list.filter((i) => i.protected).length;
 
   const pick = (p: Preset) => {
@@ -92,6 +97,7 @@ export function BulkKillDialog({ title, instances, launchersOf, liveKeys, pendin
       style={{ pointerEvents: isPresent ? undefined : 'none' }}
     >
       <motion.div
+        ref={box}
         className="dialog bulk-dialog"
         role="alertdialog"
         aria-modal="true"
@@ -133,6 +139,9 @@ export function BulkKillDialog({ title, instances, launchersOf, liveKeys, pendin
             );
           })}
         </div>
+        {historyError && (
+          <p className="bulk-note"><Info size={13} strokeWidth={2.2} /> « Inactives » : historique indisponible (erreur).</p>
+        )}
         {noHistory && (
           <p className="bulk-note"><Info size={13} strokeWidth={2.2} /> « Inactives » indisponible : pas d'historique (service d'enregistrement arrêté ou sans données).</p>
         )}
@@ -146,7 +155,7 @@ export function BulkKillDialog({ title, instances, launchersOf, liveKeys, pendin
             <span role="columnheader">Ports</span>
             <span role="columnheader" className="num">Depuis</span>
             <span role="columnheader" className="num">RAM</span>
-            <span role="columnheader" className="num">CPU</span>
+            <span role="columnheader" className="num" title="CPU au moment de l'ouverture (pas une moyenne)">CPU (instant)</span>
           </div>
           {list.map((i) => {
             const m = CATEGORY_META[i.category];
@@ -164,7 +173,10 @@ export function BulkKillDialog({ title, instances, launchersOf, liveKeys, pendin
                 title={gone ? 'Instance disparue depuis l\'ouverture : ignorée' : undefined}
               >
                 <span role="cell">
-                  <input id={id} type="checkbox" checked={!gone && selected.has(i.key)} disabled={gone} onChange={() => setSelected((s) => toggleKey(s, i.key))} />
+                  <input id={id} type="checkbox" checked={!gone && selected.has(i.key)} disabled={gone} onChange={() => {
+                      setPreset(null);
+                      setSelected((s) => toggleKey(s, i.key));
+                    }} />
                 </span>
                 <span className="bulk-proj" role="cell" title={i.project ?? undefined}>{nameOf(i)}</span>
                 <span className="inst-cat" role="cell">
@@ -205,7 +217,13 @@ export function BulkKillDialog({ title, instances, launchersOf, liveKeys, pendin
             className="danger"
             data-testid="bulk-confirm"
             disabled={checked.length === 0}
-            onClick={guard(() => onConfirm(checked, withLaunchers))}
+            onClick={guard(() =>
+              onConfirm({
+                checked,
+                launchersOf: withLaunchers ? launchersOf : undefined,
+                protectedChecked: new Set(list.filter((i) => i.protected && checked.includes(i.key)).map((i) => i.key)),
+              }),
+            )}
           >
             Tuer ({checked.length})
           </button>

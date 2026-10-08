@@ -82,6 +82,11 @@ describe('requêtes de kill', () => {
     expect(r.protectedProcs.map((p) => p.pid)).toEqual([2]);
   });
 
+  test('groupe : enfants d\'abord (les lots de 2 000 gardent l\'ordre du handler kill)', () => {
+    const procs = [proc(10, 'npm', { ppid: 1 }), proc(11, 'node', { ppid: 10 }), proc(12, 'esbuild', { ppid: 11 }), proc(13, 'node', { ppid: 10 })];
+    expect(killRequestForGroup(group('g', procs), procs, isProtected, 1000).targets.map((t) => t.pid)).toEqual([12, 11, 13, 10]);
+  });
+
   test('groupe : ne cible que les processus de l\'utilisateur', () => {
     const procs = [proc(1, 'apache2', { uid: 33 }), proc(2, 'apache2')];
     expect(killRequestForGroup(group('a', procs), procs, isProtected, 1000).targets).toEqual([{ pid: 2, startTicks: 0 }]);

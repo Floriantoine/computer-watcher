@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import type {
-  Category, Config, ConfigState, Culprit, ProcInfo, Watch, GroupHistory, GroupsHistory, HistoryEvent, KillResult, KillTarget, KillSignal, ProcsHistory, RangePreset,
+  Category, Config, ConfigState, Culprit, InstanceTargets, ProcInfo, Watch, GroupHistory, GroupsHistory, HistoryEvent, KillResult, KillTarget, KillSignal, ProcsHistory, RangePreset,
   RecorderState, Snapshot, SystemSeries, TimeRange, TopOptions, TopResult,
 } from '../core/types';
 
@@ -36,8 +36,8 @@ const api = {
     inactive: (keys: string[], sinceMs: number): Promise<string[] | null> => ipcRenderer.invoke('classify:inactive', keys, sinceMs),
   },
   instances: {
-    /** Cibles de kill (≤ 200 clés) depuis le dernier snapshot : processus d'une instance, ou lanceurs pour une clé de groupe. */
-    targets: (keys: string[]): Promise<{ key: string; targets: KillTarget[] }[]> => ipcRenderer.invoke('instances:targets', keys),
+    /** Cibles de kill (≤ 200 clés) du dernier snapshot : processus d'une instance, ou lanceurs (et instances couvertes) pour une clé de groupe. */
+    targets: (keys: string[]): Promise<InstanceTargets[]> => ipcRenderer.invoke('instances:targets', keys),
   },
   history: {
     system: (r: RangePreset | TimeRange): Promise<SystemSeries | null> => ipcRenderer.invoke('history:system', r),

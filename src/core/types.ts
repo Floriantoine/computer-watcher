@@ -147,6 +147,16 @@ export interface KillTarget {
 
 export type KillSignal = 'SIGTERM' | 'SIGKILL';
 
+/** Réponse de `instances:targets` pour une clé (instance, ou groupe pour ses lanceurs). */
+export interface InstanceTargets {
+  key: string;
+  targets: KillTarget[];
+  /** Nom du processus de chaque cible (même ordre), pour revérifier la protection au moment du kill. */
+  names: string[];
+  /** Clé de groupe seulement : instances (tous groupes) dont la racine descend d'un de ses lanceurs. */
+  covers?: string[];
+}
+
 export interface KillResult {
   pid: number;
   ok: boolean;

@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import type { ProcSample } from './types';
-import { planKill, sendSignals } from './kill';
+import { MAX_KILL_TARGETS, killRequest, planKill, sendSignals } from './kill';
 
 const p = (pid: number, ppid: number, uid = 1000): ProcSample => ({
   pid, ppid, name: 'x', cmdline: 'x', uid, startTicks: 0, ageSec: 0, cpuTicks: 0, rssKB: 0, swapKB: 0, cwd: null, cwdDeleted: false,
@@ -98,4 +98,15 @@ test('startTicks différent (PID réutilisé) → ESRCH, non tué', () => {
 test('startTicks identique → autorisé', () => {
   const t = tree.map((x) => (x.pid === 20 ? { ...x, startTicks: 777 } : x));
   expect(planKill([{ pid: 20, startTicks: 777 }], t, guards).ordered).toEqual([20]);
+});
+
+test('killRequest : valide la requête du renderer, lève une erreur au-delà de 2 000 cibles', () => {
+  expect(MAX_KILL_TARGETS).toBe(2000);
+  expect(killRequest([{ pid: 5, startTicks: 7, extra: 1 }], 'SIGTERM')).toEqual({ targets: [{ pid: 5, startTicks: 7 }], signal: 'SIGTERM' });
+  expect(killRequest([{ pid: 5 }], 'SIGTERM')).toBeNull();
+  expect(killRequest('x', 'SIGTERM')).toBeNull();
+  expect(killRequest([], 'SIGHUP')).toBeNull();
+  const max = Array.from({ length: 2000 }, (_, i) => ({ pid: i + 2, startTicks: 0 }));
+  expect(killRequest(max, 'SIGKILL')?.targets).toHaveLength(2000);
+  expect(() => killRequest([...max, { pid: 9999, startTicks: 0 }], 'SIGTERM')).toThrow('Trop de cibles (2 000 au plus)');
 });

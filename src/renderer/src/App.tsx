@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AnimatePresence, MotionConfig, motion, useIsPresent } from 'motion/react';
 import { compileProtection } from '../../core/protection';
 import type { Category, Config, ConfigState, GroupSummary, InstanceSummary, KillResult, KillSignal, KillTarget, ProcNode, Snapshot } from '../../core/types';
-import { bulkDialogTitle, fetchTargets, killBatches, splitEntries, summarizeResults } from './bulkKill';
+import { bulkDialogTitle, chunkTargets, runBulkKill, type BulkRequest } from './bulkKill';
 import { BulkKillDialog } from './components/BulkKillDialog';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { DetailView } from './components/DetailView';
@@ -118,26 +118,41 @@ export function App() {
     setTimeout(() => setToasts((t) => t.slice(1)), 5000);
   };
 
-  /** Envoie un signal ; `report` : un toast par erreur (le kill groupé fait son propre récapitulatif). null si l'IPC a échoué. */
-  async function sendKill(targets: KillTarget[], signal: KillSignal, report = true): Promise<KillResult[] | null> {
-    let results;
-    try {
-      results = await window.procWatch.kill(targets, signal);
-    } catch (e) {
-      pushToast(ipcErrorMessage(e));
-      return null;
-    }
+  /** Mémorise les SIGTERM envoyés (boutons qui pulsent, puis « Forcer » avec le même startTicks). */
+  function noteSent(targets: KillTarget[], results: KillResult[], signal: KillSignal) {
+    if (signal !== 'SIGTERM') return;
     const now = Date.now();
+    const ticks = new Map(targets.map((t) => [t.pid, t.startTicks]));
     for (const r of results) {
-      if (r.ok && signal === 'SIGTERM') {
-        pending.current.set(r.pid, now);
-        const t = targets.find((x) => x.pid === r.pid);
-        if (t) sentTicks.current.set(r.pid, t.startTicks);
-      }
+      if (!r.ok) continue;
+      pending.current.set(r.pid, now);
+      const t = ticks.get(r.pid);
+      if (t !== undefined) sentTicks.current.set(r.pid, t);
     }
     setPendingPids(new Set(pending.current.keys()));
-    if (report) for (const msg of killResultMessages(results)) pushToast(msg);
+  }
+
+  /** Un appel du handler `kill` (≤ 2 000 cibles). */
+  async function killBatch(batch: KillTarget[], signal: KillSignal): Promise<KillResult[]> {
+    const results = await window.procWatch.kill(batch, signal);
+    noteSent(batch, results, signal);
     return results;
+  }
+
+  /** Envoie un signal par lots de 2 000 au plus ; une erreur IPC n'efface pas les erreurs des lots déjà envoyés. */
+  async function sendKill(targets: KillTarget[], signal: KillSignal) {
+    const results: KillResult[] = [];
+    let error: string | null = null;
+    for (const batch of chunkTargets(targets)) {
+      try {
+        results.push(...(await killBatch(batch, signal)));
+      } catch (e) {
+        error = ipcErrorMessage(e);
+        break;
+      }
+    }
+    for (const msg of killResultMessages(results)) pushToast(msg);
+    if (error) pushToast(error);
   }
 
   // « Forcer » : on réutilise le startTicks du SIGTERM ; sans lui, on ne vise rien.
@@ -202,23 +217,18 @@ export function App() {
     setBulk({ instances, launchersOf, title: bulkDialogTitle(instances, launchersOf, one) });
   };
   // « Tuer (n) » : cibles fraîches du main, puis le handler `kill` (≤ 2 000 cibles par appel), puis un toast récapitulatif.
-  const confirmBulk = async (keys: string[], launchersOf: string | undefined) => {
+  const confirmBulk = async (req: BulkRequest) => {
     if (bulkInFlight.current) return;
     bulkInFlight.current = true;
     setBulk(null);
     try {
-      const entries = await fetchTargets(launchersOf ? [...keys, launchersOf] : keys, (k) => window.procWatch.instances.targets(k));
-      const { instances, launchers, gone } = splitEntries(keys, launchersOf, entries);
-      const results: KillResult[] = [];
-      for (const batch of killBatches(instances, launchers)) {
-        const r = await sendKill(batch, 'SIGTERM', false);
-        if (!r) return;
-        results.push(...r);
-      }
-      const s = summarizeResults(instances.map((i) => ({ key: i.key, pids: i.targets.map((t) => t.pid) })), results, gone.length);
+      const s = await runBulkKill(req, {
+        targets: (k) => window.procWatch.instances.targets(k),
+        kill: (batch) => killBatch(batch, 'SIGTERM'),
+        isProtected,
+        errorMessage: ipcErrorMessage,
+      });
       pushToast(s.message, s.kind);
-    } catch (e) {
-      pushToast(ipcErrorMessage(e));
     } finally {
       bulkInFlight.current = false;
     }
@@ -349,7 +359,7 @@ export function App() {
               liveKeys={liveKeys}
               pendingPids={pending.current}
               nameOf={nameOf}
-              onConfirm={(keys, withLaunchers) => void confirmBulk(keys, withLaunchers ? bulk.launchersOf : undefined)}
+              onConfirm={(req) => void confirmBulk(req)}
               onCancel={() => setBulk(null)}
             />
           )}

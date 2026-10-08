@@ -2,6 +2,23 @@ import type { KillResult, KillSignal, KillTarget, ProcSample } from './types';
 
 export type KillFn = (pid: number, signal: KillSignal) => void;
 
+/** Cibles au plus par appel du handler `kill` (au-delà : erreur ; le renderer envoie par lots). */
+export const MAX_KILL_TARGETS = 2000;
+
+const isKillTarget = (t: unknown): t is KillTarget =>
+  typeof t === 'object' && t !== null && Number.isInteger((t as KillTarget).pid) && Number.isInteger((t as KillTarget).startTicks);
+
+/**
+ * Requête `kill` venue du renderer : cibles `{pid, startTicks}` nettoyées et signal, ou null si invalide.
+ * Lève une erreur au-delà de MAX_KILL_TARGETS (le renderer l'affiche, au lieu d'un « rien d'arrêté » muet).
+ */
+export function killRequest(targets: unknown, signal: unknown): { targets: KillTarget[]; signal: KillSignal } | null {
+  if (!Array.isArray(targets) || !targets.every(isKillTarget)) return null;
+  if (signal !== 'SIGTERM' && signal !== 'SIGKILL') return null;
+  if (targets.length > MAX_KILL_TARGETS) throw new Error('Trop de cibles (2 000 au plus)');
+  return { targets: targets.map(({ pid, startTicks }) => ({ pid, startTicks })), signal };
+}
+
 export function planKill(
   targets: KillTarget[],
   procs: ProcSample[],

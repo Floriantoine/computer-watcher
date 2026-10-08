@@ -12,12 +12,12 @@ import { configDir, loadConfig, saveConfig, validateConfig } from '../core/confi
 import { buildGroups, isOverThreshold } from '../core/grouping/buildGroups';
 import { createProjectRootCache } from '../core/grouping/projectRootCache';
 import { recordSeparate, stickyIds } from '../core/grouping/stickyCards';
-import { planKill, sendSignals } from '../core/kill';
+import { killRequest, planKill, sendSignals } from '../core/kill';
 import { compileProtection } from '../core/protection';
 import { formatAppEvent } from '../core/history/events';
 import { appEventsPath, dataDir } from '../core/paths';
 import { buildSnapshot, flattenGroup, groupProcs, instanceTargets, isWatch, type Classification, type FullSnapshot } from '../core/snapshot';
-import type { ConfigState, Group, KillResult, KillTarget, RecorderState, Watch } from '../core/types';
+import type { ConfigState, Group, KillResult, RecorderState, Watch } from '../core/types';
 import { installDesktopEntry } from './desktopEntry';
 import { clearHistory, createHistoryReader } from './history';
 import { pollDelay, type WindowActivity } from './pollPolicy';
@@ -257,19 +257,18 @@ function createWindow(): void {
   else win.loadFile(join(__dirname, '../renderer/index.html'));
 }
 
-const isKillTarget = (t: unknown): t is KillTarget =>
-  typeof t === 'object' && t !== null && Number.isInteger((t as KillTarget).pid) && Number.isInteger((t as KillTarget).startTicks);
-
-ipcMain.handle('kill', (_e, targets: unknown, signal: unknown): KillResult[] => {
-  if (!Array.isArray(targets) || !targets.every(isKillTarget)) return [];
-  if (signal !== 'SIGTERM' && signal !== 'SIGKILL') return [];
-  const { ordered, refused } = planKill(targets.map(({ pid, startTicks }) => ({ pid, startTicks })), readProcesses(), { selfPid: process.pid, currentUid: uid });
+ipcMain.handle('kill', (_e, raw: unknown, rawSignal: unknown): KillResult[] => {
+  // Au-delà de MAX_KILL_TARGETS : erreur (le renderer découpe en lots).
+  const req = killRequest(raw, rawSignal);
+  if (!req) return [];
+  const { targets, signal } = req;
+  const { ordered, refused } = planKill(targets, readProcesses(), { selfPid: process.pid, currentUid: uid });
   const results = [...refused, ...sendSignals(ordered, signal)];
   const killed = results.filter((r) => r.ok).map((r) => r.pid);
   if (killed.length) {
     try {
       mkdirSync(data, { recursive: true });
-      appendFileSync(appEventsPath(data), formatAppEvent({ ts: Date.now(), type: 'app_kill', groupKey: null, detail: { pids: killed, signal } }));
+      appendFileSync(appEventsPath(data), formatAppEvent({ ts: Date.now(), type: 'app_kill', groupKey: null, detail: { pids: killed, signal: signal } }));
     } catch (e) {
       console.error('app event:', e);
     }

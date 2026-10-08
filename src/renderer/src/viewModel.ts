@@ -65,9 +65,26 @@ export interface KillRequest {
   protectedProcs: ProcInfo[];
 }
 
+/** Les plus profonds d'abord (ordre stable à profondeur égale) : un kill découpé en lots garde « enfants avant parents ». */
+export function childrenFirst(procs: readonly ProcInfo[]): ProcInfo[] {
+  const byPid = new Map(procs.map((p) => [p.pid, p]));
+  const depth = new Map<number, number>();
+  const depthOf = (p: ProcInfo): number => {
+    let d = 0;
+    const seen = new Set<number>();
+    for (let cur = byPid.get(p.ppid); cur && !seen.has(cur.pid); cur = byPid.get(cur.ppid)) {
+      seen.add(cur.pid);
+      d++;
+    }
+    return d;
+  };
+  for (const p of procs) depth.set(p.pid, depthOf(p));
+  return [...procs].sort((a, b) => depth.get(b.pid)! - depth.get(a.pid)!);
+}
+
 /** `all` : processus du groupe au dernier snapshot (`window.procWatch.groupProcs`). */
 export function killRequestForGroup(g: GroupSummary, all: ProcInfo[], isProtected: (n: string) => boolean, currentUid: number): KillRequest {
-  const procs = all.filter((p) => p.uid === currentUid);
+  const procs = childrenFirst(all.filter((p) => p.uid === currentUid));
   return {
     targets: procs.map(targetOf),
     title: `Tuer ${procs.length} processus « ${g.label} » ?`,

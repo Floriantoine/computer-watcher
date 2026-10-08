@@ -114,11 +114,30 @@ test('instanceTargets : cibles {pid, startTicks} des instances (disparues absent
   cls.set('a', { categories: ['front'], instances: [inst('a', 1, [1, 4])], launcherPids: [4] });
   const full = { takenAt: 5, currentUid: 1000, system, groups, classification: cls };
   expect(instanceTargets(full, ['a#1:10', 'c#3:30', 'a#9:90', 'zz'])).toEqual([
-    { key: 'a#1:10', targets: [{ pid: 1, startTicks: 10 }, { pid: 4, startTicks: 40 }] },
-    { key: 'c#3:30', targets: [{ pid: 3, startTicks: 30 }] },
+    { key: 'a#1:10', targets: [{ pid: 1, startTicks: 10 }, { pid: 4, startTicks: 40 }], names: ['vite', 'esbuild'] },
+    { key: 'c#3:30', targets: [{ pid: 3, startTicks: 30 }], names: ['cron'] },
   ]);
-  expect(instanceTargets(full, ['a'])).toEqual([{ key: 'a', targets: [{ pid: 4, startTicks: 40 }] }]);
-  expect(instanceTargets(full, ['b'])).toEqual([{ key: 'b', targets: [] }]);
+  expect(instanceTargets(full, ['a'])).toEqual([{ key: 'a', targets: [{ pid: 4, startTicks: 40 }], names: ['esbuild'], covers: [] }]);
+  expect(instanceTargets(full, ['b'])).toEqual([{ key: 'b', targets: [], names: [], covers: [] }]);
+});
+
+test('instanceTargets : pour une clé de groupe, les instances (tous groupes) que ses lanceurs couvrent, d\'après le snapshot frais', () => {
+  const npm = proc(10, 'npm');
+  const vite = proc(11, 'vite', { ppid: 10 });
+  const api = proc(12, 'node', { ppid: 10 });
+  const lone = proc(13, 'node');
+  const sh = proc(30, 'sh', { ppid: 10 });
+  const worker = proc(20, 'node', { ppid: 30 });
+  const p = group('p', [npm, vite, api, lone], { kind: 'project' });
+  const q = group('q', [sh, worker]);
+  const cls = new Map<string, GroupClassification>([
+    ['p', { categories: ['front', 'back'], instances: [inst('p', 11, [11]), inst('p', 12, [12]), inst('p', 13, [13])], launcherPids: [10] }],
+    ['q', { categories: ['worker'], instances: [inst('q', 20, [20])], launcherPids: [30] }],
+  ]);
+  const full = { takenAt: 5, currentUid: 1000, system, groups: [p, q], classification: cls };
+  expect(instanceTargets(full, ['p'])).toEqual([
+    { key: 'p', targets: [{ pid: 10, startTicks: 100 }], names: ['npm'], covers: ['p#11:110', 'p#12:120', 'q#20:200'] },
+  ]);
 });
 
 test('isWatch valide ce qui vient du renderer', () => {

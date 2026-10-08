@@ -1,11 +1,15 @@
+import { useRef } from 'react';
 import { motion, useIsPresent } from 'motion/react';
 import { Skull, TriangleAlert } from 'lucide-react';
 import { formatAge } from '../format';
+import { useFocusTrap } from '../focusTrap';
 import type { KillRequest } from '../viewModel';
 
 export function ConfirmDialog({ request, onConfirm, onCancel }: { request: KillRequest; onConfirm: () => void; onCancel: () => void }) {
   // Pendant la sortie animée, le dialogue ne doit plus déclencher d'action (pas de double envoi).
   const isPresent = useIsPresent();
+  const box = useRef<HTMLDivElement>(null);
+  useFocusTrap(box);
   const guard = (fn: () => void) => () => {
     if (isPresent) fn();
   };
@@ -20,6 +24,7 @@ export function ConfirmDialog({ request, onConfirm, onCancel }: { request: KillR
       style={{ pointerEvents: isPresent ? undefined : 'none' }}
     >
       <motion.div
+        ref={box}
         className="dialog"
         role="alertdialog"
         aria-modal="true"

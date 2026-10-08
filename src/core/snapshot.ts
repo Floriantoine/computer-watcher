@@ -1,5 +1,5 @@
 import type { GroupClassification } from './classify/classify';
-import type { Group, GroupSummary, KillTarget, ProcInfo, ProcNode, Snapshot, SystemInfo, Watch } from './types';
+import type { Group, GroupSummary, InstanceTargets, KillTarget, ProcInfo, ProcNode, Snapshot, SystemInfo, Watch } from './types';
 
 export type Classification = Map<string, GroupClassification>;
 
@@ -79,10 +79,11 @@ export function buildSnapshot(full: FullSnapshot, watch: Watch): Snapshot {
 
 /**
  * Cibles de kill depuis le dernier snapshot complet : pour une clé d'instance (`${groupId}#${rootPid}:${rootStartTicks}`),
- * tous ses processus ; pour une clé de groupe, ses lanceurs (à ajouter au kill « Tout arrêter » du projet).
+ * tous ses processus ; pour une clé de groupe, ses lanceurs (à ajouter au kill « Tout arrêter » du projet) et les clés des
+ * instances qu'ils couvrent (`covers`), pour que le renderer ne les envoie que si toutes sont cochées. `names` : nom de chaque cible.
  * Les clés inconnues (instance disparue) sont absentes du résultat.
  */
-export function instanceTargets(full: FullSnapshot, keys: string[]): { key: string; targets: KillTarget[] }[] {
+export function instanceTargets(full: FullSnapshot, keys: string[]): InstanceTargets[] {
   const byKey = new Map<string, { groupId: string; pids: number[] }>();
   for (const [groupId, c] of full.classification) for (const i of c.instances) byKey.set(i.key, { groupId, pids: i.pids });
   const procsOf = new Map<string, Map<number, ProcInfo>>();
@@ -94,20 +95,50 @@ export function instanceTargets(full: FullSnapshot, keys: string[]): { key: stri
     }
     return m;
   };
-  const toTargets = (groupId: string, pids: number[]): KillTarget[] =>
-    pids.flatMap((pid) => {
+  const toTargets = (groupId: string, pids: number[]): { targets: KillTarget[]; names: string[] } => {
+    const targets: KillTarget[] = [];
+    const names: string[] = [];
+    for (const pid of pids) {
       const p = procs(groupId).get(pid);
-      return p ? [{ pid, startTicks: p.startTicks }] : [];
-    });
-  const out: { key: string; targets: KillTarget[] }[] = [];
+      if (!p) continue;
+      targets.push({ pid, startTicks: p.startTicks });
+      names.push(p.name);
+    }
+    return { targets, names };
+  };
+  let ppidOf: Map<number, number> | undefined;
+  // Instances (tous groupes) dont la racine descend d'un des lanceurs : tuer le lanceur peut les emporter.
+  const coveredBy = (launchers: readonly number[]): string[] => {
+    if (!launchers.length) return [];
+    ppidOf ??= new Map(full.groups.flatMap(flattenGroup).map((p) => [p.pid, p.ppid]));
+    const set = new Set(launchers);
+    const out: string[] = [];
+    for (const c of full.classification.values()) {
+      for (const i of c.instances) {
+        const seen = new Set<number>();
+        for (let cur = ppidOf.get(i.rootPid); cur !== undefined && cur > 1 && !seen.has(cur); cur = ppidOf.get(cur)) {
+          if (set.has(cur)) {
+            out.push(i.key);
+            break;
+          }
+          seen.add(cur);
+        }
+      }
+    }
+    return out;
+  };
+  const out: InstanceTargets[] = [];
   for (const key of keys) {
     const inst = byKey.get(key);
     if (inst) {
-      out.push({ key, targets: toTargets(inst.groupId, inst.pids) });
+      out.push({ key, ...toTargets(inst.groupId, inst.pids) });
       continue;
     }
     const g = full.classification.get(key);
-    if (g) out.push({ key, targets: toTargets(key, g.launcherPids) });
+    if (g) {
+      const t = toTargets(key, g.launcherPids);
+      out.push({ key, ...t, covers: coveredBy(t.targets.map((x) => x.pid)) });
+    }
   }
   return out;
 }

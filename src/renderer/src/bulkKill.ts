@@ -1,8 +1,9 @@
 // Dialogue de confirmation groupée (« Tuer la sélection », « Tuer le front / le back », « Tout arrêter ») : fonctions pures.
-import type { InstanceSummary, KillResult, KillTarget } from '../../core/types';
+import { MAX_KILL_TARGETS } from '../../core/kill';
+import type { InstanceSummary, InstanceTargets as FreshEntry, KillResult, KillTarget } from '../../core/types';
 
-/** Cibles au plus par appel du handler `kill`. */
-export const MAX_KILL_TARGETS = 2000;
+/** Cibles au plus par appel du handler `kill` (le main lève une erreur au-delà). */
+export { MAX_KILL_TARGETS };
 /** Clés au plus par appel de `instances:targets` et `classify:inactive` (borne du main). */
 export const MAX_KEYS_PER_CALL = 200;
 
@@ -15,10 +16,11 @@ export const PRESETS: { id: Preset; label: string }[] = [
 ];
 export const INACTIVE_SINCE_MS: Record<'inactive1h' | 'inactive1d', number> = { inactive1h: 3600_000, inactive1d: 86400_000 };
 
-/** Résultat de `classify:inactive` par période : undefined = en cours, null = pas d'historique. */
+/** Résultat de `classify:inactive` par période : undefined = en cours, null = pas d'historique, 'error' = échec de l'appel. */
+export type InactiveResult = ReadonlySet<string> | null | 'error';
 export interface InactiveState {
-  h1?: ReadonlySet<string> | null;
-  d1?: ReadonlySet<string> | null;
+  h1?: InactiveResult;
+  d1?: InactiveResult;
 }
 
 const inactiveOf = (preset: 'inactive1h' | 'inactive1d', s: InactiveState) => (preset === 'inactive1h' ? s.h1 : s.d1);
@@ -42,7 +44,7 @@ export function presetSelection(list: readonly InstanceSummary[], preset: Preset
   if (preset === 'all') return new Set(open.map((i) => i.key));
   if (preset === 'duplicates') return new Set(open.filter((i) => i.duplicate).map((i) => i.key));
   const set = inactiveOf(preset, inactive);
-  if (!set) return null;
+  if (!set || set === 'error') return null;
   return new Set(open.filter((i) => set.has(i.key)).map((i) => i.key));
 }
 
@@ -50,6 +52,7 @@ export function presetState(preset: Preset, inactive: InactiveState): { enabled:
   if (preset === 'all' || preset === 'duplicates') return { enabled: true };
   const set = inactiveOf(preset, inactive);
   if (set === undefined) return { enabled: false, reason: "Lecture de l'historique…" };
+  if (set === 'error') return { enabled: false, reason: 'Historique indisponible (erreur)' };
   if (set === null) return { enabled: false, reason: "Pas d'historique : le service d'enregistrement est arrêté ou n'a encore rien enregistré" };
   return { enabled: true };
 }
@@ -80,12 +83,12 @@ function chunks<T>(arr: readonly T[], size: number): T[][] {
   return out;
 }
 
-export type TargetsFn = (keys: string[]) => Promise<{ key: string; targets: KillTarget[] }[]>;
+export type TargetsFn = (keys: string[]) => Promise<FreshEntry[]>;
 export type InactiveFn = (keys: string[], sinceMs: number) => Promise<string[] | null>;
 
 /** `instances:targets` par lots de 200 clés. */
-export async function fetchTargets(keys: readonly string[], fn: TargetsFn): Promise<{ key: string; targets: KillTarget[] }[]> {
-  const out: { key: string; targets: KillTarget[] }[] = [];
+export async function fetchTargets(keys: readonly string[], fn: TargetsFn): Promise<FreshEntry[]> {
+  const out: FreshEntry[] = [];
   for (const batch of chunks(keys, MAX_KEYS_PER_CALL)) out.push(...(await fn(batch)));
   return out;
 }
@@ -101,34 +104,124 @@ export async function fetchInactive(keys: readonly string[], sinceMs: number, fn
   return out;
 }
 
-export interface InstanceTargets {
+/** Cibles fraîches d'une instance à tuer. */
+export interface KillUnit {
   key: string;
   targets: KillTarget[];
 }
 
-/** Réponse de `instances:targets` → instances à tuer, lanceurs (clé = id du groupe), clés disparues (absentes ou sans processus). */
-export function splitEntries(
-  checked: readonly string[],
-  launchersOf: string | undefined,
-  entries: readonly InstanceTargets[],
-): { instances: InstanceTargets[]; launchers: KillTarget[]; gone: string[] } {
-  const byKey = new Map(entries.map((e) => [e.key, e.targets]));
-  const instances: InstanceTargets[] = [];
+export interface SummaryExtra {
+  protectedKept?: number;
+  launchersSkipped?: boolean;
+  /** Instances non envoyées (échec IPC au milieu des lots) */
+  notSent?: number;
+  /** Erreur IPC qui a interrompu l'envoi */
+  error?: string;
+}
+
+/** Lots d'au plus 2 000 cibles, dans l'ordre reçu (kill de groupe, « Forcer »…). */
+export const chunkTargets = (targets: readonly KillTarget[]): KillTarget[][] => chunks(targets, MAX_KILL_TARGETS);
+
+export interface BulkRequest {
+  /** Clés cochées (présentes à l'ouverture), dans l'ordre de la liste. */
+  checked: readonly string[];
+  /** « Tout arrêter » quand la règle des lanceurs tenait dans le dialogue : id du groupe. */
+  launchersOf?: string;
+  /** Instances montrées protégées (🔒) et cochées une par une : leurs processus protégés partent. */
+  protectedChecked: ReadonlySet<string>;
+}
+
+export interface BulkPlan {
+  instances: KillUnit[];
+  launchers: KillTarget[];
+  /** Clés cochées absentes du snapshot frais, ou sans processus. */
+  gone: string[];
+  /** Processus protégés retirés (instance non montrée protégée, ou lanceur). */
+  protectedKept: number;
+  /** Lanceurs demandés mais retenus : une instance qu'ils couvrent (snapshot frais) n'est pas cochée. */
+  launchersSkipped: boolean;
+}
+
+/**
+ * Plan du kill groupé d'après la réponse fraîche de `instances:targets` (au moment de confirmer) :
+ * - un processus protégé n'est envoyé que si son instance a été montrée protégée et cochée ;
+ * - les lanceurs ne partent que si toutes les instances qu'ils couvrent maintenant sont cochées
+ *   (une instance apparue pendant que le dialogue était ouvert les retient).
+ */
+export function planBulk(req: BulkRequest, entries: readonly FreshEntry[], isProtected: (name: string) => boolean): BulkPlan {
+  const byKey = new Map(entries.map((e) => [e.key, e]));
+  let protectedKept = 0;
+  const keep = (e: FreshEntry, allowProtected: boolean): KillTarget[] =>
+    e.targets.filter((_, i) => {
+      if (allowProtected || !isProtected(e.names[i] ?? '')) return true;
+      protectedKept++;
+      return false;
+    });
+  const instances: KillUnit[] = [];
   const gone: string[] = [];
-  for (const key of checked) {
-    const targets = byKey.get(key);
-    if (targets?.length) instances.push({ key, targets });
-    else gone.push(key);
+  for (const key of req.checked) {
+    const e = byKey.get(key);
+    if (!e?.targets.length) {
+      gone.push(key);
+      continue;
+    }
+    const targets = keep(e, req.protectedChecked.has(key));
+    if (targets.length) instances.push({ key, targets });
   }
-  const launchers = launchersOf ? (byKey.get(launchersOf) ?? []) : [];
-  return { instances, launchers, gone };
+  let launchers: KillTarget[] = [];
+  let launchersSkipped = false;
+  const g = req.launchersOf ? byKey.get(req.launchersOf) : undefined;
+  if (g?.targets.length) {
+    const checked = new Set(req.checked);
+    if ((g.covers ?? []).every((k) => checked.has(k))) launchers = keep(g, false);
+    else launchersSkipped = true;
+  }
+  return { instances, launchers, gone, protectedKept, launchersSkipped };
+}
+
+export interface BulkDeps {
+  targets: TargetsFn;
+  /** Un appel du handler `kill` (SIGTERM), ≤ 2 000 cibles. */
+  kill: (batch: KillTarget[]) => Promise<KillResult[]>;
+  isProtected: (name: string) => boolean;
+  errorMessage: (e: unknown) => string;
+}
+
+/** « Tuer (n) » : cibles fraîches, plan, envoi par lots, récapitulatif (même après un échec au milieu des lots). */
+export async function runBulkKill(req: BulkRequest, deps: BulkDeps): Promise<{ message: string; kind: 'info' | 'error' }> {
+  let entries: FreshEntry[];
+  try {
+    entries = await fetchTargets(req.launchersOf ? [...req.checked, req.launchersOf] : req.checked, deps.targets);
+  } catch (e) {
+    return { message: deps.errorMessage(e), kind: 'error' };
+  }
+  const plan = planBulk(req, entries, deps.isProtected);
+  const results: KillResult[] = [];
+  const sent = new Set<number>();
+  let error: string | undefined;
+  for (const batch of killBatches(plan.instances, plan.launchers)) {
+    try {
+      results.push(...(await deps.kill(batch)));
+      for (const t of batch) sent.add(t.pid);
+    } catch (e) {
+      error = deps.errorMessage(e);
+      break;
+    }
+  }
+  const isSent = (i: KillUnit) => i.targets.some((t) => sent.has(t.pid));
+  return summarizeResults(
+    plan.instances.filter(isSent).map((i) => ({ key: i.key, pids: i.targets.map((t) => t.pid) })),
+    results,
+    plan.gone.length,
+    { protectedKept: plan.protectedKept, launchersSkipped: plan.launchersSkipped, notSent: plan.instances.filter((i) => !isSent(i)).length, error },
+  );
 }
 
 /**
  * Lots d'au plus 2 000 cibles pour le handler `kill` (qui ordonne enfants d'abord dans chaque appel) : une instance reste
  * dans un même lot quand elle y tient ; les lanceurs passent en dernier. Un pid n'est envoyé qu'une fois.
  */
-export function killBatches(instances: readonly InstanceTargets[], launchers: readonly KillTarget[]): KillTarget[][] {
+export function killBatches(instances: readonly KillUnit[], launchers: readonly KillTarget[]): KillTarget[][] {
   const seen = new Set<number>();
   const units = [...instances.map((i) => i.targets), launchers].map((ts) =>
     ts.filter((t) => {
@@ -174,6 +267,7 @@ export function summarizeResults(
   perInstance: readonly { key: string; pids: readonly number[] }[],
   results: readonly KillResult[],
   goneBefore: number,
+  extra: SummaryExtra = {},
 ): { message: string; kind: 'info' | 'error' } {
   const byPid = new Map(results.map((r) => [r.pid, r]));
   let killed = 0;
@@ -189,13 +283,18 @@ export function summarizeResults(
   const parts = [killed ? plural(killed, 'instance arrêtée', 'instances arrêtées') : 'Aucune instance arrêtée'];
   if (refused) parts.push(plural(refused, 'refusée', 'refusées'));
   if (gone) parts.push(plural(gone, 'déjà disparue', 'déjà disparues'));
+  if (extra.notSent) parts.push(plural(extra.notSent, 'non envoyée', 'non envoyées'));
   let message = parts.join(', ');
   if (errors.length) {
     const shown = errors.slice(0, 3).map((r) => `PID ${r.pid} ${reason(r)}`);
     if (errors.length > 3) shown.push(`+${errors.length - 3}`);
     message += ` : ${shown.join(', ')}`;
   }
-  return { message, kind: errors.length ? 'error' : 'info' };
+  const notes = [message];
+  if (extra.protectedKept) notes.push(plural(extra.protectedKept, 'processus protégé conservé', 'processus protégés conservés'));
+  if (extra.launchersSkipped) notes.push('Lanceurs conservés : une instance non cochée en dépend');
+  if (extra.error) notes.push(`Envoi interrompu : ${extra.error}`);
+  return { message: notes.join('. '), kind: errors.length || extra.error ? 'error' : 'info' };
 }
 
 /** Titre du dialogue ; `singleName` = nom du projet quand la liste vient d'un seul groupe (boutons du détail). */
