@@ -23,7 +23,23 @@ describe('matchCommand', () => {
     [[n('postgres: checkpointer', 'postgres')], 'db', 'postgres'],
     [[n('/usr/bin/postgres -D /var/lib/postgres/data', 'postgres')], 'db', 'postgres'],
     [[n('redis-server *:6379', 'redis-server')], 'db', 'redis-server'],
-    [[n('node /home/u/acme/node_modules/playwright/cli.js test')], null, null],
+    [[n('node /home/u/acme/node_modules/playwright/cli.js test')], 'test', 'playwright test'],
+    [[n('node /home/u/my-mcp/node_modules/.bin/vite')], 'front', 'vite'],
+    [[n('node /home/u/my-mcp/node_modules/vite/bin/vite.js')], 'front', 'vite'],
+    [[n('node /home/u/acme/node_modules/vitest/vitest.mjs run')], 'test', 'vitest'],
+    [[n(`node ${P}/mcp-server-fs /tmp`)], 'ai', 'mcp-server-fs'],
+    [[n(`node ${P}/vite --mode production build`)], 'build', 'vite build'],
+    [[n(`node ${P}/vite optimize`)], 'build', 'vite build'],
+    [[n('node --require /home/u/acme/node_modules/tsx/dist/preflight.cjs --import file:///home/u/acme/node_modules/tsx/dist/loader.mjs src/server.ts')], 'back', 'tsx server'],
+    [[n('bun run src/index.ts', 'bun')], 'back', 'bun index'],
+    [[n('bun --watch server.ts', 'bun')], 'back', 'bun server'],
+    [[n('deno task dev', 'deno')], 'back', 'deno task'],
+    [[n('php artisan serve --port=8000', 'php')], 'back', 'php artisan serve'],
+    [[n('gopls serve', 'gopls')], 'build', 'gopls'],
+    [[n('go build ./...', 'go')], null, null],
+    [[n('rails console', 'ruby')], null, null],
+    [[n('air', 'air')], 'back', 'air'],
+    [[n('/usr/bin/air-quality-app', 'air-quality-app')], null, null],
     [[n(`node ${P}/playwright test`)], 'test', 'playwright test'],
     [[n(`node ${P}/tsc --watch`)], 'build', 'tsc --watch'],
     [[n('node /home/u/acme/node_modules/typescript/lib/tsserver.js')], 'build', 'tsserver'],
@@ -36,7 +52,7 @@ describe('matchCommand', () => {
   ] as [C[], string | null, string | null][])('%j', (chain, cat, label) => {
     const m = matchCommand(chain);
     if (cat === null) expect(m).toBeNull();
-    else expect(m).toEqual({ category: cat, label: expect.anything() }), expect(m!.label).toBe(label);
+    else expect(m).toEqual({ category: cat, label });
   });
 
   test('parcourt la chaîne de la racine vers les descendants', () => {

@@ -19,6 +19,9 @@ describe('signatureOf', () => {
     expect(sig('mytool serve --port 3000')).toBe('mytool serve');
     expect(sig('mytool --port 3000')).toBe('mytool');
     expect(sig('python -m foo.bar:app')).toBe('python foo.bar:app');
+    expect(sig('mytool --config foo.js serve')).toBe('mytool serve');
+    expect(sig('mytool --verbose serve')).toBe('mytool serve');
+    expect(sig('node --require x.cjs app.js')).toBe('node app.js');
   });
   test('chaîne vide', () => expect(signatureOf([], null)).toBe(''));
 });

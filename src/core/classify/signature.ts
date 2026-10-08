@@ -1,7 +1,6 @@
 import type { CommandMatch } from './match';
-import { baseName, splitArgs } from './argv';
+import { baseName, isInterpreter, splitArgs, VALUE_OPTIONS } from './argv';
 
-const INTERP = /^(node|nodejs|python[\d.]*|bun|deno|ruby|php)$/;
 const SCRIPT_LIKE = [/\.(m?js|cjs|ts|py)$/, /^[\w.]+:\w+$/, /^[a-z][a-z-]*$/];
 
 function reducePath(arg: string, projectRoot?: string | null): string {
@@ -28,12 +27,24 @@ export function signatureOf(
   if (argv.length === 0) return root.name;
   const bin = baseName(argv[0]).replace(/:$/, '') || root.name;
   const args = argv.slice(1);
-  let i = 0;
-  // pour un interpréteur, saute les options (-m, --inspect…) ; sinon premier argument tel quel
-  while (i < args.length && args[i].startsWith('-')) i++;
-  const first = args[i];
-  if (first === undefined || /^\d+$/.test(first)) return bin;
-  const reduced = INTERP.test(bin) || !first.startsWith('-') ? reducePath(first, projectRoot) : '';
+  const interp = isInterpreter(bin);
+  let first: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a.startsWith('-')) {
+      if (interp) {
+        if (a === '-m') { first = args[i + 1]; break; }
+        if (VALUE_OPTIONS.has(a)) i++;
+      } else if (!a.includes('=') && i + 1 < args.length && /^(\d+|.*[./].*)$/.test(args[i + 1]) && !args[i + 1].startsWith('-')) {
+        i++; // valeur d'option (nombre, fichier, chemin)
+      }
+      continue;
+    }
+    first = a;
+    break;
+  }
+  if (first === undefined) return bin;
+  const reduced = reducePath(first, projectRoot);
   if (!reduced || /^\d+$/.test(reduced)) return bin;
   return SCRIPT_LIKE.some((re) => re.test(reduced)) ? `${bin} ${reduced}` : bin;
 }

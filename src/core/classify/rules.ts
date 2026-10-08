@@ -25,24 +25,25 @@ const stripExt = (s: string): string => s.replace(/\.(m?js|cjs|ts|py)$/, '');
 const has = (c: Ctx, ...xs: string[]) => c.rest.some((a) => xs.includes(a));
 const is = (c: Ctx, ...xs: string[]) => xs.includes(c.cmd);
 const SERVER_ENTRY = /(^|\/)(src|dist|build)\/(main|server|index|app)(\.[cm]?[jt]s)?$/;
+const BARE_ENTRY = /(^|\/)(main|server|index|app)\.[cm]?[jt]s$/;
 const BROWSER = /^(chrome|chromium|chromium-browser|google-chrome|firefox|brave|msedge)([-_].*)?$/;
 
 export const COMMAND_RULES: Rule[] = [
   // ai d'abord : « claude » et serveurs MCP
   { category: 'ai', label: 'claude', test: (c) => is(c, 'claude', 'claude-desktop') || c.name === 'claude' || c.name === 'claude-desktop' },
-  { category: 'ai', label: (c) => (/^cli(\.[cm]?js)?$/.test(c.cmd) ? c.rawCmd.split('/').slice(-3, -1).join('/') : stripExt(c.cmd)), test: (c) => /(^|\/)(mcp-server-[^/]*|[^/]*-mcp)(\/|$)/.test(c.rawCmd) || /(^|\/)mcp\/cli(\.[cm]?js)?$/.test(c.rawCmd) },
+  { category: 'ai', label: (c) => (c.cmd === 'cli' ? c.rawCmd.split('/').slice(-3, -1).join('/') : stripExt(c.cmd)), test: (c) => /^(.+-mcp|mcp-server-.+)$/.test(c.cmd) || /(^|\/)@[^/]+\/mcp\/cli(\.[cm]?js)?$/.test(c.rawCmd) },
   // test avant front (vitest) et build
   { category: 'test', label: (c) => c.cmd, test: (c) => is(c, 'vitest', 'jest', 'cypress', 'pytest', 'mocha', 'karma') },
-  { category: 'test', label: 'playwright test', test: (c) => c.cmd === 'playwright' && c.rest[0] === 'test' },
+  { category: 'test', label: 'playwright test', test: (c) => (c.cmd === 'playwright' || /(^|\/)playwright(-core)?\/cli(\.[cm]?js)?$/.test(c.rawCmd)) && c.rest[0] === 'test' },
   // build
-  { category: 'build', label: 'vite build', test: (c) => c.cmd === 'vite' && c.rest[0] === 'build' },
+  { category: 'build', label: 'vite build', test: (c) => c.cmd === 'vite' && (has(c, 'build') || has(c, 'optimize')) },
   { category: 'build', label: 'tsc --watch', test: (c) => c.cmd === 'tsc' && has(c, '-w', '--watch') },
   { category: 'build', label: 'esbuild --watch', test: (c) => c.cmd === 'esbuild' && c.rest.some((a) => a === '--watch' || a.startsWith('--watch=')) },
   { category: 'build', label: 'tsserver', test: (c) => /(^|\/)tsserver(\.js)?$/.test(c.rawCmd) || c.cmd === 'tsserver' },
   { category: 'build', label: (c) => c.cmd, test: (c) => is(c, 'eslint_d', 'prettierd', 'typescript-language-server', 'gopls', 'pyright', 'pyright-langserver', 'rust-analyzer', 'turbo') },
   { category: 'build', label: 'nx daemon', test: (c) => c.cmd === 'nx' && has(c, 'daemon') },
   // front
-  { category: 'front', label: 'vite preview', test: (c) => c.cmd === 'vite' && c.rest[0] === 'preview' },
+  { category: 'front', label: 'vite preview', test: (c) => c.cmd === 'vite' && has(c, 'preview') },
   { category: 'front', label: 'vite', test: (c) => c.cmd === 'vite' },
   { category: 'front', label: (c) => `next ${c.rest[0]}`, test: (c) => c.cmd === 'next' && (c.rest[0] === 'dev' || c.rest[0] === 'start') },
   { category: 'front', label: 'next dev', test: (c) => c.cmd.startsWith('next-server') },
@@ -58,7 +59,7 @@ export const COMMAND_RULES: Rule[] = [
   // back
   { category: 'back', label: 'nest start', test: (c) => c.cmd === 'nest' && c.rest[0] === 'start' },
   { category: 'back', label: (c) => `node ${stripExt(c.rawCmd).replace(/^.*?((dist|build)\/)/, '$1')}`, test: (c) => SERVER_ENTRY.test(c.rawCmd) && /(^|\/)(dist|build)\//.test(c.rawCmd) },
-  { category: 'back', label: (c) => `${c.cmd} ${stripExt(baseName(c.rawRest.find((a) => SERVER_ENTRY.test(a)) ?? ''))}`.trim(), test: (c) => is(c, 'tsx', 'ts-node') && c.rawRest.some((a) => SERVER_ENTRY.test(a)) },
+  { category: 'back', label: (c) => `${c.raw.some((a) => /(^|[/=])ts-node([/.]|$)/.test(a)) ? 'ts-node' : 'tsx'} ${stripExt(baseName(c.raw.find((a) => SERVER_ENTRY.test(a)) ?? ''))}`.trim(), test: (c) => c.raw.some((a) => /(^|[/=])(tsx|ts-node)([/.]|$)/.test(a)) && c.raw.some((a) => SERVER_ENTRY.test(a)) },
   { category: 'back', label: 'nodemon', test: (c) => c.cmd === 'nodemon' },
   { category: 'back', label: (c) => `uvicorn ${c.rest.find((a) => /^[\w.]+:\w+$/.test(a)) ?? ''}`.trim(), test: (c) => c.cmd === 'uvicorn' },
   { category: 'back', label: (c) => `gunicorn ${c.rest.find((a) => /^[\w.]+:\w+$/.test(a)) ?? ''}`.trim(), test: (c) => c.cmd === 'gunicorn' },
@@ -75,7 +76,7 @@ export const COMMAND_RULES: Rule[] = [
   { category: 'back', label: (c) => `dotnet ${c.rest[0]}`, test: (c) => c.cmd === 'dotnet' && ['run', 'watch'].includes(c.rest[0]) },
   { category: 'back', label: 'php artisan serve', test: (c) => c.cmd === 'php' && has(c, 'serve') && c.rest[0] === 'artisan' },
   { category: 'back', label: (c) => `deno ${c.rest[0]}`, test: (c) => c.cmd === 'deno' && ['run', 'task'].includes(c.rest[0]) },
-  { category: 'back', label: (c) => `bun ${c.rawRest.find((a) => SERVER_ENTRY.test(a)) ?? ''}`.trim(), test: (c) => c.cmd === 'bun' && c.rawRest.some((a) => SERVER_ENTRY.test(a)) },
+  { category: 'back', label: (c) => `bun ${stripExt(baseName(c.rawRest.find((a) => SERVER_ENTRY.test(a) || BARE_ENTRY.test(a)) ?? ''))}`.trim(), test: (c) => c.cmd === 'bun' && c.rawRest.some((a) => SERVER_ENTRY.test(a) || BARE_ENTRY.test(a)) },
   // worker
   { category: 'worker', label: 'celery', test: (c) => c.cmd === 'celery' },
   { category: 'worker', label: 'rq worker', test: (c) => c.cmd === 'rq' && c.rest[0] === 'worker' },
@@ -96,7 +97,7 @@ function ctxOf(name: string, cmdline: string): Ctx {
   const argv = raw.map(baseName);
   const p = Math.max(0, programIndex(raw.map((r) => baseName(r))));
   const rawCmd = raw[p] ?? name;
-  const cmd = baseName(rawCmd);
+  const cmd = baseName(rawCmd).replace(/\.(m?js|cjs)$/, '');
   return { argv, raw, name, cmd: cmd || name, rawCmd, rest: argv.slice(p + 1), rawRest: raw.slice(p + 1) };
 }
 
