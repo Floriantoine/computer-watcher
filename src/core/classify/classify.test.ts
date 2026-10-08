@@ -31,4 +31,8 @@ describe('decide', () => {
   it('clé override héritée du prototype ignorée', () => {
     expect(decide({ ...base, overrideKey: 'toString' }).source).toBe('unknown');
   });
+  it('chaîne < 3 caractères ne matche jamais un script', () => {
+    const r = decide({ ...base, chainText: 'v', pkg: { front: false, back: true, scripts: { dev: 'vite' } }, matchScript: () => ({ category: 'front', label: 'x' }) });
+    expect(r.category).toBe('back');
+  });
 });

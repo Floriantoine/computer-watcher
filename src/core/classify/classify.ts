@@ -21,7 +21,7 @@ export function decide(input: DecideInput): { category: Category; source: Instan
   if (port) return { category: port, source: 'port' };
   const pkg = input.pkg;
   if (pkg) {
-    if (input.matchScript && input.chainText) {
+    if (input.matchScript && input.chainText.length >= 3) {
       for (const [name, script] of Object.entries(pkg.scripts)) {
         if (!SCRIPT_NAME.test(name) || !script.includes(input.chainText)) continue;
         const m = input.matchScript(script);

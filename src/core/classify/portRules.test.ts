@@ -16,4 +16,14 @@ describe('categoryForPorts', () => {
     expect(categoryForPorts([1234], '')).toBeNull();
     expect(categoryForPorts([], 'x')).toBeNull();
   });
+  it('précédence db > front > back', () => {
+    expect(categoryForPorts([3000, 5432], 'node s.js')).toBe('db');
+    expect(categoryForPorts([8080, 5173], '')).toBe('front');
+    expect(categoryForPorts([3000, 8080], 'node s.js')).toBe('back');
+  });
+  it('next/react-scripts seulement comme programme', () => {
+    expect(categoryForPorts([3000], 'node /home/next/server.js')).toBe('back');
+    expect(categoryForPorts([3000], 'node --name=next s.js')).toBe('back');
+    expect(categoryForPorts([3000], 'node /x/node_modules/.bin/NEXT dev')).toBe('front');
+  });
 });
