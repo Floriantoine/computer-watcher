@@ -49,3 +49,16 @@ export function groupChartSeries(h: GroupHistory): ChartSeries[] {
     { label: 'CPU', values: h.cpu, tone: 'cpu', axis: 'right', fill: false },
   ];
 }
+
+/** Index de la courbe d'un groupe survolé (Top, légende) ; null si le groupe n'est pas dans le graphe. */
+export function seriesIndexOf(keys: string[], key: string | null): number | null {
+  if (key === null) return null;
+  const i = keys.indexOf(key);
+  return i < 0 ? null : i;
+}
+
+/** Aspect d'un marqueur selon l'alerte survolée : celle-ci nette, épaisse et légendée, les autres estompées. */
+export function markerLook(ts: number, highlightTs: number | null): { alpha: number; width: number; label: boolean } {
+  if (highlightTs === null) return { alpha: 0.7, width: 1, label: false };
+  return ts === highlightTs ? { alpha: 1, width: 2, label: true } : { alpha: 0.2, width: 1, label: false };
+}

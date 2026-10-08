@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { motion, useReducedMotionConfig } from 'motion/react';
 import uPlot from 'uplot';
-import { stackBands, toAligned, type ChartAxis, type ChartSeries } from './chartData';
+import { markerLook, stackBands, toAligned, type ChartAxis, type ChartSeries } from './chartData';
 import { CURSOR_BG, formatAxisTime, formatTipTime, gradientFill, rgba, themedAxis, toneColors, type ValueFormat } from './uplotTheme';
 
 export type { ChartSeries } from './chartData';
@@ -24,6 +24,10 @@ interface Props {
   onCursor?: (ts: number) => void;
   /** Glisser : plage sélectionnée ; double-clic : `null` (retour à la plage complète). */
   onSelectRange?: (r: { from: number; to: number } | null) => void;
+  /** Courbe mise en avant (index dans `series`) : les autres sont estompées. */
+  focusSeries?: number | null;
+  /** Marqueur mis en avant (son horodatage) : net, épais et légendé ; les autres estompés. */
+  focusMarker?: number | null;
 }
 
 interface Tip {
@@ -49,15 +53,15 @@ function zeroBased(_u: uPlot, _min: number, max: number): uPlot.Range.MinMax {
   return [0, max > 0 ? max * 1.08 : 1];
 }
 
-export function TimeChart({ ts, series, height, format, markers, onCursor, onSelectRange }: Props) {
+export function TimeChart({ ts, series, height, format, markers, onCursor, onSelectRange, focusSeries = null, focusMarker = null }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const plot = useRef<uPlot | null>(null);
   const reduce = !!useReducedMotionConfig();
   const [tip, setTip] = useState<Tip | null>(null);
 
   // Valeurs lues par les hooks uPlot sans recréer l'instance.
-  const live = useRef({ ts, series, format, markers, onCursor, onSelectRange });
-  live.current = { ts, series, format, markers, onCursor, onSelectRange };
+  const live = useRef({ ts, series, format, markers, onCursor, onSelectRange, focusMarker });
+  live.current = { ts, series, format, markers, onCursor, onSelectRange, focusMarker };
 
   const key = structureKey(series);
   const data = useMemo(() => toAligned(ts, series), [ts, series]);
@@ -75,6 +79,8 @@ export function TimeChart({ ts, series, height, format, markers, onCursor, onSel
       height,
       ms: 1,
       legend: { show: false },
+      // Mise en avant pilotée de l'extérieur (survol du Top, de la légende) ; jamais par la proximité du curseur.
+      focus: { alpha: 0.18 },
       padding: [10, hasRight ? 4 : 14, 0, 4],
       scales: {
         x: { time: true },
@@ -159,7 +165,7 @@ export function TimeChart({ ts, series, height, format, markers, onCursor, onSel
             u.setSelect({ left: 0, top: 0, width: 0, height: 0 }, false);
           },
         ],
-        draw: [(u) => drawMarkers(u, live.current.markers)],
+        draw: [(u) => drawMarkers(u, live.current.markers, live.current.focusMarker)],
         ready: [
           (u) => {
             u.over.addEventListener('mousedown', (e) => (downX = e.clientX));
@@ -206,7 +212,12 @@ export function TimeChart({ ts, series, height, format, markers, onCursor, onSel
 
   useEffect(() => {
     plot.current?.redraw(false);
-  }, [markers]);
+  }, [markers, focusMarker]);
+
+  useEffect(() => {
+    // Redessin seulement (pas de recréation) : un survol rapide reste fluide.
+    plot.current?.setSeries(focusSeries === null ? null : focusSeries + 1, { focus: true });
+  }, [focusSeries, key]);
 
   const u = plot.current;
   return (
@@ -232,33 +243,64 @@ function measure(u: uPlot, values: string[] | null): number {
   return Math.ceil(w) + 14;
 }
 
-function drawMarkers(u: uPlot, markers: ChartMarker[] | undefined): void {
+function drawMarkers(u: uPlot, markers: ChartMarker[] | undefined, focusTs: number | null): void {
   if (!markers?.length) return;
   const { ctx, bbox } = u;
   const { min, max } = u.scales.x;
   if (min == null || max == null) return;
   const pr = uPlot.pxRatio;
   ctx.save();
-  for (const m of markers) {
+  // Le marqueur mis en avant est dessiné en dernier, par-dessus les autres.
+  const ordered = focusTs === null ? markers : [...markers.filter((m) => m.ts !== focusTs), ...markers.filter((m) => m.ts === focusTs)];
+  for (const m of ordered) {
     if (m.ts < min || m.ts > max) continue;
+    const look = markerLook(m.ts, focusTs);
     const x = Math.round(u.valToPos(m.ts, 'x', true)) + 0.5;
-    ctx.strokeStyle = rgba(m.color, 0.7);
-    ctx.lineWidth = pr;
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = rgba(m.color, look.alpha);
+    ctx.lineWidth = look.width * pr;
     ctx.setLineDash([3 * pr, 3 * pr]);
     ctx.beginPath();
     ctx.moveTo(x, bbox.top + 4 * pr);
     ctx.lineTo(x, bbox.top + bbox.height);
     ctx.stroke();
     ctx.setLineDash([]);
+    ctx.globalAlpha = focusTs !== null && !look.label ? 0.35 : 1;
     ctx.fillStyle = m.color;
     ctx.strokeStyle = CURSOR_BG;
     ctx.lineWidth = 2 * pr;
     ctx.beginPath();
-    ctx.arc(x, bbox.top + 4 * pr, 3.5 * pr, 0, Math.PI * 2);
+    ctx.arc(x, bbox.top + 4 * pr, (look.label ? 4.5 : 3.5) * pr, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
+    if (look.label) drawMarkerLabel(u, m, x);
   }
   ctx.restore();
+}
+
+/** Étiquette du marqueur mis en avant, en haut du graphe, du côté où elle tient. */
+function drawMarkerLabel(u: uPlot, m: ChartMarker, x: number): void {
+  const { ctx, bbox } = u;
+  const pr = uPlot.pxRatio;
+  ctx.globalAlpha = 1;
+  ctx.font = `${600} ${11 * pr}px Inter, system-ui, sans-serif`;
+  const text = `${m.label} · ${formatTipTime(m.ts, span(u))}`;
+  const w = ctx.measureText(text).width + 12 * pr;
+  const h = 18 * pr;
+  const right = x + 8 * pr + w <= bbox.left + bbox.width;
+  const lx = right ? x + 8 * pr : x - 8 * pr - w;
+  const ly = bbox.top + 12 * pr;
+  ctx.fillStyle = CURSOR_BG;
+  ctx.strokeStyle = rgba(m.color, 0.6);
+  ctx.lineWidth = pr;
+  ctx.beginPath();
+  ctx.roundRect(lx, ly, w, h, 5 * pr);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = '#e7e9ee';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, lx + 6 * pr, ly + h / 2);
 }
 
 interface TipProps {
