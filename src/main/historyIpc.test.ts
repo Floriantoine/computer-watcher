@@ -91,3 +91,13 @@ test('isOptionalGroupKey : absent, ou clé de 1 à 4 096 caractères', () => {
   for (const ok of [undefined, 'a', 'x'.repeat(4096)]) expect(isOptionalGroupKey(ok)).toBe(true);
   for (const bad of ['', 'x'.repeat(4097), 3, null, {}, ['a']]) expect(isOptionalGroupKey(bad)).toBe(false);
 });
+
+test('vue swap : swap:view ne prend aucun argument, isWatch inchangé (aucun champ « swap »)', async () => {
+  const { isWatch } = await import('../core/snapshot');
+  expect(isWatch({ groupId: null, query: '' })).toBe(true);
+  expect(isWatch({ groupId: 'app:x', query: 'vite', othersOpen: true, ports: true })).toBe(true);
+  expect(isWatch({ groupId: null, query: '', othersOpen: 'oui' })).toBe(false);
+  expect(isWatch({ groupId: null, query: '', ports: 'oui' })).toBe(false);
+  expect(isWatch({ groupId: 3, query: '' })).toBe(false);
+  expect(isWatch(null)).toBe(false);
+});

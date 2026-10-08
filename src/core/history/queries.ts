@@ -471,12 +471,10 @@ export function queryLastActive(
   lookbackMs: number,
   o: QueryOpts,
   cache?: LastActiveCache,
+  activeCpu: number = ACTIVE_CPU_PERCENT,
 ): Map<string, number | null> {
   const out = new Map<string, number | null>();
-  if (targets.length === 0) {
-    cache?.clear();
-    return out;
-  }
+  if (targets.length === 0) return out;
   const since = o.now - lookbackMs;
   const split = o.now - Math.min(INACTIVE_DETAIL_MS, o.detailHours * H);
   const findProc = db.prepare('SELECT id FROM procs WHERE pid = ? AND start_ticks = ?');
@@ -486,9 +484,9 @@ export function queryLastActive(
   /** Dernière minute active dans [from, split), précisée dans le détail s'il existe encore. */
   const lastMinute = (id: number, from: number): number | null => {
     if (from >= split) return null;
-    const m = minute.get(id, from, split, ACTIVE_CPU_PERCENT) as { ts: number } | undefined;
+    const m = minute.get(id, from, split, activeCpu) as { ts: number } | undefined;
     if (!m) return null;
-    const exact = detail.get(id, m.ts, m.ts + M - 1, ACTIVE_CPU_PERCENT) as { ts: number } | undefined;
+    const exact = detail.get(id, m.ts, m.ts + M - 1, activeCpu) as { ts: number } | undefined;
     return exact?.ts ?? m.ts;
   };
   for (const t of targets) {
@@ -499,7 +497,7 @@ export function queryLastActive(
       out.set(key, null);
       continue;
     }
-    const d = detail.get(row.id, Math.max(since, split), o.now, ACTIVE_CPU_PERCENT) as { ts: number } | undefined;
+    const d = detail.get(row.id, Math.max(since, split), o.now, activeCpu) as { ts: number } | undefined;
     if (d) {
       out.set(key, d.ts);
       continue;
@@ -511,8 +509,52 @@ export function queryLastActive(
     cache?.set(key, { upTo: split, ts });
     out.set(key, ts);
   }
-  if (cache) for (const k of [...cache.keys()]) if (!out.has(k)) cache.delete(k);
   return out;
+}
+
+/** Retire du cache les processus qui ne sont plus des cibles (l'appelant lit par tranches, puis élague une fois). */
+export function pruneLastActiveCache(cache: LastActiveCache, keep: ReadonlySet<string>): void {
+  for (const k of [...cache.keys()]) if (!keep.has(k)) cache.delete(k);
+}
+
+/** Trou toléré dans l'historique (redémarrage du service, mise en veille courte) avant de déclarer la couverture interrompue. */
+export const COVERAGE_MAX_GAP_MS = 10 * M;
+
+export interface HistoryCoverage {
+  /** Dernier échantillon système enregistré (détail ; sans détail, fin de la dernière minute) ; null si la base est vide. */
+  latestTs: number | null;
+  /** Début de la couverture continue (aucun trou > 10 min) qui finit à `latestTs`, borné à `from` ; null si vide. */
+  coveredFrom: number | null;
+  /** La couverture s'arrête sur un trou (et non au début des données ou de la fenêtre). */
+  gap: boolean;
+}
+
+/**
+ * Couverture de l'historique sur [from, now] d'après la table système par minute (≤ 10 080 lignes pour 7 jours) : en
+ * remontant depuis le dernier échantillon, premier trou de plus de 10 min entre deux minutes enregistrées.
+ */
+export function historyCoverage(db: DatabaseSync, from: number, now: number): HistoryCoverage {
+  const detail = (db.prepare('SELECT MAX(ts) AS t FROM system_samples').get() as { t: number | null }).t;
+  const lastMinute = (db.prepare('SELECT MAX(ts) AS t FROM system_minute').get() as { t: number | null }).t;
+  // Le détail fait foi : la minute en cours peut déjà être agrégée (le service ré-agrège la minute entamée), sa fin serait dans le futur.
+  const latestTs = detail ?? (lastMinute === null ? null : lastMinute + M);
+  if (latestTs === null) return { latestTs: null, coveredFrom: null, gap: false };
+  const rows = db.prepare('SELECT ts FROM system_minute WHERE ts >= ? AND ts <= ? ORDER BY ts DESC').all(Math.floor(from / M) * M - M, Math.min(now, latestTs)) as { ts: number }[];
+  let cur = latestTs;
+  let gap = false;
+  for (const { ts } of rows) {
+    if (cur - (ts + M) > COVERAGE_MAX_GAP_MS) {
+      gap = true;
+      break;
+    }
+    cur = Math.min(cur, ts);
+  }
+  // détail seul (minutes pas encore agrégées) : couvert depuis le plus ancien échantillon détaillé récent
+  if (rows.length === 0 && detail !== null) {
+    const first = (db.prepare('SELECT MIN(ts) AS t FROM system_samples WHERE ts >= ?').get(from) as { t: number | null }).t;
+    if (first !== null) cur = first;
+  }
+  return { latestTs, coveredFrom: Math.max(cur, from), gap };
 }
 
 /** Premier instant couvert par l'historique : le plus ancien des tables système détaillée et par minute ; null si vide. */

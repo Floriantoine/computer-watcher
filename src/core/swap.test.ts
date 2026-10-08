@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import type { GroupClassification } from './classify/classify';
 import { group, node, proc } from './classify/testFixtures';
 import type { FullSnapshot } from './snapshot';
-import { SWAP_IDLE_MS, swapTargets, swapView, type SwapInput } from './swap';
+import { isSessionService, SWAP_IDLE_MS, swapTargets, swapView, type SwapInput } from './swap';
 import type { Group, InstanceSummary, ProcInfo, SystemInfo } from './types';
 
 const H = 3600_000;
@@ -35,8 +35,11 @@ function full(groups: Group[], instances: InstanceSummary[] = []): FullSnapshot 
 /** Dernière activité de chaque processus (clé pid:startTicks). */
 const last = (entries: [ProcInfo, number | null][]) => new Map(entries.map(([p, ts]) => [`${p.pid}:${p.startTicks}`, ts]));
 
+/** Historique continu sur toute la fenêtre (7 j), dernier échantillon il y a 3 s. */
+const COVERED = { latestTs: NOW - 3000, coveredFrom: NOW - 7 * D, gap: false };
+
 function input(f: FullSnapshot, lastActive: SwapInput['lastActive'], over: Partial<SwapInput> = {}): SwapInput {
-  return { full: f, lastActive, historyFrom: NOW - 10 * D, now: NOW, minSwapKB: 100 * MB, idleMs: SWAP_IDLE_MS, ...over };
+  return { full: f, lastActive, coverage: COVERED, now: NOW, minSwapKB: 100 * MB, idleMs: SWAP_IDLE_MS, intervalMs: 5000, activeCpu: 1, ...over };
 }
 
 /** Projet acme avec une instance (processus fournis). */
@@ -88,8 +91,8 @@ describe('swapView', () => {
   test('historique depuis 3 h seulement → inconnu, pas dans sleepingKeys', () => {
     const p = sleeper('nest', 300);
     const { f } = project([p]);
-    const v = swapView(input(f, last([[p, null]]), { historyFrom: NOW - 3 * H }));
-    expect(v.rows[0]!.children[0]!.state).toEqual({ kind: 'unknown' });
+    const v = swapView(input(f, last([[p, null]]), { coverage: { ...COVERED, coveredFrom: NOW - 3 * H } }));
+    expect(v.rows[0]!.children[0]!.state).toEqual({ kind: 'unknown', reason: 'short' });
     expect(v.rows[0]!.children[0]!.bulkEligible).toBe(false);
     expect(v.sleepingKeys).toEqual([]);
   });
@@ -97,8 +100,11 @@ describe('swapView', () => {
   test('pas de base (lastActive null) ou historique vide → inconnu', () => {
     const p = sleeper('nest', 300);
     const { f } = project([p]);
-    expect(swapView(input(f, null)).rows[0]!.children[0]!.state).toEqual({ kind: 'unknown' });
-    expect(swapView(input(f, last([[p, null]]), { historyFrom: null })).rows[0]!.children[0]!.state).toEqual({ kind: 'unknown' });
+    expect(swapView(input(f, null)).rows[0]!.children[0]!.state).toEqual({ kind: 'unknown', reason: 'none' });
+    expect(swapView(input(f, last([[p, null]]), { coverage: null })).rows[0]!.children[0]!.state).toEqual({ kind: 'unknown', reason: 'none' });
+    expect(swapView(input(f, last([[p, null]]), { coverage: { latestTs: null, coveredFrom: null, gap: false } })).rows[0]!.children[0]!.state).toEqual({
+      kind: 'unknown', reason: 'none',
+    });
   });
 
   test('instance lancée il y a 2 h, inactive → active (même sans historique suffisant)', () => {
@@ -118,6 +124,41 @@ describe('swapView', () => {
     const p = sleeper('nest', 300);
     const { f } = project([p]);
     expect(swapView(input(f, last([[p, NOW - 2 * H]]))).rows[0]!.children[0]!.state).toEqual({ kind: 'active' });
+  });
+
+  test('service d\'enregistrement arrêté maintenant (dernier échantillon il y a 2 h) → inconnu, rien de proposé', () => {
+    const p = sleeper('nest', 300);
+    const { f } = project([p]);
+    const v = swapView(input(f, last([[p, NOW - 3 * D]]), { coverage: { ...COVERED, latestTs: NOW - 2 * H } }));
+    expect(v.rows[0]!.children[0]!.state).toEqual({ kind: 'unknown', reason: 'stopped' });
+    expect(v.sleepingKeys).toEqual([]);
+    // dernier échantillon plus vieux que 2 intervalles (11 s pour 5 s) : déjà « arrêté »
+    expect(swapView(input(f, last([[p, NOW - 3 * D]]), { coverage: { ...COVERED, latestTs: NOW - 11_000 } })).rows[0]!.children[0]!.state.kind).toBe('unknown');
+  });
+
+  test('service arrêté 20 h dans le dernier jour (trou > 10 min) → inconnu (trou), rien de proposé', () => {
+    const p = sleeper('nest', 300);
+    const { f } = project([p]);
+    const v = swapView(input(f, last([[p, NOW - 3 * D]]), { coverage: { latestTs: NOW - 3000, coveredFrom: NOW - 4 * H, gap: true } }));
+    expect(v.rows[0]!.children[0]!.state).toEqual({ kind: 'unknown', reason: 'gap' });
+    expect(v.sleepingKeys).toEqual([]);
+  });
+
+  test('dernière activité avant le début de la couverture continue → endormi depuis plus de (sinceTs null)', () => {
+    const p = sleeper('nest', 300);
+    const { f } = project([p]);
+    const v = swapView(input(f, last([[p, NOW - 6 * D]]), { coverage: { latestTs: NOW - 3000, coveredFrom: NOW - 2 * D, gap: true } }));
+    expect(v.rows[0]!.children[0]!.state).toEqual({ kind: 'sleeping', sinceTs: null });
+    expect(v.coveredFrom).toBe(NOW - 2 * D);
+  });
+
+  test('seuil d\'activité max(1, procMinCpuPercent) : CPU en direct 1,5 % sous un seuil de 2 % → pas actif', () => {
+    const p = sleeper('nest', 300, { cpuPercent: 1.5 });
+    const { f } = project([p]);
+    expect(swapView(input(f, last([[p, NOW - 3 * D]]))).rows[0]!.children[0]!.state.kind).toBe('active');
+    const v = swapView(input(f, last([[p, NOW - 3 * D]]), { activeCpu: 2 }));
+    expect(v.rows[0]!.children[0]!.state.kind).toBe('sleeping');
+    expect(v.activeCpu).toBe(2);
   });
 
   test('jamais actif dans la fenêtre → endormi, sinceTs null', () => {
@@ -160,7 +201,10 @@ describe('swapView', () => {
   test('instance lancée par Claude, ou projet non tuable : jamais éligible', () => {
     const p = sleeper('nest', 300);
     const a = project([p], { launchedBy: 'claude' });
-    expect(swapView(input(a.f, last([[p, NOW - 3 * D]]))).sleepingKeys).toEqual([]);
+    const va = swapView(input(a.f, last([[p, NOW - 3 * D]])));
+    expect(va.sleepingKeys).toEqual([]);
+    expect(va.rows[0]!.children[0]!.launchedBy).toBe('claude');
+    expect(va.rows[0]!.children[0]!.state.kind).toBe('sleeping');
     const b = project([p], {}, { killable: false });
     expect(swapView(input(b.f, last([[p, NOW - 3 * D]]))).sleepingKeys).toEqual([]);
   });
@@ -171,6 +215,24 @@ describe('swapView', () => {
     const v = swapView(input(full([g]), last([[p, NOW - 3 * D]])));
     expect(v.rows[0]!.killable).toBe(false);
     expect(v.rows[0]!.bulkEligible).toBe(false);
+  });
+
+  test('groupe « command » (démons de session, processus regroupés par nom) : jamais tuable depuis la vue swap', () => {
+    const p = sleeper('kwalletd6', 300);
+    const v = swapView(input(full([group('command:kwalletd6', 'command', [node(p)])]), last([[p, NOW - 3 * D]])));
+    expect(v.rows[0]!.state.kind).toBe('sleeping');
+    expect(v.rows[0]!.killable).toBe(false);
+  });
+
+  test('appli contenant un service de session (portail, pipewire, kwallet…) : jamais tuable', () => {
+    for (const name of ['xdg-desktop-portal-kde', 'kwalletd6', 'pipewire-pulse', 'wireplumber', 'kded6', 'plasmashell', 'kwin_wayland', 'Xwayland', 'dbus-broker', 'systemd', 'gvfsd-fuse', 'at-spi2-registryd']) {
+      const root = sleeper('app', 300);
+      const svc = sleeper(name, 10);
+      const v = swapView(input(full([group('app:x', 'app', [node(root, node(svc))])]), last([[root, NOW - 3 * D], [svc, null]])));
+      expect(v.rows[0]!.killable, name).toBe(false);
+    }
+    expect(isSessionService('spotify')).toBe(false);
+    expect(isSessionService('kwalletmanager5')).toBe(false);
   });
 
   test('tri par swap décroissant, groupes sans swap absents, sous-groupes de « Autres » listés à la place de « Autres »', () => {

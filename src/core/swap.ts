@@ -2,12 +2,30 @@
 import { flattenGroup, type FullSnapshot } from './snapshot';
 import type { Category, Group, GroupKind, InstanceSummary, ProcInfo } from './types';
 
-/** Seuil d'activité CPU (même valeur que « inactives » : ACTIVE_CPU_PERCENT de l'historique). */
-const ACTIVE_CPU = 1;
-/** « Endormi » : aucun CPU ≥ 1 % depuis 1 jour. */
-export const SWAP_IDLE_MS = 86_400_000;
+import type { HistoryCoverage } from './history/queries';
 
-export type SleepState = { kind: 'active' } | { kind: 'sleeping'; sinceTs: number | null } | { kind: 'unknown' };
+/** « Endormi » : aucun CPU ≥ seuil depuis 1 jour. */
+export const SWAP_IDLE_MS = 86_400_000;
+/** Fenêtre lue dans l'historique, quelle que soit la rétention : au-delà, « endormi depuis plus de 7 j » (lecture à froid bornée). */
+export const SWAP_LOOKBACK_MS = 7 * 86_400_000;
+
+/**
+ * Pourquoi l'état est inconnu : pas d'historique (base absente ou vide), service d'enregistrement arrêté (dernier échantillon
+ * plus vieux que 2 intervalles), trou de plus de 10 min dans le dernier jour, ou historique plus court qu'un jour.
+ */
+export type UnknownReason = 'none' | 'stopped' | 'gap' | 'short';
+export type SleepState = { kind: 'active' } | { kind: 'sleeping'; sinceTs: number | null } | { kind: 'unknown'; reason: UnknownReason };
+
+/**
+ * Services de la session de bureau : jamais d'« Arrêter » depuis la vue swap, même classés en appli (liste locale, à unifier
+ * avec la liste « jamais tuer » des règles). Motifs sur le nom du processus, `*` = préfixe.
+ */
+const SESSION_SERVICES = [
+  'xdg-desktop-portal*', 'kwalletd*', 'pipewire*', 'wireplumber', 'kded*', 'plasmashell', 'kwin*', 'Xwayland', 'dbus*', 'systemd*', 'gvfs*', 'at-spi*',
+];
+export function isSessionService(name: string): boolean {
+  return SESSION_SERVICES.some((p) => (p.endsWith('*') ? name.startsWith(p.slice(0, -1)) : name === p));
+}
 
 export interface SwapRow {
   /** Id du groupe, ou clé de l'instance pour une ligne enfant. */
@@ -25,8 +43,10 @@ export interface SwapRow {
   /** Proposée par « Arrêter les endormis » : instance endormie, non protégée, d'un projet / dossier supprimé tuable, pas lancée par Claude. */
   bulkEligible: boolean;
   protected: boolean;
-  /** Groupe tuable depuis la vue (bouton « Arrêter » individuel) : jamais Claude, jamais protégé. */
+  /** Bouton « Arrêter » individuel possible : groupe `app` tuable, non protégé, sans service de session (jamais Claude ni `command`). */
   killable: boolean;
+  /** Instance lancée par une session Claude encore ouverte : jamais proposée. */
+  launchedBy?: 'claude';
   children: SwapRow[];
 }
 
@@ -34,8 +54,10 @@ export interface SwapView {
   swapUsedKB: number;
   swapTotalKB: number;
   shmemKB: number | null;
-  /** Premier instant couvert par l'historique (« endormi depuis plus de … ») ; null sans historique. */
-  historyFrom: number | null;
+  /** Début de la couverture continue de l'historique, au plus 7 j (« endormi depuis plus de … ») ; null sans historique. */
+  coveredFrom: number | null;
+  /** Seuil d'activité CPU appliqué (%) : max(1, procMinCpuPercent). */
+  activeCpu: number;
   rows: SwapRow[];
   /** Clés des instances `bulkEligible`, dans l'ordre des lignes. */
   sleepingKeys: string[];
@@ -43,12 +65,17 @@ export interface SwapView {
 
 export interface SwapInput {
   full: FullSnapshot;
-  /** Dernière activité CPU ≥ 1 % par `pid:startTicks` ; null sans base d'historique. */
+  /** Dernière activité CPU ≥ `activeCpu` par `pid:startTicks` ; null sans base d'historique. */
   lastActive: ReadonlyMap<string, number | null> | null;
-  historyFrom: number | null;
+  /** Couverture de l'historique sur la fenêtre lue ; null sans base. */
+  coverage: HistoryCoverage | null;
   now: number;
   minSwapKB: number;
   idleMs: number;
+  /** Intervalle d'enregistrement : au-delà de 2 intervalles sans échantillon, le service est jugé arrêté. */
+  intervalMs: number;
+  /** Seuil d'activité CPU (%), max(1, procMinCpuPercent) : en dessous, un processus peut ne pas être enregistré du tout. */
+  activeCpu: number;
 }
 
 const sum = (procs: readonly ProcInfo[], f: (p: ProcInfo) => number) => procs.reduce((s, p) => s + f(p), 0);
@@ -58,23 +85,34 @@ function listedGroups(groups: readonly Group[]): Group[] {
   return groups.flatMap((g) => (g.kind === 'others' ? g.subgroups : [g]));
 }
 
+/** Historique utilisable pour affirmer « aucune activité depuis `idleMs` » ? Sinon la raison de l'état inconnu. */
+function historyProblem(i: SwapInput): UnknownReason | null {
+  const c = i.coverage;
+  if (i.lastActive === null || !c || c.latestTs === null || c.coveredFrom === null) return 'none';
+  if (i.now - c.latestTs > 2 * i.intervalMs) return 'stopped';
+  if (c.coveredFrom > i.now - i.idleMs) return c.gap ? 'gap' : 'short';
+  return null;
+}
+
 /**
- * État d'un ensemble de processus : CPU en direct ≥ 1 % → actif ; swap cumulé ≤ seuil → actif (non concerné) ; lancé depuis
- * moins de `idleMs` → actif ; historique absent ou trop court → inconnu ; dernière activité avant `now − idleMs` (ou aucune
- * dans la fenêtre) → endormi ; sinon actif.
+ * État d'un ensemble de processus : CPU en direct (somme) ≥ seuil → actif ; swap cumulé ≤ seuil → actif (non concerné) ;
+ * lancé depuis moins de `idleMs` → actif ; historique absent, service arrêté, trou ou historique trop court → inconnu ;
+ * dernière activité (par processus) avant `now − idleMs`, ou aucune → endormi (`sinceTs` null si avant la couverture continue) ;
+ * sinon actif. La somme en direct et le maximum par processus penchent tous deux vers « actif ».
  */
 function sleepState(procs: readonly ProcInfo[], swapKB: number, ageSec: number, i: SwapInput): SleepState {
-  if (sum(procs, (p) => p.cpuPercent) >= ACTIVE_CPU) return { kind: 'active' };
+  if (sum(procs, (p) => p.cpuPercent) >= i.activeCpu) return { kind: 'active' };
   if (swapKB <= i.minSwapKB) return { kind: 'active' };
   if (ageSec * 1000 < i.idleMs) return { kind: 'active' };
-  if (i.lastActive === null || i.historyFrom === null || i.historyFrom > i.now - i.idleMs) return { kind: 'unknown' };
+  const problem = historyProblem(i);
+  if (problem) return { kind: 'unknown', reason: problem };
   let latest: number | null = null;
   for (const p of procs) {
-    const ts = i.lastActive.get(`${p.pid}:${p.startTicks}`) ?? null;
+    const ts = i.lastActive!.get(`${p.pid}:${p.startTicks}`) ?? null;
     if (ts !== null && (latest === null || ts > latest)) latest = ts;
   }
   if (latest !== null && latest >= i.now - i.idleMs) return { kind: 'active' };
-  return { kind: 'sleeping', sinceTs: latest };
+  return { kind: 'sleeping', sinceTs: latest !== null && latest >= i.coverage!.coveredFrom! ? latest : null };
 }
 
 const bySwap = (a: SwapRow, b: SwapRow) => b.swapKB - a.swapKB;
@@ -88,7 +126,8 @@ export function swapView(i: SwapInput): SwapView {
     if (swapKB <= 0) continue;
     const instances = full.classification.get(g.id)?.instances ?? [];
     const isProject = g.kind === 'project' || g.kind === 'deleted';
-    const killable = g.killable && !g.protected && g.kind !== 'claude';
+    /** Groupe tuable (kill groupé des instances de projet, ou « Arrêter » d'une appli). */
+    const groupKillable = g.killable && !g.protected && g.kind !== 'claude';
     const children: SwapRow[] = [];
     if (isProject) {
       const byPid = new Map(procs.map((p) => [p.pid, p]));
@@ -100,8 +139,9 @@ export function swapView(i: SwapInput): SwapView {
         children.push({
           key: inst.key, groupId: g.id, label: inst.label, kind: g.kind, category: inst.category, project: inst.project,
           swapKB: kb, rssKB: sum(own, (p) => p.rssKB), instanceKey: inst.key, state,
-          bulkEligible: state.kind === 'sleeping' && killable && !inst.protected && inst.launchedBy !== 'claude',
+          bulkEligible: state.kind === 'sleeping' && groupKillable && !inst.protected && inst.launchedBy !== 'claude',
           protected: inst.protected, killable: false, children: [],
+          ...(inst.launchedBy === 'claude' ? { launchedBy: 'claude' as const } : {}),
         });
       }
       children.sort(bySwap);
@@ -111,7 +151,7 @@ export function swapView(i: SwapInput): SwapView {
       key: g.id, groupId: g.id, label: g.label, kind: g.kind, category: single?.category ?? null, project: isProject ? g.label : null,
       swapKB, rssKB: sum(procs, (p) => p.rssKB), instanceKey: single?.key ?? null,
       state: sleepState(procs, swapKB, Math.max(0, ...procs.map((p) => p.ageSec)), i),
-      bulkEligible: false, protected: g.protected, killable: !isProject && killable, children,
+      bulkEligible: false, protected: g.protected, killable: g.kind === 'app' && groupKillable && !procs.some((p) => isSessionService(p.name)), children,
     });
   }
   rows.sort(bySwap);
@@ -119,7 +159,8 @@ export function swapView(i: SwapInput): SwapView {
     swapUsedKB: full.system.swapTotalKB - full.system.swapFreeKB,
     swapTotalKB: full.system.swapTotalKB,
     shmemKB: full.system.shmemKB ?? null,
-    historyFrom: i.historyFrom,
+    coveredFrom: i.coverage?.coveredFrom ?? null,
+    activeCpu: i.activeCpu,
     rows,
     sleepingKeys: rows.flatMap((r) => r.children.filter((c) => c.bulkEligible).map((c) => c.key)),
   };

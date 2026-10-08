@@ -86,19 +86,26 @@ test('history.active : null sans base, ensemble avec base, null (et erreur journ
   }
 });
 
-test('history.lastActive / from (vue swap) : null sans base, valeurs avec base, cache vidé à la fermeture', () => {
+test('history.lastActive / coverage / from (vue swap) : null sans base, valeurs avec base, lecture par tranches', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'pw-hist-'));
   const reader = createHistoryReader(dir, () => DEFAULT_RECORDER);
   const targets = [{ pid: 10, startTicks: 100 }];
-  expect(reader.lastActive(targets, 86_400_000)).toBeNull();
+  expect(await reader.lastActive(targets, 86_400_000, 1)).toBeNull();
+  expect(await reader.lastActive([], 86_400_000, 1)).toBeNull();
   expect(reader.from()).toBeNull();
+  expect(reader.coverage(0, Date.now())).toBeNull();
   const now = Date.now();
   makeDb(dir, now);
   // enregistré mais CPU 0 : jamais actif → null (≠ base absente)
-  expect(reader.lastActive(targets, 86_400_000)).toEqual(new Map([['10:100', null]]));
+  expect(await reader.lastActive(targets, 86_400_000, 1)).toEqual(new Map([['10:100', null]]));
   expect(reader.from()).not.toBeNull();
+  expect(reader.coverage(now - 86_400_000, now)?.latestTs).not.toBeNull();
+  // 60 cibles : trois tranches, toutes présentes dans le résultat
+  const many = Array.from({ length: 60 }, (_, i) => ({ pid: 1000 + i, startTicks: 1 }));
+  const r = await reader.lastActive([...many, ...targets], 86_400_000, 1);
+  expect(r?.size).toBe(61);
   reader.close();
-  expect(reader.lastActive(targets, 86_400_000)).toEqual(new Map([['10:100', null]]));
+  expect(await reader.lastActive(targets, 86_400_000, 1)).toEqual(new Map([['10:100', null]]));
 });
 
 const backups = ['metrics.db.pre-v2-20261007T094000', 'metrics.db.bak-20261001T000000', 'metrics.db.bak-20261001T000000-wal'];

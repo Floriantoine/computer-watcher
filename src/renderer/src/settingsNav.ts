@@ -5,7 +5,7 @@ export type SettingsSection = 'protected' | 'others' | 'display' | 'classify' | 
 export const SETTINGS_SECTIONS: { id: SettingsSection; label: string; description: string }[] = [
   { id: 'protected', label: 'Protégés', description: 'Programmes dont le kill demande toujours une confirmation.' },
   { id: 'others', label: 'Carte « Autres »', description: 'Seuils sous lesquels les petits groupes sont rassemblés dans une seule carte.' },
-  { id: 'display', label: 'Affichage', description: 'Mémoire affichée, effets visuels, barre des tâches et seuil de la vue swap.' },
+  { id: 'display', label: 'Affichage', description: 'Mémoire affichée, effets visuels et barre des tâches.' },
   { id: 'classify', label: 'Classement', description: 'Classement automatique des instances, ports et corrections manuelles.' },
   { id: 'alerts', label: 'Alertes', description: 'Où chaque type d’alerte est signalé, et à quelle fréquence.' },
   { id: 'recorder', label: 'Enregistrement', description: 'Service d’arrière-plan qui alimente l’onglet Métriques.' },
@@ -98,8 +98,6 @@ export interface AttentionInput {
   protectedEntry: string;
   protectedList: readonly string[];
   others: FormState;
-  /** Affichage : seuil « endormi » de la vue swap (les autres réglages s'enregistrent tout de suite). */
-  display?: FormState;
   alerts: FormState;
   /** null : pas encore lu. */
   recorder: FormState & { status: { available: boolean; enabled: boolean; running: boolean } | null };
@@ -142,7 +140,6 @@ export function sectionAttention(i: AttentionInput): Partial<Record<SettingsSect
   const out: Partial<Record<SettingsSection, Attention>> = {
     protected: entry && !i.protectedList.includes(entry) ? { tone: 'dirty', reasons: ['Saisie pas encore ajoutée'] } : undefined,
     others: attention(i.others, null),
-    display: i.display ? attention(i.display, null) : undefined,
     alerts: attention(i.alerts, null),
     recorder: attention(i.recorder, recorderWarning(i.recorder.status)),
     earlyoom: attention(i.earlyoom, earlyoomWarning(i.earlyoom.status)),

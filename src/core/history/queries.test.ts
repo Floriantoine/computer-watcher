@@ -7,7 +7,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { openHistoryDb } from './db';
 import { createV3Db } from './testDb';
 import { aggregateMinute } from './maintenance';
-import { bucketMs, historyFrom, pickSource, queryInactive, queryLastActive, queryCulprits, queryEvents, queryGroup, queryGroups, PROC_TREE_MAX, queryProcs, queryProcsAt, queryProcTree, querySystem, queryTop, rangeFromPreset } from './queries';
+import { bucketMs, historyCoverage, historyFrom, pickSource, pruneLastActiveCache, queryInactive, queryLastActive, queryCulprits, queryEvents, queryGroup, queryGroups, PROC_TREE_MAX, queryProcs, queryProcsAt, queryProcTree, querySystem, queryTop, rangeFromPreset } from './queries';
 
 const H = 3600_000;
 const M = 60_000;
@@ -661,9 +661,18 @@ describe('queryLastActive / historyFrom (vue swap)', () => {
     const c2 = new Map();
     queryLastActive(db, [{ pid: 30, startTicks: 300 }], 30 * D, o(now), c2);
     expect(queryLastActive(db, [{ pid: 30, startTicks: 300 }], H, o(now), c2).get('30:300')).toBeNull();
-    // cibles disparues : retirées du cache
-    queryLastActive(db, [{ pid: 30, startTicks: 300 }], 30 * D, o(now + 20 * M), cache);
-    expect([...cache.keys()]).toEqual(['30:300']);
+    // cibles disparues : retirées du cache par l'appelant (lecture par tranches)
+    pruneLastActiveCache(cache, new Set(['31:310']));
+    expect([...cache.keys()]).toEqual(['31:310']);
+    pruneLastActiveCache(cache, new Set());
+    expect(cache.size).toBe(0);
+  });
+
+  test('seuil d\'activité passé en paramètre (max(1, procMinCpuPercent)) : 0,2 % compte sous un seuil de 0,1 %, 5 % ne compte pas sous 6 %', () => {
+    const { db, now } = lastActiveDb();
+    const o = { now, detailHours: 24, intervalSec: 5 };
+    expect(queryLastActive(db, targets, D, o, undefined, 0.1).get('32:320')).not.toBeNull();
+    expect(queryLastActive(db, targets, D, o, undefined, 6).get('30:300')).toBeNull();
   });
 
   test('aucune cible : carte vide', () => {
@@ -678,5 +687,55 @@ describe('queryLastActive / historyFrom (vue swap)', () => {
     expect(historyFrom(db)).toBe(5 * H);
     db.prepare('INSERT INTO system_minute VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(2 * H, 1, 1, 8, 0, 0, 1, null, null, 0, 0, null, null);
     expect(historyFrom(db)).toBe(2 * H);
+  });
+});
+
+describe('historyCoverage (vue swap : trous de l\'historique)', () => {
+  const D = 24 * H;
+  const now = 10 * D;
+  function coverageDb(minutes: number[], latestDetail: number | null) {
+    const { db } = openHistoryDb(join(mkdtempSync(join(tmpdir(), 'pw-q-')), 'm.db'));
+    const ins = db.prepare('INSERT INTO system_minute VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)');
+    for (const t of minutes) ins.run(t, 1, 1, 8, 0, 0, 1, null, null, 0, 0, null, null);
+    if (latestDetail !== null)
+      db.prepare('INSERT INTO system_samples(ts, mem_used_kb, mem_total_kb, swap_used_kb, swap_total_kb, psi_some10, load1, cpu_percent) VALUES (?,?,?,?,?,?,?,?)').run(latestDetail, 1, 1, 0, 0, null, 0, 0);
+    return db;
+  }
+  const range = (from: number, to: number) => {
+    const out: number[] = [];
+    for (let t = from; t < to; t += M) out.push(t);
+    return out;
+  };
+
+  test('base vide : rien', () => {
+    expect(historyCoverage(coverageDb([], null), now - 7 * D, now)).toEqual({ latestTs: null, coveredFrom: null, gap: false });
+  });
+
+  test('continu sur 3 j, fenêtre 7 j : couvert depuis le début des données, sans trou', () => {
+    const db = coverageDb(range(now - 3 * D, now - M), now - 3000);
+    expect(historyCoverage(db, now - 7 * D, now)).toEqual({ latestTs: now - 3000, coveredFrom: now - 3 * D, gap: false });
+  });
+
+  test('continu sur 10 j : couverture bornée au début de la fenêtre', () => {
+    const db = coverageDb(range(now - 10 * D, now - M), now - 3000);
+    expect(historyCoverage(db, now - 7 * D, now)).toEqual({ latestTs: now - 3000, coveredFrom: now - 7 * D, gap: false });
+  });
+
+  test('service arrêté 20 h dans le dernier jour : couverture continue depuis la fin du trou, gap', () => {
+    const db = coverageDb([...range(now - 3 * D, now - 24 * H), ...range(now - 4 * H, now - M)], now - 3000);
+    expect(historyCoverage(db, now - 7 * D, now)).toEqual({ latestTs: now - 3000, coveredFrom: now - 4 * H, gap: true });
+  });
+
+  test('trou de 9 min toléré, trou de 11 min non', () => {
+    const a = coverageDb([...range(now - 2 * D, now - D), ...range(now - D + 9 * M, now - M)], now - 3000);
+    expect(historyCoverage(a, now - 7 * D, now).gap).toBe(false);
+    const b = coverageDb([...range(now - 2 * D, now - D), ...range(now - D + 11 * M, now - M)], now - 3000);
+    expect(historyCoverage(b, now - 7 * D, now)).toMatchObject({ coveredFrom: now - D + 11 * M, gap: true });
+  });
+
+  test('service arrêté maintenant : latestTs ancien (la fraîcheur est jugée par swapView)', () => {
+    // la minute entamée du dernier échantillon est déjà agrégée (le service ré-agrège la minute en cours) : sa fin n'est pas un échantillon
+    const db = coverageDb(range(now - 3 * D, now - 2 * H + M), now - 2 * H + 5000);
+    expect(historyCoverage(db, now - 7 * D, now).latestTs).toBe(now - 2 * H + 5000);
   });
 });

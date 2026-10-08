@@ -3,13 +3,16 @@ import { existsSync, readFileSync, rmSync, statSync, writeFileSync, mkdirSync } 
 import type { DatabaseSync } from 'node:sqlite';
 import { historyBackups, openHistoryDb, SCHEMA_VERSION } from '../core/history/db';
 import {
-  historyFrom, queryCulprits, queryEvents, queryGroup, queryGroups, queryInactive, queryLastActive, queryProcs, queryProcTree, querySystem, queryTop, rangeFromPreset,
-  type LastActiveCache, type QueryOpts,
+  historyCoverage, historyFrom, pruneLastActiveCache, queryCulprits, queryEvents, queryGroup, queryGroups, queryInactive, queryLastActive, queryProcs, queryProcTree, querySystem, queryTop, rangeFromPreset,
+  type HistoryCoverage, type LastActiveCache, type QueryOpts,
 } from '../core/history/queries';
 import { countUnseenAlerts, newestAlertTs, queryAlert, queryAlertTimes, queryUnseenAlerts, type UnseenFilter } from '../core/history/alertsQuery';
 import { clearRequestPath, dbPath, statusPath } from '../core/paths';
 import type { RangePreset, RecorderConfig, RecorderStatus, TimeRange, TopOptions, TopResult } from '../core/types';
 import { clampToDetail } from './historyIpc';
+
+/** Processus lus par tranche dans `lastActive` (≈ 10 ms à froid pour 7 jours d'historique). */
+const LAST_ACTIVE_CHUNK = 25;
 
 export function createHistoryReader(dataDir: string, getConfig: () => RecorderConfig) {
   let db: DatabaseSync | null = null;
@@ -81,9 +84,28 @@ export function createHistoryReader(dataDir: string, getConfig: () => RecorderCo
     /** Clés `pid:startTicks` actives (CPU ≥ 1 %) depuis `since` ; null sans base (ou en cas d'erreur). */
     active: (targets: { pid: number; startTicks: number }[], since: number): Set<string> | null =>
       run<Set<string> | null>((d) => queryInactive(d, targets, since, opts()), null),
-    /** Vue swap : dernière activité CPU ≥ 1 % par `pid:startTicks` dans les `lookbackMs` ; null sans base (ou en cas d'erreur). */
-    lastActive: (targets: { pid: number; startTicks: number }[], lookbackMs: number): Map<string, number | null> | null =>
-      run<Map<string, number | null> | null>((d) => queryLastActive(d, targets, lookbackMs, opts(), lastActiveCache), null),
+    /**
+     * Vue swap : dernière activité CPU ≥ `activeCpu` par `pid:startTicks` dans les `lookbackMs` ; null sans base (ou en cas
+     * d'erreur). Lue par tranches de 25 processus séparées par un tour de boucle : une lecture à froid ne bloque jamais le
+     * processus main plus de quelques millisecondes d'affilée (IPC, collecte, barre des tâches).
+     */
+    lastActive: async (targets: { pid: number; startTicks: number }[], lookbackMs: number, activeCpu: number): Promise<Map<string, number | null> | null> => {
+      const out = new Map<string, number | null>();
+      for (let i = 0; i < targets.length; i += LAST_ACTIVE_CHUNK) {
+        if (i > 0) await new Promise<void>((r) => setImmediate(r));
+        const part = run<Map<string, number | null> | null>(
+          (d) => queryLastActive(d, targets.slice(i, i + LAST_ACTIVE_CHUNK), lookbackMs, opts(), lastActiveCache, activeCpu),
+          null,
+        );
+        if (!part) return null;
+        for (const [k, v] of part) out.set(k, v);
+      }
+      if (targets.length === 0 && !conn()) return null;
+      pruneLastActiveCache(lastActiveCache, new Set(targets.map((t) => `${t.pid}:${t.startTicks}`)));
+      return out;
+    },
+    /** Couverture de l'historique sur [from, now] (dernier échantillon, trous) ; null sans base. */
+    coverage: (from: number, now: number): HistoryCoverage | null => run((d) => historyCoverage(d, from, now), null),
     /** Premier instant couvert par l'historique ; null sans base ou base vide. */
     from: (): number | null => run((d) => historyFrom(d), null),
     /** Ferme la connexion (avant suppression de la base). */

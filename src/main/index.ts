@@ -19,7 +19,8 @@ import { compileProtection } from '../core/protection';
 import { formatAppEvent } from '../core/history/events';
 import { appEventsPath, dataDir, focusStatePath, forecastSnoozePath } from '../core/paths';
 import { alertIdFromArgv } from '../core/alerts';
-import { swapTargets, swapView, SWAP_IDLE_MS, type SwapView } from '../core/swap';
+import { ACTIVE_CPU_PERCENT } from '../core/history/queries';
+import { swapTargets, swapView, SWAP_IDLE_MS, SWAP_LOOKBACK_MS, type SwapView } from '../core/swap';
 import { buildSnapshot, flattenGroup, groupProcs, instanceTargets, isWatch, othersFollowed, type Classification, type FullSnapshot } from '../core/snapshot';
 import type { ConfigState, Group, KillResult, ProcInfo, RecorderState, Watch } from '../core/types';
 import { createFreeOpener, wantsFree } from './launchArgs';
@@ -504,14 +505,21 @@ ipcMain.handle('classify:inactive', (_e, keys: unknown, since: unknown): string[
 
 /**
  * Vue swap (onglet Métriques) d'après le dernier snapshot : swap déjà lu par la collecte (VmSwap), dernière activité CPU lue
- * dans l'historique seulement pour les processus des groupes au-dessus du seuil (fenêtre : rétention résumée).
+ * dans l'historique seulement pour les processus des groupes au-dessus du seuil, sur au plus 7 jours (lecture par tranches,
+ * jamais un long blocage du main). Seuil d'activité : max(1, procMinCpuPercent) — en dessous, un petit processus peut ne pas
+ * être enregistré du tout. Couverture de l'historique (service arrêté, trous) vérifiée sur la même fenêtre.
  */
-ipcMain.handle('swap:view', (): SwapView | null => {
-  if (!last) return null;
+ipcMain.handle('swap:view', async (): Promise<SwapView | null> => {
+  const full = last;
+  if (!full) return null;
   const minSwapKB = config.ui.swapSleepMinMB * 1024;
+  const rec = config.recorder;
+  const activeCpu = Math.max(ACTIVE_CPU_PERCENT, rec.procMinCpuPercent);
+  const lookback = Math.min(rec.summaryDays * 86_400_000, SWAP_LOOKBACK_MS);
+  const lastActive = await history.lastActive(swapTargets(full, minSwapKB), lookback, activeCpu);
   const now = Date.now();
-  const lastActive = history.lastActive(swapTargets(last, minSwapKB), config.recorder.summaryDays * 86_400_000);
-  return swapView({ full: last, lastActive, historyFrom: lastActive ? history.from() : null, now, minSwapKB, idleMs: SWAP_IDLE_MS });
+  const coverage = lastActive ? history.coverage(now - lookback, now) : null;
+  return swapView({ full, lastActive, coverage, now, minSwapKB, idleMs: SWAP_IDLE_MS, intervalMs: rec.intervalSec * 1000, activeCpu });
 });
 
 /** Cibles de kill des instances (ou lanceurs d'un groupe) d'après le dernier snapshot ; instances disparues absentes. */
