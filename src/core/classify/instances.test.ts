@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ProcInfo } from '../types';
-import { findInstances, splitInstances } from './instances';
+import { findInstances, isLauncher, splitInstances } from './instances';
 import { group, node, proc } from './testFixtures';
 
 const pidsOf = (d: { procs: ProcInfo[] }) => d.procs.map((p) => p.pid);
@@ -101,5 +101,29 @@ describe('findInstances / splitInstances', () => {
 
   it('groupe vide ou « Autres » : aucune instance', () => {
     expect(splitInstances(group('others', 'others', []))).toEqual({ instances: [], launchers: [] });
+  });
+
+  it('processus non reconnu hors liste des lanceurs : absorbe ses descendants reconnus', () => {
+    const srv = proc('node', 'node tools/serve.mjs');
+    const esb = proc('esbuild', '/x/node_modules/@esbuild/linux-x64/bin/esbuild src/main.ts --bundle --watch');
+    const r = splitInstances(group('project:/x', 'project', [node(srv, node(esb))]));
+    expect(r.instances.map((d) => d.root.proc.pid)).toEqual([srv.pid]);
+    expect(pidsOf(r.instances[0])).toEqual([srv.pid, esb.pid]);
+    expect(r.launchers).toEqual([]);
+    // même avec une instance signalée hors du groupe : pas un lanceur
+    expect(splitInstances(group('project:/x', 'project', [node(srv, node(esb))]), () => true).launchers).toEqual([]);
+  });
+
+  it('isLauncher : programme significatif dans la liste des lanceurs', () => {
+    const L = (cmd: string, name = 'x') => isLauncher(proc(name, cmd));
+    for (const c of ['npm run dev', 'pnpm dev', 'yarn dev', 'npx vite', 'bun run dev', 'bunx vite', '/bin/sh -c vite', 'bash -c x', 'dash -c x', 'zsh -c x',
+      'env FOO=1 node x', 'node /x/node_modules/concurrently/dist/bin/concurrently.js a b', 'node /x/node_modules/.bin/nodemon src/x.ts',
+      'npm-run-all -p a b', 'run-p a b', 'run-s a b', 'node /x/node_modules/.bin/turbo run dev', 'node /x/node_modules/nx/bin/nx.js run app:serve']) {
+      expect(L(c), c).toBe(true);
+    }
+    for (const c of ['node tools/serve.mjs', 'bun server.ts', 'node /x/node_modules/nx/bin/nx.js daemon', 'python app.py', 'node /x/node_modules/.bin/vite']) {
+      expect(L(c), c).toBe(false);
+    }
+    expect(L('', 'npm run dev')).toBe(true);
   });
 });
