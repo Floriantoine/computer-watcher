@@ -11,7 +11,8 @@
 // Variables : MEASURE_SETTLE_S (20), MEASURE_SAMPLE_S (60), MEASURE_SCENARIOS (« visible,minimized »),
 // MEASURE_MAXIMIZE (1 : fenêtre agrandie, plus de cartes à l'écran), MEASURE_OTHERS_OPEN (1 : carte « Autres » dépliée),
 // MEASURE_ROUTE (metrics : onglet Métriques ouvert après la stabilisation, panneau « Ports ouverts » compris),
-// MEASURE_QUERY (texte tapé dans la recherche de la page Processus après la stabilisation, ex. « :3000 »).
+// MEASURE_QUERY (texte tapé dans la recherche de la page Processus après la stabilisation, ex. « :3000 »),
+// MEASURE_QUERIES (« q1|q2 » : une recherche par app, dans l'ordre des dossiers).
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -230,17 +231,19 @@ try {
     await onAll("win.webContents.executeJavaScript(\"localStorage.setItem('pw.othersOpen','1'); location.reload()\")");
   await sleep(SETTLE_S * 1000);
   const ROUTE = process.env.MEASURE_ROUTE ?? 'main';
-  if (process.env.MEASURE_QUERY) {
+  // MEASURE_QUERIES (« q1|q2 ») : une recherche par app, dans l'ordre des dossiers (comparer deux recherches qui affichent les mêmes cartes).
+  const queries = process.env.MEASURE_QUERIES ? process.env.MEASURE_QUERIES.split('|') : process.env.MEASURE_QUERY ? apps.map(() => process.env.MEASURE_QUERY) : null;
+  if (queries) {
     // Champ contrôlé par React : setter natif puis événement input.
-    const js = `(() => { const i = document.querySelector('.search input'); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(i, ${JSON.stringify(process.env.MEASURE_QUERY)}); i.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`;
-    await onAll(`win.webContents.executeJavaScript(${JSON.stringify(js)})`);
+    const js = (q) => `(() => { const i = document.querySelector('.search input'); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(i, ${JSON.stringify(q)}); i.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`;
+    await Promise.all(apps.map((a, i) => a.evaluate(`win.webContents.executeJavaScript(${JSON.stringify(js(queries[i] ?? ''))})`)));
   }
   if (ROUTE === 'metrics') {
     const js = `(() => { const b = [...document.querySelectorAll('button, a, [role=tab]')].find((e) => e.textContent.trim().startsWith('Métriques')); b?.click(); return !!b; })()`;
     await onAll(`win.webContents.executeJavaScript(${JSON.stringify(js)})`);
   }
-  if (ROUTE !== 'main' || process.env.MEASURE_QUERY) await sleep(5000);
-  const page = ROUTE === 'metrics' ? 'onglet Métriques' : process.env.MEASURE_QUERY ? `page Processus, recherche « ${process.env.MEASURE_QUERY} »` : 'page Processus';
+  if (ROUTE !== 'main' || queries) await sleep(5000);
+  const page = ROUTE === 'metrics' ? 'onglet Métriques' : queries ? `page Processus, recherche « ${queries.join(' » / « ')} »` : 'page Processus';
   for (const sc of SCENARIOS) {
     if (sc === 'minimized') await onAll('win.minimize()');
     if (sc === 'hidden') await onAll('win.hide()');
