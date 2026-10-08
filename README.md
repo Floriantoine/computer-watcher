@@ -8,7 +8,8 @@ Né d'un PC gelé dix minutes par 19 Go de swap : vieilles sessions de terminal,
 
 ## Ce que ça fait
 
-- **Groupes lisibles** : une carte par appli (Chrome, Spotify…), par projet de dev (tous les `node`, `vite`, `esbuild`… d'un même dépôt), une carte « Claude » qui rassemble toutes les sessions Claude Code (chaque session est une racine de l'arbre de détail), et le reste par nom de commande. Les petits groupes sont rangés dans « Autres ».
+- **Groupes lisibles** : une carte par appli (Chrome, Spotify…), par projet de dev (tous les `node`, `vite`, `esbuild`… d'un même dépôt), une carte « Claude » qui rassemble toutes les sessions Claude Code (chaque session est une racine de l'arbre de détail), et le reste par nom de commande. Les petits groupes sont rangés dans « Autres », sauf les projets, toujours visibles.
+- **Classement des instances** : chaque serveur de dev est reconnu (Front, Back, BDD, Worker, Tests, Outils…), avec son port en écoute et un badge « en double » s'il tourne deux fois. Filtres par catégorie, « Tuer la sélection », « Tuer le front », « Tout arrêter »… (voir plus bas).
 - **Ancienneté** de chaque groupe et de chaque processus, en orange au-delà d'un jour.
 - **Bandeau système** : RAM, swap, pression mémoire (PSI), charge.
 - **Page de détail** : arbre parent → enfants, commande complète, dossier de travail, CPU, RAM, swap.
@@ -17,6 +18,34 @@ Né d'un PC gelé dix minutes par 19 Go de swap : vieilles sessions de terminal,
 - **Mini-courbes** de mémoire sur chaque carte et **vue liste** compacte en alternative aux cartes.
 - **Historique en arrière-plan** et onglet **Métriques** (voir plus bas).
 - proc-watch refuse de tuer lui-même, ses parents (ton terminal) et les processus des autres utilisateurs.
+
+## Classement front / back et actions groupées
+
+Dans un projet, proc-watch découpe les processus en **instances** : un serveur et ses enfants (`npm run dev` → `vite` → `esbuild` donne une instance « vite »), classées dans une **catégorie** :
+
+| Catégorie | Exemples |
+|---|---|
+| Front | `vite`, `next dev`, `nuxt`, `ng serve`, `webpack serve`, `storybook` |
+| Back | `nest start`, `node dist/main`, `tsx src/server.ts`, `uvicorn`, `manage.py runserver`, `rails s`, `go run`, `cargo run` |
+| BDD | `postgres`, `mysqld`, `redis-server`, `mongod`, `meilisearch` |
+| Worker | `celery`, `rq worker`, `sidekiq`, `bullmq`, scripts `worker`/`queue`/`consumer` |
+| Tests | `vitest`, `jest`, `playwright test`, `pytest` |
+| Outils | `tsc --watch`, `esbuild --watch`, serveurs de langage (`tsserver`, `gopls`, `pyright`…), `vite build` |
+| Conteneur, Navigateur, IA, Système | `docker`, `podman` ; Chrome, Firefox ; Claude, serveurs MCP ; bureau et services (kwin, pipewire, systemd…) |
+| Inconnu | tout le reste (les shells et terminaux restent sans étiquette) |
+
+**D'où vient la catégorie**, dans cet ordre (la première qui conclut gagne) : ta correction manuelle, puis la ligne de commande, puis le port en écoute (5173 → front, 5432 → BDD, 8000 → back…), puis un script `dev` / `start*` du `package.json` du projet qui lance cette commande. Les dépendances seules (`react`, `express`…) ne classent rien.
+
+- **Reclasser** : dans le détail d'un projet, section « Instances », le menu « Reclasser » corrige une erreur en un clic. Un `node server.js` resté « Inconnu » devient ainsi un « Back ». La correction est retenue pour ce projet et ce motif de commande (elle survit aux redémarrages du serveur) ; « Revenir à l'automatique » l'annule. Toutes les corrections se retrouvent dans Réglages → Classement, où l'on peut les retirer une par une ou tout effacer.
+- **Ports** : les ports TCP en écoute sont lus toutes les 10 s dans `/proc/net/tcp{,6}`, pour les projets et les bases seulement, et affichés sur les étiquettes (`Front :5173`). Les ports des processus d'autres utilisateurs (un `postgres` lancé par le système, par exemple) ne sont pas lisibles. Réglages → Classement → « Détecter les ports » coupe cette lecture.
+- **Doublons** : deux instances du même projet, de la même catégorie (front, back, worker ou BDD) et de la même commande sont des doublons. Toutes sauf la plus ancienne portent le badge « en double ». Une API et un worker, ou deux applis d'un monorepo, n'en sont pas.
+- **Filtres** : sous la barre d'outils, une pastille par catégorie présente (avec le nombre d'instances), à sélection multiple et mémorisée. Un groupe reste affiché s'il a au moins une instance d'une catégorie choisie.
+- **Kill groupé** : avec un filtre actif, « Tuer la sélection (n) » ; dans le détail d'un projet, « Tuer le front », « Tuer le back » et « Tout arrêter ». Tous ouvrent la même confirmation, qui liste exactement les instances visées (projet, catégorie, commande, ports, ancienneté, RAM, CPU instantané) avec des raccourcis « Toutes », « Inactives > 1 h », « Inactives > 1 j » et « Doublons seulement ». Garde-fous :
+  - seuls les processus des **projets** (et des dossiers supprimés) sont visés : les applis, Claude et les services gardent leurs étiquettes mais ne sont jamais tués en groupe ;
+  - les instances **protégées** (🔒) sont décochées par défaut et se cochent une par une ;
+  - le kill passe par le même chemin que le kill simple (`SIGTERM`, puis « Forcer » ; refus pour proc-watch lui-même, ses parents et les autres utilisateurs), au plus 2 000 processus par demande.
+- **Lanceurs** : `npm`, `pnpm`, `yarn`, `npx`, `sh -c`, `concurrently`, `nodemon`, `turbo`… qui ne font que lancer un serveur ne forment pas d'instance : ils s'arrêtent d'eux-mêmes quand leurs enfants meurent. « Tout arrêter » les ajoute quand même au kill du projet.
+- **Inactives** : une instance est « inactive depuis 1 h » si l'historique n'a aucun échantillon à 1 % de CPU ou plus pour ses processus sur cette période. Ces raccourcis ont donc besoin du service d'enregistrement (voir plus bas) ; s'il est arrêté, ils sont désactivés. Au-delà de 30 minutes, seules les moyennes par minute sont lues : un pic de moins d'une minute peut passer inaperçu.
 
 ## Installation
 
@@ -56,7 +85,7 @@ Avec npm 11.10+ (dont npm 12), les scripts d'installation des dépendances sont 
 | `npm run smoke` | build + lancement réel de l'app via Playwright |
 | `npm run dist` | produit l'AppImage et le .deb dans `release/` |
 
-La logique (lecture de `/proc`, regroupement, protection, kill) vit dans `src/core/`, sans dépendance à Electron, et se teste sur de faux répertoires `/proc`. Pour reconnaître une nouvelle appli multi-processus ou un nouvel outil de dev, modifier `src/core/grouping/rules.ts`.
+La logique (lecture de `/proc`, regroupement, protection, kill) vit dans `src/core/`, sans dépendance à Electron, et se teste sur de faux répertoires `/proc`. Pour reconnaître une nouvelle appli multi-processus, modifier `src/core/grouping/rules.ts` ; pour classer un nouvel outil de dev (front, back…), `src/core/classify/rules.ts`.
 
 ## Historique en arrière-plan
 
@@ -83,6 +112,16 @@ Au premier lancement de la version installée (AppImage, .deb), proc-watch insta
 - **Enquête — mémoire par groupe** : courbe de la mémoire par groupe sur la période choisie ; cliquer place un curseur sur un instant. Le panneau « À <heure> » liste alors les groupes dont la mémoire a le plus augmenté dans les 5 minutes précédentes.
 - **Top consommateurs** : les groupes les plus gourmands en mémoire (moyenne) sur la plage, avec mini-courbe, pic et moyenne.
 - **Alertes** : fuites, kills earlyoom, pics de pression et trous d'enregistrement ; un clic place le curseur de l'enquête sur l'événement. Une fuite probable est signalée quand la mémoire d'un groupe monte de façon quasi continue (≥ 80 % des minutes sur 1 h, +300 Mo par défaut, réglable), et un badge « fuite ? » apparaît alors sur sa carte.
+
+**Gestes sur les graphes** (Métriques et détail d'un groupe) :
+
+| Geste | Effet |
+|---|---|
+| Glisser sur le graphe, ou Ctrl + molette | zoomer sur une période |
+| Maj + molette, ou glisser avec le clic molette | se déplacer dans le temps |
+| Double-clic | revenir à la plage complète |
+| Zoom collé au bout du graphe | suivi « En direct » : la fenêtre avance avec le temps |
+| Survol d'une ligne du Top, de la légende ou d'une alerte | met en avant la courbe ou l'instant correspondant |
 
 ## Va bien avec earlyoom
 
