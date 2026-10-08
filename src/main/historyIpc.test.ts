@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import type { RecorderStatus } from '../core/types';
-import { applyOverride, clampToDetail, classifySetKey, isGroupKeys, isInstanceKeys, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState } from './historyIpc';
+import { applyOverride, clampToDetail, classifySetKey, isGroupKeys, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState } from './historyIpc';
 
 test('isRange : préréglages et plages valides uniquement', () => {
   for (const ok of ['1h', '6h', '24h', '7d', '30d', { from: 0, to: 10 }]) expect(isRange(ok)).toBe(true);
@@ -85,4 +85,9 @@ test('isProcTreeRequest : clé de 1 à 4 096 caractères, instant fini, ≥ 0, �
   expect(isProcTreeRequest(5, 1000, 2000)).toBe(false);
   for (const bad of [NaN, -1, Infinity, '5', null]) expect(isProcTreeRequest('a', bad, 2000)).toBe(false);
   expect(isProcTreeRequest('a', 2000 + 61_000, 2000)).toBe(false);
+});
+
+test('isOptionalGroupKey : absent, ou clé de 1 à 4 096 caractères', () => {
+  for (const ok of [undefined, 'a', 'x'.repeat(4096)]) expect(isOptionalGroupKey(ok)).toBe(true);
+  for (const bad of ['', 'x'.repeat(4097), 3, null, {}, ['a']]) expect(isOptionalGroupKey(bad)).toBe(false);
 });

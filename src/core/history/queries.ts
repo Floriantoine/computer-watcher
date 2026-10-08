@@ -228,13 +228,37 @@ export function queryTop(db: DatabaseSync, range: TimeRange, o: QueryOpts, { lim
   return { byAvg: byAvgRows.flatMap((r) => toConsumer(r, true)), byMax: byMaxRows.flatMap((r) => toConsumer(r, false)) };
 }
 
-export function queryEvents(db: DatabaseSync, range: TimeRange): HistoryEvent[] {
-  const rows = db
-    .prepare(
-      `SELECT e.ts, e.type, g.key AS gk, g.label AS gl, e.detail FROM events e LEFT JOIN groups g ON g.id = e.group_id
-       WHERE e.ts >= ? AND e.ts < ? ORDER BY e.ts`,
-    )
-    .all(range.from, range.to) as { ts: number; type: string; gk: string | null; gl: string | null; detail: string }[];
+/**
+ * Sans groupKey : inchangé. Avec groupKey : pressure (système) ; leak du groupe ; app_kill et earlyoom_kill dont une cible
+ * (detail.pids / detail.pid) est un processus enregistré du groupe (procs.group_id) vivant au moment du kill
+ * (échantillon dans les 2 min précédentes en détail, ou une ligne minute dans les 3 min précédentes) — ou dont group_id est le groupe.
+ * Exclut gap et tmpfs.
+ */
+export function queryEvents(db: DatabaseSync, range: TimeRange, groupKey?: string): HistoryEvent[] {
+  const base = `SELECT e.ts, e.type, g.key AS gk, g.label AS gl, e.detail FROM events e LEFT JOIN groups g ON g.id = e.group_id
+       WHERE e.ts >= ? AND e.ts < ?`;
+  // Un PID peut avoir été réutilisé : la cible n'appartient au groupe que si ce processus y vivait juste avant le kill.
+  // `+p.group_id` écarte l'index procs_group : la recherche part des PID ciblés (index unique (pid, start_ticks)) au lieu
+  // de parcourir les dizaines de milliers de processus d'un groupe à chaque kill (4,4 s → quelques ms sur 7 j).
+  const rows = (
+    groupKey === undefined
+      ? db.prepare(`${base} ORDER BY e.ts`).all(range.from, range.to)
+      : db
+          .prepare(
+            `WITH gs AS (SELECT id FROM groups WHERE key = ?)
+             ${base}
+             AND (e.type = 'pressure'
+               OR (e.type = 'leak' AND e.group_id = (SELECT id FROM gs))
+               OR (e.type IN ('app_kill', 'earlyoom_kill') AND (e.group_id = (SELECT id FROM gs) OR EXISTS (
+                     SELECT 1 FROM procs p
+                     WHERE +p.group_id = (SELECT id FROM gs)
+                       AND p.pid IN (SELECT CAST(value AS INTEGER) FROM json_each(e.detail, '$.pids') UNION ALL SELECT json_extract(e.detail, '$.pid'))
+                       AND (EXISTS (SELECT 1 FROM proc_samples s WHERE s.proc_id = p.id AND s.ts BETWEEN e.ts - 120000 AND e.ts)
+                            OR EXISTS (SELECT 1 FROM proc_minute m WHERE m.proc_id = p.id AND m.ts BETWEEN e.ts - 180000 AND e.ts))))))
+             ORDER BY e.ts`,
+          )
+          .all(groupKey, range.from, range.to)
+  ) as { ts: number; type: string; gk: string | null; gl: string | null; detail: string }[];
   return rows.map((r) => ({ ts: r.ts, type: r.type, groupKey: r.gk, groupLabel: r.gl, detail: JSON.parse(r.detail) as Record<string, unknown> }));
 }
 

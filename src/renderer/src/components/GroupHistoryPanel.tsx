@@ -3,7 +3,7 @@ import { ChartLine, Pause, Play } from 'lucide-react';
 import type { RangePreset } from '../../../core/types';
 import { useChartZoom, ZoomChip } from '../chartZoom';
 import { useHistory } from '../history';
-import { PRESET_MS, refreshMsFor } from '../metrics';
+import { eventMarkers, PRESET_MS, refreshMsFor } from '../metrics';
 import { groupChartSeries } from './charts/chartData';
 import { TimeChart, type ChartMarker } from './charts/TimeChart';
 import { KB_FORMAT, PERCENT_FORMAT } from './charts/uplotTheme';
@@ -14,12 +14,14 @@ const CHART_FORMAT = { left: KB_FORMAT, right: PERCENT_FORMAT };
 
 /**
  * Panneau « Historique » : RAM, swap et CPU du groupe sur la plage choisie, avec les mêmes gestes que l'onglet Métriques.
- * Avec `replay`, un clic fige l'instant examiné (rejeu de l'arbre) et « Rejouer » le fait avancer à ×60.
+ * Marqueurs : alertes du groupe et pressions système (survol : infobulle). Avec `replay`, un clic fige l'instant examiné (rejeu de l'arbre) et « Rejouer » le fait avancer à ×60.
  */
 export function GroupHistoryPanel({ groupId, replay, markers: extra }: { groupId: string; replay?: Replay; markers?: ChartMarker[] }) {
   const [range, setRange] = useState<RangePreset>('1h');
   const z = useChartZoom(PRESET_MS[range]);
   const h = useHistory(() => window.procWatch.history.group(groupId, z.range()), [groupId, range, z.zoom], refreshMsFor(range, z.frozen));
+  // Alertes du groupe (fuites, kills de ses processus) et pics de pression système, en marqueurs sur le graphe.
+  const events = useHistory(() => window.procWatch.history.events(z.range(), groupId), [groupId, range, z.zoom], refreshMsFor(range, z.frozen));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => z.onData(), [h]);
   const series = useMemo(() => (h ? groupChartSeries(h) : []), [h]);
@@ -27,10 +29,10 @@ export function GroupHistoryPanel({ groupId, replay, markers: extra }: { groupId
   const enough = !!h && h.ts.length >= 2;
   const instant = replay?.instant ?? null;
   const markers = useMemo((): ChartMarker[] => {
-    const m: ChartMarker[] = [...(extra ?? [])];
+    const m: ChartMarker[] = [...eventMarkers(events ?? []), ...(extra ?? [])];
     if (instant !== null) m.push({ ts: instant, color: '#e7e9ee', label: 'Instant examiné' });
     return m;
-  }, [extra, instant]);
+  }, [events, extra, instant]);
   const pickRange = (r: RangePreset) => {
     z.setZoom(null);
     setRange(r);

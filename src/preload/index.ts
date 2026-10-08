@@ -48,7 +48,8 @@ const api = {
     procTree: (key: string, ts: number): Promise<ProcTreeAt | null> => ipcRenderer.invoke('history:procTree', key, ts),
     culprits: (ts: number): Promise<Culprit[]> => ipcRenderer.invoke('history:culprits', ts),
     top: (r: RangePreset | TimeRange, o?: TopOptions): Promise<TopResult> => ipcRenderer.invoke('history:top', r, o),
-    events: (r: RangePreset | TimeRange): Promise<HistoryEvent[]> => ipcRenderer.invoke('history:events', r),
+    /** Événements de la plage ; avec `groupKey`, seulement ceux du groupe et les pressions système. */
+    events: (r: RangePreset | TimeRange, groupKey?: string): Promise<HistoryEvent[]> => ipcRenderer.invoke('history:events', r, groupKey),
   },
   recorder: {
     status: (): Promise<RecorderState> => ipcRenderer.invoke('recorder:status'),

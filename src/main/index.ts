@@ -22,7 +22,7 @@ import { installDesktopEntry } from './desktopEntry';
 import { clearHistory, createHistoryReader } from './history';
 import { pollDelay, type WindowActivity } from './pollPolicy';
 import {
-  applyOverride, classifySetKey, isGroupKeys, isInstanceKeys, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState as computeRecorderState,
+  applyOverride, classifySetKey, isGroupKeys, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState as computeRecorderState,
 } from './historyIpc';
 import { autoManageService, defaultSystemctl, recorderSyncDisabled, ensureRecorderService, recorderExecArgs, systemctlAvailable, unitPath } from './recorderService';
 
@@ -356,7 +356,7 @@ ipcMain.handle('history:procs', (_e, key: unknown, r: unknown) => (typeof key ==
 ipcMain.handle('history:procTree', (_e, key: unknown, ts: unknown) => (isProcTreeRequest(key, ts) ? history.procTree(key as string, ts as number) : null));
 ipcMain.handle('history:culprits', (_e, ts: unknown) => (Number.isFinite(ts) ? history.culprits(ts as number) : []));
 ipcMain.handle('history:top', (_e, r: unknown, o: unknown) => (isRange(r) && isTopOptions(o) ? history.top(r, o) : { byAvg: [], byMax: [] }));
-ipcMain.handle('history:events', (_e, r: unknown) => (isRange(r) ? history.events(r) : []));
+ipcMain.handle('history:events', (_e, r: unknown, groupKey: unknown) => (isRange(r) && isOptionalGroupKey(groupKey) ? history.events(r, groupKey) : []));
 ipcMain.handle('recorder:status', () => recorderState());
 ipcMain.handle('recorder:setEnabled', async (_e, enabled: unknown) => {
   if (typeof enabled !== 'boolean') throw new Error('Valeur invalide');

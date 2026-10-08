@@ -64,7 +64,8 @@ export function createHistoryReader(dataDir: string, getConfig: () => RecorderCo
     procTree: (key: string, ts: number) => run((d) => queryProcTree(d, key, ts, opts()), null),
     culprits: (ts: number) => run((d) => queryCulprits(d, ts, opts()), []),
     top: (r: RangePreset | TimeRange, o?: TopOptions): TopResult => run((d) => queryTop(d, toRange(r), opts(), o), { byAvg: [], byMax: [] }),
-    events: (r: RangePreset | TimeRange) => run((d) => queryEvents(d, toRange(r)), []),
+    /** Événements de la plage ; avec `groupKey`, ceux du groupe (fuites, kills de ses processus) et les pressions système. */
+    events: (r: RangePreset | TimeRange, groupKey?: string) => run((d) => queryEvents(d, toRange(r), groupKey), []),
     /** Clés `pid:startTicks` actives (CPU ≥ 1 %) depuis `since` ; null sans base (ou en cas d'erreur). */
     active: (targets: { pid: number; startTicks: number }[], since: number): Set<string> | null =>
       run<Set<string> | null>((d) => queryInactive(d, targets, since, opts()), null),

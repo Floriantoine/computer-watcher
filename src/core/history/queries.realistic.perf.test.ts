@@ -81,6 +81,8 @@ test.skipIf(process.env.PROC_WATCH_PERF !== '1')('requêtes Métriques et taille
     for (const id of [...prevChurn, ...churn]) ins.pm.run(ts, id, 60_000, 70_000, 2);
     prevChurn = churn;
     if (m % 30 === 0) ins.ev.run(ts, 'pressure', null, '{"psi":30}');
+    // un kill earlyoom par heure, sur un processus stable : le filtre par groupe le résout via proc_minute
+    if (m % 60 === 0) ins.ev.run(ts, 'earlyoom_kill', null, JSON.stringify({ pid: 1000 + ((m / 60) % STABLE_PROCS) + 1, name: 'p' }));
   }
   rollupHours(db, { from: start, to: detailFrom });
   db.exec('COMMIT');
@@ -166,6 +168,8 @@ test.skipIf(process.env.PROC_WATCH_PERF !== '1')('requêtes Métriques et taille
     const top = time('top', () => queryTop(ro, r, o, { peakLimit: 8 }));
     time('groups', () => queryGroups(ro, r, o, top.byMax.map((t) => t.key)));
     time('events', () => queryEvents(ro, r));
+    // détail d'un groupe (B7) : pressions + fuites et kills du groupe
+    time('events g1', () => queryEvents(ro, r, 'command:g1'));
     time('culprits', () => queryCulprits(ro, r.from + (r.to - r.from) / 2, o));
     const total = Object.values(times).reduce((a, b) => a + b, 0);
     console.info(`${preset} : ${Object.entries(times).map(([k, v]) => `${k} ${v.toFixed(1)} ms`).join(', ')} — total ${total.toFixed(1)} ms`);

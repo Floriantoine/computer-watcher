@@ -3,6 +3,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
+import type { DatabaseSync } from 'node:sqlite';
 import { openHistoryDb } from './db';
 import { aggregateMinute } from './maintenance';
 import { bucketMs, pickSource, queryInactive, queryCulprits, queryEvents, queryGroup, queryGroups, queryProcs, queryProcsAt, queryProcTree, querySystem, queryTop, rangeFromPreset } from './queries';
@@ -442,5 +443,61 @@ describe('queryProcTree (rejeu de l\'arbre)', () => {
     expect(queryProcTree(db, 'g', 1000, { now: 2000, detailHours: 24, intervalSec: 5 }).procs[0]).toMatchObject({ pid: 10, ppid: null, swapKB: 5 });
     expect(queryProcTree(db, 'g', 1000, { now: 100 * H, detailHours: 24, intervalSec: 5 }).procs[0]).toMatchObject({ pid: 10, ppid: null, swapKB: null });
     db.close();
+  });
+});
+
+describe('queryEvents filtré par groupe (alertes du détail)', () => {
+  const D = 24 * H;
+  const now = 10 * D;
+  const t = now - H;
+  /** g : proc 10 (échantillonné 30 s avant t), proc 11 (dernier échantillon 1 h avant t) ; h : proc 20. */
+  function eventsDb() {
+    const { db } = openHistoryDb(join(mkdtempSync(join(tmpdir(), 'pw-ev-')), 'm.db'));
+    db.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'g','G','app'), (2,'h','H','app');
+             INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id) VALUES (1,10,1,'a','a',1), (2,11,1,'b','b',1), (3,20,1,'c','c',2), (4,30,1,'d','d',1);`);
+    const ps = db.prepare('INSERT INTO proc_samples VALUES (?,?,?,?,?)');
+    ps.run(t - 30_000, 1, 1000, 0, 1);
+    ps.run(t - H, 2, 1000, 0, 1);
+    ps.run(t - 30_000 + 10, 3, 1000, 0, 1);
+    // proc 30 de g : seulement des agrégats minute, 3 jours avant
+    db.prepare('INSERT INTO proc_minute VALUES (?,?,?,?,?)').run(t - 3 * D - 2 * M, 4, 1000, 1000, 1);
+    const ev = db.prepare('INSERT INTO events(ts,type,group_id,detail) VALUES (?,?,?,?)');
+    ev.run(t - 5 * M, 'pressure', null, '{"psi":30}');
+    ev.run(t - 4 * M, 'leak', 1, '{"growthKB":1}');
+    ev.run(t - 4 * M + 1, 'leak', 2, '{"growthKB":2}');
+    ev.run(t - 3 * M, 'gap', null, '{"from":0,"to":1}');
+    ev.run(t - 2 * M, 'tmpfs', null, '{"usedKB":1}');
+    ev.run(t, 'earlyoom_kill', null, '{"pid":10,"name":"a"}');
+    ev.run(t + 1, 'earlyoom_kill', null, '{"pid":20,"name":"c"}');
+    ev.run(t + 2, 'earlyoom_kill', null, '{"pid":11,"name":"b"}');
+    ev.run(t + 3, 'app_kill', null, '{"pids":[99,10],"signal":"SIGTERM"}');
+    ev.run(t + 4, 'app_kill', 2, '{"pids":[20],"signal":"SIGTERM"}');
+    ev.run(t + 5, 'app_kill', 1, '{"pids":[12345],"signal":"SIGTERM"}');
+    ev.run(t - 3 * D, 'earlyoom_kill', null, '{"pid":30,"name":"d"}');
+    return db;
+  }
+  const all = { from: 0, to: now };
+  const sig = (db: DatabaseSync, key?: string) => queryEvents(db, all, key).map((e) => `${e.type}@${e.ts - t}`);
+
+  test('groupe g : pressions, sa fuite, kills de ses processus vivants ; ni gap ni tmpfs', () => {
+    expect(sig(eventsDb(), 'g')).toEqual([
+      `earlyoom_kill@${-3 * D}`, // résolu via proc_minute
+      `pressure@${-5 * M}`,
+      `leak@${-4 * M}`,
+      'earlyoom_kill@0', // pid 10 échantillonné 30 s avant
+      'app_kill@3', // pids [99, 10]
+      'app_kill@5', // group_id du groupe
+    ]);
+  });
+
+  test('groupe h : son pid 20 ; pas le pid 10 de g', () => {
+    expect(sig(eventsDb(), 'h')).toEqual([`pressure@${-5 * M}`, `leak@${-4 * M + 1}`, 'earlyoom_kill@1', 'app_kill@4']);
+  });
+
+  test('groupe inconnu : seulement les pressions ; sans groupe : tout, inchangé', () => {
+    const db = eventsDb();
+    expect(sig(db, 'inconnu')).toEqual([`pressure@${-5 * M}`]);
+    expect(queryEvents(db, all)).toHaveLength(12);
+    expect(queryEvents(db, all, undefined)).toEqual(queryEvents(db, all));
   });
 });

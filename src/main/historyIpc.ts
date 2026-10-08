@@ -55,6 +55,10 @@ export function isProcTreeRequest(groupKey: unknown, ts: unknown, now: number = 
   );
 }
 
+/** Filtre optionnel des événements par groupe : absent, ou clé de 1 à 4 096 caractères. */
+export const isOptionalGroupKey = (k: unknown): k is string | undefined =>
+  k === undefined || (typeof k === 'string' && k.length >= 1 && k.length <= 4096);
+
 const isBoundedText = (v: unknown): v is string => typeof v === 'string' && v.length >= 1 && v.length <= MAX_OVERRIDE_KEY;
 
 /**
