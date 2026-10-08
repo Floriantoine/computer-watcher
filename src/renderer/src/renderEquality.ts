@@ -1,4 +1,4 @@
-// Comparaisons « ce qui est affiché » pour React.memo : un snapshot arrive toutes les 2 s avec des objets neufs,
+// Comparaisons « ce qui est affiché » pour React.memo : un snapshot arrive toutes les 3 s avec des objets neufs,
 // mais la plupart des cartes et lignes affichent exactement les mêmes textes. Celles-là ne se re-rendent pas.
 import type { GroupSummary, ProcInfo } from '../../core/types';
 import { formatAge, formatCpu, formatKB } from './format';

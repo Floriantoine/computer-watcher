@@ -6,9 +6,9 @@ describe('pollDelay', () => {
     expect(pollDelay({ hidden: true, blurredAt: null }, 0)).toBeNull();
     expect(pollDelay({ hidden: true, blurredAt: 0 }, 10 * BLUR_GRACE_MS)).toBeNull();
   });
-  test('fenêtre active → toutes les 2 s', () => {
+  test('fenêtre active → toutes les 3 s', () => {
     expect(pollDelay({ hidden: false, blurredAt: null }, 123)).toBe(POLL_MS);
-    expect(POLL_MS).toBe(2000);
+    expect(POLL_MS).toBe(3000);
   });
   test('sans focus depuis peu → toujours 2 s ; depuis plus d\'une minute → rythme de fond', () => {
     expect(pollDelay({ hidden: false, blurredAt: 1000 }, 1000 + BLUR_GRACE_MS - 1)).toBe(POLL_MS);

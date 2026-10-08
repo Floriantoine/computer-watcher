@@ -1,4 +1,4 @@
-// Petites règles pour ne pas produire d'images (frames) qui ne montrent rien : chaque snapshot (toutes les 2 s)
+// Petites règles pour ne pas produire d'images (frames) qui ne montrent rien : chaque snapshot (toutes les 3 s)
 // ferait sinon tourner ~0,7 s d'animation à 60 i/s pour des variations invisibles.
 
 const STEPS = 8;

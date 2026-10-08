@@ -1,5 +1,5 @@
 /** Rythme de collecte en direct, fenêtre active. */
-export const POLL_MS = 2000;
+export const POLL_MS = 3000;
 /** Fenêtre visible mais sans focus depuis plus de BLUR_GRACE_MS : on rafraîchit moins souvent. */
 export const BACKGROUND_POLL_MS = 10_000;
 export const BLUR_GRACE_MS = 60_000;

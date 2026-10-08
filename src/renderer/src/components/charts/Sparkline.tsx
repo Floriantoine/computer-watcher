@@ -39,5 +39,5 @@ function SparklineImpl({ values, tone, height = 28 }: Props) {
   );
 }
 
-/** Ne se redessine que si les valeurs changent réellement (les snapshots arrivent toutes les 2 s). */
+/** Ne se redessine que si les valeurs changent réellement (les snapshots arrivent toutes les 3 s). */
 export const Sparkline = memo(SparklineImpl, (a, b) => a.tone === b.tone && a.height === b.height && sameSeries(a.values, b.values));
