@@ -38,6 +38,7 @@ interface Props {
   swapMinMB?: number;
   onStopSleeping?: (keys: readonly string[]) => void;
   onStopSwapRow?: (row: SwapRow) => void;
+  onSetSwapMinMB?: (mb: number) => void;
 }
 
 /** Teintes des couches de l'enquête (de la plus grosse à la 8e) ; les trois couches du Reste ont les leurs, en pointillés. */
@@ -74,7 +75,7 @@ interface SysChart {
 
 const NO_PIDS = new Set<number>();
 
-export function MetricsView({ at, canOpen, onOpenGroup, onOpenSettings, openPorts, pendingPids = NO_PIDS, onFreePort, onOpenPortGroup, swapMinMB = 100, onStopSleeping, onStopSwapRow }: Props) {
+export function MetricsView({ at, canOpen, onOpenGroup, onOpenSettings, openPorts, pendingPids = NO_PIDS, onFreePort, onOpenPortGroup, swapMinMB = 100, onStopSleeping, onStopSwapRow, onSetSwapMinMB }: Props) {
   const [preset, setPreset] = useState<RangePreset>(() => presetFor(at));
   const z = useChartZoom(PRESET_MS[preset]);
   const { zoom, view, setZoom } = z;
@@ -106,7 +107,6 @@ export function MetricsView({ at, canOpen, onOpenGroup, onOpenSettings, openPort
   const system = data?.system;
   const events = data?.events;
   const swapSeries = system && system.ts.length >= 2 ? system.swapUsedKB : undefined;
-  const openDisplaySettings = useMemo(() => onOpenSettings && (() => onOpenSettings('display')), [onOpenSettings]);
 
   const culprits = useHistory(
     async (): Promise<{ ts: number; list: Culprit[] } | null> =>
@@ -289,8 +289,8 @@ export function MetricsView({ at, canOpen, onOpenGroup, onOpenSettings, openPort
         <AlertsPanel events={events} onPick={setCursor} onHover={setHoverTs} onSettings={onOpenSettings && (() => onOpenSettings('alerts'))} />
       </div>
       {onFreePort && onOpenPortGroup && <OpenPortsPanel info={openPorts ?? null} pendingPids={pendingPids} onFree={onFreePort} onOpenGroup={onOpenPortGroup} />}
-      {onStopSleeping && onStopSwapRow && (
-        <SwapPanel minMB={swapMinMB} swapSeries={swapSeries} onStopSleeping={onStopSleeping} onStopOne={onStopSwapRow} onSettings={openDisplaySettings} />
+      {onStopSleeping && onStopSwapRow && onSetSwapMinMB && (
+        <SwapPanel minMB={swapMinMB} swapSeries={swapSeries} onStopSleeping={onStopSleeping} onStopOne={onStopSwapRow} onSetMinMB={onSetSwapMinMB} />
       )}
     </div>
   );

@@ -12,7 +12,7 @@ import { Toasts, type Toast } from './components/Toasts';
 import { MainView } from './components/MainView';
 import { MetricsView } from './components/MetricsView';
 import type { SwapRow } from '../../core/swap';
-import { sleepingInstances, stopOneCheck } from './swapPanel';
+import { freshSleepingKeys, sessionServiceIn, sleepingInstances, sleepLabel, stillAsleep, stopOneCheck } from './swapPanel';
 import { SystemBar, type SystemSparks } from './components/SystemBar';
 import { TopNav } from './components/TopNav';
 import { LiveBuffer, setLive, useHistory } from './history';
@@ -97,9 +97,13 @@ export function App() {
   const onFreePort = useCallback((row: OpenPort) => freePortRef.current(row), []);
   const onOpenPortGroup = useCallback((groupId: string) => setRoute({ view: 'detail', groupId }), []);
   // Actions stables du panneau « Swap » (mémoïsé : il ne se redessine pas à chaque snapshot).
-  const swapActions = useRef({ stopSleeping: (_keys: readonly string[]) => {}, stopOne: (_row: SwapRow) => {} });
+  const swapActions = useRef({ stopSleeping: (_keys: readonly string[]) => {}, stopOne: (_row: SwapRow) => {}, setMinMB: (_mb: number) => {} });
   const onStopSleeping = useCallback((keys: readonly string[]) => swapActions.current.stopSleeping(keys), []);
   const onStopSwapRow = useCallback((row: SwapRow) => swapActions.current.stopOne(row), []);
+  const onSetSwapMinMB = useCallback((mb: number) => swapActions.current.setMinMB(mb), []);
+  // Dernier snapshot, pour les actions qui reprennent après une relecture asynchrone (vue swap relue au clic).
+  const snapshotRef = useRef(snapshot);
+  snapshotRef.current = snapshot;
   const openSettings = useCallback((section: SettingsSection) => setRoute({ view: 'settings', section }), []);
   // Résultat de recherche valable seulement pour la requête en cours ; en attente de la réponse du main : pas de filtre.
   const query = filter.query.trim();
@@ -334,12 +338,22 @@ export function App() {
   };
   // Vue swap, « Arrêter les endormis » : le kill groupé habituel (instances de projets du dernier snapshot seulement, cibles
   // fraîches, « Tuer (n) »).
+  // Au clic, la vue swap est relue : une instance ou une appli réveillée entre-temps n'est plus visée.
   swapActions.current.stopSleeping = (keys) => {
     if (bulkInFlight.current || bulk) return;
-    const instances = sleepingInstances({ sleepingKeys: [...keys] }, snapshot.groups);
-    if (instances.length === 0) pushToast('Plus aucune instance endormie à arrêter', 'info');
-    else setBulk({ instances, title: 'Arrêter les endormis' });
+    window.procWatch.swap.view().then(
+      (fresh) => {
+        if (bulkInFlight.current || bulkRef.current) return;
+        const latest = snapshotRef.current?.groups ?? [];
+        const instances = sleepingInstances({ sleepingKeys: freshSleepingKeys(fresh, keys) }, latest);
+        if (instances.length === 0) pushToast('Plus aucune instance endormie à arrêter', 'info');
+        else setBulk({ instances, title: 'Arrêter les endormis' });
+      },
+      (e: unknown) => pushToast(ipcErrorMessage(e)),
+    );
   };
+  // « Arrêter » d'une appli endormie : kill de groupe avec confirmation ; refusé si le groupe a changé, s'est réveillé,
+  // contient un processus protégé ou un service de session (jamais Claude : garde de stopOneCheck).
   swapActions.current.stopOne = (row: SwapRow) => {
     const g = findGroup(snapshot.groups, row.groupId);
     const check = stopOneCheck(row, g ?? (groupIds.has(row.groupId) ? row : undefined));
@@ -347,15 +361,23 @@ export function App() {
       pushToast(check.message);
       return;
     }
-    window.procWatch.groupProcs(row.groupId).then(
-      (procs) => {
+    Promise.all([window.procWatch.swap.view(), window.procWatch.groupProcs(row.groupId)]).then(
+      ([fresh, procs]) => {
         if (procs.length === 0) return pushToast(`« ${row.label} » a disparu`);
+        if (!stillAsleep(fresh, row)) return pushToast(`« ${row.label} » n'est plus endormi : rien n'est arrêté`, 'info');
+        const svc = sessionServiceIn(procs);
+        if (svc) return pushToast(`« ${row.label} » contient un service de session (${svc}) : non arrêtable depuis la vue swap`);
+        const freshRow = fresh!.rows.find((x) => x.key === row.key)!;
         const req = killRequestForGroup(g ?? { label: row.label }, procs, isProtected, currentUid);
         if (req.protectedProcs.length > 0) pushToast(`« ${row.label} » contient un processus protégé : à arrêter depuis son détail`);
-        else requestKill(req);
+        else requestKill({ ...req, title: `${req.title} (${sleepLabel(freshRow.state, Date.now(), fresh!.coveredFrom)})` });
       },
       (e: unknown) => pushToast(ipcErrorMessage(e)),
     );
+  };
+  swapActions.current.setMinMB = (mb) => {
+    const cfg = configState.config;
+    if (cfg.ui.swapSleepMinMB !== mb) void saveConfig({ ...cfg, ui: { ...cfg.ui, swapSleepMinMB: mb } });
   };
   const reclassify = (inst: InstanceSummary, category: Category | null) => {
     const name = projectName(inst, findGroup(snapshot.groups, inst.groupId)?.label ?? inst.groupId);
@@ -461,6 +483,7 @@ export function App() {
                 swapMinMB={configState.config.ui.swapSleepMinMB}
                 onStopSleeping={onStopSleeping}
                 onStopSwapRow={onStopSwapRow}
+                onSetSwapMinMB={onSetSwapMinMB}
               />
             )}
             {route.view === 'settings' && (
