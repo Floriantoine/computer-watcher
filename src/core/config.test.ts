@@ -131,23 +131,39 @@ test('recorder.groupMinMemMB : 20 Mo par défaut, ajouté si absent (config d\'u
 
 describe('section ui', () => {
   test('par défaut : effets visuels complets, mémoire en RSS', () => {
-    expect(DEFAULT_CONFIG.ui).toEqual({ reducedEffects: false, memoryMetric: 'rss' });
+    expect(DEFAULT_CONFIG.ui).toEqual({ reducedEffects: false, memoryMetric: 'rss', trayIcon: true, closeToTray: true, swapSleepMinMB: 100 });
   });
   test('config sans section ui : valide, défaut ajouté', () => {
     const { ui: _u, ...old } = DEFAULT_CONFIG;
-    expect(validateConfig(old)?.ui).toEqual({ reducedEffects: false, memoryMetric: 'rss' });
+    expect(validateConfig(old)?.ui).toEqual({ reducedEffects: false, memoryMetric: 'rss', trayIcon: true, closeToTray: true, swapSleepMinMB: 100 });
   });
   test('reducedEffects conservé ; ui sans memoryMetric (config existante) → rss', () => {
-    expect(validateConfig({ ...DEFAULT_CONFIG, ui: { reducedEffects: true } })?.ui).toEqual({ reducedEffects: true, memoryMetric: 'rss' });
+    expect(validateConfig({ ...DEFAULT_CONFIG, ui: { reducedEffects: true } })?.ui).toEqual({ ...DEFAULT_CONFIG.ui, reducedEffects: true, memoryMetric: 'rss' });
   });
   test('memoryMetric « pss » conservé', () => {
-    expect(validateConfig({ ...DEFAULT_CONFIG, ui: { reducedEffects: false, memoryMetric: 'pss' } })?.ui).toEqual({ reducedEffects: false, memoryMetric: 'pss' });
+    expect(validateConfig({ ...DEFAULT_CONFIG, ui: { reducedEffects: false, memoryMetric: 'pss' } })?.ui).toEqual({ ...DEFAULT_CONFIG.ui, memoryMetric: 'pss' });
   });
   test.each([['PSS'], [1], [null], ['']])('memoryMetric = %j → config invalide', (memoryMetric) => {
     expect(validateConfig({ ...DEFAULT_CONFIG, ui: { reducedEffects: false, memoryMetric } })).toBeNull();
   });
   test.each([[null], ['oui'], [{}], [{ reducedEffects: 'true' }]])('ui = %j → config invalide', (ui) => {
     expect(validateConfig({ ...DEFAULT_CONFIG, ui })).toBeNull();
+  });
+});
+
+describe('ui : barre des tâches et swap endormi', () => {
+  test('config existante sans ces champs → icône et fermeture vers la barre activées, 100 Mo', () => {
+    const ui = validateConfig({ ...DEFAULT_CONFIG, ui: { reducedEffects: false, memoryMetric: 'pss' } })?.ui;
+    expect(ui).toEqual({ reducedEffects: false, memoryMetric: 'pss', trayIcon: true, closeToTray: true, swapSleepMinMB: 100 });
+  });
+  test('valeurs conservées', () => {
+    const ui = { ...DEFAULT_CONFIG.ui, trayIcon: false, closeToTray: false, swapSleepMinMB: 65_536 };
+    expect(validateConfig({ ...DEFAULT_CONFIG, ui })?.ui).toEqual(ui);
+  });
+  test.each<[string, unknown]>([
+    ['closeToTray', 'oui'], ['trayIcon', 1], ['trayIcon', null], ['swapSleepMinMB', 0], ['swapSleepMinMB', 65_537], ['swapSleepMinMB', 1.5], ['swapSleepMinMB', '100'],
+  ])('%s = %j → config invalide', (field, value) => {
+    expect(validateConfig({ ...DEFAULT_CONFIG, ui: { ...DEFAULT_CONFIG.ui, [field]: value } })).toBeNull();
   });
 });
 

@@ -133,6 +133,12 @@ export interface UiConfig {
   reducedEffects: boolean;
   /** Absent d'une config existante → 'rss'. L'historique reste toujours en RSS. */
   memoryMetric: MemoryMetric;
+  /** Icône dans la barre des tâches (zone de notification) */
+  trayIcon: boolean;
+  /** Fermer la fenêtre la garde dans la barre des tâches (sans effet sans icône ou sans zone de notification) */
+  closeToTray: boolean;
+  /** Vue swap : seuil de swap cumulé (Mo) au-delà duquel un processus inactif est « endormi » */
+  swapSleepMinMB: number;
 }
 
 export type { Category } from './classify/categories';

@@ -42,19 +42,7 @@ export function findGroup(groups: GroupSummary[], id: string): GroupSummary | un
   return undefined;
 }
 
-export type Level = 'ok' | 'warn' | 'bad';
-
-export function swapPercent(s: SystemInfo): number {
-  return s.swapTotalKB ? (1 - s.swapFreeKB / s.swapTotalKB) * 100 : 0;
-}
-
-export function pressureLevel(s: SystemInfo): Level {
-  const swap = swapPercent(s);
-  const psi = s.psiSome10 ?? 0;
-  if (swap >= 70 || psi >= 25) return 'bad';
-  if (swap >= 50 || psi >= 10) return 'warn';
-  return 'ok';
-}
+export { pressureLevel, swapPercent, type Level } from '../../core/pressure';
 
 const targetOf = (p: ProcInfo): KillTarget => ({ pid: p.pid, startTicks: p.startTicks });
 
