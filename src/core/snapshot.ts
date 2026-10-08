@@ -1,4 +1,7 @@
 import type { GroupClassification } from './classify/classify';
+import type { ListenSocket } from './collector/ports';
+import { openPorts, portMatches } from './openPorts';
+import { parsePortQuery } from './portQuery';
 import type { Group, GroupSummary, InstanceTargets, KillTarget, MemoryMetric, ProcInfo, ProcNode, Snapshot, SystemInfo, Watch } from './types';
 
 export type Classification = Map<string, GroupClassification>;
@@ -94,7 +97,12 @@ export interface FullSnapshot {
   classification: Classification;
   /** Mémoire des processus et groupes : PSS si 'pss' (absent → 'rss'). */
   memMetric?: MemoryMetric;
+  /** Ports lus dans les fd des processus de l'utilisateur (tous, en mode « ports ») et sockets en écoute de /proc/net. */
+  listen?: { byPid: ReadonlyMap<number, number[]>; sockets: readonly ListenSocket[] };
 }
+
+/** Le renderer a besoin des ports de tous les processus : panneau « Ports ouverts » ou recherche `:port`. */
+export const wantsAllPorts = (w: Watch): boolean => w.ports === true || parsePortQuery(w.query) !== null;
 
 /**
  * Snapshot envoyé au renderer : résumés de groupes, résultat de la recherche et arbre du seul groupe suivi.
@@ -104,6 +112,14 @@ export function buildSnapshot(full: FullSnapshot, watch: Watch): Snapshot {
   const query = watch.query.trim();
   const followed = watch.groupId === null ? undefined : findFullGroup(full.groups, watch.groupId);
   const pss = full.memMetric === 'pss';
+  const port = parsePortQuery(query);
+  const ports = wantsAllPorts(watch) ? openPorts(full, full.listen?.byPid ?? new Map(), full.listen?.sockets ?? [], full.currentUid) : null;
+  let matches: string[] | null = null;
+  if (port !== null) {
+    // Groupes de premier niveau : « Autres » correspond si l'un de ses sous-groupes écoute ce port.
+    const ids = new Set(portMatches(ports!, port).groupIds);
+    matches = full.groups.filter((g) => ids.has(g.id) || g.subgroups.some((s) => ids.has(s.id))).map((g) => g.id);
+  } else if (query) matches = full.groups.filter((g) => groupMatches(g, query)).map((g) => g.id);
   const inOthers = (g: Group) => watch.othersOpen === true || (!!followed && (followed === g || g.subgroups.includes(followed)));
   return {
     takenAt: full.takenAt,
@@ -114,10 +130,11 @@ export function buildSnapshot(full: FullSnapshot, watch: Watch): Snapshot {
     ),
     groupIds: full.groups.flatMap((g) => [g.id, ...g.subgroups.map((s) => s.id)]),
     query,
-    matches: query ? full.groups.filter((g) => groupMatches(g, query)).map((g) => g.id) : null,
+    matches,
     watched: watch.groupId,
     detail: followed ? { groupId: followed.id, roots: followed.roots } : null,
     memMetric: full.memMetric ?? 'rss',
+    openPorts: ports,
   };
 }
 
@@ -195,4 +212,5 @@ export const isWatch = (w: unknown): w is Watch =>
   ((w as Watch).groupId === null || typeof (w as Watch).groupId === 'string') &&
   typeof (w as Watch).query === 'string' &&
   (w as Watch).query.length <= MAX_QUERY &&
-  ((w as Watch).othersOpen === undefined || typeof (w as Watch).othersOpen === 'boolean');
+  ((w as Watch).othersOpen === undefined || typeof (w as Watch).othersOpen === 'boolean') &&
+  ((w as Watch).ports === undefined || typeof (w as Watch).ports === 'boolean');

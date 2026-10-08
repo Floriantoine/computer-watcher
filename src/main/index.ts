@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { classifyGroups, type InstanceDecision } from '../core/classify/classify';
 import { readPackageHints } from '../core/classify/packageJson';
 import { CpuTracker } from '../core/collector/cpuTracker';
-import { readListeningPorts } from '../core/collector/ports';
+import { dedupeSockets, MAX_FDS_PER_READ, readAllListenSockets, readListeningPorts } from '../core/collector/ports';
 import { applyPss, PssCache, pssTargets } from '../core/collector/pss';
 import { readProcesses, type CwdEntry, type StatusEntry } from '../core/collector/readProcesses';
 import { readSystem } from '../core/collector/readSystem';
@@ -19,7 +19,7 @@ import { compileProtection } from '../core/protection';
 import { formatAppEvent } from '../core/history/events';
 import { appEventsPath, dataDir, focusStatePath } from '../core/paths';
 import { alertIdFromArgv } from '../core/alerts';
-import { buildSnapshot, flattenGroup, groupProcs, instanceTargets, isWatch, othersFollowed, type Classification, type FullSnapshot } from '../core/snapshot';
+import { buildSnapshot, flattenGroup, groupProcs, instanceTargets, isWatch, othersFollowed, wantsAllPorts, type Classification, type FullSnapshot } from '../core/snapshot';
 import type { ConfigState, Group, KillResult, ProcInfo, RecorderState, Watch } from '../core/types';
 import { createAlertOpener, createFocusWriter, initSeenUpTo, keepSeenUpTo, markSeen, unseenFilter } from './alerts';
 import { installDesktopEntry } from './desktopEntry';
@@ -131,6 +131,8 @@ const separateSeen = new Map<string, number>();
 const CARD_HOLD_MS = 30_000;
 
 // Classement : ports en écoute relus au plus toutes les 10 s (groupes projet / dossier supprimé + instances db) ;
+// panneau « Ports ouverts » affiché ou recherche `:port` : ports de tous les processus de l'utilisateur, même cadence
+// (le classement ne garde que ceux du périmètre habituel) ;
 // décisions en cache par instance (racine + empreinte des pid:startTicks de ses processus), cache vidé quand les corrections
 // ou les ports changent,
 // et toutes les 60 s (durée du cache de package.json).
@@ -145,27 +147,48 @@ const decisions = new Map<string, InstanceDecision>();
 let decisionsFor = '';
 let decisionsAt = 0;
 let lastClassification: Classification = new Map();
+/** Mode « tous les ports » : ports de tous les processus de l'utilisateur et sockets en écoute ; undefined hors de ce mode. */
+let listen: FullSnapshot['listen'];
+let allPortsMode = false;
 
 function refreshPorts(groups: Group[], now: number): void {
-  if (!config.classify.detectPorts) {
-    if (ports.size) {
-      ports = new Map();
-      portsKey = '';
-      portsVersion++;
-    }
-    return;
+  const all = wantsAllPorts(watch);
+  if (all !== allPortsMode) {
+    allPortsMode = all;
+    portsAt = 0; // entrée dans le mode : relecture immédiate
+    if (!all) listen = undefined;
   }
+  if (!config.classify.detectPorts && ports.size) {
+    ports = new Map();
+    portsKey = '';
+    portsVersion++;
+  }
+  if (!config.classify.detectPorts && !all) return;
   if (now - portsAt >= 0 && now - portsAt < PORTS_EVERY_MS) return;
   portsAt = now;
   const pids = new Set<number>();
-  const visit = (g: Group) => {
-    if (g.kind === 'project' || g.kind === 'deleted') for (const p of flattenGroup(g)) pids.add(p.pid);
-    else g.subgroups.forEach(visit);
-  };
-  groups.forEach(visit);
-  // instances db : d'après le classement précédent
-  for (const c of lastClassification.values()) for (const i of c.instances) if (i.category === 'db') i.pids.forEach((pid) => pids.add(pid));
-  const next = pids.size ? readListeningPorts([...pids]) : new Map<number, number[]>();
+  if (config.classify.detectPorts) {
+    const visit = (g: Group) => {
+      if (g.kind === 'project' || g.kind === 'deleted') for (const p of flattenGroup(g)) pids.add(p.pid);
+      else g.subgroups.forEach(visit);
+    };
+    groups.forEach(visit);
+    // instances db : d'après le classement précédent
+    for (const c of lastClassification.values()) for (const i of c.instances) if (i.category === 'db') i.pids.forEach((pid) => pids.add(pid));
+  }
+  let next = new Map<number, number[]>();
+  if (all) {
+    // Périmètre du classement d'abord : si le plafond de fd est atteint, ce sont les autres processus qui manquent.
+    const sockets = readAllListenSockets();
+    const rest = groups.flatMap(flattenGroup).filter((p) => p.uid === uid && !pids.has(p.pid)).map((p) => p.pid);
+    const byPid = readListeningPorts([...pids, ...rest], '/proc', MAX_FDS_PER_READ, sockets);
+    listen = { byPid, sockets: dedupeSockets(sockets) };
+    for (const pid of pids) {
+      const list = byPid.get(pid);
+      if (list) next.set(pid, list);
+    }
+  } else if (pids.size) next = readListeningPorts([...pids]);
+  if (!config.classify.detectPorts) return;
   const key = JSON.stringify([...next].sort((a, b) => a[0] - b[0]));
   if (key !== portsKey) {
     portsKey = key;
@@ -236,7 +259,7 @@ function takeSnapshot(): FullSnapshot {
   recordSeparate(separateSeen, groups, now, (g) => isOverThreshold(g, config.othersThreshold));
   refreshPorts(groups, now);
   const classification = classify(groups, now);
-  return { takenAt: Date.now(), currentUid: uid, system: readSystem(), groups, classification, memMetric: config.ui.memoryMetric };
+  return { takenAt: Date.now(), currentUid: uid, system: readSystem(), groups, classification, memMetric: config.ui.memoryMetric, listen };
 }
 
 /** Dernier snapshot complet (arbres compris) : sert au kill de groupe et aux réponses immédiates à `watch`. */
@@ -368,7 +391,14 @@ ipcMain.handle('config:get', () => configState());
 // Le renderer dit ce qu'il suit ; on renvoie tout de suite le dernier snapshot recalculé (sans relire /proc).
 ipcMain.handle('watch', (_e, w: unknown) => {
   if (!isWatch(w)) return;
-  watch = { groupId: w.groupId, query: w.query, othersOpen: w.othersOpen === true };
+  const wasAll = wantsAllPorts(watch);
+  watch = { groupId: w.groupId, query: w.query, othersOpen: w.othersOpen === true, ports: w.ports === true };
+  // Panneau « Ports ouverts » ouvert ou recherche `:port` commencée : ports de tous les processus lus tout de suite.
+  if (last && !wasAll && wantsAllPorts(watch)) {
+    const before = portsVersion;
+    refreshPorts(last.groups, Date.now());
+    last = { ...last, listen, classification: portsVersion !== before ? classify(last.groups, Date.now()) : last.classification };
+  }
   // « Autres » déplié, ou ouverture de « Autres » / d'un de ses sous-groupes : leur classement est calculé tout de suite (reclassify envoie).
   const others = last?.groups.find((g) => g.kind === 'others');
   const unclassified = !!others && others.subgroups.length > 0 && !last!.classification.has(others.subgroups[0].id);

@@ -1,5 +1,6 @@
 import type { AlertsConfig } from './alerts';
 import type { EarlyoomSettings } from './earlyoom';
+import type { OpenPortsInfo } from './openPorts';
 
 export interface ProcSample {
   pid: number;
@@ -87,6 +88,8 @@ export interface Watch {
   query: string;
   /** Carte « Autres » dépliée sur la page Processus (ses sous-groupes sont alors résumés). */
   othersOpen?: boolean;
+  /** Panneau « Ports ouverts » affiché : les ports de tous les processus de l'utilisateur sont lus. */
+  ports?: boolean;
 }
 
 export interface Snapshot {
@@ -108,6 +111,8 @@ export interface Snapshot {
   detail: { groupId: string; roots: ProcNode[] } | null;
   /** Mémoire affichée : 'pss' → les rssKB des processus et des groupes sont des PSS (repli RSS signalé par pssDenied). */
   memMetric: MemoryMetric;
+  /** Ports ouverts : non nul seulement si `Watch.ports` ou une recherche de port (`:3000`). */
+  openPorts: OpenPortsInfo | null;
 }
 
 export interface RecorderConfig {

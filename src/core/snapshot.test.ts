@@ -128,6 +128,27 @@ describe('buildSnapshot', () => {
     expect(buildSnapshot(base, { groupId: null, query: '' }).watched).toBeNull();
   });
 
+  test('recherche de port : groupes (de premier niveau) qui écoutent ce port, liste des ports jointe', () => {
+    const listen = { byPid: new Map([[1, [3000]], [3, [631]]]), sockets: [{ inode: 1, port: 3000, uid: 1000 }, { inode: 2, port: 5432, uid: 965 }] };
+    const s = buildSnapshot({ ...base, listen }, { groupId: null, query: ' :3000 ' });
+    expect(s.matches).toEqual(['a']);
+    expect(s.openPorts?.ports.map((p) => [p.port, p.pid, p.instanceKey])).toEqual([[631, 3, 'c#3:30'], [3000, 1, 'a#1:10']]);
+    expect(s.openPorts?.otherUsers).toEqual([{ port: 5432, uid: 965 }]);
+    // sous-groupe de « Autres » : la carte « Autres » correspond
+    expect(buildSnapshot({ ...base, listen }, { groupId: null, query: 'port:631' }).matches).toEqual(['others']);
+    // port d'un autre utilisateur ou libre : aucune carte
+    expect(buildSnapshot({ ...base, listen }, { groupId: null, query: ':5432' }).matches).toEqual([]);
+    // panneau « Ports ouverts » sans recherche de port : liste jointe, recherche normale
+    const panel = buildSnapshot({ ...base, listen }, { groupId: null, query: 'chrome', ports: true });
+    expect(panel.matches).toEqual(['b']);
+    expect(panel.openPorts?.ports).toHaveLength(2);
+    // ni panneau ni recherche de port : rien
+    expect(buildSnapshot({ ...base, listen }, { groupId: null, query: 'vite' }).openPorts).toBeNull();
+    expect(buildSnapshot({ ...base, listen }, { groupId: null, query: '' }).openPorts).toBeNull();
+    // ports pas encore lus : liste vide plutôt qu'une erreur
+    expect(buildSnapshot(base, { groupId: null, query: ':3000' }).openPorts).toEqual({ ports: [], otherUsers: [] });
+  });
+
   test('recherche : ids des groupes de premier niveau qui correspondent', () => {
     expect(buildSnapshot(base, { groupId: null, query: ' cron ' })).toMatchObject({ query: 'cron', matches: ['others'] });
     expect(buildSnapshot(base, { groupId: null, query: 'chrome' }).matches).toEqual(['b']);
@@ -203,4 +224,8 @@ test('isWatch valide ce qui vient du renderer', () => {
   expect(isWatch({ groupId: null, query: '', othersOpen: false })).toBe(true);
   expect(isWatch({ groupId: null, query: '', othersOpen: 'yes' })).toBe(false);
   expect(isWatch({ groupId: null, query: '', othersOpen: 1 })).toBe(false);
+  // ports : absent ou booléen
+  expect(isWatch({ groupId: null, query: '', ports: true })).toBe(true);
+  expect(isWatch({ groupId: null, query: '', ports: false })).toBe(true);
+  expect(isWatch({ groupId: null, query: '', ports: 'oui' })).toBe(false);
 });
