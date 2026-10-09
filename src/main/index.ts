@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Tray } from 'electron';
-import { appendFileSync, existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { classifyGroups, type InstanceDecision } from '../core/classify/classify';
@@ -31,7 +31,7 @@ import { createAlertOpener, createFocusWriter, initSeenUpTo, keepSeenUpTo, markS
 import { installDesktopEntry } from './desktopEntry';
 import { createEarlyoomApplier, earlyoomStatus, type EarlyoomLock } from './earlyoom';
 import { createEarlyoomSetup, keepEarlyoomReminder, setupConfirmation, snoozeReminder } from './earlyoomSetup';
-import { reminderMode } from '../core/earlyoomSetup';
+import { OS_RELEASE, reminderMode } from '../core/earlyoomSetup';
 import { clearHistory, createHistoryReader } from './history';
 import { pollDelay, type WindowActivity } from './pollPolicy';
 import { portModes } from './portModes';
@@ -600,6 +600,13 @@ const earlyoomSetupIpc = createEarlyoomSetup({
   status: () => earlyoomStatus(),
   getProtected: () => config.protected,
   exists: existsSync,
+  readOsRelease: () => {
+    try {
+      return readFileSync(OS_RELEASE, 'utf8');
+    } catch {
+      return null;
+    }
+  },
   lock: earlyoomLock,
   confirm: async ({ mode, pm, line }) => {
     const c = setupConfirmation(mode, pm, line);

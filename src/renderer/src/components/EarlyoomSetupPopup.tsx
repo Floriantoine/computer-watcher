@@ -43,7 +43,13 @@ export function useEarlyoomReminder(o: { onState: (s: ConfigState) => void; onTo
     setBusy(true);
     try {
       const r = await runEarlyoomSetup(m, (msg, kind) => latest.current.onToast(msg, kind));
-      if (popupAfterSetup(r) === 'close') setMode(null);
+      const next = popupAfterSetup(r);
+      if (next === 'close') setMode(null);
+      else if (next === 'refresh') {
+        // État changé (ex. installé entre-temps mais inactif) : le pop-up reste ouvert avec le nouveau mode.
+        const fresh = await window.procWatch.earlyoom.reminder().catch(() => null);
+        setMode(fresh ? fresh.mode : null);
+      }
     } finally {
       setBusy(false);
     }

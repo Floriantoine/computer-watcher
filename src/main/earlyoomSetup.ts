@@ -1,7 +1,7 @@
 // Installation et activation d'earlyoom depuis l'app (B8 bis) : un seul pkexec d'un script fixe.
 import { buildEarlyoomArgs, checkEarlyoomLine, EARLYOOM_LINE_PATTERN } from '../core/earlyoom';
 import {
-  detectPackageManager, isSetupMode, PACKAGE_MANAGERS, setupNeed, setupSettings, type EarlyoomSetupMode, type PackageManagerName,
+  detectPackageManager, isSetupMode, OS_RELEASE, PACKAGE_MANAGERS, setupNeed, setupSettings, type EarlyoomSetupMode, type PackageManagerName,
 } from '../core/earlyoomSetup';
 import type { ApplyResult, Config, EarlyoomStatus } from '../core/types';
 import { applyExitMessage, defaultRun, EARLYOOM_SYSTEMCTL, EARLYOOM_TARGET, LINE_CHECKS, PKEXEC, writeAndStartFragment, type EarlyoomLock, type ExecFn } from './earlyoom';
@@ -16,13 +16,20 @@ const GRACE_MS = 2_000;
 
 if (EARLYOOM_LINE_PATTERN.includes("'")) throw new Error('motif earlyoom : apostrophe interdite');
 for (const m of PACKAGE_MANAGERS) {
-  if (!/^[a-z_]+$/.test(m.varName) || !/^\/usr\/bin\/[a-z-]+$/.test(m.path) || !m.args.every((a) => /^[A-Za-z0-9:=_-]+$/.test(a))) {
+  if (
+    !/^[a-z_]+$/.test(m.varName) || !/^\/usr\/bin\/[a-z-]+$/.test(m.path) || !m.args.every((a) => /^[A-Za-z0-9:=_-]+$/.test(a)) ||
+    !m.distros.every((d) => /^[a-z]+$/.test(d))
+  ) {
     throw new Error(`gestionnaire de paquets ${m.name} : constante non conforme`);
   }
 }
 
 const PM_VARS = PACKAGE_MANAGERS.map((m) => `${m.varName}=${m.path}`).join('\n');
-const PM_BRANCHES = PACKAGE_MANAGERS.map((m, i) => `  ${i === 0 ? 'if' : 'elif'} [[ -x "$${m.varName}" ]]; then pm=("$${m.varName}" ${m.args.join(' ')})`).join('\n');
+const PM_PRESENT = PACKAGE_MANAGERS.map((m) => `  [[ -x "$${m.varName}" ]] && { n=$((n + 1)); choice=${m.varName}; }`).join('\n');
+const PM_WANT_INIT = PACKAGE_MANAGERS.map((m) => `w_${m.varName}=0`).join('; ');
+const PM_WANT_CASES = PACKAGE_MANAGERS.map((m) => `        ${m.distros.join('|')}) [[ -x "$${m.varName}" ]] && w_${m.varName}=1 ;;`).join('\n');
+const PM_WANT_COUNT = PACKAGE_MANAGERS.map((m) => `    (( w_${m.varName} )) && { n=$((n + 1)); choice=${m.varName}; }`).join('\n');
+const PM_BRANCHES = PACKAGE_MANAGERS.map((m) => `    ${m.varName}) pm=("$${m.varName}" ${m.args.join(' ')}) ;;`).join('\n');
 
 /**
  * Script fixe exécuté en root par `pkexec /usr/bin/bash -c SCRIPT proc-watch-earlyoom-setup <mode> <ligne>`.
@@ -47,20 +54,55 @@ target=${EARLYOOM_TARGET}
 systemctl=${EARLYOOM_SYSTEMCTL}
 earlyoom=${EARLYOOM_BIN}
 ${PM_VARS}
+osrelease=${OS_RELEASE}
 pause=2
 re='${EARLYOOM_LINE_PATTERN}'
 [[ "$mode" == install || "$mode" == activate ]] || exit 10
 ${LINE_CHECKS}if [[ "$mode" == install ]]; then
-${PM_BRANCHES}
-  else exit 20
+  # Un seul gestionnaire présent : celui-là. Plusieurs : celui que désigne /etc/os-release (ID, ID_LIKE ; lu, jamais
+  # exécuté), s'il est présent et le seul désigné. Sinon : 20.
+  n=0
+  choice=""
+${PM_PRESENT}
+  if (( n > 1 )); then
+    n=0
+    choice=""
+    ids=""
+    if [[ -f "$osrelease" ]]; then
+      while IFS= read -r l || [[ -n "$l" ]]; do
+        case "$l" in
+          ID=*|ID_LIKE=*) ids+=" \${l#*=}" ;;
+        esac
+      done < "$osrelease"
+    fi
+    ids=\${ids//[\\"\\']/ }
+    read -r -a words <<< "$ids"
+    ${PM_WANT_INIT}
+    for w in "\${words[@]}"; do
+      case "$w" in
+${PM_WANT_CASES}
+      esac
+    done
+${PM_WANT_COUNT}
+    (( n == 1 )) || choice=""
   fi
-  out=$(DEBIAN_FRONTEND=noninteractive "\${pm[@]}" < /dev/null 2>&1)
+  case "$choice" in
+${PM_BRANCHES}
+    *) exit 20 ;;
+  esac
+  # Environnement minimal pour le gestionnaire et les scripts de mainteneur (ni DISPLAY, ni XAUTHORITY, ni TERM, ni SHELL).
+  out=$(/usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C DEBIAN_FRONTEND=noninteractive "\${pm[@]}" < /dev/null 2>&1)
   rc=$?
   printf '%s\\n' "$out" | tail -n 5 >&2
   (( rc == 0 )) || exit 21
 fi
 [[ -x "$earlyoom" ]] || exit 22
-${writeAndStartFragment('  "$systemctl" enable --now earlyoom || return 1\n  "$systemctl" restart earlyoom || return 1')}`;
+${writeAndStartFragment(
+  '  "$systemctl" enable --now earlyoom || return 1\n  "$systemctl" restart earlyoom || return 1',
+  // Juste après une installation, l'ancien fichier est souvent celui du paquet, SANS les exclusions obligatoires :
+  // on ne relance pas earlyoom avec lui, on le désactive (16 ; 17 si la désactivation échoue).
+  '  if [[ "$mode" == install ]]; then\n    "$systemctl" disable --now earlyoom || exit 17\n    exit 16\n  fi\n  start_and_check || exit 15\n  exit 13',
+)}`;
 
 /** Dernière ligne non vide de la sortie du gestionnaire, sans caractères de contrôle, 200 caractères au plus. */
 function lastLine(stderr: string): string {
@@ -72,7 +114,9 @@ function lastLine(stderr: string): string {
 export function setupExitMessage(code: number, mode: EarlyoomSetupMode, line: string, stdout: string, stderr: string): ApplyResult {
   switch (code) {
     case 10: return { ok: false, reason: 'invalid', message: "Demande refusée par le script (mode ou arguments) : rien n'a été modifié." };
-    case 20: return { ok: false, reason: 'unavailable', message: "Gestionnaire de paquets non reconnu (pacman, apt-get, dnf ou zypper attendu) : installer earlyoom à la main ; rien n'a été modifié." };
+    case 16: return { ok: false, reason: 'failed', message: "earlyoom installé mais désactivé : la configuration ne démarrait pas. L'ancien fichier a été restauré ; régler earlyoom dans Réglages › earlyoom." };
+    case 17: return { ok: false, reason: 'failed', message: "earlyoom installé, ancien fichier restauré, mais le service n’a pas pu être désactivé : vérifier « systemctl status earlyoom »." };
+    case 20: return { ok: false, reason: 'unavailable', message: "Gestionnaire de paquets non reconnu ou ambigu (pacman, apt-get, dnf ou zypper ; s'il y en a plusieurs, /etc/os-release doit en désigner un seul) : installer earlyoom à la main ; rien n'a été modifié." };
     case 21: {
       const detail = lastLine(stderr);
       return {
@@ -98,7 +142,7 @@ const timeoutMessage = (mode: EarlyoomSetupMode): ApplyResult => ({
   ok: false,
   reason: 'failed',
   message: mode === 'install'
-    ? 'Délai dépassé (10 min) : l’installation continue peut-être en arrière-plan ; rouvrir Réglages › earlyoom pour vérifier son état.'
+    ? 'Délai dépassé (10 min) : gestionnaire de paquets peut-être occupé (autre installation en cours) ; l’installation continue peut-être en arrière-plan. Rouvrir Réglages › earlyoom pour vérifier son état.'
     : "Délai dépassé (120 s) : rien n'a été modifié si la fenêtre de mot de passe était encore ouverte.",
 });
 
@@ -161,6 +205,8 @@ export function createEarlyoomSetup(deps: {
   status: () => Promise<EarlyoomStatus>;
   getProtected: () => readonly string[];
   exists: (p: string) => boolean;
+  /** Contenu de /etc/os-release (null : absent), pour choisir entre plusieurs gestionnaires. */
+  readOsRelease?: () => string | null;
   confirm: (c: { mode: EarlyoomSetupMode; pm: PackageManagerName | null; line: string }) => Promise<boolean>;
   setup?: (mode: EarlyoomSetupMode, line: string) => Promise<SetupOutcome>;
   log: (e: SetupEvent) => void;
@@ -182,8 +228,16 @@ export function createEarlyoomSetup(deps: {
       if (need !== rawMode) {
         return { ok: false, reason: 'stale', message: `L’état d’earlyoom a changé (${need === null ? 'rien à faire' : need === 'install' ? 'non installé' : 'installé mais inactif'}) : rien n’a été modifié.` };
       }
-      const pm = rawMode === 'install' ? detectPackageManager(deps.exists) : null;
-      if (rawMode === 'install' && !pm) return setupExitMessage(20, rawMode, '', '', '');
+      let pm: PackageManagerName | null = null;
+      if (rawMode === 'install') {
+        const c = detectPackageManager(deps.exists, deps.readOsRelease?.() ?? null);
+        if (!c.ok) {
+          return c.reason === 'none'
+            ? setupExitMessage(20, rawMode, '', '', '')
+            : { ok: false, reason: 'unavailable', message: "Plusieurs gestionnaires de paquets sont présents et /etc/os-release ne permet pas d'en choisir un : installer earlyoom à la main ; rien n'a été modifié." };
+        }
+        pm = c.pm;
+      }
       const built = buildEarlyoomArgs(setupSettings(st.file), deps.getProtected());
       if (!built.ok) return { ok: false, reason: 'invalid', message: built.errors.join(' · ') };
       if (!(await deps.confirm({ mode: rawMode, pm, line: built.line }))) return { ok: false, reason: 'cancelled', message: "Annulé : rien n'a été modifié." };

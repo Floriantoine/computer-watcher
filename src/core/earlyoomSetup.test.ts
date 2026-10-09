@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { buildEarlyoomArgs } from './earlyoom';
 import {
   detectPackageManager, EARLYOOM_DEFAULT_SETTINGS, EARLYOOM_REMINDER_SNOOZE_MS, isSetupMode, reminderMode, reminderSnoozed, setupNeed, setupSettings,
-  validateEarlyoomReminder,
+  PACKAGE_MANAGERS, validateEarlyoomReminder,
 } from './earlyoomSetup';
 
 const NOW = 1_800_000_000_000;
@@ -86,15 +86,49 @@ describe('setupSettings (réglages de la ligne écrite à l’installation)', ()
   });
 });
 
-describe('detectPackageManager (affichage seulement : le script root détecte lui-même)', () => {
+describe('choix du gestionnaire (M1 : plusieurs présents → /etc/os-release)', () => {
   const only = (...paths: string[]) => (p: string) => paths.includes(p);
-  test('ordre pacman, apt-get, dnf, zypper', () => {
-    expect(detectPackageManager(only('/usr/bin/pacman', '/usr/bin/apt-get'))).toBe('pacman');
-    expect(detectPackageManager(only('/usr/bin/apt-get', '/usr/bin/dnf'))).toBe('apt-get');
-    expect(detectPackageManager(only('/usr/bin/dnf', '/usr/bin/zypper'))).toBe('dnf');
-    expect(detectPackageManager(only('/usr/bin/zypper'))).toBe('zypper');
+  const ALL = only('/usr/bin/pacman', '/usr/bin/apt-get', '/usr/bin/dnf', '/usr/bin/zypper');
+  test('un seul présent → celui-là, sans lire os-release', () => {
+    expect(detectPackageManager(only('/usr/bin/zypper'), null)).toEqual({ ok: true, pm: 'zypper' });
+    expect(detectPackageManager(only('/usr/bin/apt-get'), 'ID=arch\n')).toEqual({ ok: true, pm: 'apt-get' });
   });
-  test('aucun → null ; jamais par le PATH', () => {
-    expect(detectPackageManager(only('/usr/local/bin/pacman', '/bin/pacman', 'pacman'))).toBeNull();
+  test('aucun → none ; jamais par le PATH', () => {
+    expect(detectPackageManager(only('/usr/local/bin/pacman', '/bin/pacman', 'pacman'), 'ID=arch')).toEqual({ ok: false, reason: 'none' });
   });
+  test.each([
+    ['ID=manjaro\nID_LIKE=arch\n', 'pacman'],
+    ['ID=arch', 'pacman'],
+    ['ID=debian\n', 'apt-get'],
+    ['ID=linuxmint\nID_LIKE="ubuntu debian"\n', 'apt-get'],
+    ['ID="ubuntu"\nID_LIKE=debian\n', 'apt-get'],
+    ['ID=fedora\n', 'dnf'],
+    ['ID="centos"\nID_LIKE="rhel fedora"\n', 'dnf'],
+    ['ID="opensuse-tumbleweed"\nID_LIKE="opensuse suse"\n', 'zypper'],
+    ["ID='sles'\nID_LIKE='suse'\n", 'zypper'],
+  ] as const)('plusieurs présents, os-release %j → %s', (text, pm) => {
+    expect(detectPackageManager(ALL, text)).toEqual({ ok: true, pm });
+  });
+  test.each([
+    ['os-release absent', null],
+    ['distribution inconnue', 'ID=gentoo\n'],
+    ['deux familles', 'ID=arch\nID_LIKE=debian\n'],
+    ['VERSION_ID ne compte pas', 'VERSION_ID=arch\nID=void\n'],
+    ['PRETTY_NAME ne compte pas', 'PRETTY_NAME="arch"\n'],
+    ['vide', ''],
+  ])('plusieurs présents, %s → ambiguous', (_l, text) => {
+    expect(detectPackageManager(ALL, text)).toEqual({ ok: false, reason: 'ambiguous' });
+  });
+  test('la famille désignée doit avoir son gestionnaire présent', () => {
+    expect(detectPackageManager(only('/usr/bin/pacman', '/usr/bin/dnf'), 'ID=debian')).toEqual({ ok: false, reason: 'ambiguous' });
+    expect(detectPackageManager(only('/usr/bin/pacman', '/usr/bin/dnf'), 'ID=fedora')).toEqual({ ok: true, pm: 'dnf' });
+  });
+});
+
+describe('options des gestionnaires (M2 : ni recommandations ni suppressions)', () => {
+  const args = (n: string) => PACKAGE_MANAGERS.find((m) => m.name === n)!.args.join(' ');
+  test('apt-get --no-install-recommends --no-remove', () => expect(args('apt-get')).toMatch(/--no-install-recommends --no-remove/));
+  test('dnf sans dépendances faibles', () => expect(args('dnf')).toContain('--setopt=install_weak_deps=False'));
+  test('zypper --no-recommends', () => expect(args('zypper')).toContain('--no-recommends'));
+  test('pacman --needed --noconfirm', () => expect(args('pacman')).toBe('-S --needed --noconfirm earlyoom'));
 });

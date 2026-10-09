@@ -59,22 +59,48 @@ export function setupSettings(file: { settings: EarlyoomSettings } | null): Earl
 }
 
 /**
- * Gestionnaires de paquets reconnus, dans l'ordre de détection (chemins absolus, jamais le PATH), avec leur commande
- * d'installation non interactive. Le script root est généré depuis cette constante (paquet constant : earlyoom).
+ * Gestionnaires de paquets reconnus (chemins absolus, jamais le PATH), commande d'installation non interactive et familles
+ * de distributions (`ID` / `ID_LIKE` de /etc/os-release) qui les désignent quand plusieurs sont présents. Le script root
+ * est généré depuis cette constante (paquet constant : earlyoom).
+ * Ni paquets recommandés ni suppressions : apt-get --no-install-recommends --no-remove (s'arrête avant toute suppression),
+ * dnf install_weak_deps=False, zypper --no-recommends ; pacman --needed (rien d'autre que earlyoom et ses dépendances).
  */
 export const PACKAGE_MANAGERS = [
-  { name: 'pacman', varName: 'pacman', path: '/usr/bin/pacman', args: ['-S', '--needed', '--noconfirm', 'earlyoom'] },
+  { name: 'pacman', varName: 'pacman', path: '/usr/bin/pacman', distros: ['arch'], args: ['-S', '--needed', '--noconfirm', 'earlyoom'] },
   {
-    name: 'apt-get', varName: 'apt_get', path: '/usr/bin/apt-get',
+    name: 'apt-get', varName: 'apt_get', path: '/usr/bin/apt-get', distros: ['debian', 'ubuntu'],
     // confold : un /etc/default/earlyoom déjà présent est gardé sans question (proc-watch l'écrit ensuite, avec .bak).
-    args: ['-o', 'Dpkg::Options::=--force-confdef', '-o', 'Dpkg::Options::=--force-confold', 'install', '-y', 'earlyoom'],
+    args: ['-o', 'Dpkg::Options::=--force-confdef', '-o', 'Dpkg::Options::=--force-confold', 'install', '-y', '--no-install-recommends', '--no-remove', 'earlyoom'],
   },
-  { name: 'dnf', varName: 'dnf', path: '/usr/bin/dnf', args: ['install', '-y', 'earlyoom'] },
-  { name: 'zypper', varName: 'zypper', path: '/usr/bin/zypper', args: ['--non-interactive', 'install', 'earlyoom'] },
+  { name: 'dnf', varName: 'dnf', path: '/usr/bin/dnf', distros: ['fedora', 'rhel'], args: ['install', '-y', '--setopt=install_weak_deps=False', 'earlyoom'] },
+  { name: 'zypper', varName: 'zypper', path: '/usr/bin/zypper', distros: ['suse', 'opensuse'], args: ['--non-interactive', 'install', '--no-recommends', 'earlyoom'] },
 ] as const;
 export type PackageManagerName = (typeof PACKAGE_MANAGERS)[number]['name'];
 
-/** Pour la confirmation seulement : le script root refait la détection lui-même. */
-export function detectPackageManager(exists: (p: string) => boolean): PackageManagerName | null {
-  return PACKAGE_MANAGERS.find((m) => exists(m.path))?.name ?? null;
+export const OS_RELEASE = '/etc/os-release';
+
+/** Mots de `ID` et `ID_LIKE` (guillemets retirés), comme les lit le script root. */
+export function osReleaseIds(text: string): string[] {
+  const out: string[] = [];
+  for (const line of text.split('\n')) {
+    const m = /^(ID|ID_LIKE)=(.*)$/.exec(line);
+    if (m) out.push(...m[2].replace(/["']/g, '').split(/[ \t]+/).filter(Boolean));
+  }
+  return out;
+}
+
+export type PackageManagerChoice = { ok: true; pm: PackageManagerName } | { ok: false; reason: 'none' | 'ambiguous' };
+
+/**
+ * Un seul gestionnaire présent : celui-là. Plusieurs : celui que désigne /etc/os-release (ID, ID_LIKE), à condition qu'il
+ * soit présent et le seul désigné ; sinon (fichier absent, distribution inconnue, plusieurs familles) : ambigu, on refuse.
+ * Même règle dans le script root ; ici, pour la confirmation et pour refuser avant le mot de passe.
+ */
+export function detectPackageManager(exists: (p: string) => boolean, osRelease: string | null): PackageManagerChoice {
+  const present = PACKAGE_MANAGERS.filter((m) => exists(m.path));
+  if (present.length === 0) return { ok: false, reason: 'none' };
+  if (present.length === 1) return { ok: true, pm: present[0]!.name };
+  const ids = osRelease === null ? [] : osReleaseIds(osRelease);
+  const chosen = present.filter((m) => m.distros.some((d) => ids.includes(d)));
+  return chosen.length === 1 ? { ok: true, pm: chosen[0]!.name } : { ok: false, reason: 'ambiguous' };
 }

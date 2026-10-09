@@ -21,9 +21,13 @@ export function earlyoomPopupText(mode: EarlyoomSetupMode): EarlyoomPopupText {
       };
 }
 
-/** Après « Installer et configurer » / « Activer » : réussi ou plus rien à faire → fermé ; sinon reste ouvert (réessayer ou fermer). */
-export function popupAfterSetup(r: ApplyResult): 'close' | 'keep' {
-  return r.ok || r.reason === 'stale' ? 'close' : 'keep';
+/**
+ * Après « Installer et configurer » / « Activer » : réussi → fermé ; état changé entre-temps (`stale`) → état relu, le pop-up
+ * passe au nouveau mode (ou se ferme s'il n'y a plus rien à faire) ; sinon reste ouvert (réessayer ou fermer).
+ */
+export function popupAfterSetup(r: ApplyResult): 'close' | 'keep' | 'refresh' {
+  if (r.ok) return 'close';
+  return r.reason === 'stale' ? 'refresh' : 'keep';
 }
 
 /** Bouton de Réglages › earlyoom : même mot-clé que le pop-up, ou rien si earlyoom est actif et lancé au démarrage. */

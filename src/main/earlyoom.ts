@@ -100,9 +100,10 @@ export const LINE_CHECKS = `[[ -n "$line" ]] || exit 10
 
 /**
  * Sauvegarde (.bak-<date à la ms>[.n], jamais écrasée), écriture atomique, démarrage vérifié et restauration :
- * commun à « Appliquer » et à l'installation. `start` : commandes de démarrage (dans start_and_check, `|| return 1`).
+ * commun à « Appliquer » et à l'installation. `start` : commandes de démarrage (dans start_and_check, `|| return 1`) ;
+ * `restoreEnd` : fin de restore(), après la remise de l'ancien fichier (défaut : redémarrage vérifié, 13 ou 15).
  */
-export const writeAndStartFragment = (start: string): string => `bak=""
+export const writeAndStartFragment = (start: string, restoreEnd = '  start_and_check || exit 15\n  exit 13'): string => `bak=""
 if [[ -e "$target" ]]; then
   bak="$target.bak-$(date +%Y%m%dT%H%M%S.%3N)"
   first="$bak"
@@ -129,8 +130,7 @@ restore() {
   else
     rm -f -- "$target" || exit 14
   fi
-  start_and_check || exit 15
-  exit 13
+${restoreEnd}
 }
 start_and_check || restore
 exit 0

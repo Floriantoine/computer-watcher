@@ -45,6 +45,7 @@ const fakeSystemctl = (): string => {
     'c=$(( $(grep -c -- "^systemctl $1 " "$FAKE_LOG") - 1 ))',
     'case $1 in',
     '  enable) exit "$(pick "${FAKE_ENABLE:-}" $c)";;',
+    '  disable) exit "$(pick "${FAKE_DISABLE:-}" $c)";;',
     '  restart) exit "$(pick "${FAKE_RESTART:-}" $c)";;',
     '  is-active) exit "$(pick "${FAKE_ACTIVE:-}" $c)";;',
     '  show) pick "${FAKE_NRESTARTS:-}" $c; exit 0;;',
@@ -54,35 +55,46 @@ const fakeSystemctl = (): string => {
   return p;
 };
 
-/** Faux gestionnaire de paquets : journalise son nom, son argv et DEBIAN_FRONTEND ; installe un faux earlyoom si FAKE_PM_CODE=0. */
-const fakePm = (name: string): string => {
+/**
+ * Faux gestionnaire de paquets. Lancé par le script sous `env -i` : il ne reçoit AUCUNE variable du test, donc ses
+ * réglages (journal, code, faux binaire) sont écrits dans son texte. Journalise son nom, son argv, son environnement
+ * (hors PWD/SHLVL/_ ajoutés par bash) et son stdin ; installe un faux earlyoom si le code est 0.
+ */
+const fakePm = (name: string, o: { log: string; earlyoom: string; code: number; noBin: boolean }): string => {
   const p = join(dir, name);
   writeExec(p, [
     '#!/usr/bin/bash',
-    `echo "${name} $* [DEBIAN_FRONTEND=\${DEBIAN_FRONTEND:-}] [stdin=$(readlink /proc/self/fd/0)]" >> "$FAKE_LOG"`,
+    `env_=$(/usr/bin/env | /usr/bin/grep -v -E '^(PWD|SHLVL|_|OLDPWD)=' | /usr/bin/sort | /usr/bin/paste -sd ' ')`,
+    `echo "${name} $* [env=$env_] [stdin=$(/usr/bin/readlink /proc/self/fd/0)]" >> '${o.log}'`,
     'echo "ligne 1 du gestionnaire"',
     'echo "erreur : impossible de joindre le miroir" >&2',
-    'code=${FAKE_PM_CODE:-0}',
-    'if [[ $code == 0 && ${FAKE_PM_NO_BIN:-0} != 1 ]]; then printf "#!/usr/bin/bash\\nexit 0\\n" > "$FAKE_EARLYOOM"; chmod 755 "$FAKE_EARLYOOM"; fi',
-    'exit "$code"',
+    ...(o.code === 0 && !o.noBin ? [`printf '#!/usr/bin/bash\\nexit 0\\n' > '${o.earlyoom}'`, `/usr/bin/chmod 755 '${o.earlyoom}'`] : []),
+    `exit ${o.code}`,
   ]);
   return p;
 };
 
+/** Environnement vu par le gestionnaire : seulement ces trois variables (M3). */
+const PM_ENV = '[env=DEBIAN_FRONTEND=noninteractive LC_ALL=C PATH=/usr/bin:/bin] [stdin=/dev/null]';
+
 type PmName = (typeof PACKAGE_MANAGERS)[number]['name'];
 
 /** Copie de test : chemins remplacés par des fichiers du dossier de test (absents si non demandés), pause 0. */
-function testScript(o: { pms: PmName[] }): { script: string; target: string; earlyoom: string } {
+function testScript(o: { pms: PmName[]; pmCode: number; pmNoBin: boolean; osRelease: string | null }): { script: string; target: string; earlyoom: string } {
   const target = join(dir, 'earlyoom.conf');
   const earlyoom = join(dir, 'earlyoom-bin');
+  const osRelease = join(dir, 'os-release');
+  if (o.osRelease !== null) writeFileSync(osRelease, o.osRelease);
+  const log = join(dir, 'log');
   const swaps: [string, string][] = [
     ['\ntarget=/etc/default/earlyoom\n', `\ntarget='${target}'\n`],
     ['\nsystemctl=/usr/bin/systemctl\n', `\nsystemctl='${fakeSystemctl()}'\n`],
     ['\nearlyoom=/usr/bin/earlyoom\n', `\nearlyoom='${earlyoom}'\n`],
     ['\npause=2\n', '\npause=0\n'],
+    ['\nosrelease=/etc/os-release\n', `\nosrelease='${osRelease}'\n`],
   ];
   for (const m of PACKAGE_MANAGERS) {
-    const path = o.pms.includes(m.name) ? fakePm(m.name) : join(dir, `absent-${m.name}`);
+    const path = o.pms.includes(m.name) ? fakePm(m.name, { log, earlyoom, code: o.pmCode, noBin: o.pmNoBin }) : join(dir, `absent-${m.name}`);
     swaps.push([`\n${m.varName}=${m.path}\n`, `\n${m.varName}='${path}'\n`]);
   }
   let s = EARLYOOM_SETUP_SCRIPT;
@@ -104,17 +116,22 @@ interface RunOpts {
   active?: string;
   enable?: string;
   nrestarts?: string;
+  disable?: string;
+  /** Contenu de /etc/os-release (copie de test) ; null : absent. Défaut : absent. */
+  osRelease?: string | null;
   env?: Record<string, string>;
 }
 function run(o: RunOpts) {
-  const { script, target, earlyoom } = testScript({ pms: o.pms ?? [] });
+  const { script, target, earlyoom } = testScript({ pms: o.pms ?? [], pmCode: o.pmCode ?? 0, pmNoBin: !!o.pmNoBin, osRelease: o.osRelease ?? null });
   if (o.existing) writeFileSync(target, o.existing);
   if (o.binPresent) writeExec(earlyoom, ['#!/usr/bin/bash', 'exit 0']);
   const log = join(dir, 'log');
   const r = spawnSync('/usr/bin/bash', ['-c', script, 'proc-watch-earlyoom-setup', ...o.args], {
     env: {
-      PATH: '/usr/bin:/bin', FAKE_LOG: log, FAKE_EARLYOOM: earlyoom, FAKE_PM_CODE: String(o.pmCode ?? 0), FAKE_PM_NO_BIN: o.pmNoBin ? '1' : '0',
-      FAKE_RESTART: o.restart ?? '', FAKE_ACTIVE: o.active ?? '', FAKE_ENABLE: o.enable ?? '', FAKE_NRESTARTS: o.nrestarts ?? '',
+      PATH: '/usr/bin:/bin', FAKE_LOG: log,
+      FAKE_RESTART: o.restart ?? '', FAKE_ACTIVE: o.active ?? '', FAKE_ENABLE: o.enable ?? '', FAKE_NRESTARTS: o.nrestarts ?? '', FAKE_DISABLE: o.disable ?? '',
+      // Ce que pkexec aurait déjà retiré, et que le script retire aussi pour le gestionnaire (M3).
+      DISPLAY: ':0', XAUTHORITY: '/home/u/.Xauthority', TERM: 'xterm', SHELL: '/usr/bin/zsh',
       ...o.env,
     },
     encoding: 'utf8',
@@ -147,6 +164,8 @@ describe('script d’installation livré (constante)', () => {
   test('aucune variable d’environnement lue : toute variable référencée est assignée par le script', () => {
     const assigned = new Set([...EARLYOOM_SETUP_SCRIPT.matchAll(/(?:^|[\s;(])(?:local\s+)?([A-Za-z_][A-Za-z0-9_]*)=/gm)].map((m) => m[1]));
     for (const v of ['n1', 'n2']) assigned.add(v); // `local n1 n2`
+    // Variables de boucle et de read (`for w in`, `read -r l`, `read -r -a words`).
+    for (const m of EARLYOOM_SETUP_SCRIPT.matchAll(/\b(?:for|read(?: -r)?(?: -a)?)\s+([A-Za-z_][A-Za-z0-9_]*)/g)) assigned.add(m[1]!);
     const used = new Set([...EARLYOOM_SETUP_SCRIPT.matchAll(/\$\{?#?([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]));
     used.delete('BASH_REMATCH'); // tableau de bash rempli par =~, pas l'environnement
     for (const v of used) expect(assigned, `$${v} lu sans être assigné`).toContain(v);
@@ -175,13 +194,13 @@ describe('script d’installation livré (constante)', () => {
 describe('installation : une branche par gestionnaire (faux binaires, argv journalisé)', () => {
   test.each([
     ['pacman', 'pacman -S --needed --noconfirm earlyoom'],
-    ['apt-get', 'apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold install -y earlyoom'],
-    ['dnf', 'dnf install -y earlyoom'],
-    ['zypper', 'zypper --non-interactive install earlyoom'],
+    ['apt-get', 'apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold install -y --no-install-recommends --no-remove earlyoom'],
+    ['dnf', 'dnf install -y --setopt=install_weak_deps=False earlyoom'],
+    ['zypper', 'zypper --non-interactive install --no-recommends earlyoom'],
   ] as [PmName, string][])('%s seul → `%s`, ligne écrite, enable --now, vérifié', (pm, argv) => {
     const r = run({ args: ['install', VALID], pms: [pm], existing: OLD });
     expect(r.code).toBe(0);
-    expect(r.pmCalls).toEqual([`${argv} [DEBIAN_FRONTEND=noninteractive] [stdin=/dev/null]`]);
+    expect(r.pmCalls).toEqual([`${argv} ${PM_ENV}`]); // env -i : ni DISPLAY, ni XAUTHORITY, ni TERM, ni SHELL, ni FAKE_*
     expect(r.read()).toBe(`${VALID}\n`);
     expect(r.baks).toHaveLength(1);
     expect(readFileSync(join(dir, r.baks[0]), 'utf8')).toBe(OLD);
@@ -189,11 +208,38 @@ describe('installation : une branche par gestionnaire (faux binaires, argv journ
     expect(r.stdout).toBe(''); // sortie du gestionnaire sur stderr (stdout réservé au chemin du .bak, code 14)
     expect(r.stderr).toContain('impossible de joindre le miroir');
   });
-  test('plusieurs gestionnaires → le premier dans l’ordre pacman, apt-get, dnf, zypper', () => {
-    const r = run({ args: ['install', VALID], pms: ['zypper', 'dnf', 'apt-get', 'pacman'] });
+  test.each([
+    ['ID=manjaro\nID_LIKE=arch\n', 'pacman'],
+    ['ID=linuxmint\nID_LIKE="ubuntu debian"\n', 'apt-get'],
+    ['ID="centos"\nID_LIKE="rhel fedora"\n', 'dnf'],
+    ['ID="opensuse-tumbleweed"\nID_LIKE="opensuse suse"\n', 'zypper'],
+  ] as [string, PmName][])('plusieurs gestionnaires, os-release %j → %s (M1)', (osRelease, pm) => {
+    const r = run({ args: ['install', VALID], pms: ['zypper', 'dnf', 'apt-get', 'pacman'], osRelease });
     expect(r.code).toBe(0);
     expect(r.pmCalls).toHaveLength(1);
-    expect(r.pmCalls[0]).toMatch(/^pacman /);
+    expect(r.pmCalls[0]!.startsWith(`${pm} `)).toBe(true);
+  });
+  test.each([
+    ['os-release absent', null],
+    ['distribution inconnue', 'ID=gentoo\n'],
+    ['deux familles présentes', 'ID=arch\nID_LIKE=fedora\n'],
+    ['VERSION_ID et PRETTY_NAME ne comptent pas', 'VERSION_ID=arch\nPRETTY_NAME="debian"\nID=void\n'],
+    ['glob dans la valeur', 'ID=*\nID_LIKE="[a-z]*"\n'],
+    ['injection dans la valeur', 'ID="$(touch PWNED)"\nID_LIKE=`touch PWNED`\n'],
+  ])('plusieurs gestionnaires, %s → 20, rien installé ni écrit', (_l, osRelease) => {
+    const r = run({ args: ['install', VALID], pms: ['pacman', 'dnf'], osRelease, existing: OLD });
+    expect(r.code).toBe(20);
+    expect(r.calls).toEqual([]);
+    expect(r.read()).toBe(OLD);
+    expect(existsSync(join(dir, 'PWNED'))).toBe(false);
+  });
+  test('la famille désignée doit avoir son gestionnaire présent', () => {
+    expect(run({ args: ['install', VALID], pms: ['pacman', 'dnf'], osRelease: 'ID=debian\n' }).code).toBe(20);
+  });
+  test('un seul gestionnaire présent : os-release ignoré', () => {
+    const r = run({ args: ['install', VALID], pms: ['apt-get'], osRelease: 'ID=arch\n' });
+    expect(r.code).toBe(0);
+    expect(r.pmCalls[0]).toMatch(/^apt-get /);
   });
   test('fichier de config absent après installation → écrit, pas de .bak', () => {
     const r = run({ args: ['install', VALID], pms: ['dnf'] });
@@ -251,15 +297,31 @@ describe('restauration si le service ne démarre pas', () => {
     expect(r.read()).toBe(OLD);
     expect(r.baks).toHaveLength(1);
   });
-  test('inactif après démarrage → restauré : 13', () => {
-    const r = run({ args: ['install', VALID], pms: ['pacman'], existing: OLD, active: '3 0' });
+  test('activation : inactif après démarrage → restauré et redémarré : 13', () => {
+    const r = run({ args: ['activate', VALID], binPresent: true, existing: OLD, active: '3 0' });
     expect(r.code).toBe(13);
     expect(r.read()).toBe(OLD);
     expect(r.sysCalls).toEqual([...START_CALLS, ...START_CALLS]);
   });
-  test('boucle de plantages (NRestarts augmente) → restauré : 13', () => {
-    const r = run({ args: ['install', VALID], pms: ['pacman'], existing: OLD, nrestarts: '0 2 0 0' });
+  test('activation : boucle de plantages (NRestarts augmente) → restauré : 13', () => {
+    const r = run({ args: ['activate', VALID], binPresent: true, existing: OLD, nrestarts: '0 2 0 0' });
     expect(r.code).toBe(13);
+    expect(r.read()).toBe(OLD);
+  });
+  test('juste après une INSTALLATION : ancien fichier (celui du paquet) restauré puis disable --now, jamais relancé : 16 (M4)', () => {
+    const r = run({ args: ['install', VALID], pms: ['pacman'], existing: OLD, active: '3' });
+    expect(r.code).toBe(16);
+    expect(r.read()).toBe(OLD);
+    expect(r.sysCalls).toEqual([...START_CALLS, 'systemctl disable --now earlyoom']);
+  });
+  test('installation, boucle de plantages → 16, désactivé', () => {
+    const r = run({ args: ['install', VALID], pms: ['pacman'], existing: OLD, nrestarts: '0 2' });
+    expect(r.code).toBe(16);
+    expect(r.sysCalls.at(-1)).toBe('systemctl disable --now earlyoom');
+  });
+  test('installation, désactivation impossible → 17', () => {
+    const r = run({ args: ['install', VALID], pms: ['pacman'], existing: OLD, active: '3', disable: '1' });
+    expect(r.code).toBe(17);
     expect(r.read()).toBe(OLD);
   });
   test('ne démarre pas non plus avec l’ancien fichier → 15 (ancien fichier en place)', () => {
@@ -267,9 +329,9 @@ describe('restauration si le service ne démarre pas', () => {
     expect(r.code).toBe(15);
     expect(r.read()).toBe(OLD);
   });
-  test('pas d’ancien fichier → nouveau supprimé, 13', () => {
-    const r = run({ args: ['install', VALID], pms: ['dnf'], active: '3 0' });
-    expect(r.code).toBe(13);
+  test('pas d’ancien fichier → nouveau supprimé (installation : 16, désactivé)', () => {
+    const r = run({ args: ['install', VALID], pms: ['dnf'], active: '3' });
+    expect(r.code).toBe(16);
     expect(r.read()).toBeNull();
   });
 });
@@ -324,7 +386,7 @@ describe('corpus d’attaque (mode et ligne) : refusé avant toute action', () =
     });
     expect(r.code).toBe(0);
     expect(r.read()).toBe(`${VALID}\n`);
-    expect(r.pmCalls[0]).toContain('[DEBIAN_FRONTEND=noninteractive]');
+    expect(r.pmCalls[0]).toContain(PM_ENV);
     expect(existsSync(evil)).toBe(false);
   });
 });
@@ -340,7 +402,9 @@ describe('setupExitMessage (un message français par code)', () => {
     [12, /Écriture de \/etc\/default\/earlyoom impossible/],
     [13, /ancien fichier a été restauré/],
     [15, /ne redémarre pas/],
-    [20, /Gestionnaire de paquets non reconnu/],
+    [16, /earlyoom installé mais désactivé : la configuration ne démarrait pas/],
+    [17, /n’a pas pu être désactivé/],
+    [20, /Gestionnaire de paquets non reconnu ou ambigu/],
     [21, /Échec de l’installation du paquet earlyoom/],
     [22, /earlyoom introuvable/],
     [126, /Authentification annulée/],
@@ -400,6 +464,7 @@ describe('setupEarlyoom (pkexec simulé)', () => {
     const o = await setupEarlyoom('install', VALID, { run, timeoutMs: 20 });
     expect(o.timedOut).toBe(true);
     expect(!o.result.ok && o.result.message).toMatch(/Délai dépassé \(10 min\)/);
+    expect(!o.result.ok && o.result.message).toContain('gestionnaire de paquets peut-être occupé');
     let done = false;
     void o.done.then(() => (done = true));
     await new Promise((r) => setTimeout(r, 10));
@@ -497,6 +562,26 @@ describe('createEarlyoomSetup (IPC earlyoom:setup)', () => {
     expect(!r.ok && r.message).toMatch(/Gestionnaire de paquets non reconnu/);
     expect(m.confirms).toEqual([]);
     expect(m.setups).toEqual([]);
+  });
+  test('plusieurs gestionnaires et os-release ambigu → refus sans mot de passe (M1)', async () => {
+    const confirms: unknown[] = [];
+    const handler = createEarlyoomSetup({
+      status: async () => status({}), getProtected: () => [], exists: (p) => p === '/usr/bin/pacman' || p === '/usr/bin/apt-get',
+      readOsRelease: () => 'ID=gentoo\n', confirm: async (c) => (confirms.push(c), true), log: () => {},
+      setup: async () => { throw new Error('pkexec lancé'); },
+    });
+    const r = await handler('install');
+    expect(!r.ok && r.message).toMatch(/Plusieurs gestionnaires de paquets/);
+    expect(confirms).toEqual([]);
+  });
+  test('plusieurs gestionnaires, os-release clair → confirmé avec le bon', async () => {
+    const confirms: { pm: string | null }[] = [];
+    const handler = createEarlyoomSetup({
+      status: async () => status({}), getProtected: () => [], exists: (p) => p === '/usr/bin/pacman' || p === '/usr/bin/apt-get',
+      readOsRelease: () => 'ID=ubuntu\nID_LIKE=debian\n', confirm: async (c) => (confirms.push(c), false), log: () => {},
+    });
+    await handler('install');
+    expect(confirms[0]!.pm).toBe('apt-get');
   });
   test('confirmation refusée → annulé, aucun pkexec, aucun événement', async () => {
     const m = make({ confirm: false });

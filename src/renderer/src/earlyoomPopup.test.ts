@@ -23,8 +23,8 @@ describe('popupAfterSetup', () => {
     expect(popupAfterSetup({ ok: false, reason: 'failed', message: 'x' })).toBe('keep');
     expect(popupAfterSetup({ ok: false, reason: 'cancelled', message: 'x' })).toBe('keep');
   });
-  test('état changé entre-temps (déjà réglé ailleurs) → fermé', () => {
-    expect(popupAfterSetup({ ok: false, reason: 'stale', message: 'L’état d’earlyoom a changé (rien à faire) : rien n’a été modifié.' })).toBe('close');
+  test('état changé entre-temps → l’état est relu : le pop-up passe au nouveau mode, ou se ferme s’il n’y a plus rien à faire (M6)', () => {
+    expect(popupAfterSetup({ ok: false, reason: 'stale', message: 'L’état d’earlyoom a changé (installé mais inactif) : rien n’a été modifié.' })).toBe('refresh');
     expect(popupAfterSetup({ ok: false, reason: 'invalid', message: 'x' })).toBe('keep');
   });
 });
