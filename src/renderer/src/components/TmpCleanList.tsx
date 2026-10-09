@@ -1,13 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { AnimatePresence } from 'motion/react';
 import { Link2, Trash2, TriangleAlert } from 'lucide-react';
 import { displayName, type TmpListing } from '../../../core/tmpClean';
 import { TMP_SCAN_LIMITS } from '../../../core/tmpScanLimits';
 import { formatKB } from '../format';
 import { tmpCleanMessage, tmpSelection } from '../tmpClean';
 import { ipcErrorMessage } from '../viewModel';
-import { SettingsConfirm } from './SettingsConfirm';
 
 interface Props {
   onToast?: (message: string, kind: 'info' | 'error') => void;
@@ -15,13 +12,13 @@ interface Props {
 
 /**
  * Plus gros éléments de premier niveau de /tmp, à cocher pour les supprimer (B1 bis). Une ligne non supprimable dit pourquoi ;
- * le main revérifie tout juste avant de supprimer. Suppression définitive : la corbeille est sur disque, elle ne libérerait pas la RAM.
+ * le résumé de la sélection est affiché ici, la confirmation est la boîte native du main, qui revérifie tout juste avant
+ * de supprimer. Suppression définitive : la corbeille est sur disque, elle ne libérerait pas la RAM.
  */
 export function TmpCleanList({ onToast }: Props) {
   const [listing, setListing] = useState<TmpListing | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
-  const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => {
@@ -47,14 +44,6 @@ export function TmpCleanList({ onToast }: Props) {
   const root = listing?.root ?? '/tmp';
   const atLeast = listing?.truncated ? 'au moins ' : '';
 
-  useEffect(() => {
-    if (!confirming) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setConfirming(false);
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [confirming]);
 
   const toggle = (name: string) =>
     setSelected((s) => {
@@ -64,8 +53,8 @@ export function TmpCleanList({ onToast }: Props) {
       return n;
     });
 
+  // la seule confirmation est la boîte native du main (chemins exacts, total, « Annuler » par défaut)
   const run = async () => {
-    setConfirming(false);
     if (!sel.items.length || busy) return;
     setBusy(true);
     try {
@@ -135,50 +124,44 @@ export function TmpCleanList({ onToast }: Props) {
         </div>
       )}
       {listing?.disabled && <div className="sub partial" data-testid="tmp-clean-disabled">{listing.disabled}</div>}
+      {listing && !listing.disabled && sel.entries.length > 0 && (
+        <div className="tmp-clean-summary" data-testid="tmp-clean-summary" aria-live="polite">
+          <div className="sub">Sélection, supprimée définitivement (la corbeille ne libérerait pas la RAM) :</div>
+          <ul>
+            {sel.entries.map((e) => {
+              const shown = displayName(e.name);
+              return (
+                <li key={e.name}>
+                  <span className="mono path">
+                    {shown.escaped && '⚠ '}
+                    {shown.text}{e.kind === 'link' ? ' (le lien seul)' : e.kind === 'dir' ? '/' : ''}
+                  </span>
+                  {e.recent && <span className="tmp-recent">⚠ modifié il y a moins de 5 min</span>}
+                  <span className="mono size">{e.kind === 'dir' ? atLeast : ''}{formatKB(e.sizeKB)}</span>
+                </li>
+              );
+            })}
+          </ul>
+          <div className="sub">Total : {atLeast}{formatKB(sel.sizeKB)}</div>
+          {uninspectableNames.length > 0 && (
+            <div className="sub tmp-clean-uninspectable" data-testid="tmp-clean-uninspectable">
+              <TriangleAlert size={11} strokeWidth={2.2} aria-hidden /> Non vérifiable : un fichier ouvert par {uninspectableNames.join(', ')} (droits élevés) ne serait pas détecté.
+            </div>
+          )}
+        </div>
+      )}
       {listing && !listing.disabled && listing.entries.some((e) => e.refusal === null) && (
         <div className="tmp-clean-actions">
-          <button className="danger sm" data-testid="tmp-clean-delete" disabled={!sel.items.length || busy} onClick={() => setConfirming(true)}>
+          <button
+            className="danger sm"
+            data-testid="tmp-clean-delete"
+            disabled={!sel.items.length || busy}
+            title="proc-watch demande confirmation (chemins exacts, total), puis revérifie chaque élément juste avant de le supprimer"
+            onClick={() => void run()}
+          >
             <Trash2 size={13} strokeWidth={2} /> {busy ? 'Suppression…' : sel.label}
           </button>
         </div>
-      )}
-      {createPortal(
-        <AnimatePresence>
-          {confirming && (
-            <SettingsConfirm
-              id="tmp-clean-confirm-title"
-              title={`Supprimer définitivement ${sel.entries.length > 1 ? `ces ${sel.entries.length} éléments` : 'cet élément'} de ${root} ?`}
-              text="C'est définitif, la corbeille ne libérerait pas la RAM (elle est sur disque). proc-watch redemande confirmation, puis revérifie chaque élément juste avant de le supprimer."
-              confirmLabel={`Supprimer (${formatKB(sel.sizeKB)})`}
-              focusCancel
-              onCancel={() => setConfirming(false)}
-              onConfirm={() => void run()}
-            >
-              <div className="prot-list tmp-clean-recap" data-testid="tmp-clean-recap">
-                {sel.entries.map((e) => {
-                  const shown = displayName(e.name);
-                  return (
-                    <div key={e.name} className="tmp-clean-recap-row">
-                      <span className="mono">
-                        {shown.escaped && '⚠ '}
-                        {root}/{shown.text}{e.kind === 'link' ? ' (le lien seul)' : e.kind === 'dir' ? '/' : ''}
-                        {e.recent && <span className="tmp-recent recap-recent">⚠ modifié il y a moins de 5 min</span>}
-                      </span>
-                      <span className="mono size">{e.kind === 'dir' ? atLeast : ''}{formatKB(e.sizeKB)}</span>
-                    </div>
-                  );
-                })}
-              </div>
-              {uninspectableNames.length > 0 && (
-                <p className="warn-line tmp-clean-uninspectable" data-testid="tmp-clean-uninspectable">
-                  <TriangleAlert size={15} strokeWidth={2.2} /> Non vérifiable : un fichier ouvert par {uninspectableNames.join(', ')} (droits élevés) ne serait pas détecté.
-                </p>
-              )}
-              <p className="hint" style={{ margin: 0 }}>Les sockets des applications isolées (flatpak, bac à sable de Chromium) ne sont pas vus.</p>
-            </SettingsConfirm>
-          )}
-        </AnimatePresence>,
-        document.body,
       )}
     </div>
   );
