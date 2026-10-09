@@ -246,14 +246,14 @@ test('migration sans copie de sécurité possible : avertissement dans le statut
   rec.stop();
 });
 
-test('Shmem au-delà du seuil (2048 Mo par défaut) : un seul événement tmpfs, même après redémarrage du service', () => {
+test('Shmem au-delà du seuil (4000 Mo par défaut) : un seul événement tmpfs, même après redémarrage du service', () => {
   const { rec, procRoot, advance, db } = setup();
-  writeFileSync(join(procRoot, 'meminfo'), 'MemTotal: 32000000 kB\nMemAvailable: 16000000 kB\nSwapTotal: 2000000 kB\nSwapFree: 1000000 kB\nShmem: 3000000 kB\n');
+  writeFileSync(join(procRoot, 'meminfo'), 'MemTotal: 32000000 kB\nMemAvailable: 16000000 kB\nSwapTotal: 2000000 kB\nSwapFree: 1000000 kB\nShmem: 5000000 kB\n');
   rec.start();
   rec.tick();
   const tmpfs = () => db().prepare("SELECT detail FROM events WHERE type = 'tmpfs'").all();
-  expect(tmpfs()).toEqual([{ detail: JSON.stringify({ shmemKB: 3000000, thresholdKB: 2097152 }) }]);
-  expect(db().prepare('SELECT shmem_kb FROM system_samples').all()).toEqual([{ shmem_kb: 3000000 }]);
+  expect(tmpfs()).toEqual([{ detail: JSON.stringify({ shmemKB: 5000000, thresholdKB: 4096000 }) }]);
+  expect(db().prepare('SELECT shmem_kb FROM system_samples').all()).toEqual([{ shmem_kb: 5000000 }]);
   advance(5000);
   rec.tick();
   expect(tmpfs()).toHaveLength(1);
@@ -267,7 +267,7 @@ test('Shmem au-delà du seuil (2048 Mo par défaut) : un seul événement tmpfs,
 
 test('alerte tmpfs dont l’écriture échoue : retentée au tick suivant (pas réduite au silence 1 h)', () => {
   const { rec, procRoot, advance, db, base } = setup();
-  writeFileSync(join(procRoot, 'meminfo'), 'MemTotal: 32000000 kB\nMemAvailable: 16000000 kB\nSwapTotal: 2000000 kB\nSwapFree: 1000000 kB\nShmem: 3000000 kB\n');
+  writeFileSync(join(procRoot, 'meminfo'), 'MemTotal: 32000000 kB\nMemAvailable: 16000000 kB\nSwapTotal: 2000000 kB\nSwapFree: 1000000 kB\nShmem: 5000000 kB\n');
   rec.start();
   const w = new DatabaseSync(join(base, 'data', 'metrics.db'));
   w.exec("CREATE TRIGGER no_tmpfs BEFORE INSERT ON events WHEN NEW.type = 'tmpfs' BEGIN SELECT RAISE(FAIL, 'écriture refusée'); END");
