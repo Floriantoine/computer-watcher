@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from 'electron';
 import appIcon from '../../resources/icon.png?asset';
 import { appendFileSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { access, realpath } from 'node:fs/promises';
+import { access, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { classifyGroups, type InstanceDecision } from '../core/classify/classify';
@@ -855,9 +855,10 @@ async function deletePendingOriginal(): Promise<void> {
   }
   const c = taken.consent;
   try {
-    const here = appImage ? await realpath(appImage).catch(() => null) : null;
-    const copy = await realpath(paths.appImage).catch(() => null);
-    if (!here || here !== copy) throw new Error('proc-watch ne tourne pas depuis la copie installée : rien supprimé');
+    // même fichier que la copie installée (dev+ino), pas seulement le même chemin réel
+    const here = appImage ? await stat(appImage).catch(() => null) : null;
+    const copy = await stat(paths.appImage).catch(() => null);
+    if (!here || !copy || here.dev !== copy.dev || here.ino !== copy.ino) throw new Error('proc-watch ne tourne pas depuis la copie installée : rien supprimé');
     await verifyAndDeleteOriginal({ path: c.path, sha256: c.sha256, ino: c.ino, copy: paths.appImage });
     originalDeletion = { path: c.path, ok: true, message: '' };
   } catch (e) {

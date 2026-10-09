@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -177,6 +177,14 @@ describe('supprimer le fichier téléchargé (accord par onboarding.json, vérif
     const otherApp = fakeAppImage('Editeur-1.2.3.AppImage', AI('autre application'));
     await expect(verifyAndDeleteOriginal({ path: otherApp, sha256: sha(AI('autre application')), ino: ino(otherApp), copy: r.dest })).rejects.toThrow(/copie en cours/);
     expect(existsSync(otherApp)).toBe(true);
+  });
+  test('f1 : même fichier que la copie sous un autre chemin (lien physique, second montage) → refusé (dev+ino), copie intacte', async () => {
+    const r = await installAppImage({ source: fakeAppImage(), roots });
+    const alias = join(dl, 'alias.AppImage');
+    linkSync(r.dest, alias);
+    await expect(verifyAndDeleteOriginal({ path: alias, sha256: r.sha256, ino: ino(alias), copy: r.dest })).rejects.toThrow(/copie installée/);
+    expect(existsSync(alias)).toBe(true);
+    expect(existsSync(r.dest)).toBe(true);
   });
   test('refuse la copie elle-même', async () => {
     const r = await installAppImage({ source: fakeAppImage(), roots });

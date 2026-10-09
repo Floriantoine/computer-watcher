@@ -1,7 +1,7 @@
 // Installation comme une app (AppImage → ~/Applications), démarrage avec la session, désinstallation propre.
 // Toutes les racines (HOME, XDG_CONFIG_HOME, XDG_DATA_HOME) sont injectées : les tests ne touchent jamais les vrais dossiers.
 import { closeSync, constants as C, lstatSync, realpathSync } from 'node:fs';
-import { access, lstat, realpath, unlink } from 'node:fs/promises';
+import { access, lstat, realpath, stat, unlink } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import { desktopEntryContent, installDesktopEntry, isManagedEntry } from './desktopEntry';
 import { isUsableAppImage } from './realAppImage';
@@ -145,8 +145,9 @@ export async function verifyAndDeleteOriginal(o: { path: string; sha256: string;
   if (l.isSymbolicLink()) throw new Error(`${o.path} est un lien symbolique : non supprimé`);
   if (!l.isFile()) throw new Error(`${o.path} n’est pas un fichier ordinaire : non supprimé`);
   if (l.ino !== o.ino) throw new Error(`${o.path} a été remplacé depuis l’accord : non supprimé`);
-  const [a, b] = await Promise.all([realOrNull(o.path), realOrNull(o.copy)]);
-  if (a === b) throw new Error('C’est la copie installée : non supprimée');
+  // f1 : identité par dev+ino (un lien physique ou un second montage du même fichier a un autre chemin réel)
+  const copySt = await stat(o.copy).catch(() => null);
+  if (!copySt || (copySt.dev === l.dev && copySt.ino === l.ino)) throw new Error('C’est la copie installée (même fichier) : non supprimée');
   if (!isUsableAppImage(o.path)) throw new Error(`${o.path} n’est pas une AppImage : non supprimé`);
   const [h, running] = await Promise.all([hashNoFollow(o.path), hashNoFollow(o.copy)]);
   if (h.sha256 !== o.sha256) throw new Error(`${o.path} a changé depuis l’accord (empreinte différente) : non supprimé`);
