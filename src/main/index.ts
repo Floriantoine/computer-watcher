@@ -17,6 +17,7 @@ import { buildGroups, isOverThreshold } from '../core/grouping/buildGroups';
 import { claudeDirs } from '../core/grouping/claudeDirs';
 import { createProjectRootCache } from '../core/grouping/projectRootCache';
 import { recordSeparate, stickyIds } from '../core/grouping/stickyCards';
+import { APP_DISPLAY_NAME, APP_NAME } from '../core/appName';
 import { killRequest, planKill, sendSignals } from '../core/kill';
 import { compileProtection } from '../core/protection';
 import { formatAppEvent } from '../core/history/events';
@@ -44,6 +45,7 @@ import { createAlertOpener, createFocusWriter, initSeenUpTo, keepSeenUpTo, markS
 import { installDesktopEntry, refreshDesktopEntry } from './desktopEntry';
 import { installedAppImage, installedElsewhere } from './appImageTrust';
 import { acquireLock, blockingSleep } from './singleInstance';
+import { userDataPath } from './userDataPath';
 import { createAppImageBackend } from './appImageUpdate';
 import { relaunchDetached, sanitizeAppImageEnv } from './relaunch';
 import { createPrefsStore, createReleasesApiBackend, createUpdateController, type UpdateBackend } from './updater';
@@ -69,13 +71,18 @@ import { autoManageService, defaultSystemctl, recorderSyncDisabled, ensureRecord
 // Service réseau dans le processus main : l'app ne charge que des fichiers locaux, un processus de moins (~20 Mo).
 app.commandLine.appendSwitch('enable-features', 'NetworkServiceInProcess2');
 
+// Nom technique et dossier userData (profil Chromium, verrou d'instance unique) fixés avant toute autre initialisation :
+// jamais déduits de productName ni du nom affiché ; userData = dossier de config de l'app (voir userDataPath).
+app.setName(APP_NAME);
+app.setPath('userData', userDataPath());
+
 // Instance unique : un second lancement (bouton « Ouvrir » d'une notification, menu) réveille la fenêtre existante.
 // Relance après une mise à jour : la version précédente peut tenir encore le verrou quelques instants (voir acquireLock).
 const primary = acquireLock({ tryLock: () => app.requestSingleInstanceLock(), env: process.env, sleep: blockingSleep });
 if (!primary) {
   // `npm run dev` / `npm start` pendant que l'app de l'utilisateur tourne avec la même config : pas un plantage.
   console.error(
-    "proc-watch est déjà ouvert avec cette configuration (XDG_CONFIG_HOME) : sa fenêtre est affichée et ce lancement s'arrête. " +
+    `${APP_DISPLAY_NAME} est déjà ouvert avec cette configuration (XDG_CONFIG_HOME) : sa fenêtre est affichée et ce lancement s'arrête. ` +
       'Pour une seconde instance, lancer avec un XDG_CONFIG_HOME temporaire.',
   );
   app.quit();
@@ -152,7 +159,7 @@ const relaunchHooks = () => ({
   releaseLock: () => app.releaseSingleInstanceLock(),
   reacquireLock: () => app.requestSingleInstanceLock(),
 });
-/** N1 : copie installée (~/Applications/proc-watch.AppImage) présente → le service pointe vers elle, jamais vers l'original. */
+/** N1 : copie installée (~/Applications/computer-watcher.AppImage) présente → le service pointe vers elle, jamais vers l'original. */
 const execArgs = () =>
   recorderExecArgs({ appImage: recorderAppImage(ownImage, installedAppImage(homedir())) ?? undefined, execPath: process.execPath, appPath: app.getAppPath() });
 
@@ -361,7 +368,7 @@ function createWindow(shown = true): void {
     width: 1200,
     height: 800,
     show: shown,
-    title: 'proc-watch',
+    title: APP_DISPLAY_NAME,
     icon: appIcon,
     backgroundColor: '#0b0c10',
     webPreferences: {
@@ -609,8 +616,8 @@ ipcMain.handle('history:events', (_e, r: unknown, groupKey: unknown) => (isRange
  */
 const tmpRootChoice = tmpRootFromEnv(process.env);
 const tmpRoot = tmpRootChoice.root;
-if (tmpRootChoice.warning) console.error(`proc-watch : ${tmpRootChoice.warning}`);
-if (tmpRoot !== '/tmp') console.error(`proc-watch : racine /tmp de test : ${tmpRoot}`);
+if (tmpRootChoice.warning) console.error(`${APP_DISPLAY_NAME} : ${tmpRootChoice.warning}`);
+if (tmpRoot !== '/tmp') console.error(`${APP_DISPLAY_NAME} : racine /tmp de test : ${tmpRoot}`);
 const tmpTopDirs = sharedScan(() => topTmpDirs(tmpRoot));
 ipcMain.handle('tmp:topDirs', () => tmpTopDirs());
 /** Tuiles de la page /tmp : taille et occupation (statfs), RAM totale ; lecture seule. */
@@ -856,7 +863,7 @@ ipcMain.handle('onboarding:relaunch', async (_e, del: unknown): Promise<{ relaun
       },
       onFailed: (m) => {
         quitting = false;
-        reject(new Error(`Copie installée, mais pas relancée : ${m}. Lancer proc-watch depuis le menu.`));
+        reject(new Error(`Copie installée, mais pas relancée : ${m}. Lancer ${APP_DISPLAY_NAME} depuis le menu.`));
       },
     }),
   );
@@ -888,7 +895,7 @@ async function deletePendingOriginal(): Promise<void> {
     // même fichier que la copie installée (dev+ino), pas seulement le même chemin réel
     const here = appImage ? await stat(appImage).catch(() => null) : null;
     const copy = await stat(paths.appImage).catch(() => null);
-    if (!here || !copy || here.dev !== copy.dev || here.ino !== copy.ino) throw new Error('proc-watch ne tourne pas depuis la copie installée : rien supprimé');
+    if (!here || !copy || here.dev !== copy.dev || here.ino !== copy.ino) throw new Error(`${APP_DISPLAY_NAME} ne tourne pas depuis la copie installée : rien supprimé`);
     await verifyAndDeleteOriginal({ path: c.path, sha256: c.sha256, ino: c.ino, copy: paths.appImage });
     originalDeletion = { path: c.path, ok: true, message: '' };
   } catch (e) {
@@ -925,7 +932,7 @@ ipcMain.handle('uninstall:run', async (_e, o: unknown) => {
   if (!isUninstallOptions(o)) throw new Error('Requête invalide');
   const plan = uninstallPlan(roots, o);
   const s = uninstallSummary(plan, { deb: isDeb() });
-  if (!(await confirmNative({ title: 'Désinstaller proc-watch', message: s.message, detail: s.detail, confirm: 'Désinstaller' }))) return { cancelled: true as const };
+  if (!(await confirmNative({ title: `Désinstaller ${APP_DISPLAY_NAME}`, message: s.message, detail: s.detail, confirm: 'Désinstaller' }))) return { cancelled: true as const };
   uninstalling = true;
   await syncing.catch(() => {}); // pas de synchronisation du service en cours
   let stopped = false;
@@ -1095,7 +1102,7 @@ app.on('second-instance', (_e, argv) => {
 // Mises à jour : AppImage empaquetée → proposition puis installation sur demande ; .deb → notification seulement ;
 // sources → rien (sauf PROC_WATCH_UPDATE_FEED vers un flux de test local). Réglages dans updater.json.
 const updatePrefs = createPrefsStore(join(dir, 'updater.json'));
-// Copie installée (~/Applications/proc-watch.AppImage) présente mais pas lancée : l'original n'est pas mis à jour.
+// Copie installée (~/Applications/computer-watcher.AppImage) présente mais pas lancée : l'original n'est pas mis à jour.
 const updMode = updateMode({ isPackaged: app.isPackaged, appImage: ownImage, testFeed: updateFeed, installedElsewhere: !!ownImage && installedElsewhere(ownImage, homedir()) });
 let updateBackend: Promise<UpdateBackend> | null = null;
 const loadUpdateBackend = (): Promise<UpdateBackend> =>
@@ -1117,8 +1124,8 @@ const loadUpdateBackend = (): Promise<UpdateBackend> =>
                 quitting = false;
                 void dialog.showMessageBox({
                   type: 'warning',
-                  title: 'proc-watch',
-                  message: 'Mise à jour installée ; relance proc-watch depuis le menu.',
+                  title: APP_DISPLAY_NAME,
+                  message: `Mise à jour installée ; relance ${APP_DISPLAY_NAME} depuis le menu.`,
                   detail: m,
                   buttons: ['OK'],
                   noLink: true,

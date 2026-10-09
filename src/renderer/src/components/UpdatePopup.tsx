@@ -1,4 +1,5 @@
 // Pop-up « Mise à jour X.Y.Z disponible » (même style que les pop-ups d'alerte) et section Réglages › À propos.
+import { APP_DISPLAY_NAME } from '../../../core/appName';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { Download, ExternalLink, Info, RefreshCw, RotateCw, X } from 'lucide-react';
@@ -119,7 +120,7 @@ export function AboutPanel({ onToast }: { onToast: ToastFn }) {
       .check()
       .then((v) => {
         setView(v);
-        if (v.state.lastResult === 'none') onToast('proc-watch est à jour', 'info');
+        if (v.state.lastResult === 'none') onToast(`${APP_DISPLAY_NAME} est à jour`, 'info');
       }, (e: unknown) => onToast(`Vérification impossible : ${e instanceof Error ? e.message : String(e)}`))
       .finally(() => setBusy(false));
   };
@@ -127,7 +128,7 @@ export function AboutPanel({ onToast }: { onToast: ToastFn }) {
   return (
     <Card title="Version et mises à jour" icon={<Info size={14} strokeWidth={2} />} testid="about-card">
       <p className="upd-version">
-        proc-watch <span className="mono" data-testid="about-version">{state.current}</span>
+        {APP_DISPLAY_NAME} <span className="mono" data-testid="about-version">{state.current}</span>
       </p>
       <p className="hint upd-line">{lines.mode}</p>
       <Row label="Vérifier les mises à jour" help="Au démarrage (après 30 s) puis toutes les 6 h. Rien n’est téléchargé sans ton accord.">

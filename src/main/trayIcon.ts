@@ -1,3 +1,4 @@
+import { APP_DISPLAY_NAME } from '../core/appName';
 import { crc32, deflateSync } from 'node:zlib';
 import type { Level } from '../core/pressure';
 import type { SystemInfo } from '../core/types';
@@ -92,6 +93,6 @@ export function trayMenuLabels(s: SystemInfo): { mem: string; pressure: string; 
   return {
     mem: `RAM ${go(memUsed)} · Swap ${go(swapUsed)}`,
     pressure: `Pression ${psi} · Charge ${s.load1.toFixed(1).replace('.', ',')}`,
-    tooltip: `proc-watch — RAM ${Math.round(memPercent(s))} %`,
+    tooltip: `${APP_DISPLAY_NAME} — RAM ${Math.round(memPercent(s))} %`,
   };
 }

@@ -6,7 +6,7 @@ const ATTEMPTS = 20;
 const DELAY_MS = 250;
 
 /**
- * Relance (APPIMAGE_SILENT_INSTALL=true d'electron-updater, ou PROC_WATCH_RELAUNCH=1 de proc-watch : relance après
+ * Relance (APPIMAGE_SILENT_INSTALL=true d'electron-updater, ou PROC_WATCH_RELAUNCH=1 de l’app : relance après
  * installation ou mise à jour) : nouveaux essais le temps que l'instance précédente quitte. Verrou obtenu : ces deux
  * variables sont retirées de l'environnement (jamais transmises aux processus lancés ensuite).
  */

@@ -1,4 +1,5 @@
 // Réglages : « Démarrer avec la session » (Affichage) et À propos (version, accueil, désinstallation).
+import { APP_DISPLAY_NAME } from '../../../core/appName';
 import { useEffect, useState } from 'react';
 import { Info, RotateCcw, Trash2, TriangleAlert } from 'lucide-react';
 import type { AboutInfo, AutostartInfo, UninstallItem, UninstallOptions } from '../../../core/onboarding';
@@ -103,7 +104,7 @@ export function AboutSetup({ onToast, onReopenOnboarding }: { onToast: ToastFn; 
           </p>
           {!open && (
             <button className="danger" data-testid="about-uninstall-open" onClick={() => setOpen(true)}>
-              <Trash2 size={13} strokeWidth={2} /> Désinstaller proc-watch…
+              <Trash2 size={13} strokeWidth={2} /> Désinstaller {APP_DISPLAY_NAME}…
             </button>
           )}
         </div>
@@ -121,7 +122,7 @@ export function AboutSetup({ onToast, onReopenOnboarding }: { onToast: ToastFn; 
             </div>
             <p className="hint" style={{ margin: '8px 0 0' }}>Sera retiré (une confirmation reprend cette liste) :</p>
             <ul className="about-plan" data-testid="uninstall-plan">
-              {plan === null ? <li>…</li> : plan.length === 0 ? <li>Aucun fichier de proc-watch trouvé.</li> : plan.map((i) => (
+              {plan === null ? <li>…</li> : plan.length === 0 ? <li>Aucun fichier de {APP_DISPLAY_NAME} trouvé.</li> : plan.map((i) => (
                 <li key={i.path}>{i.label}{i.dir ? ' (dossier, s’il est vide)' : i.tree ? ' (profil de l’app, avec son contenu)' : ''} : <code>{i.path}</code></li>
               ))}
             </ul>

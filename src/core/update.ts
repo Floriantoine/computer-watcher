@@ -3,8 +3,8 @@
 /**
  * `install` : AppImage de ce processus (voir realAppImage), téléchargement (sha512 vérifié par electron-updater) puis
  * installation au redémarrage ;
- * `relaunch` : AppImage lancée hors de la copie installée (~/Applications/proc-watch.AppImage) : on ne met pas à jour
- * l'original téléchargé, on invite à lancer proc-watch depuis le menu ;
+ * `relaunch` : AppImage lancée hors de la copie installée (~/Applications/computer-watcher.AppImage) : on ne met pas à jour
+ * l'original téléchargé, on invite à lancer l’app depuis le menu ;
  * `notify` : .deb (ou autre version empaquetée) : notification et lien vers la page des versions, jamais d'installation ;
  * `off` : lancée depuis les sources, aucune vérification (sauf flux de test local).
  */

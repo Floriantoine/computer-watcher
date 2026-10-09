@@ -82,7 +82,7 @@ test('baisse de 1 Go/min qui franchit le plancher : un seul événement forecast
   expect(detail.body).toBe('swap 90 %');
   expect(s.notify).toHaveBeenCalledTimes(1);
   const req = s.notify.mock.calls[0]![0];
-  expect(req.title).toBe('proc-watch — Mémoire bientôt épuisée');
+  expect(req.title).toBe('Computer Watcher — Mémoire bientôt épuisée');
   expect(req.body).toMatch(/^Mémoire épuisée dans ~\d+ min — swap 90 %$/);
   expect(req.urgency).toBe('critical');
   expect(req.actions).toEqual([{ id: 'free', label: 'Libérer…' }, { id: 'snooze', label: 'Ignorer 30 min' }]);

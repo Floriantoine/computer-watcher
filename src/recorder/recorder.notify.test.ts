@@ -46,7 +46,7 @@ test('canal « both » : une notification critique avec « Ouvrir » ; « Ouvrir
   await flush();
   expect(s.notify).toHaveBeenCalledTimes(1);
   expect(s.notify.mock.calls[0]![0]).toMatchObject({
-    title: 'proc-watch — Pression mémoire', urgency: 'critical', actions: [{ id: 'open', label: 'Ouvrir' }],
+    title: 'Computer Watcher — Pression mémoire', urgency: 'critical', actions: [{ id: 'open', label: 'Ouvrir' }],
   });
   expect(s.notify.mock.calls[0]![0].body).toContain('Pression mémoire 30 %');
   expect(s.notify.mock.calls[0]![0].waitMs).toBeUndefined(); // la notification vit sa vie : pas d'arrêt forcé
@@ -80,7 +80,7 @@ test('kill earlyoom (défaut both) : notification « earlyoom a arrêté chrome 
   s.rec.onEarlyoomLine(JSON.stringify({ __REALTIME_TIMESTAMP: '1000500000', MESSAGE: 'sending SIGTERM to process 10 uid 1000 "chrome": oom_score 600' }));
   await flush();
   expect(s.notify).toHaveBeenCalledTimes(1);
-  expect(s.notify.mock.calls[0]![0].title).toBe('proc-watch — Kill earlyoom');
+  expect(s.notify.mock.calls[0]![0].title).toBe('Computer Watcher — Kill earlyoom');
   expect(s.notify.mock.calls[0]![0].body).toContain('earlyoom a arrêté chrome');
   s.rec.stop();
 });
@@ -171,7 +171,7 @@ test('nom de processus hostile : échappé dans le corps, jamais dans le titre',
   s.rec.onEarlyoomLine(JSON.stringify({ __REALTIME_TIMESTAMP: '1000500000', MESSAGE: 'sending SIGTERM to process 10 uid 1000 "<b>x</b>&y": oom_score 600' }));
   await flush();
   const r = s.notify.mock.calls[0]![0];
-  expect(r.title).toBe('proc-watch — Kill earlyoom');
+  expect(r.title).toBe('Computer Watcher — Kill earlyoom');
   expect(r.body).toContain('&lt;b&gt;x&lt;/b&gt;&amp;y');
   s.rec.stop();
 });
@@ -194,7 +194,7 @@ test('notifyAlert (canal pour la prévision ②) : public, applique canal et ant
   s.rec.notifyAlert({ ...ev, id: 8 });
   await flush();
   expect(s.notify).toHaveBeenCalledTimes(1);
-  expect(s.notify.mock.calls[0]![0].title).toBe('proc-watch — Mémoire bientôt épuisée');
+  expect(s.notify.mock.calls[0]![0].title).toBe('Computer Watcher — Mémoire bientôt épuisée');
   expect(s.notify.mock.calls[0]![0].body).toContain('Mémoire épuisée dans ~8 min');
   s.rec.stop();
 });

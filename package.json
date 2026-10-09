@@ -1,5 +1,5 @@
 {
-  "name": "proc-watch",
+  "name": "computer-watcher",
   "version": "0.1.3",
   "description": "Voir ce qui tourne, depuis quand, ce que ça consomme, et le tuer en un clic (Linux).",
   "main": "out/main/index.js",

@@ -1,4 +1,5 @@
 // Dialogue de confirmation groupée (« Tuer la sélection », « Tuer le front / le back », « Tout arrêter ») : fonctions pures.
+import { APP_DISPLAY_NAME } from '../../core/appName';
 import { MAX_KILL_TARGETS } from '../../core/kill';
 import type { GroupSummary, InstanceSummary, InstanceTargets as FreshEntry, KillResult, KillTarget } from '../../core/types';
 
@@ -349,7 +350,7 @@ const plural = (n: number, one: string, many: string) => `${n} ${n > 1 ? many : 
 
 function reason(r: KillResult): string {
   if (r.error === 'EPERM') return 'permission refusée';
-  if (r.error === 'SELF') return "c'est proc-watch ou l'un de ses parents";
+  if (r.error === 'SELF') return `c'est ${APP_DISPLAY_NAME} ou l'un de ses parents`;
   return r.error ?? 'erreur inconnue';
 }
 

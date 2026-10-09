@@ -7,7 +7,7 @@
 //   C. pas une AppImage : notification seulement (« Voir la version », pas de téléchargement).
 //   D. sans flux : aucune vérification (Réglages › À propos).
 //   E. APPIMAGE/APPDIR hérités d'une autre application : jamais le mode installation (notification seulement).
-//   F. copie installée (~/Applications/proc-watch.AppImage) présente, autre AppImage lancée : « lancez proc-watch depuis le menu ».
+//   F. copie installée (~/Applications/computer-watcher.AppImage) présente, autre AppImage lancée : « lancez Computer Watcher depuis le menu ».
 //   G. variable PROC_WATCH_UPDATE_FEED sans l'option --update-feed-test : ignorée.
 // « AppImage » factice : APPDIR = dossier du binaire electron en cours (tenu pour un montage seulement avec
 // --update-feed-test, voir testFeedTrust), APPIMAGE = petit fichier ordinaire à en-tête AppImage, hors de APPDIR.
@@ -21,7 +21,7 @@ import { _electron as electron } from 'playwright';
 
 const payload = randomBytes(64 * 1024);
 const sha512 = createHash('sha512').update(payload).digest('base64');
-const FILE = 'proc-watch-9.9.9-x86_64.AppImage';
+const FILE = 'computer-watcher-9.9.9-x86_64.AppImage';
 let badSha = false;
 const hits = [];
 const yml = () =>
@@ -73,7 +73,7 @@ async function launch(name, extra, o = {}) {
   for (const k of ['APPIMAGE', 'APPDIR', 'PROC_WATCH_UPDATE_FEED', 'APPIMAGE_SILENT_INSTALL']) delete env[k];
   Object.assign(env, extra);
   if (o.appImage) {
-    const img = join(dir, 'proc-watch-0.1.0-x86_64.AppImage');
+    const img = join(dir, 'computer-watcher-0.1.0-x86_64.AppImage');
     // en-tête d'AppImage (ELF + « AI\x02 » à l'octet 8) exigé par realAppImage ; jamais exécuté
     writeFileSync(img, Buffer.concat([Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0, 0x41, 0x49, 0x02]), Buffer.from(' factice : jamais exécuté')]));
     Object.assign(env, { APPIMAGE: img, APPDIR: electronDir });
@@ -220,14 +220,14 @@ try {
   {
     const home = join(root, 'f-home');
     mkdirSync(join(home, 'Applications'), { recursive: true });
-    writeFileSync(join(home, 'Applications', 'proc-watch.AppImage'), 'copie installée');
+    writeFileSync(join(home, 'Applications', 'computer-watcher.AppImage'), 'copie installée');
     const before = hits.filter((h) => h === `/${FILE}`).length;
     const { app, win } = await launch('f', { PROC_WATCH_UPDATE_FEED: feed, HOME: home }, { appImage: true });
     try {
       await openAbout(win);
       await press(win.locator('[data-testid="about-check-now"]'));
       await win.locator('[data-testid="update-popup"]').waitFor({ timeout: 15000 });
-      ok((await win.locator('[data-testid="update-popup-body"]').innerText()).includes('lancez proc-watch depuis le menu pour mettre à jour'), 'F. « lancez proc-watch depuis le menu pour mettre à jour »');
+      ok((await win.locator('[data-testid="update-popup-body"]').innerText()).includes('lancez Computer Watcher depuis le menu pour mettre à jour'), 'F. « lancez Computer Watcher depuis le menu pour mettre à jour »');
       ok((await win.locator('[data-testid="update-popup-download"]').count()) === 0, 'F. aucun bouton de téléchargement');
       ok(hits.filter((h) => h === `/${FILE}`).length === before, 'F. rien téléchargé');
     } finally {

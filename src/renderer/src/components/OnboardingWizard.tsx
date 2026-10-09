@@ -1,4 +1,5 @@
 // Assistant d'accueil : installer comme une app (AppImage), démarrer avec la session, historique, earlyoom.
+import { APP_DISPLAY_NAME } from '../../../core/appName';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { motion } from 'motion/react';
 import { AppWindow, Check, CircleAlert, HardDrive, KeyRound, Power, RotateCw, ShieldCheck, Sparkles } from 'lucide-react';
@@ -147,7 +148,7 @@ export function OnboardingWizard({ info, onClose, onToast }: {
     install: () => (
       <>
         <p>
-          proc-watch tourne depuis le fichier téléchargé. L’installer le copie dans <code>~/Applications</code> et l’ajoute au menu des
+          {APP_DISPLAY_NAME} tourne depuis le fichier téléchargé. L’installer le copie dans <code>~/Applications</code> et l’ajoute au menu des
           applications avec son icône. Les mises à jour automatiques remplaceront cette copie.
         </p>
         <dl className="onb-paths">
@@ -156,7 +157,7 @@ export function OnboardingWizard({ info, onClose, onToast }: {
           <dt>Copie</dt>
           <dd><code>{info.dest}</code></dd>
         </dl>
-        {info.runningFromCopy && !results.install && <p className="hint">Déjà installée : proc-watch tourne depuis la copie.</p>}
+        {info.runningFromCopy && !results.install && <p className="hint">Déjà installée : {APP_DISPLAY_NAME} tourne depuis la copie.</p>}
         <div className="onb-actions">
           <button className="primary" data-testid="onb-install" disabled={busy} onClick={() => void install()}>
             <AppWindow size={14} strokeWidth={2} />
@@ -189,7 +190,7 @@ export function OnboardingWizard({ info, onClose, onToast }: {
     autostart: () => (
       <>
         <p>
-          proc-watch démarre à l’ouverture de session, caché dans la barre des tâches (ou fenêtre réduite si le bureau n’en a pas) :
+          {APP_DISPLAY_NAME} démarre à l’ouverture de session, caché dans la barre des tâches (ou fenêtre réduite si le bureau n’en a pas) :
           l’icône montre la mémoire utilisée en permanence.
         </p>
         <div className="onb-switch">
@@ -197,7 +198,7 @@ export function OnboardingWizard({ info, onClose, onToast }: {
           <label htmlFor="onb-autostart">Démarrer avec la session</label>
         </div>
         {autoTarget === null && <p className="hint">Disponible uniquement dans la version installée (AppImage ou .deb).</p>}
-        {autoTarget && <p className="hint">Entrée écrite dans <code>~/.config/autostart/proc-watch.desktop</code>, appliquée avec « Suivant ». Modifiable dans Réglages › Affichage.</p>}
+        {autoTarget && <p className="hint">Entrée écrite dans <code>~/.config/autostart/computer-watcher.desktop</code>, appliquée avec « Suivant ». Modifiable dans Réglages › Affichage.</p>}
         <Result r={results.autostart} testid="onb-autostart-result" />
       </>
     ),
@@ -219,7 +220,7 @@ export function OnboardingWizard({ info, onClose, onToast }: {
     earlyoom: () => (
       <>
         <p>
-          earlyoom tue le processus le plus gourmand avant que la mémoire saturée ne gèle tout le système. proc-watch peut l’installer, le
+          earlyoom tue le processus le plus gourmand avant que la mémoire saturée ne gèle tout le système. {APP_DISPLAY_NAME} peut l’installer, le
           configurer (terminaux, Claude et session toujours exclus) et l’activer, avec un seul mot de passe administrateur.
         </p>
         <p className="onb-eo-state" data-testid="onb-earlyoom-state">
@@ -257,7 +258,7 @@ export function OnboardingWizard({ info, onClose, onToast }: {
         <header className="onb-head">
           <span className="onb-logo" aria-hidden><Sparkles size={16} strokeWidth={2} /></span>
           <div>
-            <h2>Bienvenue dans proc-watch</h2>
+            <h2>Bienvenue dans {APP_DISPLAY_NAME}</h2>
             <p id="onb-pos">{stepPosition(index, steps.length)}</p>
           </div>
         </header>

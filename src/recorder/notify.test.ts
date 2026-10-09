@@ -44,10 +44,10 @@ const silentLog = () => {
 describe('notifyArgs', () => {
   test('arguments exacts, titre et corps littéraux après `--` (pas de shell)', () => {
     expect(notifyArgs(req({ body: '$(rm -rf ~)' }), true)).toEqual([
-      '--app-name=proc-watch', '--urgency=critical', '--icon=dialog-warning', '--action=open=Ouvrir', '--', 'Fuite probable : acme', '$(rm -rf ~)',
+      '--app-name=Computer Watcher', '--urgency=critical', '--icon=dialog-warning', '--action=open=Ouvrir', '--', 'Fuite probable : acme', '$(rm -rf ~)',
     ]);
     expect(notifyArgs(req({ urgency: 'normal' }), false)).toEqual([
-      '--app-name=proc-watch', '--urgency=normal', '--icon=dialog-warning', '--', 'Fuite probable : acme', '+3,0 Go en 60 min',
+      '--app-name=Computer Watcher', '--urgency=normal', '--icon=dialog-warning', '--', 'Fuite probable : acme', '+3,0 Go en 60 min',
     ]);
   });
 });
@@ -80,7 +80,7 @@ describe('createNotifier', () => {
     await expect(n.notify(req())).resolves.toBe('open');
     expect(n.state()).toBe('actions');
     expect(f.calls()).toEqual([[
-      '--app-name=proc-watch', '--urgency=critical', '--icon=dialog-warning', '--action=open=Ouvrir', '--', 'Fuite probable : acme', '+3,0 Go en 60 min',
+      '--app-name=Computer Watcher', '--urgency=critical', '--icon=dialog-warning', '--action=open=Ouvrir', '--', 'Fuite probable : acme', '+3,0 Go en 60 min',
     ]]);
   });
 
@@ -99,7 +99,7 @@ describe('createNotifier', () => {
     const n = createNotifier({ bin: f.bin, log: () => {} });
     await expect(n.notify(req())).resolves.toBeNull();
     expect(n.state()).toBe('plain');
-    expect(f.calls()).toEqual([['--app-name=proc-watch', '--urgency=critical', '--icon=dialog-warning', '--', 'Fuite probable : acme', '+3,0 Go en 60 min']]);
+    expect(f.calls()).toEqual([['--app-name=Computer Watcher', '--urgency=critical', '--icon=dialog-warning', '--', 'Fuite probable : acme', '+3,0 Go en 60 min']]);
   });
 
   test('--help annonce --action mais l’option est refusée : bascule en simple et renvoie sans action', async () => {

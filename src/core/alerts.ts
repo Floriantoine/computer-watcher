@@ -1,5 +1,7 @@
 // src/core/alerts.ts — canaux des alertes (pop-up dans l'app, notification du bureau), textes, anti-spam. Pur, sans import Node.
 
+import { APP_DISPLAY_NAME } from './appName';
+
 /** Types d'événements qui sont des alertes (les autres — gap, app_kill — n'en sont pas). */
 export const ALERT_TYPES = ['earlyoom_kill', 'leak', 'tmpfs', 'pressure', 'forecast', 'rule_action', 'rule_dry_run'] as const;
 export type AlertType = (typeof ALERT_TYPES)[number];
@@ -209,5 +211,5 @@ export function desktopMessage(e: AlertEvent): { title: string; body: string } {
   const m = alertMessage(e);
   let text = desktopText([m.title, m.body].filter(Boolean).join(' — '));
   if (text.length > DESKTOP_BODY_MAX) text = `${text.slice(0, DESKTOP_BODY_MAX - 1)}…`;
-  return { title: `proc-watch — ${DESKTOP_TITLES[e.type]}`, body: escapeMarkup(text) };
+  return { title: `${APP_DISPLAY_NAME} — ${DESKTOP_TITLES[e.type]}`, body: escapeMarkup(text) };
 }

@@ -18,9 +18,9 @@ writeFileSync(
 );
 chmodSync(join(fakeBin, 'notify-send'), 0o755);
 // Seuil « fichiers en mémoire » au minimum (100 Mo) : l'alerte tmpfs part au premier tick sur une machine normale.
-mkdirSync(join(base, 'cfg', 'proc-watch'), { recursive: true });
+mkdirSync(join(base, 'cfg', 'computer-watcher'), { recursive: true });
 writeFileSync(
-  join(base, 'cfg', 'proc-watch', 'config.json'),
+  join(base, 'cfg', 'computer-watcher', 'config.json'),
   JSON.stringify({
     version: 1, protected: [], othersThreshold: { memMB: 100, cpuPercent: 1 },
     recorder: { enabled: true, intervalSec: 5, detailHours: 24, summaryDays: 30, procMinMemMB: 50, procMinCpuPercent: 1, groupMinMemMB: 20, leakMinMinutes: 60, leakMinGrowthMB: 300, tmpfsAlertMB: 100 },
@@ -49,7 +49,7 @@ try {
 }
 let code = 0;
 try {
-  const db = new DatabaseSync(join(base, 'data', 'proc-watch', 'metrics.db'), { readOnly: true });
+  const db = new DatabaseSync(join(base, 'data', 'computer-watcher', 'metrics.db'), { readOnly: true });
   const samples = db.prepare('SELECT COUNT(*) n FROM system_samples').get().n;
   const groups = db.prepare('SELECT COUNT(*) n FROM groups').get().n;
   const tmpfs = db.prepare("SELECT id FROM events WHERE type = 'tmpfs'").all();
@@ -57,11 +57,11 @@ try {
   // une alerte tmpfs (canal « both » par défaut) → exactement une notification, avec « Ouvrir » si l'app est construite
   const sent = existsSync(calls) ? readFileSync(calls, 'utf8').split('---\n').filter(Boolean).map((c) => c.trim().split('\n')) : [];
   console.log(JSON.stringify({ tmpfsEvents: tmpfs.length, notifications: sent }));
-  if (tmpfs.length > 0 && (sent.length !== 1 || !sent[0].includes('--app-name=proc-watch') || !sent[0].includes('--urgency=critical'))) {
+  if (tmpfs.length > 0 && (sent.length !== 1 || !sent[0].includes('--app-name=Computer Watcher') || !sent[0].includes('--urgency=critical'))) {
     console.error('notification du bureau attendue pour l’alerte tmpfs');
     code = 1;
   }
-  const status = JSON.parse(readFileSync(join(base, 'data', 'proc-watch', 'recorder-status.json'), 'utf8'));
+  const status = JSON.parse(readFileSync(join(base, 'data', 'computer-watcher', 'recorder-status.json'), 'utf8'));
   console.log(JSON.stringify({ samples, groups, pssMB: Math.round(pss / 1024), status }));
   if (samples < 2 || groups < 5 || status.lastError) code = 1;
   if (pss / 1024 > 60) {

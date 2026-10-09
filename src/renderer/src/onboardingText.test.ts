@@ -55,11 +55,11 @@ describe('désinstallation', () => {
   test('tout retiré : liste exacte, fermeture annoncée', () => {
     const r = uninstallReport({ removed: ['/a', '/b'], failed: [], kept: [], done: true });
     expect(r.tone).toBe('ok');
-    expect(r.lines).toEqual(['Retiré : /a', 'Retiré : /b', 'proc-watch est désinstallé et va se fermer.']);
+    expect(r.lines).toEqual(['Retiré : /a', 'Retiré : /b', 'Computer Watcher est désinstallé et va se fermer.']);
   });
   test('échecs partiels : chaque échec et ce qui reste', () => {
     const r = uninstallReport({ removed: ['/a'], failed: [{ path: '/u', error: 'refus' }], kept: [{ path: '/app', reason: 'gardée' }], done: false });
     expect(r.tone).toBe('error');
-    expect(r.lines).toEqual(['Retiré : /a', 'Échec : /u — refus', 'Laissé : /app — gardée', 'Désinstallation incomplète : proc-watch reste ouvert.']);
+    expect(r.lines).toEqual(['Retiré : /a', 'Échec : /u — refus', 'Laissé : /app — gardée', 'Désinstallation incomplète : Computer Watcher reste ouvert.']);
   });
 });

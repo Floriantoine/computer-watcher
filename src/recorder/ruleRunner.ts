@@ -18,7 +18,7 @@ export interface RuleRunnerDeps {
   readProcs: () => ProcSample[];
   selfPid: number;
   currentUid: number;
-  /** Dossier de l'app proc-watch (jamais visée), null si inconnu. */
+  /** Dossier de l'app (jamais visée), null si inconnu. */
   appRoot: string | null;
   /** Liste protégée courante (relue avec la config). */
   isProtected: (name: string) => boolean;

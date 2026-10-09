@@ -1,5 +1,6 @@
-appId: io.github.floriantoine.procwatch
-productName: proc-watch
+appId: io.github.floriantoine.computerwatcher
+# Nom technique (fichiers publiés, dossier d'installation) ; le nom affiché vient de Name= et du titre de la fenêtre.
+productName: computer-watcher
 directories:
   output: release
 files:
@@ -12,8 +13,18 @@ linux:
     - AppImage
     - deb
   category: System
-  executableName: proc-watch
+  executableName: computer-watcher
   synopsis: Voir et tuer les processus gourmands
+  desktop:
+    entry:
+      Name: Computer Watcher
+      StartupWMClass: computer-watcher
+deb:
+  # remplace l'ancien paquet (proc-watch) au lieu de s'installer à côté
+  fpm:
+    - --replaces=proc-watch
+    - --conflicts=proc-watch
+    - --provides=proc-watch
 artifactName: ${productName}-${version}-${arch}.${ext}
 publish:
   provider: github

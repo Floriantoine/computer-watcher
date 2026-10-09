@@ -75,7 +75,7 @@ function runScript(o: RunOpts) {
   const target = join(dir, 'earlyoom');
   if (o.existing) writeFileSync(target, o.existing);
   const log = join(dir, 'log');
-  const args = ['-c', testScript(target, fakeSystemctl()), 'proc-watch-earlyoom', ...(o.arg === null || o.arg === undefined ? [] : [o.arg])];
+  const args = ['-c', testScript(target, fakeSystemctl()), 'computer-watcher-earlyoom', ...(o.arg === null || o.arg === undefined ? [] : [o.arg])];
   const r = spawnSync('/usr/bin/bash', args, {
     env: {
       PATH: '/usr/bin:/bin', FAKE_LOG: log, FAKE_TARGET: target, FAKE_LOCK: o.lock ? '1' : '0',
@@ -128,7 +128,7 @@ describe('script root (exécuté directement, sans pkexec)', () => {
     expect(readFileSync(join(dir, r.baks[0]), 'utf8')).toBe(OLD);
     expect(r.calls).toEqual(['restart earlyoom', 'show -p NRestarts --value earlyoom', 'show -p NRestarts --value earlyoom', 'is-active --quiet earlyoom']);
     expect(statSync(r.target).mode & 0o777).toBe(0o644);
-    expect(existsSync(`${r.target}.proc-watch.tmp`)).toBe(false);
+    expect(existsSync(`${r.target}.computer-watcher.tmp`)).toBe(false);
   });
   test('deux applications de suite → deux .bak, aucun écrasé', () => {
     runScript({ arg: VALID, existing: OLD });
@@ -367,7 +367,7 @@ describe('applyEarlyoom (pkexec simulé, ligne en argument)', () => {
   test('0 → ok ; arguments exacts : la ligne elle-même, aucun fichier', async () => {
     const { run, seen } = capture({ code: 0 });
     expect(await applyEarlyoom(VALID, { run })).toEqual({ ok: true, line: VALID });
-    expect(seen).toEqual([{ cmd: '/usr/bin/pkexec', args: ['/usr/bin/bash', '-c', EARLYOOM_APPLY_SCRIPT, 'proc-watch-earlyoom', VALID], timeout: 120_000 }]);
+    expect(seen).toEqual([{ cmd: '/usr/bin/pkexec', args: ['/usr/bin/bash', '-c', EARLYOOM_APPLY_SCRIPT, 'computer-watcher-earlyoom', VALID], timeout: 120_000 }]);
   });
   test('126 (pkexec annulé) → cancelled', async () => {
     expect(await applyEarlyoom(VALID, { run: capture({ code: 126 }).run })).toMatchObject({ ok: false, reason: 'cancelled' });

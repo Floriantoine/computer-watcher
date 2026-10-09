@@ -1,3 +1,4 @@
+import { APP_DISPLAY_NAME } from '../../../core/appName';
 import { useEffect, useState, type CSSProperties } from 'react';
 import { BellRing, Bot, FlaskConical, FolderOpen, Gauge, Hourglass, MonitorSmartphone, Skull, TrendingUp, type LucideIcon } from 'lucide-react';
 import type { AlertType } from '../../../core/alerts';
@@ -31,8 +32,8 @@ export function AlertsSettings({ config, onSave, onFormState, recorder = null }:
     <div className="s-stack" data-testid="alerts-panel">
       <Card title="Canal par type" icon={<BellRing size={14} strokeWidth={2} />}>
         <p className="hint">
-          Pop-up en haut à droite de proc-watch, qui reste jusqu'à ce que tu le fermes. Notification du bureau envoyée par le service
-          d'enregistrement, même app fermée (rien quand proc-watch est au premier plan) ; son bouton « Ouvrir » affiche l'alerte.
+          Pop-up en haut à droite de {APP_DISPLAY_NAME}, qui reste jusqu'à ce que tu le fermes. Notification du bureau envoyée par le service
+          d'enregistrement, même app fermée (rien quand {APP_DISPLAY_NAME} est au premier plan) ; son bouton « Ouvrir » affiche l'alerte.
           Enregistré dès le choix.
         </p>
         <ul className="alert-channels">

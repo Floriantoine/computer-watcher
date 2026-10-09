@@ -1,3 +1,4 @@
+import { APP_DISPLAY_NAME } from '../../../core/appName';
 import { useCallback, useEffect, useState } from 'react';
 import { Activity, Copy, KeyRound, ShieldCheck, TriangleAlert } from 'lucide-react';
 import { ignoreConversions, ignoreList } from '../../../core/earlyoom';
@@ -94,8 +95,8 @@ export function EarlyoomPanel({ protectedList, onToast, onAttention }: Props) {
       </button>
       <span className="hint">
         {setupAction.mode === 'install'
-          ? 'Installe le paquet earlyoom, écrit la configuration (exclusions obligatoires) et active le service. proc-watch montre d’abord le détail exact.'
-          : 'Écrit la configuration (exclusions obligatoires) puis systemctl enable --now earlyoom. proc-watch montre d’abord la ligne exacte.'}
+          ? `Installe le paquet earlyoom, écrit la configuration (exclusions obligatoires) et active le service. ${APP_DISPLAY_NAME} montre d’abord le détail exact.`
+          : `Écrit la configuration (exclusions obligatoires) puis systemctl enable --now earlyoom. ${APP_DISPLAY_NAME} montre d’abord la ligne exacte.`}
       </span>
     </div>
   );
@@ -283,7 +284,7 @@ export function EarlyoomPanel({ protectedList, onToast, onAttention }: Props) {
           <span className="hint s-foot-note">
             {unchanged
               ? 'Identique à la configuration actuelle'
-              : "proc-watch demande confirmation avec la ligne « Nouveau », puis le mot de passe administrateur. L'ancien fichier est copié en .bak ; il est restauré si earlyoom ne reste pas actif."}
+              : `${APP_DISPLAY_NAME} demande confirmation avec la ligne « Nouveau », puis le mot de passe administrateur. L'ancien fichier est copié en .bak ; il est restauré si earlyoom ne reste pas actif.`}
           </span>
         </SaveBar>
       </Card>

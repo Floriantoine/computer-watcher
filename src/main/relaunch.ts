@@ -1,4 +1,4 @@
-// Relance détachée de proc-watch (copie installée après « Installer comme une app », version mise à jour) et
+// Relance détachée de l’app (copie installée après « Installer comme une app », version mise à jour) et
 // environnement du processus principal en mode AppImage.
 import { cleanEnv } from '../core/childEnv';
 
@@ -19,7 +19,7 @@ export function sanitizeAppImageEnv(env: NodeJS.ProcessEnv): void {
 }
 
 /**
- * Relance de proc-watch : environnement sans le montage /tmp qui va disparaître (I-C), et PROC_WATCH_RELAUNCH=1 pour que
+ * Relance de l’app : environnement sans le montage /tmp qui va disparaître (I-C), et PROC_WATCH_RELAUNCH=1 pour que
  * la nouvelle instance réessaie de prendre le verrou si l'ancienne ne l'a pas encore rendu (n-3).
  */
 export function restartCommand(target: string, env: NodeJS.ProcessEnv): { cmd: string; args: string[]; env: NodeJS.ProcessEnv } {

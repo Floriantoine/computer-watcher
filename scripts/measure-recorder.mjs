@@ -40,9 +40,9 @@ const rules = mode === 'none'
       ],
     };
 if (rules.list.some((r) => r.mode !== 'simulate')) throw new Error('mesure : règles en Simulation seulement');
-mkdirSync(join(base, 'cfg', 'proc-watch'), { recursive: true });
+mkdirSync(join(base, 'cfg', 'computer-watcher'), { recursive: true });
 writeFileSync(
-  join(base, 'cfg', 'proc-watch', 'config.json'),
+  join(base, 'cfg', 'computer-watcher', 'config.json'),
   JSON.stringify({ version: 1, protected: [], othersThreshold: { memMB: 100, cpuPercent: 1 }, rules }),
 );
 const env = {
@@ -76,12 +76,12 @@ try {
 }
 let code = 0;
 try {
-  const db = new DatabaseSync(join(base, 'data', 'proc-watch', 'metrics.db'), { readOnly: true });
+  const db = new DatabaseSync(join(base, 'data', 'computer-watcher', 'metrics.db'), { readOnly: true });
   const count = (t) => db.prepare('SELECT COUNT(*) n FROM events WHERE type = ?').get(t).n;
   result.ruleDryRuns = count('rule_dry_run');
   result.ruleActions = count('rule_action');
   db.close();
-  const status = JSON.parse(readFileSync(join(base, 'data', 'proc-watch', 'recorder-status.json'), 'utf8'));
+  const status = JSON.parse(readFileSync(join(base, 'data', 'computer-watcher', 'recorder-status.json'), 'utf8'));
   result.jobErrors = status.jobErrors;
   console.log(JSON.stringify(result));
   if (result.ruleActions !== 0) {

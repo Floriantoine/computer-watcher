@@ -1,4 +1,5 @@
 // Textes des résultats de l'accueil et de la désinstallation (logique pure) : chemins exacts, ton du message.
+import { APP_DISPLAY_NAME } from '../../core/appName';
 import type { AutostartInfo, InstallOutcome, UninstallResult } from '../../core/onboarding';
 
 export type Tone = 'ok' | 'warn' | 'error';
@@ -39,7 +40,7 @@ export function uninstallReport(r: UninstallResult): ResultText {
       ...r.removed.map((p) => `Retiré : ${p}`),
       ...r.failed.map((f) => `Échec : ${f.path} — ${f.error}`),
       ...r.kept.map((k) => `Laissé : ${k.path} — ${k.reason}`),
-      r.done ? 'proc-watch est désinstallé et va se fermer.' : 'Désinstallation incomplète : proc-watch reste ouvert.',
+      r.done ? `${APP_DISPLAY_NAME} est désinstallé et va se fermer.` : `Désinstallation incomplète : ${APP_DISPLAY_NAME} reste ouvert.`,
     ],
   };
 }

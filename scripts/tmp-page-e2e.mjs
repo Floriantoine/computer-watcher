@@ -17,13 +17,13 @@ const base = mkdtempSync(join(homedir(), '.cache', 'pw-tmp-page-'));
 const cfg = join(base, 'cfg');
 const data = join(base, 'data');
 const root = join(base, 'root');
-mkdirSync(join(cfg, 'proc-watch'), { recursive: true });
-writeFileSync(join(cfg, 'proc-watch', 'onboarding.json'), '{"version":1,"done":true}\n');
+mkdirSync(join(cfg, 'computer-watcher'), { recursive: true });
+writeFileSync(join(cfg, 'computer-watcher', 'onboarding.json'), '{"version":1,"done":true}\n');
 mkdirSync(data, { recursive: true });
 
 // racine factice : noms neutres, tailles distinctes (tri), une quarantaine restée
 mkdirSync(root);
-writeFileSync(join(root, '.proc-watch-test-root'), '');
+writeFileSync(join(root, '.computer-watcher-test-root'), '');
 const fill = (path, kb) => writeFileSync(path, Buffer.alloc(kb * 1024, 1));
 mkdirSync(join(root, 'acme-build'));
 fill(join(root, 'acme-build', 'bundle.js'), 3072);

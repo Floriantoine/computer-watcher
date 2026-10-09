@@ -30,14 +30,14 @@ describe('updatePopupText', () => {
     expect(t.body).toContain('une mise à jour est disponible');
     expect(t.actions.map((a) => a.kind)).toEqual(['open', 'later', 'ignore']);
   });
-  test('AppImage lancée hors de la copie installée : « lancez proc-watch depuis le menu », pas de téléchargement', () => {
+  test('AppImage lancée hors de la copie installée : « lancez Computer Watcher depuis le menu », pas de téléchargement', () => {
     const t = updatePopupText(view({}, 'relaunch'));
-    expect(t.body).toContain('lancez proc-watch depuis le menu pour mettre à jour');
+    expect(t.body).toContain('lancez Computer Watcher depuis le menu pour mettre à jour');
     expect(t.actions.map((a) => a.kind)).toEqual(['later', 'ignore']);
-    expect(aboutLines(view({}, 'relaunch').state, String).mode).toContain('lancez proc-watch depuis le menu');
+    expect(aboutLines(view({}, 'relaunch').state, String).mode).toContain('lancez Computer Watcher depuis le menu');
   });
   test('sans notes : texte par défaut', () => {
-    expect(updatePopupText(view({ available: { version: '0.1.1', notes: '', url: 'x' } })).body).toBe('Nouvelle version de proc-watch.');
+    expect(updatePopupText(view({ available: { version: '0.1.1', notes: '', url: 'x' } })).body).toBe('Nouvelle version de Computer Watcher.');
   });
   test('téléchargement : progression arrondie, aucune action', () => {
     const t = updatePopupText(view({ phase: 'downloading', progress: 41.6 }));

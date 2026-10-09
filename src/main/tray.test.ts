@@ -163,7 +163,7 @@ describe('createTrayController', () => {
     const t = setup();
     const m = t.menu();
     expect(m.map((i) => (i.type === 'separator' ? '—' : i.label))).toEqual([
-      'RAM 42,0 Go · Swap 0,0 Go', 'Pression 0 % · Charge 1,0', '—', 'Ouvrir proc-watch', 'Libérer de la mémoire…', '—', 'Quitter',
+      'RAM 42,0 Go · Swap 0,0 Go', 'Pression 0 % · Charge 1,0', '—', 'Ouvrir Computer Watcher', 'Libérer de la mémoire…', '—', 'Quitter',
     ]);
     expect(m[0]!.enabled).toBe(false);
     expect(m[1]!.enabled).toBe(false);

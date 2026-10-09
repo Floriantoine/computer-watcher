@@ -32,7 +32,7 @@ const PM_WANT_COUNT = PACKAGE_MANAGERS.map((m) => `    (( w_${m.varName} )) && {
 const PM_BRANCHES = PACKAGE_MANAGERS.map((m) => `    ${m.varName}) pm=("$${m.varName}" ${m.args.join(' ')}) ;;`).join('\n');
 
 /**
- * Script fixe exécuté en root par `pkexec /usr/bin/bash -c SCRIPT proc-watch-earlyoom-setup <mode> <ligne>`.
+ * Script fixe exécuté en root par `pkexec /usr/bin/bash -c SCRIPT computer-watcher-earlyoom-setup <mode> <ligne>`.
  * Construit seulement à partir de constantes du module ; ne lit AUCUNE variable d'environnement (PATH, locale, umask fixés).
  * - exactement deux arguments : le mode, comparé à l'identique à `install` ou `activate` (jamais interprété), puis la ligne,
  *   revalidée par la même politique qu'« Appliquer » (LINE_CHECKS) ; tout est validé AVANT la moindre action ;
@@ -146,7 +146,7 @@ const timeoutMessage = (mode: EarlyoomSetupMode): ApplyResult => ({
     : "Délai dépassé (120 s) : rien n'a été modifié si la fenêtre de mot de passe était encore ouverte.",
 });
 
-/** `/usr/bin/pkexec /usr/bin/bash -c SCRIPT proc-watch-earlyoom-setup <mode> <ligne>` : argv figé, aucun fichier, aucune variable. */
+/** `/usr/bin/pkexec /usr/bin/bash -c SCRIPT computer-watcher-earlyoom-setup <mode> <ligne>` : argv figé, aucun fichier, aucune variable. */
 export async function setupEarlyoom(mode: EarlyoomSetupMode, line: string, deps: { run?: ExecFn; timeoutMs?: number } = {}): Promise<SetupOutcome> {
   const settled = Promise.resolve();
   if (!isSetupMode(mode)) return { result: setupExitMessage(10, 'activate', line, '', ''), code: null, timedOut: false, done: settled };
@@ -157,7 +157,7 @@ export async function setupEarlyoom(mode: EarlyoomSetupMode, line: string, deps:
   type Done = { code: number; stdout: string; stderr: string; timedOut?: boolean } | { error: unknown };
   const proc: Promise<Done> = (async () => {
     try {
-      return await run(PKEXEC, ['/usr/bin/bash', '-c', EARLYOOM_SETUP_SCRIPT, 'proc-watch-earlyoom-setup', mode, line], { timeout: limit });
+      return await run(PKEXEC, ['/usr/bin/bash', '-c', EARLYOOM_SETUP_SCRIPT, 'computer-watcher-earlyoom-setup', mode, line], { timeout: limit });
     } catch (error) {
       return { error };
     }

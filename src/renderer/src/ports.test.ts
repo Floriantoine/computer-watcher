@@ -45,14 +45,14 @@ describe('autres utilisateurs et ports illisibles (Review Focus 5)', () => {
   const i: OpenPortsInfo = { ports: [row({ port: 8080 })], otherUsers: [{ port: 5432, uid: 965 }], unreadable: [7777], tooBig: 0 };
   it('un port d\'un autre utilisateur ne donne aucune ligne et un message explicite', () => {
     expect(portRowsFor(i, 5432)).toEqual([]);
-    expect(portSearchEmpty(5432, i)).toBe(':5432 est écouté par un autre utilisateur (uid 965) : non arrêtable depuis proc-watch');
+    expect(portSearchEmpty(5432, i)).toBe(':5432 est écouté par un autre utilisateur (uid 965) : non arrêtable depuis Computer Watcher');
   });
   it('plusieurs autres utilisateurs sur le même port', () => {
     const two: OpenPortsInfo = { ports: [], otherUsers: [{ port: 80, uid: 0 }, { port: 80, uid: 33 }], unreadable: [], tooBig: 0 };
-    expect(portSearchEmpty(80, two)).toBe(':80 est écouté par d\'autres utilisateurs (uid 0, 33) : non arrêtable depuis proc-watch');
+    expect(portSearchEmpty(80, two)).toBe(':80 est écouté par d\'autres utilisateurs (uid 0, 33) : non arrêtable depuis Computer Watcher');
   });
   it('port à soi sans processus lisible : le message le dit', () => {
-    expect(portSearchEmpty(7777, i)).toBe(":7777 est écouté par un de vos processus illisible (processus trop gros, conteneur, autre espace de noms…) : non arrêtable depuis proc-watch");
+    expect(portSearchEmpty(7777, i)).toBe(":7777 est écouté par un de vos processus illisible (processus trop gros, conteneur, autre espace de noms…) : non arrêtable depuis Computer Watcher");
   });
   it('port libre', () => {
     expect(portSearchEmpty(1, i)).toBe('Aucun processus n\'écoute :1');

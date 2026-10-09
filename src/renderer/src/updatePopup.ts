@@ -1,4 +1,5 @@
 // Pop-up « Mise à jour disponible » et section « À propos » (logique pure) : textes et actions selon l'état du main.
+import { APP_DISPLAY_NAME } from '../../core/appName';
 import type { UpdateState, UpdateView } from '../../core/update';
 
 export type UpdateAction = { kind: 'download' | 'install' | 'retry' | 'later' | 'ignore' | 'open'; label: string };
@@ -14,7 +15,7 @@ const IGNORE: UpdateAction = { kind: 'ignore', label: 'Ignorer cette version' };
 export function updatePopupText(v: UpdateView): UpdatePopupText {
   const s = v.state;
   const version = s.available?.version ?? '';
-  const notes = s.available?.notes || 'Nouvelle version de proc-watch.';
+  const notes = s.available?.notes || `Nouvelle version de ${APP_DISPLAY_NAME}.`;
   const title = `Mise à jour ${version} disponible`;
   switch (s.phase) {
     case 'downloading':
@@ -23,7 +24,7 @@ export function updatePopupText(v: UpdateView): UpdatePopupText {
       return {
         title,
         body:
-          'Téléchargée et vérifiée. proc-watch va se fermer, remplacer son AppImage puis redémarrer ; le service ' +
+          `Téléchargée et vérifiée. ${APP_DISPLAY_NAME} va se fermer, remplacer son AppImage puis redémarrer ; le service ` +
           "d'enregistrement sera relancé avec la nouvelle version.",
         progress: null,
         actions: [{ kind: 'install', label: 'Redémarrer et installer' }, LATER],
@@ -48,7 +49,7 @@ export function updatePopupText(v: UpdateView): UpdatePopupText {
       if (s.mode === 'relaunch')
         return {
           title,
-          body: `${notes} Cette AppImage n’est pas la copie installée : lancez proc-watch depuis le menu pour mettre à jour.`,
+          body: `${notes} Cette AppImage n’est pas la copie installée : lancez ${APP_DISPLAY_NAME} depuis le menu pour mettre à jour.`,
           progress: null,
           actions: [LATER, IGNORE],
           command: null,
@@ -67,7 +68,7 @@ export function updatePopupText(v: UpdateView): UpdatePopupText {
 
 const MODE_TEXT: Record<UpdateState['mode'], string> = {
   install: 'AppImage : mise à jour téléchargée et vérifiée (sha512), installée au redémarrage, sur demande.',
-  relaunch: 'AppImage lancée hors de la copie installée (~/Applications) : lancez proc-watch depuis le menu pour mettre à jour.',
+  relaunch: `AppImage lancée hors de la copie installée (~/Applications) : lancez ${APP_DISPLAY_NAME} depuis le menu pour mettre à jour.`,
   notify: 'Paquet (.deb) : notification seulement, la mise à jour se télécharge depuis la page des versions.',
   off: 'Lancée depuis les sources : aucune vérification des mises à jour.',
 };

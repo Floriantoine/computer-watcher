@@ -178,7 +178,7 @@ describe('summarizeResults', () => {
   test('rien d\'arrêté', () => {
     expect(summarizeResults([], [], 1).message).toBe('Aucune instance arrêtée, 1 déjà disparue');
     expect(summarizeResults([{ key: 'a', pids: [7] }], [err(7, 'SELF')], 0)).toEqual({
-      message: "Aucune instance arrêtée, 1 refusée : PID 7 c'est proc-watch ou l'un de ses parents",
+      message: "Aucune instance arrêtée, 1 refusée : PID 7 c'est Computer Watcher ou l'un de ses parents",
       kind: 'error',
     });
   });

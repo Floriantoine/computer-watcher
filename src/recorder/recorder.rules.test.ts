@@ -91,7 +91,7 @@ test('règle passée en Active (config réécrite + reloadConfig) → kill(700, 
   expect(s.kill.mock.calls).toEqual([[700, 'SIGTERM']]);
   expect(s.events()).toEqual([expect.objectContaining({ type: 'rule_action', ruleId: 'r-v', result: 'sigterm', killed: 1 })]);
   await new Promise((r) => setTimeout(r, 0));
-  expect(s.notify).toHaveBeenCalledWith(expect.objectContaining({ title: 'proc-watch — Règle exécutée' }));
+  expect(s.notify).toHaveBeenCalledWith(expect.objectContaining({ title: 'Computer Watcher — Règle exécutée' }));
   expect(s.timers).toHaveLength(1);
   s.timers[0]!();
   expect(s.kill.mock.calls).toEqual([[700, 'SIGTERM'], [700, 'SIGKILL']]);

@@ -1,4 +1,5 @@
 // src/recorder/recorder.ts
+import { APP_DISPLAY_NAME } from '../core/appName';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { cpus, homedir } from 'node:os';
 import type { DatabaseSync } from 'node:sqlite';
@@ -64,7 +65,7 @@ export interface RecorderDeps {
   selfPid?: number;
   /** Uid courant (défaut : process.getuid()). */
   currentUid?: number;
-  /** Dossier de l'app proc-watch, jamais visée (défaut : null). */
+  /** Dossier de l'app, jamais visée (défaut : null). */
   appRoot?: string | null;
   /** Minuterie de l'escalade SIGTERM → SIGKILL (défaut : setTimeout). */
   ruleTimers?: { setTimeout(fn: () => void, ms: number): unknown };
@@ -477,7 +478,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       } catch (e) {
         if ((e as { code?: string }).code !== 'HISTORY_DB_NEWER') throw e;
         // base d'une version plus récente : on reste inactif (aucune écriture), sans planter en boucle
-        jobErrors.tick = "Base d'historique créée par une version plus récente de proc-watch : enregistrement suspendu";
+        jobErrors.tick = `Base d'historique créée par une version plus récente de ${APP_DISPLAY_NAME} : enregistrement suspendu`;
         errorAt.tick = ++errSeq;
         refreshLastError();
         log(jobErrors.tick);
