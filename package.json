@@ -1,6 +1,6 @@
 {
   "name": "proc-watch",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Voir ce qui tourne, depuis quand, ce que ça consomme, et le tuer en un clic (Linux).",
   "main": "out/main/index.js",
   "author": {
