@@ -13,10 +13,12 @@ import { cleanEnv, systemBin } from '../core/childEnv';
 import {
   decideDirMove, nextSteps, parseMigrationState, reportOf, serializeMigrationState, type DirMove, type MigrationReport, type MigrationState, type MigrationStep,
 } from '../core/nameMigration';
-import { appPaths, rootList, stopRecorderForUninstall, type Roots } from './appInstall';
+import { DELETE_CONSENT_TTL_MS, parseOnboardingFile, serializeOnboarding } from '../core/onboarding';
+import { appPaths, installAppImage, rootList, stopRecorderForUninstall, type Roots } from './appInstall';
+import { isUsableAppImage } from './realAppImage';
 import { desktopEntryContent, execFromEntry, installDesktopEntry, isManagedEntry } from './desktopEntry';
 import { LEGACY_UNIT_NAME } from './recorderService';
-import { moveDirSafe, mountPointsOf, readFileSafe, removeFileSafe, removeLinkSafe, writeFileSafe } from './safeFs';
+import { hashNoFollow, moveDirSafe, mountPointsOf, readFileSafe, removeFileSafe, removeLinkSafe, writeFileSafe } from './safeFs';
 
 export type { MigrationReport };
 
@@ -45,6 +47,8 @@ export interface MigrateDeps {
   iconPng?: string;
   /** AppImage de ce processus vérifiée par realAppImage(), ou null (lue au second temps seulement). */
   ownAppImage: () => string | null;
+  /** Relance détachée depuis `target` (relaunchDetached) puis sortie ; rejetée si rien n'a démarré. */
+  relaunch: (target: string) => Promise<void>;
   now: () => number;
 }
 
@@ -338,14 +342,55 @@ function desktopEntries(d: MigrateDeps, s: MigrationState): void {
 
 // ---------------------------------------------------------------- 5. copie AppImage
 
-function appImageStep(d: MigrateDeps, s: MigrationState): void {
+/** onboarding.json du dossier de config, avec ou sans l'accord de suppression de l'ancienne copie. */
+function writeConsent(d: MigrateDeps, consent: { path: string; sha256: string; ino: number; expires: number } | null): void {
+  const file = join(stateDir(d), 'onboarding.json');
+  const cur = parseOnboardingFile(readFileSafe(rootsOf(d), file));
+  const { deleteOriginal: _old, ...rest } = cur ?? { version: 1 as const, done: true };
+  writeFileSafe(rootsOf(d), file, serializeOnboarding({ ...rest, ...(consent ? { deleteOriginal: consent } : {}) }), 0o600);
+}
+
+/**
+ * Lancée depuis ~/Applications/proc-watch.AppImage : copie vers ~/Applications/computer-watcher.AppImage par le chemin
+ * « Installer comme une app » (SHA-256 vérifié, 0755, écriture par descripteur ; menu et démarrage repointés), unité
+ * repointée, accord de suppression de l'ancienne copie écrit dans onboarding.json (usage unique, 5 min, inode + SHA-256),
+ * puis relance depuis la nouvelle copie, qui supprime l'ancienne (deletePendingOriginal). Relance impossible : accord
+ * retiré, ancienne copie gardée, l'app reste ouverte.
+ */
+async function appImageStep(d: MigrateDeps, s: MigrationState): Promise<void> {
   const step = 'appimage';
-  const before: MigrationStep[] = ['move-dirs', 'desktop'];
-  if (!before.every((x) => s.done.includes(x))) return;
+  if (!(['move-dirs', 'desktop'] as const).every((x) => s.done.includes(x))) return;
   if (!s.done.includes('new-service') && !s.skipped?.['new-service']) return;
-  // pas lancée depuis l'ancienne copie installée : rien à faire
-  if (d.ownAppImage() !== appPaths(d.roots).legacy.appImage) return markDone(s, step);
+  const p = appPaths(d.roots);
+  const own = d.ownAppImage();
+  // pas lancée depuis l'ancienne copie installée (ou ancienne copie inutilisable) : rien à faire
+  if (own !== p.legacy.appImage || !isUsableAppImage(own)) return markDone(s, step);
+  try {
+    const out = await installAppImage({ source: own, roots: d.roots, iconPng: d.iconPng });
+    if (!out.executable) throw new Error(`${out.dest} n’est pas exécutable (dossier monté en noexec ?)`);
+    if (out.warnings.length) throw new Error(out.warnings.join(' ; '));
+    if (d.env.PROC_WATCH_NO_RECORDER_SYNC !== '1' && present(p.unit)) await d.writeNewService(); // ExecStart → la nouvelle copie
+    const h = await hashNoFollow(own);
+    if (h.sha256 !== out.sha256) throw new Error(`${own} a changé pendant la copie : rien supprimé`);
+    writeConsent(d, { path: own, sha256: h.sha256, ino: h.ino, expires: d.now() + DELETE_CONSENT_TTL_MS });
+  } catch (e) {
+    s.errors[step] = `copie vers ${p.appImage} : ${msg(e)} ; ancienne copie gardée`;
+    return;
+  }
+  // fait avant la relance : la nouvelle instance ne recommence pas
   markDone(s, step);
+  writeState(d, s);
+  try {
+    await d.relaunch(p.appImage);
+  } catch (e) {
+    s.done = s.done.filter((x) => x !== step);
+    s.errors[step] = `relance depuis ${p.appImage} impossible (${msg(e)}) : ancienne copie gardée ; lancer Computer Watcher depuis le menu`;
+    try {
+      writeConsent(d, null);
+    } catch (e2) {
+      s.errors[step] += ` ; accord de suppression non retiré (${msg(e2)})`;
+    }
+  }
 }
 
 // ---------------------------------------------------------------- enchaînement
@@ -384,7 +429,7 @@ export async function migrateLate(d: MigrateDeps): Promise<MigrationReport> {
   if (plan === 'nothing' || plan === 'deferred') return reportOf(s);
   if (plan.includes('new-service')) await newService(d, s);
   if (plan.includes('desktop')) desktopEntries(d, s);
-  if (plan.includes('appimage')) appImageStep(d, s);
+  if (plan.includes('appimage')) await appImageStep(d, s);
   writeState(d, s);
   return reportOf(s);
 }

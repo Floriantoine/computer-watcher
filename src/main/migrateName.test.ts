@@ -4,7 +4,10 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
-import { appPaths, rootsFrom, type Roots } from './appInstall';
+import { appPaths, rootsFrom, verifyAndDeleteOriginal, type Roots } from './appInstall';
+import { chmodSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { DELETE_CONSENT_TTL_MS, parseOnboardingFile } from '../core/onboarding';
 import { desktopEntryContent } from './desktopEntry';
 import { aliveAfterWait, legacyLockHolderAlive, migrateEarly, migrateName, type MigrateDeps, type SystemctlSync } from './migrateName';
 import { parseMigrationState } from '../core/nameMigration';
@@ -57,6 +60,7 @@ function deps(over: Partial<MigrateDeps> = {}): MigrateDeps & { written: number 
       writeFileSync(P().unit, '[Unit]\nDescription=Computer Watcher recorder\n');
     },
     ownAppImage: () => null,
+    relaunch: async () => {},
     now: () => 1_000_000,
     ...over,
   };
@@ -383,5 +387,118 @@ describe('idempotence', () => {
     expect((await migrateName(deps())).status).toBe('nothing');
     expect(existsSync(P().legacy.updaterCache)).toBe(true);
     expect(readdirSync(run)).toEqual(['proc-watch']);
+  });
+});
+
+describe('copie AppImage (tâche 7)', () => {
+  /** En-tête d'AppImage type 2 (ELF + « AI\x02 » à l'octet 8), suivi d'un corps. */
+  const AI = (body: string) => Buffer.concat([Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0, 0x41, 0x49, 0x02]), Buffer.from(body)]);
+  const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
+  /** v0.1.3 installée « comme une app », mise à jour sur place en 0.2.0 (même nom de fichier), menu et démarrage marqués. */
+  function installedLegacy() {
+    const L = legacyInstall();
+    mkdirSync(dirname(L.appImage), { recursive: true });
+    writeFileSync(L.appImage, AI('computer-watcher 0.2.0'));
+    chmodSync(L.appImage, 0o755);
+    writeFileSync(join(L.configDir, 'onboarding.json'), '{"version":1,"done":true}\n');
+    managedEntry(L.desktop, L.appImage);
+    managedEntry(L.autostart, L.appImage, ['--hidden']);
+    return L;
+  }
+
+  test('lancée depuis ~/Applications/proc-watch.AppImage : copie 0755 même SHA-256, menu, démarrage et unité repointés, accord écrit, relance depuis la copie', async () => {
+    const L = installedLegacy();
+    mkdirSync(dirname(L.unit), { recursive: true });
+    writeFileSync(L.unit, '[Unit]\n');
+    const relaunched: string[] = [];
+    const units: string[] = [];
+    const d = deps({
+      systemctl: fakeCtl({ frag: L.unit }).ctl,
+      ownAppImage: () => L.appImage,
+      relaunch: async (t) => void relaunched.push(t),
+      writeNewService: async () => {
+        // ExecStart : la copie installée si elle est utilisable (recorderAppImage), sinon l'AppImage lancée
+        units.push(existsSync(P().appImage) ? P().appImage : L.appImage);
+        mkdirSync(dirname(P().unit), { recursive: true });
+        writeFileSync(P().unit, `ExecStart=${units.at(-1)}\n`);
+      },
+    });
+    const r = await migrateName(d);
+    expect(r.status).toBe('done');
+    const p = P();
+    expect(readFileSync(p.appImage)).toEqual(AI('computer-watcher 0.2.0'));
+    expect(statSync(p.appImage).mode & 0o777).toBe(0o755);
+    expect(readFileSync(p.desktop, 'utf8')).toBe(desktopEntryContent(p.appImage));
+    expect(readFileSync(p.autostart, 'utf8')).toBe(desktopEntryContent(p.appImage, { args: ['--hidden'], autostart: true }));
+    expect(readFileSync(p.unit, 'utf8')).toBe(`ExecStart=${p.appImage}\n`);
+    for (const x of [L.desktop, L.autostart]) expect(existsSync(x), x).toBe(false);
+    expect(existsSync(L.appImage)).toBe(true); // supprimée seulement par la nouvelle instance
+    const ob = parseOnboardingFile(readFileSync(join(p.configDir, 'onboarding.json'), 'utf8'))!;
+    expect(ob.done).toBe(true);
+    expect(ob.deleteOriginal).toEqual({ path: L.appImage, sha256: sha(AI('computer-watcher 0.2.0')), ino: statSync(L.appImage).ino, expires: 1_000_000 + DELETE_CONSENT_TTL_MS });
+    expect(relaunched).toEqual([p.appImage]);
+    expect(stateOf(p.configDir)?.done).toContain('appimage');
+  });
+
+  test('la nouvelle instance supprime l’ancienne copie avec l’accord ; un document mis à sa place est refusé', async () => {
+    const L = installedLegacy();
+    await migrateName(deps({ ownAppImage: () => L.appImage }));
+    const c = parseOnboardingFile(readFileSync(join(P().configDir, 'onboarding.json'), 'utf8'))!.deleteOriginal!;
+    // document au même chemin (autre inode) : refusé
+    rmSync(L.appImage);
+    writeFileSync(L.appImage, 'mon document');
+    await expect(verifyAndDeleteOriginal({ path: c.path, sha256: c.sha256, ino: c.ino, copy: P().appImage })).rejects.toThrow(/non supprimé/);
+    expect(readFileSync(L.appImage, 'utf8')).toBe('mon document');
+  });
+
+  test('accord valide : l’ancienne copie identique est supprimée par la nouvelle instance', async () => {
+    const L = installedLegacy();
+    await migrateName(deps({ ownAppImage: () => L.appImage }));
+    const c = parseOnboardingFile(readFileSync(join(P().configDir, 'onboarding.json'), 'utf8'))!.deleteOriginal!;
+    await verifyAndDeleteOriginal({ path: c.path, sha256: c.sha256, ino: c.ino, copy: P().appImage });
+    expect(existsSync(L.appImage)).toBe(false);
+    expect(existsSync(P().appImage)).toBe(true);
+  });
+
+  test('lancée d’ailleurs (AppImage téléchargée, déjà computer-watcher.AppImage, .deb, sources) : étape faite, rien copié ni relancé', async () => {
+    for (const own of [null, join(roots.home, 'Téléchargements/computer-watcher-0.2.0-x86_64.AppImage'), join(roots.home, 'Applications/computer-watcher.AppImage')]) {
+      rmSync(roots.home, { recursive: true, force: true });
+      mkdirSync(run, { recursive: true });
+      const L = installedLegacy();
+      const relaunched: string[] = [];
+      const r = await migrateName(deps({ ownAppImage: () => own, relaunch: async (t) => void relaunched.push(t) }));
+      expect(r.done).toContain('appimage');
+      expect(relaunched).toEqual([]);
+      expect(existsSync(L.appImage)).toBe(true);
+      expect(existsSync(P().appImage)).toBe(false);
+    }
+  });
+
+  test('ancienne copie inutilisable (pas une AppImage) : étape faite, rien copié', async () => {
+    const L = legacyInstall();
+    mkdirSync(dirname(L.appImage), { recursive: true });
+    writeFileSync(L.appImage, '');
+    const r = await migrateName(deps({ ownAppImage: () => L.appImage }));
+    expect(r.done).toContain('appimage');
+    expect(existsSync(P().appImage)).toBe(false);
+  });
+
+  test('relance impossible : l’app reste ouverte, accord retiré, ancienne copie gardée, message', async () => {
+    const L = installedLegacy();
+    const r = await migrateName(deps({ ownAppImage: () => L.appImage, relaunch: async () => { throw new Error('EACCES'); } }));
+    expect(r.status).toBe('partial');
+    expect(r.errors.appimage).toMatch(/EACCES/);
+    expect(r.done).not.toContain('appimage');
+    expect(existsSync(L.appImage)).toBe(true);
+    expect(parseOnboardingFile(readFileSync(join(P().configDir, 'onboarding.json'), 'utf8'))!.deleteOriginal).toBeUndefined();
+  });
+
+  test('étapes précédentes en échec : pas de copie ni de relance', async () => {
+    const L = installedLegacy();
+    const relaunched: string[] = [];
+    const r = await migrateName(deps({ ownAppImage: () => L.appImage, systemctl: fakeCtl({ showOk: false }).ctl, relaunch: async (t) => void relaunched.push(t) }));
+    expect(r.status).toBe('partial');
+    expect(relaunched).toEqual([]);
+    expect(existsSync(P().appImage)).toBe(false);
   });
 });

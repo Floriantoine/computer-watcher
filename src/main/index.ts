@@ -104,6 +104,23 @@ function migrationDeps(): MigrateDeps {
     },
     iconPng: appIcon,
     ownAppImage: () => ownImage,
+    // copie AppImage renommée : relance depuis elle, puis sortie (la nouvelle instance supprime l'ancienne copie)
+    relaunch: (target) =>
+      new Promise<void>((resolve, reject) => {
+        quitting = true;
+        relaunchDetached({
+          ...relaunchHooks(),
+          target,
+          onStarted: () => {
+            setTimeout(() => app.quit(), 50);
+            resolve();
+          },
+          onFailed: (m) => {
+            quitting = false;
+            reject(new Error(m));
+          },
+        });
+      }),
     now: () => Date.now(),
   };
 }
@@ -1315,6 +1332,7 @@ app.whenReady().then(async () => {
     } catch (e) {
       console.error('migration :', e);
     }
+    if (quitting) return; // relancée depuis computer-watcher.AppImage : cette instance s'arrête
   }
   if (migration.status === 'partial' || migration.status === 'deferred') {
     const [message, ...detail] = migrationLines(migration);
