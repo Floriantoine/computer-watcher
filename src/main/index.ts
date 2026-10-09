@@ -38,7 +38,7 @@ import { portModes } from './portModes';
 import { PortSweep } from './portSweep';
 import { promises as originalFsp } from 'original-fs';
 import type { TmpConfirmSummary, TmpDeleteOutcome } from '../core/tmpClean';
-import { confirmText, createTmpCleaner, tmpCleanEvent, tmpRootFromEnv, type CleanFs } from './tmpClean';
+import { confirmText, createSetAsideStore, createTmpCleaner, tmpCleanEvent, tmpRootFromEnv, type CleanFs } from './tmpClean';
 import { sharedScan, topTmpDirs } from './tmpUsage';
 import { closeAction, confirmTray, createTrayController, defaultRun, statusNotifierAvailable, type TrayController } from './tray';
 import {
@@ -578,7 +578,9 @@ const confirmTmpClean = async (s: TmpConfirmSummary): Promise<boolean> => {
   return r.response === 1;
 };
 // original-fs : aucune réécriture des archives .asar par Electron ; la récursion est faite par GNU rm (voir tmpClean.ts)
-const tmpCleaner = createTmpCleaner(tmpRoot, { fs: originalFsp as unknown as CleanFs, confirm: confirmTmpClean });
+// objets mis à l'écart après un échange : gardés par le main dans son dossier de données (0600), jamais dans la quarantaine
+const tmpSetAside = createSetAsideStore(join(data, 'tmp-set-aside.json'));
+const tmpCleaner = createTmpCleaner(tmpRoot, { fs: originalFsp as unknown as CleanFs, confirm: confirmTmpClean, setAside: tmpSetAside });
 ipcMain.handle('tmp:entries', () => tmpCleaner.list());
 /** Suppression : liste autorisée du main, confirmation native, revérification et suppression élément par élément. */
 /** Journal : une suppression (même partielle) ajoute un événement tmp_clean. */

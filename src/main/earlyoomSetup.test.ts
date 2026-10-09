@@ -525,8 +525,10 @@ describe('createEarlyoomSetup (IPC earlyoom:setup)', () => {
     const m = make();
     const r = await m.handler('install');
     expect(r.ok).toBe(true);
-    expect(m.confirms).toEqual([{ mode: 'install', pm: 'pacman', line: VALID }]);
-    expect(m.setups).toEqual([{ mode: 'install', line: VALID }]);
+    // nouvelle installation : les processus de test sont préférés par défaut
+    const fresh = VALID.replace(')$"', ')$ --prefer ^(vitest|node..vitest.|jest|pytest|playwright|cypress|mocha|karma|headless_shell|chrome-headless)$"');
+    expect(m.confirms).toEqual([{ mode: 'install', pm: 'pacman', line: fresh }]);
+    expect(m.setups).toEqual([{ mode: 'install', line: fresh }]);
     expect(m.events).toEqual([{ ts: 42, type: 'earlyoom_setup', groupKey: null, detail: { mode: 'install', ok: true, code: 0 } }]);
   });
   test.each(['install; reboot', '--mode=x', 'install\n', '-m 99', null, 3, { mode: 'install' }])('mode %j → refusé sans rien lancer', async (mode) => {

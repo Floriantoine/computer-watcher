@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { buildEarlyoomArgs } from './earlyoom';
 import {
-  detectPackageManager, EARLYOOM_DEFAULT_SETTINGS, EARLYOOM_REMINDER_SNOOZE_MS, isSetupMode, reminderMode, reminderSnoozed, setupNeed, setupSettings,
+  detectPackageManager, EARLYOOM_DEFAULT_SETTINGS, EARLYOOM_TEST_PREFER, EARLYOOM_REMINDER_SNOOZE_MS, isSetupMode, reminderMode, reminderSnoozed, setupNeed, setupSettings,
   PACKAGE_MANAGERS, validateEarlyoomReminder,
 } from './earlyoomSetup';
 
@@ -67,7 +67,7 @@ describe('reminderMode (pop-up au lancement)', () => {
 describe('setupSettings (réglages de la ligne écrite à l’installation)', () => {
   test('aucun fichier → valeurs par défaut 8,5 / 35,25', () => {
     expect(setupSettings(null)).toEqual(EARLYOOM_DEFAULT_SETTINGS);
-    expect(EARLYOOM_DEFAULT_SETTINGS).toEqual({ memTerm: 8, memKill: 5, swapTerm: 35, swapKill: 25, prefer: [] });
+    expect(EARLYOOM_DEFAULT_SETTINGS).toEqual({ memTerm: 8, memKill: 5, swapTerm: 35, swapKill: 25, prefer: [...EARLYOOM_TEST_PREFER] });
   });
   test('fichier existant valide → ses réglages', () => {
     const s = { memTerm: 10, memKill: 5, swapTerm: 20, swapKill: 10, prefer: ['node'] };
@@ -82,7 +82,7 @@ describe('setupSettings (réglages de la ligne écrite à l’installation)', ()
   test('la ligne par défaut passe la politique, exclusions de base en tête', () => {
     const b = buildEarlyoomArgs(EARLYOOM_DEFAULT_SETTINGS, ['kitty']);
     expect(b.ok).toBe(true);
-    if (b.ok) expect(b.line).toBe('EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(claude|claude-desktop|warp|zsh|bash|kwin_wayland|kwin_wayland_wr|plasmashell|Xwayland|sddm|systemd.*|kitty)$"');
+    if (b.ok) expect(b.line).toBe('EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(claude|claude-desktop|warp|zsh|bash|kwin_wayland|kwin_wayland_wr|plasmashell|Xwayland|sddm|systemd.*|kitty)$ --prefer ^(vitest|node..vitest.|jest|pytest|playwright|cypress|mocha|karma|headless_shell|chrome-headless)$"');
   });
 });
 

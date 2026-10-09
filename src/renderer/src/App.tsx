@@ -25,7 +25,7 @@ import { parsePortQuery } from '../../core/portQuery';
 import { freePortCheck } from './ports';
 import type { SettingsSection } from './settingsNav';
 import { leakTimes } from './recorderForm';
-import { findGroup, visibleGroups, ipcErrorMessage, killResultMessages, killRequestForGroup, killRequestForProc, trackKills, type KillRequest, type ViewFilter } from './viewModel';
+import { findGroup, sortForTile, tileForSort, visibleGroups, ipcErrorMessage, killResultMessages, killRequestForGroup, killRequestForProc, trackKills, type KillRequest, type ViewFilter } from './viewModel';
 
 export type Route = { view: 'main' } | { view: 'detail'; groupId: string } | { view: 'settings'; section?: SettingsSection } | { view: 'metrics'; at?: number };
 
@@ -426,7 +426,12 @@ export function App() {
     <MotionConfig reducedMotion={reducedEffects ? 'always' : 'user'}>
       <div data-testid="snapshot-ready">
         <TopNav route={route} onNavigate={setRoute} unseen={alertPopups.badge} />
-        <SystemBar system={snapshot.system} sparks={sparks} />
+        <SystemBar
+          system={snapshot.system}
+          sparks={sparks}
+          sortTile={route.view === 'main' ? tileForSort(filter.sort) : null}
+          onSortTile={route.view === 'main' ? (t) => setFilter((f) => ({ ...f, sort: sortForTile(t, f.sort) })) : undefined}
+        />
         <AnimatePresence mode="wait" initial={false}>
           <RouteFade key={routeKey}>
             {route.view === 'main' && (

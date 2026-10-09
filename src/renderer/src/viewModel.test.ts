@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import type { GroupSummary, InstanceSummary, ProcInfo, SystemInfo } from '../../core/types';
 import {
-  findGroup, ipcErrorMessage, killErrorMessage, killResultMessages, killRequestForGroup, killRequestForInstance, killRequestForProc, pressureLevel, trackKills, visibleGroups,
+  findGroup, ipcErrorMessage, sortForTile, killErrorMessage, killResultMessages, killRequestForGroup, killRequestForInstance, killRequestForProc, pressureLevel, trackKills, visibleGroups,
 } from './viewModel';
 
 const proc = (pid: number, name: string, extra: Partial<ProcInfo> = {}): ProcInfo => ({
@@ -13,6 +13,21 @@ const group = (id: string, procs: ProcInfo[], extra: Partial<GroupSummary> = {})
   id, kind: 'command', label: id, tags: [], rootName: procs[0]?.name ?? '',
   pids: procs.map((p) => p.pid), procCount: procs.length, cpuPercent: 0, rssKB: 0, swapKB: 0, oldestAgeSec: 10,
   protected: false, killable: true, subgroups: [], categories: [], instances: [], ...extra,
+});
+
+describe('tri depuis les tuiles du haut', () => {
+  test('chaque tuile donne son tri ; recliquer la tuile active revient au tri mémoire', () => {
+    expect(sortForTile('mem', 'cpu')).toBe('mem');
+    expect(sortForTile('swap', 'mem')).toBe('swap');
+    expect(sortForTile('psi', 'cpu')).toBe('mem');
+    expect(sortForTile('load', 'mem')).toBe('cpu');
+    expect(sortForTile('swap', 'swap')).toBe('mem');
+    expect(sortForTile('load', 'cpu')).toBe('mem');
+  });
+  test('tri par swap', () => {
+    const g = (id: string, swapKB: number) => ({ id, label: id, kind: 'app', rssKB: 100_000 - swapKB, swapKB, cpuPercent: 0, oldestAgeSec: 10, subgroups: [] }) as unknown as GroupSummary;
+    expect(visibleGroups([g('a', 10), g('b', 500), g('c', 0)], { query: '', sort: 'swap', minAgeSec: 0 }).map((x) => x.id)).toEqual(['b', 'a', 'c']);
+  });
 });
 
 describe('visibleGroups', () => {

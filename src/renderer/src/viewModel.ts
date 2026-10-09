@@ -1,7 +1,20 @@
 import type { GroupSummary, InstanceSummary, KillResult, KillTarget, ProcInfo, SystemInfo } from '../../core/types';
 import { cpuOutOfOrder, memOutOfOrder, stableOrder } from './stableOrder';
 
-export type SortKey = 'mem' | 'cpu' | 'age' | 'name';
+export type SortKey = 'mem' | 'swap' | 'cpu' | 'age' | 'name';
+
+/** Tuiles du haut de la page Processus. */
+export type SystemTile = 'mem' | 'swap' | 'psi' | 'load';
+const TILE_SORT: Record<SystemTile, SortKey> = { mem: 'mem', swap: 'swap', psi: 'mem', load: 'cpu' };
+
+/** Tri choisi en cliquant une tuile ; recliquer la tuile du tri actif revient au tri mémoire (par défaut). */
+export function sortForTile(tile: SystemTile, current: SortKey): SortKey {
+  const s = TILE_SORT[tile];
+  return s === current && s !== 'mem' ? 'mem' : s;
+}
+
+/** Tuile mise en avant pour un tri (la pression suit la mémoire, sans être surlignée en double). */
+export const tileForSort = (sort: SortKey): SystemTile | null => (sort === 'mem' ? 'mem' : sort === 'swap' ? 'swap' : sort === 'cpu' ? 'load' : null);
 
 export interface ViewFilter {
   query: string;
@@ -13,6 +26,7 @@ const mem = (g: GroupSummary) => g.rssKB + g.swapKB;
 
 const comparators: Record<SortKey, (a: GroupSummary, b: GroupSummary) => number> = {
   mem: (a, b) => mem(b) - mem(a),
+  swap: (a, b) => b.swapKB - a.swapKB || mem(b) - mem(a),
   cpu: (a, b) => b.cpuPercent - a.cpuPercent,
   age: (a, b) => b.oldestAgeSec - a.oldestAgeSec,
   name: (a, b) => a.label.localeCompare(b.label, 'fr'),
