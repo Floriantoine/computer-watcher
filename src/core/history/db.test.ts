@@ -312,6 +312,8 @@ const HOUR_COLS = SYSTEM_MINUTE_COLS;
 /** Base v3 ou v4 (schémas figés) remplie : 3 procs (1 et 3 partagent `node vite`), échantillons, minutes, heures, événements. */
 function makeOld(p: string, v: 3 | 4): void {
   const db = v === 3 ? createV3Db(p) : createV4Db(p);
+  // Une seule transaction : ~9 000 lignes en autocommit = un fsync chacune, > 5 s sur les disques de la CI.
+  db.exec('BEGIN');
   db.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'g','G','app'),(2,'h','H','project');
            INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id,ppid) VALUES
              (1,10,100,'node','node vite',1,1),(2,11,100,'bash','bash -l',1,10),(3,12,200,'node','node vite',2,NULL);`);
@@ -344,6 +346,7 @@ function makeOld(p: string, v: 3 | 4): void {
   db.exec(`INSERT INTO events(ts,type,group_id,detail) VALUES (${NOW - H},'pressure',NULL,'{"psi":30}'),(${NOW - 2 * H},'leak',1,'{}'),
              (${NOW - 3 * H},'earlyoom_kill',NULL,'{"pid":10,"name":"node"}'),
              (${NOW - 4 * H},'app_kill',NULL,'{"targets":[{"pid":12,"startTicks":200}]}')`);
+  db.exec('COMMIT');
   db.close();
 }
 
