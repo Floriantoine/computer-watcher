@@ -66,17 +66,23 @@ describe('updateMode', () => {
 
 describe('testFeedFromEnv', () => {
   const flag = ['electron', '.', '--update-feed-test'];
-  test('variable ET option --update-feed-test, adresse locale (boucle) en http(s), jamais dans une version empaquetée', () => {
-    expect(testFeedFromEnv({ PROC_WATCH_UPDATE_FEED: 'http://127.0.0.1:8123' }, false, flag)).toBe('http://127.0.0.1:8123/');
-    expect(testFeedFromEnv({ PROC_WATCH_UPDATE_FEED: 'http://localhost:8123/feed/' }, false, flag)).toBe('http://localhost:8123/feed/');
-    expect(testFeedFromEnv({ PROC_WATCH_UPDATE_FEED: 'http://127.0.0.1:8123' }, true, flag)).toBeNull();
-    expect(testFeedFromEnv({ PROC_WATCH_UPDATE_FEED: 'http://example.com/' }, false, flag)).toBeNull();
+  const T = 'a3f1c9e07b5d4c2e8f6a1b3c5d7e9f00a3f1c9e0';
+  test('variable ET option --update-feed-test, adresse locale (boucle) en http(s), jeton aléatoire en tête du chemin, jamais empaquetée', () => {
+    expect(testFeedFromEnv({ PROC_WATCH_UPDATE_FEED: `http://127.0.0.1:8123/${T}` }, false, flag)).toBe(`http://127.0.0.1:8123/${T}/`);
+    expect(testFeedFromEnv({ PROC_WATCH_UPDATE_FEED: `http://localhost:8123/${T}/feed/` }, false, flag)).toBe(`http://localhost:8123/${T}/feed/`);
+    expect(testFeedFromEnv({ PROC_WATCH_UPDATE_FEED: `http://127.0.0.1:8123/${T}` }, true, flag)).toBeNull();
+    expect(testFeedFromEnv({ PROC_WATCH_UPDATE_FEED: `http://example.com/${T}/` }, false, flag)).toBeNull();
     expect(testFeedFromEnv({ PROC_WATCH_UPDATE_FEED: 'file:///tmp/x' }, false, flag)).toBeNull();
     expect(testFeedFromEnv({ PROC_WATCH_UPDATE_FEED: 'pas une url' }, false, flag)).toBeNull();
     expect(testFeedFromEnv({}, false, flag)).toBeNull();
   });
+  test('R3 : sans jeton (ou jeton trop court) : refusé — un port local peut être pris par un autre utilisateur', () => {
+    expect(testFeedFromEnv({ PROC_WATCH_UPDATE_FEED: 'http://127.0.0.1:8123' }, false, flag)).toBeNull();
+    expect(testFeedFromEnv({ PROC_WATCH_UPDATE_FEED: 'http://127.0.0.1:8123/feed/' }, false, flag)).toBeNull();
+    expect(testFeedFromEnv({ PROC_WATCH_UPDATE_FEED: 'http://127.0.0.1:8123/abc123/' }, false, flag)).toBeNull();
+  });
   test('variable seule (héritée de la session) : ignorée', () => {
-    expect(testFeedFromEnv({ PROC_WATCH_UPDATE_FEED: 'http://127.0.0.1:8123' }, false, ['electron', '.'])).toBeNull();
+    expect(testFeedFromEnv({ PROC_WATCH_UPDATE_FEED: `http://127.0.0.1:8123/${T}` }, false, ['electron', '.'])).toBeNull();
   });
 });
 

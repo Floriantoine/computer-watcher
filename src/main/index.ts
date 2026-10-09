@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from 'electron';
 import appIcon from '../../resources/icon.png?asset';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFileSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { access, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { classifyGroups, type InstanceDecision } from '../core/classify/classify';
@@ -25,12 +26,22 @@ import { ACTIVE_CPU_PERCENT } from '../core/history/queries';
 import { swapTargets, swapView, SWAP_IDLE_MS, SWAP_LOOKBACK_MS, type SwapView } from '../core/swap';
 import { buildSnapshot, flattenGroup, groupProcs, instanceTargets, isWatch, othersFollowed, type Classification, type FullSnapshot } from '../core/snapshot';
 import type { ConfigState, Group, KillResult, ProcInfo, RecorderState, Watch } from '../core/types';
-import { createFreeOpener, wantsFree } from './launchArgs';
+import { createFreeOpener, hiddenPlacement, secondInstanceAction, startWindowShown, wantsFree } from './launchArgs';
+import {
+  appPaths, autostartState, installAppImage, launchTarget, rootsFrom, runUninstall, setAutostart, stopRecorderForUninstall,
+  uninstallPlan, uninstallSummary, verifyAndDeleteOriginal,
+} from './appInstall';
+import { realAppImage, testFeedTrust } from './realAppImage';
+import { hashNoFollow, writeFileSafe } from './safeFs';
+import {
+  DELETE_CONSENT_TTL_MS, isUninstallOptions, onboardingSteps, takeDeleteConsent, parseOnboardingFile, serializeOnboarding, shouldOpenOnboarding, startIndex,
+  type AboutInfo, type AutostartInfo, type OnboardingFile, type OnboardingInfo,
+} from '../core/onboarding';
 import { SNOOZE_MS } from '../core/forecast/forecast';
 import { writeSnooze } from '../core/forecast/snooze';
 import { createAlertOpener, createFocusWriter, initSeenUpTo, keepSeenUpTo, markSeen, unseenFilter } from './alerts';
 import { installDesktopEntry, refreshDesktopEntry } from './desktopEntry';
-import { installedElsewhere, ownAppImage } from './appImageTrust';
+import { installedAppImage, installedElsewhere } from './appImageTrust';
 import { acquireLock, blockingSleep } from './singleInstance';
 import { createAppImageBackend } from './appImageUpdate';
 import { createPrefsStore, createReleasesApiBackend, createUpdateController, type UpdateBackend } from './updater';
@@ -50,7 +61,7 @@ import { closeAction, confirmTray, createTrayController, defaultRun, statusNotif
 import {
   applyOverride, checkConfigSet, classifySetKey, swapSettingsChanged, isGroupKeys, noKill, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState as computeRecorderState,
 } from './historyIpc';
-import { autoManageService, defaultSystemctl, recorderSyncDisabled, ensureRecorderService, recorderExecArgs, systemctlAvailable, unitPath } from './recorderService';
+import { autoManageService, defaultSystemctl, recorderSyncDisabled, ensureRecorderService, recorderAppImage, recorderExecArgs, systemctlAvailable, unitPath } from './recorderService';
 
 // Service réseau dans le processus main : l'app ne charge que des fichiers locaux, un processus de moins (~20 Mo).
 app.commandLine.appendSwitch('enable-features', 'NetworkServiceInProcess2');
@@ -68,6 +79,8 @@ if (!primary) {
 }
 
 const dir = configDir();
+// Premier lancement : la config n'existe pas encore (loadConfig la crée) → assistant d'accueil.
+const freshConfig = !existsSync(join(dir, 'config.json'));
 const loaded = loadConfig(dir);
 let config = loaded.config;
 let warning = loaded.warning;
@@ -115,13 +128,19 @@ const freeOpener = createFreeOpener(() => {
 const history = createHistoryReader(data, () => config.recorder);
 let systemdOk = false;
 
+/** Désinstallation lancée : plus aucune synchronisation du service (il ne doit pas être recréé). */
+let uninstalling = false;
 /**
- * AppImage de ce processus, vérifiée (APPDIR contient le binaire en cours, APPIMAGE est un fichier hors de APPDIR) : un
- * APPIMAGE hérité d'une autre application (terminal d'un éditeur en AppImage) n'est jamais utilisé pour le service,
- * le raccourci du menu ni les mises à jour.
+ * AppImage de ce processus, vérifiée par realAppImage() — seule source de vérité (accueil, menu, service, mises à jour) :
+ * APPDIR est un montage FUSE, le binaire en cours est dessous, APPIMAGE est un fichier ordinaire à en-tête AppImage.
+ * Un APPIMAGE hérité d'une autre application, ou posé à la main, n'est jamais utilisé.
  */
-const ownImage = ownAppImage(process.env, process.execPath);
-const execArgs = () => recorderExecArgs({ appImage: ownImage ?? undefined, execPath: process.execPath, appPath: app.getAppPath() });
+// Flux de test des mises à jour (sources + --update-feed-test + flux local) : seul cas où APPDIR est tenu pour un montage.
+const updateFeed = testFeedFromEnv(process.env, app.isPackaged, process.argv);
+const ownImage = realAppImage(process.env, testFeedTrust(process.env, updateFeed, app.isPackaged));
+/** N1 : copie installée (~/Applications/proc-watch.AppImage) présente → le service pointe vers elle, jamais vers l'original. */
+const execArgs = () =>
+  recorderExecArgs({ appImage: recorderAppImage(ownImage, installedAppImage(homedir())) ?? undefined, execPath: process.execPath, appPath: app.getAppPath() });
 
 /**
  * `explicit` : action de l'utilisateur (réglage) ; sinon synchronisation au démarrage (création réservée à autoManageService).
@@ -129,7 +148,7 @@ const execArgs = () => recorderExecArgs({ appImage: ownImage ?? undefined, execP
  */
 async function doSync(explicit: boolean, restart = false): Promise<boolean> {
   systemdOk = await systemctlAvailable(defaultSystemctl);
-  if (!systemdOk || recorderSyncDisabled()) return false;
+  if (!systemdOk || recorderSyncDisabled() || uninstalling) return false;
   // Au démarrage en dev (non empaqueté, sans PROC_WATCH_RECORDER_DEV) : jamais de création d'unité, mais une unité
   // existante est tenue à jour (ou retirée si l'historique est désactivé), comme en mode empaqueté.
   const allowCreate = explicit || autoManageService(app.isPackaged);
@@ -322,10 +341,12 @@ function send(): void {
 
 const configState = (): ConfigState => ({ config, warning, invalid: protection.invalid, ...(ruleIssues.length ? { ruleIssues } : {}) });
 
-function createWindow(): void {
+/** `shown` faux (`--hidden`) : fenêtre créée cachée, collecte suspendue ; placée ensuite (barre des tâches ou réduite). */
+function createWindow(shown = true): void {
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
+    show: shown,
     title: 'proc-watch',
     icon: appIcon,
     backgroundColor: '#0b0c10',
@@ -350,7 +371,7 @@ function createWindow(): void {
     }
   };
   // Collecte en direct : arrêtée fenêtre réduite ou cachée, ralentie après une minute sans focus (voir pollPolicy).
-  const activity: WindowActivity = { hidden: false, blurredAt: null };
+  const activity: WindowActivity = { hidden: !shown, blurredAt: null };
   let timer: NodeJS.Timeout | null = null;
   let timerDelay: number | null = null;
   const schedule = () => {
@@ -719,6 +740,185 @@ ipcMain.handle('desktop:install', () => {
   return installDesktopEntry(ownImage ?? process.execPath, process.env, undefined, appIcon);
 });
 
+// ---------------------------------------------------------------- installation comme une app, accueil, désinstallation
+// Racines injectables (HOME, XDG_CONFIG_HOME, XDG_DATA_HOME) : une app de test aux dossiers temporaires ne touche rien d'autre.
+const roots = rootsFrom(process.env, homedir());
+const paths = appPaths(roots);
+/** AppImage réellement lancée (voir ownImage / realAppImage), sinon null. */
+const appImage = ownImage;
+const onboardingFile = join(dir, 'onboarding.json');
+const readOnboarding = (): OnboardingFile | null => {
+  try {
+    return parseOnboardingFile(readFileSync(onboardingFile, 'utf8'));
+  } catch {
+    return null;
+  }
+};
+const writeOnboarding = (f: OnboardingFile) => writeFileSafe([roots.configHome], onboardingFile, serializeOnboarding(f), 0o600);
+const onboardingAtLaunch = readOnboarding();
+let onboardingOpen = primary && shouldOpenOnboarding({ file: onboardingAtLaunch, freshConfig });
+const isFile = (p: string) => {
+  try {
+    return lstatSync(p).isFile();
+  } catch {
+    return false;
+  }
+};
+
+/** Confirmation native (« Annuler » par défaut). */
+async function confirmNative(o: { title: string; message: string; detail: string; confirm: string }): Promise<boolean> {
+  const opts: Electron.MessageBoxOptions = {
+    type: 'warning', title: o.title, message: o.message, detail: o.detail, buttons: ['Annuler', o.confirm], defaultId: 0, cancelId: 0, noLink: true,
+  };
+  const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+  const r = parent ? await dialog.showMessageBox(parent, opts) : await dialog.showMessageBox(opts);
+  return r.response === 1;
+}
+
+ipcMain.handle('onboarding:get', async (): Promise<OnboardingInfo> => {
+  const steps = onboardingSteps(appImage !== null);
+  const destReal = await realpath(paths.appImage).catch(() => null);
+  const srcReal = appImage ? await realpath(appImage).catch(() => null) : null;
+  return {
+    open: onboardingOpen,
+    steps,
+    start: startIndex(steps, onboardingAtLaunch?.resume),
+    appImage,
+    dest: paths.appImage,
+    installed: isFile(paths.appImage),
+    runningFromCopy: !!destReal && destReal === srcReal,
+    dataDir: data,
+    ...(originalDeletion ? { originalDeletion } : {}),
+  };
+});
+/** Terminé ou « Passer » : ne revient plus au lancement (rouvrable depuis Réglages › À propos). */
+ipcMain.handle('onboarding:finish', () => {
+  onboardingOpen = false;
+  writeOnboarding({ version: 1, done: true });
+});
+ipcMain.handle('onboarding:install', async () => {
+  if (!appImage) throw new Error('Pas une AppImage : rien à installer (paquet .deb ou version de développement)');
+  return installAppImage({ source: appImage, roots, iconPng: appIcon });
+});
+/**
+ * Relance depuis la copie installée, puis quitte. La copie est d'abord revérifiée (fichier ordinaire, exécutable, même
+ * SHA-256 que l'AppImage lancée). Avec `deleteOriginal` (case cochée) et après une confirmation native qui montre le
+ * chemin, le consentement (chemin + SHA-256) est passé à la copie relancée, qui supprime l'original elle-même après
+ * revérification : l'original n'est jamais supprimé avant que la copie ait démarré.
+ */
+ipcMain.handle('onboarding:relaunch', async (_e, del: unknown): Promise<{ relaunched: boolean }> => {
+  if (!appImage) throw new Error('Pas une AppImage : rien à relancer');
+  const [src, copy] = await Promise.all([hashNoFollow(appImage), hashNoFollow(paths.appImage).catch(() => null)]);
+  if (!copy) throw new Error(`Copie introuvable ou pas un fichier ordinaire : ${paths.appImage} (installer d'abord)`);
+  if (copy.sha256 !== src.sha256) throw new Error(`${paths.appImage} ne correspond pas à l’AppImage lancée : réinstaller`);
+  if (!(await access(paths.appImage, fsConstants.X_OK).then(() => true, () => false))) throw new Error(`${paths.appImage} n’est pas exécutable (dossier monté en noexec ?)`);
+  let consent: OnboardingFile['deleteOriginal'];
+  if (del === true) {
+    const ok = await confirmNative({
+      title: 'Supprimer le fichier téléchargé',
+      message: 'Supprimer le fichier téléchargé d’origine ?',
+      detail: `${appImage}\n\nIl sera supprimé par la copie relancée, seulement s’il n’a pas changé.\nLa copie installée reste : ${paths.appImage}`,
+      confirm: 'Relancer et supprimer',
+    });
+    if (!ok) return { relaunched: false };
+    // accord transmis par onboarding.json (0600, dossier ouvert sans suivre de lien), jamais par la ligne de commande
+    consent = { path: appImage, sha256: src.sha256, ino: src.ino, expires: Date.now() + DELETE_CONSENT_TTL_MS };
+  }
+  const steps = onboardingSteps(true);
+  writeOnboarding({ version: 1, done: false, resume: steps[steps.indexOf('install') + 1], ...(consent ? { deleteOriginal: consent } : {}) });
+  app.releaseSingleInstanceLock(); // la copie relancée prend le verrou
+  app.relaunch({ execPath: paths.appImage, args: [] });
+  quitting = true;
+  setTimeout(() => app.quit(), 50);
+  return { relaunched: true };
+});
+
+/**
+ * Accord reçu de l'instance précédente par onboarding.json : lu et effacé une seule fois (le fichier est réécrit sans lui
+ * avant toute suppression), refusé s'il a expiré ; traité seulement dans la copie installée. La ligne de commande
+ * (anciens --delete-original=…) est ignorée.
+ */
+let originalDeletion: { path: string; ok: boolean; message: string } | null = null;
+async function deletePendingOriginal(): Promise<void> {
+  const taken = takeDeleteConsent(readOnboarding(), Date.now());
+  if (!taken.consent && !taken.error) return;
+  const path = taken.consent?.path ?? readOnboarding()?.deleteOriginal?.path ?? '';
+  try {
+    writeOnboarding(taken.rest!); // usage unique : effacé avant d'agir
+  } catch (e) {
+    originalDeletion = { path, ok: false, message: `accord non effacé (${e instanceof Error ? e.message : String(e)}) : rien supprimé` };
+    return;
+  }
+  if (!taken.consent) {
+    originalDeletion = { path, ok: false, message: taken.error! };
+    return;
+  }
+  const c = taken.consent;
+  try {
+    const here = appImage ? await realpath(appImage).catch(() => null) : null;
+    const copy = await realpath(paths.appImage).catch(() => null);
+    if (!here || here !== copy) throw new Error('proc-watch ne tourne pas depuis la copie installée : rien supprimé');
+    await verifyAndDeleteOriginal({ path: c.path, sha256: c.sha256, ino: c.ino, copy: paths.appImage });
+    originalDeletion = { path: c.path, ok: true, message: '' };
+  } catch (e) {
+    originalDeletion = { path: c.path, ok: false, message: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+const autostartInfo = (): AutostartInfo => {
+  const s = autostartState(roots);
+  return { enabled: s.enabled, path: s.path, target: launchTarget({ roots, appImage: appImage ?? undefined, packaged: app.isPackaged, execPath: process.execPath }) };
+};
+ipcMain.handle('autostart:get', () => autostartInfo());
+ipcMain.handle('autostart:set', (_e, on: unknown) => {
+  if (typeof on !== 'boolean') throw new Error('Valeur invalide');
+  setAutostart(on, autostartInfo().target, roots);
+  return autostartInfo();
+});
+
+ipcMain.handle('about:info', (): AboutInfo => ({
+  version: app.getVersion(),
+  appImage,
+  installedCopy: isFile(paths.appImage) ? paths.appImage : null,
+  packaged: app.isPackaged,
+}));
+
+const isDeb = () => app.isPackaged && !appImage;
+ipcMain.handle('uninstall:plan', (_e, o: unknown) => {
+  if (!isUninstallOptions(o)) throw new Error('Requête invalide');
+  const plan = uninstallPlan(roots, o);
+  return { items: plan, ...uninstallSummary(plan, { deb: isDeb() }) };
+});
+/** Le main refait le plan (jamais de chemins venus du renderer), le montre dans une confirmation native, puis l'exécute. */
+ipcMain.handle('uninstall:run', async (_e, o: unknown) => {
+  if (!isUninstallOptions(o)) throw new Error('Requête invalide');
+  const plan = uninstallPlan(roots, o);
+  const s = uninstallSummary(plan, { deb: isDeb() });
+  if (!(await confirmNative({ title: 'Désinstaller proc-watch', message: s.message, detail: s.detail, confirm: 'Désinstaller' }))) return { cancelled: true as const };
+  uninstalling = true;
+  await syncing.catch(() => {}); // pas de synchronisation du service en cours
+  let stopped = false;
+  const result = await runUninstall(plan, roots, {
+    service: {
+      stop: async (unitPath) => {
+        // échoue fermé : erreur ou `keep` (PROC_WATCH_NO_RECORDER_SYNC) → unité et AppImage gardées
+        const r = await stopRecorderForUninstall({ unitPath, run: defaultSystemctl, disabled: recorderSyncDisabled() });
+        stopped = r.stopped;
+        return r;
+      },
+      reload: async () => {
+        if (stopped) await defaultSystemctl(['daemon-reload']);
+      },
+    },
+    beforeHistory: () => history.close(),
+  });
+  if (result.done) {
+    quitting = true;
+    setTimeout(() => app.quit(), 2500); // le renderer affiche le résultat, puis l'app quitte
+  }
+  return { cancelled: false as const, result };
+});
+
 ipcMain.handle('alerts:unseen', () => history.unseenAlerts(config.alerts.seenUpTo, unseenFilter(config)));
 ipcMain.handle('alerts:get', (_e, id: unknown) => (Number.isSafeInteger(id) && (id as number) > 0 ? history.alert(id as number) : null));
 const applySeen = (req: unknown): ConfigState => {
@@ -824,8 +1024,9 @@ ipcMain.handle('tray:available', async () => {
 app.on('second-instance', (_e, argv) => {
   // Pendant une installation de mise à jour, la nouvelle version peut démarrer avant que celle-ci ait fini de quitter.
   if (quitting) return;
-  if (wantsFree(argv)) openFree();
-  else showWindow();
+  const action = secondInstanceAction(argv);
+  if (action === 'free') openFree();
+  else if (action === 'show') showWindow();
   const id = alertIdFromArgv(argv);
   if (id !== null) alertOpener.open(id);
 });
@@ -833,7 +1034,6 @@ app.on('second-instance', (_e, argv) => {
 // Mises à jour : AppImage empaquetée → proposition puis installation sur demande ; .deb → notification seulement ;
 // sources → rien (sauf PROC_WATCH_UPDATE_FEED vers un flux de test local). Réglages dans updater.json.
 const updatePrefs = createPrefsStore(join(dir, 'updater.json'));
-const updateFeed = testFeedFromEnv(process.env, app.isPackaged, process.argv);
 // Copie installée (~/Applications/proc-watch.AppImage) présente mais pas lancée : l'original n'est pas mis à jour.
 const updMode = updateMode({ isPackaged: app.isPackaged, appImage: ownImage, testFeed: updateFeed, installedElsewhere: !!ownImage && installedElsewhere(ownImage, homedir()) });
 let updateBackend: Promise<UpdateBackend> | null = null;
@@ -922,11 +1122,14 @@ async function syncAfterUpdate(): Promise<void> {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   if (!primary) return;
-  createWindow();
+  // `--hidden` (démarrage avec la session) : fenêtre cachée, puis dans la barre des tâches si l'icône existe, sinon réduite.
+  const shown = startWindowShown(process.argv);
+  await deletePendingOriginal(); // avant la fenêtre : l'accueil repris montre le résultat
+  createWindow(shown);
   // Après une mise à jour de l'AppImage, le fichier a souvent un nouveau nom : l'unité du service (ExecStart) est réécrite
-  // par la synchronisation (AppImage vérifiée), et relancée même si elle est identique (nouveau code).
+  // par la synchronisation (copie installée, sinon AppImage vérifiée), et relancée même si elle est identique (nouveau code).
   void syncAfterUpdate();
   if (app.isPackaged && ownImage) {
     try {
@@ -935,7 +1138,13 @@ app.whenReady().then(() => {
       console.error('desktop entry:', e);
     }
   }
-  void syncTray();
+  const tray = syncTray();
   updater.start();
+  if (shown) return;
+  await tray;
+  if (mainWin && !mainWin.isDestroyed() && !mainWin.isVisible() && hiddenPlacement(trayCtl?.active() === true) === 'minimized') {
+    mainWin.showInactive();
+    mainWin.minimize();
+  }
 });
 app.on('window-all-closed', () => app.quit());

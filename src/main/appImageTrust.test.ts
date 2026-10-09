@@ -2,7 +2,10 @@ import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { hasControlChars, installedAppImage, installedElsewhere, ownAppImage } from './appImageTrust';
+import * as trust from './appImageTrust';
+import { hasControlChars, installedAppImage, installedElsewhere } from './appImageTrust';
+import { realAppImage } from './realAppImage';
+import { updateMode } from '../core/update';
 
 /** Faux montage d'AppImage : APPDIR/proc-watch (binaire), et le fichier AppImage à côté. */
 function layout() {
@@ -16,39 +19,23 @@ function layout() {
   return { root, appdir, exe, img };
 }
 
-describe('ownAppImage', () => {
-  test('APPDIR contient le binaire en cours, APPIMAGE est un fichier hors de APPDIR : accepté', () => {
-    const l = layout();
-    expect(ownAppImage({ APPIMAGE: l.img, APPDIR: l.appdir }, l.exe)).toBe(l.img);
+describe('mises à jour : une seule source de vérité, realAppImage()', () => {
+  test('ownAppImage n’existe plus (délégué à realAppImage)', () => {
+    expect('ownAppImage' in trust).toBe(false);
   });
-  test('environnement hérité d’une autre AppImage (.deb lancé depuis son terminal) : refusé', () => {
+  test('faux APPDIR (dossier ordinaire qui contient le binaire) + faux APPIMAGE : refusé, l’updater ne passe jamais en mode « install »', () => {
     const l = layout();
-    const other = join(l.root, 'Editeur-1.2.3.AppImage');
-    writeFileSync(other, 'x');
-    const otherMount = join(l.root, '.mount_Editeur');
-    mkdirSync(otherMount);
-    expect(ownAppImage({ APPIMAGE: other, APPDIR: otherMount }, '/opt/proc-watch/proc-watch')).toBeNull();
-    // APPIMAGE seul (sans APPDIR) : refusé
-    expect(ownAppImage({ APPIMAGE: l.img }, l.exe)).toBeNull();
+    // ce montage factice était accepté par l'ancien ownAppImage ; APPDIR n'est pas un montage FUSE
+    const img = realAppImage({ APPIMAGE: l.img, APPDIR: l.appdir });
+    expect(img).toBeNull();
+    expect(updateMode({ isPackaged: true, appImage: img, testFeed: null, installedElsewhere: false })).toBe('notify');
   });
-  test('APPIMAGE absent, dossier, dans APPDIR ou chemin relatif : refusé', () => {
+  test('faux APPDIR déclaré FUSE mais APPIMAGE sans en-tête AppImage : refusé aussi', () => {
     const l = layout();
-    expect(ownAppImage({ APPIMAGE: join(l.root, 'absent.AppImage'), APPDIR: l.appdir }, l.exe)).toBeNull();
-    expect(ownAppImage({ APPIMAGE: l.root, APPDIR: l.appdir }, l.exe)).toBeNull();
-    expect(ownAppImage({ APPIMAGE: l.exe, APPDIR: l.appdir }, l.exe)).toBeNull();
-    expect(ownAppImage({ APPIMAGE: 'proc-watch.AppImage', APPDIR: l.appdir }, l.exe)).toBeNull();
+    const deps = { mountinfo: `1 2 0:9 / ${l.appdir} ro - fuse.proc-watch x ro`, realpath: (p: string) => (p === '/proc/self/exe' ? l.exe : p) };
+    expect(realAppImage({ APPIMAGE: l.img, APPDIR: l.appdir }, deps)).toBeNull();
   });
-  test('lien symbolique vers un fichier dans APPDIR : refusé (chemin réel)', () => {
-    const l = layout();
-    const link = join(l.root, 'lien.AppImage');
-    symlinkSync(l.exe, link);
-    expect(ownAppImage({ APPIMAGE: link, APPDIR: l.appdir }, l.exe)).toBeNull();
-  });
-  test('caractères de contrôle dans le chemin : refusé', () => {
-    const l = layout();
-    const bad = join(l.root, 'proc-watch\nExecStartPre=x.AppImage');
-    writeFileSync(bad, 'x');
-    expect(ownAppImage({ APPIMAGE: bad, APPDIR: l.appdir }, l.exe)).toBeNull();
+  test('caractères de contrôle', () => {
     expect(hasControlChars('a\x7fb')).toBe(true);
     expect(hasControlChars('/home/u/Applications/proc-watch.AppImage')).toBe(false);
   });

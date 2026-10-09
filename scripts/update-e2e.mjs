@@ -9,7 +9,8 @@
 //   E. APPIMAGE/APPDIR hérités d'une autre application : jamais le mode installation (notification seulement).
 //   F. copie installée (~/Applications/proc-watch.AppImage) présente, autre AppImage lancée : « lancez proc-watch depuis le menu ».
 //   G. variable PROC_WATCH_UPDATE_FEED sans l'option --update-feed-test : ignorée.
-// « AppImage » factice : APPDIR = dossier du binaire electron en cours, APPIMAGE = petit fichier ordinaire hors de APPDIR.
+// « AppImage » factice : APPDIR = dossier du binaire electron en cours (tenu pour un montage seulement avec
+// --update-feed-test, voir testFeedTrust), APPIMAGE = petit fichier ordinaire à en-tête AppImage, hors de APPDIR.
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -39,8 +40,12 @@ const yml = () =>
 const releases = JSON.stringify([
   { tag_name: 'v9.9.9', html_url: 'https://github.com/Floriantoine/proc-watcher/releases/tag/v9.9.9', body: 'Notes de test (API).', draft: false, prerelease: false },
 ]);
+/** Jeton aléatoire exigé en tête du chemin du flux de test (testFeedFromEnv). */
+const TOKEN = randomBytes(24).toString('hex');
 const server = createServer((req, res) => {
-  const path = new URL(req.url, 'http://x').pathname; // electron-updater ajoute ?noCache=…
+  const full = new URL(req.url, 'http://x').pathname; // electron-updater ajoute ?noCache=…
+  if (!full.startsWith(`/${TOKEN}/`)) return void res.writeHead(404).end();
+  const path = full.slice(TOKEN.length + 1);
   hits.push(path);
   if (path === '/latest-linux.yml') res.writeHead(200, { 'content-type': 'text/yaml' }).end(yml());
   else if (path === `/${FILE}`) res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': payload.length }).end(payload);
@@ -48,7 +53,7 @@ const server = createServer((req, res) => {
   else res.writeHead(404).end();
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
-const feed = `http://127.0.0.1:${server.address().port}/`;
+const feed = `http://127.0.0.1:${server.address().port}/${TOKEN}/`;
 
 mkdirSync(join(homedir(), '.cache'), { recursive: true });
 const root = mkdtempSync(join(homedir(), '.cache', 'pw-update-e2e-'));
@@ -69,7 +74,8 @@ async function launch(name, extra, o = {}) {
   Object.assign(env, extra);
   if (o.appImage) {
     const img = join(dir, 'proc-watch-0.1.0-x86_64.AppImage');
-    writeFileSync(img, 'factice : jamais exécuté');
+    // en-tête d'AppImage (ELF + « AI\x02 » à l'octet 8) exigé par realAppImage ; jamais exécuté
+    writeFileSync(img, Buffer.concat([Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0, 0x41, 0x49, 0x02]), Buffer.from(' factice : jamais exécuté')]));
     Object.assign(env, { APPIMAGE: img, APPDIR: electronDir });
   }
   const app = await electron.launch({ args: o.flag === false ? ['.'] : ['.', '--update-feed-test'], env });

@@ -1,8 +1,8 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { expect, test } from 'vitest';
-import { autoManageService, recorderSyncDisabled, ensureRecorderService, recorderExecArgs, recorderUnit, systemdQuote, unitPath, type Systemctl } from './recorderService';
+import { describe, expect, test } from 'vitest';
+import { autoManageService, recorderSyncDisabled, ensureRecorderService, recorderAppImage, recorderExecArgs, recorderUnit, systemdQuote, unitPath, type Systemctl } from './recorderService';
 
 test('systemdQuote échappe \\ " $ % et entoure de guillemets', () => {
   expect(systemdQuote('/opt/My App/p%w$x"y\\z')).toBe('"/opt/My App/p%%w$$x\\"y\\\\z"');
@@ -135,4 +135,47 @@ test('caractère de contrôle dans un argument (chemin d’AppImage) : refusé, 
   await expect(ensureRecorderService({ enabled: true, args: ['/home/u/a\rb'], path, run: f.run })).rejects.toThrow();
   expect(existsSync(path)).toBe(false);
   expect(f.calls).toEqual([]);
+});
+
+describe('N1 : le service pointe vers la copie installée quand elle existe', () => {
+  const copy = '/home/u/Applications/proc-watch.AppImage';
+  const dl = '/home/u/Téléchargements/proc-watch-1.0.0-x86_64.AppImage';
+  test('lancée depuis l’original téléchargé, copie présente → la copie, jamais l’original', () => {
+    expect(recorderAppImage(dl, copy, (p) => p === copy)).toBe(copy);
+    const args = recorderExecArgs({ appImage: recorderAppImage(dl, copy, (p) => p === copy) ?? undefined, execPath: '/x', appPath: '/y' });
+    expect(args[0]).toBe(copy);
+    expect(recorderUnit(args)).toContain(`ExecStart="${copy}"`);
+    expect(recorderUnit(args)).not.toContain(dl);
+  });
+  test('lancée depuis la copie → la copie', () => {
+    expect(recorderAppImage(copy, copy, () => true)).toBe(copy);
+  });
+  test('pas de copie → l’AppImage lancée ; pas une AppImage (.deb, dev) → null (binaire lancé)', () => {
+    expect(recorderAppImage(dl, copy, () => false)).toBe(dl);
+    expect(recorderAppImage(null, copy, () => true)).toBeNull();
+  });
+  test('resynchro au démarrage depuis l’original : l’unité qui vise la copie n’est jamais réécrite vers l’original', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pw-n1-'));
+    const path = join(dir, 'proc-watch-recorder.service');
+    const run: Systemctl = async () => ({ ok: true, stdout: '' });
+    const args = () => recorderExecArgs({ appImage: recorderAppImage(dl, copy, (p) => p === copy) ?? undefined, execPath: '/x', appPath: '/y' });
+    expect(await ensureRecorderService({ enabled: true, args: args(), path, run })).toBe('installed');
+    expect(await ensureRecorderService({ enabled: true, args: args(), path, run })).toBe('unchanged');
+    expect(readFileSync(path, 'utf8')).toContain(copy);
+    expect(readFileSync(path, 'utf8')).not.toContain(dl);
+  });
+});
+
+describe('R2 : copie installée inutilisable → l’AppImage lancée', () => {
+  test('fichier vide laissé par une mise à jour ratée, ou sans en-tête AppImage : jamais choisi', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pw-r2-'));
+    const copy = join(dir, 'proc-watch.AppImage');
+    const own = '/home/u/dl/proc-watch-1.0.0-x86_64.AppImage';
+    writeFileSync(copy, '');
+    expect(recorderAppImage(own, copy)).toBe(own);
+    writeFileSync(copy, 'texte');
+    expect(recorderAppImage(own, copy)).toBe(own);
+    writeFileSync(copy, Buffer.concat([Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0, 0x41, 0x49, 0x02]), Buffer.from('ok')]));
+    expect(recorderAppImage(own, copy)).toBe(copy);
+  });
 });

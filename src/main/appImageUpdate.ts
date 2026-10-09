@@ -9,8 +9,18 @@ export interface AppImageBackendOptions {
   testFeed: string | null;
   /** Mode test (non empaqueté) : fichier de config d'electron-updater écrit ici (nom du dossier de cache). */
   testConfigPath: string;
-  /** AppImage vérifiée de ce processus (ownAppImage), remplacée par electron-updater. */
+  /** AppImage vérifiée de ce processus (realAppImage), remplacée par electron-updater. */
   appImage: string;
+}
+
+/**
+ * Fichier qu'electron-updater va remplacer : il lit process.env.APPIMAGE (posé par le runtime AppImage : la copie installée
+ * quand l'app tourne depuis elle) et, le nom « proc-watch.AppImage » n'ayant pas de version, l'écrase sur place. On exige
+ * que ce soit exactement l'AppImage vérifiée par realAppImage() ; sinon (variable modifiée depuis) : refusé.
+ */
+export function installTarget(env: NodeJS.ProcessEnv, verified: string): string {
+  if (env.APPIMAGE !== verified) throw new Error(`Installation refusée : APPIMAGE (${env.APPIMAGE ?? 'absent'}) n’est pas l’AppImage vérifiée (${verified})`);
+  return verified;
 }
 
 export async function createAppImageBackend(o: AppImageBackendOptions): Promise<UpdateBackend> {
@@ -60,6 +70,7 @@ export async function createAppImageBackend(o: AppImageBackendOptions): Promise<
       // est synchrone : un échec (dossier en lecture seule…) est signalé par l'événement `error`, renvoyé ici en exception.
       // electron-updater supprime l'ancienne AppImage avant de déplacer la nouvelle : après un premier échec, elle peut
       // manquer et sa suppression échouerait à nouveau. Un fichier vide à sa place permet de réessayer le même chemin.
+      installTarget(process.env, o.appImage);
       const file = pendingFile();
       if (file && !existsSync(o.appImage)) {
         try {

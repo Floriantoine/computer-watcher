@@ -28,6 +28,7 @@ import { pollWhileLive } from '../history';
 import { EarlyoomPanel, type EarlyoomAttention } from './EarlyoomPanel';
 import { RulesPanel } from './RulesPanel';
 import { SettingsConfirm } from './SettingsConfirm';
+import { AboutSetup, AutostartRow } from './AppSetup';
 import { AboutPanel } from './UpdatePopup';
 import { Card, NumberField, Row, SaveBar, Switch } from './settingsUi';
 import { recorderToForm, validateRecorderForm, type RecorderErrors, type RecorderForm } from '../recorderForm';
@@ -52,6 +53,8 @@ interface Props {
   onToast: (message: string, kind?: 'error' | 'info') => void;
   /** La config a été modifiée côté main (interrupteur) : le parent la recharge. */
   onConfigChanged: () => void;
+  /** Réglages › À propos › « Relancer l'accueil ». */
+  onReopenOnboarding: () => void;
   /** Lien profond : section demandée par la route (nouvel objet à chaque navigation). */
   request?: { section?: SettingsSection };
 }
@@ -105,7 +108,7 @@ const REC_GROUPS: { title: string; icon: LucideIcon; help?: string; fields: RecF
 
 const CALM: FormState = { dirty: false, invalid: false };
 
-export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast, onConfigChanged, request }: Props) {
+export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast, onConfigChanged, onReopenOnboarding, request }: Props) {
   const { config, warning, invalid } = state;
   const [section, setSection] = useState<SettingsSection>(() => initialSection(request?.section, readStoredSection()));
   const select = useCallback((s: SettingsSection) => {
@@ -456,6 +459,7 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
                   </span>
                 )}
               </Row>
+              <AutostartRow onToast={onToast} />
               <p className="hint s-auto">Enregistré dès le changement.</p>
             </Card>,
           )}
@@ -615,7 +619,14 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
             </Card>,
           )}
 
-          {panel('about', 'about-panel', <AboutPanel onToast={onToast} />)}
+          {panel(
+            'about',
+            'about-panel',
+            <>
+              <AboutPanel onToast={onToast} />
+              <AboutSetup onToast={onToast} onReopenOnboarding={onReopenOnboarding} />
+            </>,
+          )}
         </div>
       </div>
     </>

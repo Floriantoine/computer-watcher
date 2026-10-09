@@ -161,8 +161,10 @@ async function startKwin(n) {
 async function launch(spec, kwin) {
   const [dir, variant] = spec.split(':');
   const cfg = mkdtempSync(join(tmpdir(), 'pw-measure-'));
+  // Accueil déjà fait : pas d'assistant (fond flouté) par-dessus la page mesurée.
+  mkdirSync(join(cfg, 'proc-watch'), { recursive: true });
+  writeFileSync(join(cfg, 'proc-watch', 'onboarding.json'), '{"version":1,"done":true}\n');
   if (variant === 'reduced' || variant === 'pss') {
-    mkdirSync(join(cfg, 'proc-watch'));
     const ui = variant === 'pss' ? { reducedEffects: false, memoryMetric: 'pss' } : { reducedEffects: true };
     const config = { version: 1, protected: [], othersThreshold: { memMB: 100, cpuPercent: 1 }, ui };
     writeFileSync(join(cfg, 'proc-watch', 'config.json'), JSON.stringify(config));

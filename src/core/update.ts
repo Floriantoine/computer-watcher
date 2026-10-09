@@ -1,7 +1,7 @@
 // Mises à jour (logique pure) : mode selon le format d'installation, comparaison de versions, machine à états du pop-up.
 
 /**
- * `install` : AppImage de ce processus (voir ownAppImage), téléchargement (sha512 vérifié par electron-updater) puis
+ * `install` : AppImage de ce processus (voir realAppImage), téléchargement (sha512 vérifié par electron-updater) puis
  * installation au redémarrage ;
  * `relaunch` : AppImage lancée hors de la copie installée (~/Applications/proc-watch.AppImage) : on ne met pas à jour
  * l'original téléchargé, on invite à lancer proc-watch depuis le menu ;
@@ -18,7 +18,7 @@ export const CHECK_EVERY_MS = 6 * 3600_000;
 /** « Plus tard » : pop-up caché pendant 24 h (en mémoire : revient au prochain lancement). */
 export const LATER_MS = 24 * 3600_000;
 
-/** `appImage` : AppImage vérifiée de ce processus (ownAppImage), jamais la variable APPIMAGE brute. */
+/** `appImage` : AppImage vérifiée de ce processus (realAppImage), jamais la variable APPIMAGE brute. */
 export function updateMode(p: { isPackaged: boolean; appImage: string | null; testFeed: string | null; installedElsewhere: boolean }): UpdateMode {
   if (!p.isPackaged && !p.testFeed) return 'off';
   if (!p.appImage) return 'notify';
@@ -44,6 +44,8 @@ export function testFeedFromEnv(env: NodeJS.ProcessEnv, isPackaged: boolean, arg
     return null;
   }
   if ((u.protocol !== 'http:' && u.protocol !== 'https:') || !LOOPBACK.has(u.hostname)) return null;
+  // jeton aléatoire (≥ 32 caractères) en tête du chemin : un autre utilisateur local qui prendrait le port ne le connaît pas
+  if (!/^\/[A-Za-z0-9_-]{32,}(\/|$)/.test(u.pathname)) return null;
   if (!u.pathname.endsWith('/')) u.pathname += '/';
   return u.toString();
 }

@@ -71,6 +71,7 @@ describe('sectionByKey', () => {
   test('flèches bas / droite : suivante, avec retour au début', () => {
     expect(sectionByKey('protected', 'ArrowDown')).toBe('others');
     expect(sectionByKey('protected', 'ArrowRight')).toBe('others');
+    expect(sectionByKey('desktop', 'ArrowDown')).toBe('about');
     expect(sectionByKey('about', 'ArrowDown')).toBe('protected');
   });
   test('flèches haut / gauche : précédente, avec retour à la fin', () => {
