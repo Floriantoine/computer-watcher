@@ -7,9 +7,18 @@ export interface ResultText { tone: Tone; lines: string[] }
 export function installResult(r: InstallOutcome): ResultText {
   const head = r.status === 'already' ? `Déjà installée : ${r.dest}` : r.status === 'updated' ? `Copie remplacée : ${r.dest}` : `Copiée dans ${r.dest}`;
   return {
-    tone: 'ok',
-    lines: [head, `Entrée de menu : ${r.desktopFile}`, ...(r.autostartUpdated ? ['Démarrage avec la session : repointé vers la copie'] : [])],
+    tone: r.warnings.length ? 'warn' : 'ok',
+    lines: [
+      head,
+      ...(r.desktopFile ? [`Entrée de menu : ${r.desktopFile}`] : []),
+      ...(r.autostartUpdated ? ['Démarrage avec la session : repointé vers la copie'] : []),
+      ...r.warnings,
+    ],
   };
+}
+
+export function originalDeletionResult(d: { path: string; ok: boolean; message: string }): ResultText {
+  return d.ok ? { tone: 'ok', lines: [`Fichier téléchargé supprimé : ${d.path}`] } : { tone: 'error', lines: [`Fichier téléchargé non supprimé : ${d.path} — ${d.message}`] };
 }
 
 export function autostartResult(a: AutostartInfo): ResultText {

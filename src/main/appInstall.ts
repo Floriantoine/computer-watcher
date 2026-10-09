@@ -1,11 +1,12 @@
 // Installation comme une app (AppImage → ~/Applications), démarrage avec la session, désinstallation propre.
 // Toutes les racines (HOME, XDG_CONFIG_HOME, XDG_DATA_HOME) sont injectées : les tests ne touchent jamais les vrais dossiers.
-import { createHash } from 'node:crypto';
-import { createReadStream, lstatSync, readdirSync, readFileSync, realpathSync, rmdirSync, unlinkSync } from 'node:fs';
-import { chmod, lstat, realpath, stat, unlink } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, sep } from 'node:path';
-import { copyFileAtomicAsync, writeFileAtomic } from './atomicFile';
+import { closeSync, constants as C, lstatSync, realpathSync } from 'node:fs';
+import { access, lstat, realpath, unlink } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join } from 'node:path';
 import { desktopEntryContent, installDesktopEntry, isManagedEntry } from './desktopEntry';
+import {
+  chmodSafe, copyFileSafe, fdPath, hashNoFollow, listDirSafe, openParent, readFileSafe, removeDirIfEmptySafe, removeFileSafe, writeFileSafe,
+} from './safeFs';
 import type { InstallOutcome, UninstallItem, UninstallKind, UninstallOptions, UninstallResult } from '../core/onboarding';
 import { UNIT_NAME, type Systemctl } from './recorderService';
 
@@ -29,94 +30,137 @@ export function appPaths(r: Roots) {
   };
 }
 
-/**
- * AppImage réellement lancée : APPIMAGE (absolu, fichier) ET APPDIR, avec le binaire en cours (realpath) dans APPDIR
- * (realpath). APPIMAGE seul (variable héritée, posée à la main) ne suffit jamais.
- */
-export function appImageSource(env: NodeJS.ProcessEnv, execPath: string): string | null {
-  const img = env.APPIMAGE;
-  const dir = env.APPDIR;
-  if (!img || !dir || !isAbsolute(img) || !isAbsolute(dir)) return null;
+/** Racines sous lesquelles proc-watch écrit (chaque dossier en dessous est ouvert sans suivre de lien). */
+export const rootList = (r: Roots) => [r.home, r.configHome, r.dataHome];
+
+const code = (e: unknown) => (e as NodeJS.ErrnoException)?.code;
+const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+const realOrNull = async (p: string) => realpath(p).catch(() => null);
+
+/** Entrée .desktop écrite par proc-watch (X-ProcWatch-Managed=1), lue sans suivre de lien. */
+function managedEntry(r: Roots, path: string): boolean {
+  const t = readFileSafe(rootList(r), path);
+  return t !== null && isManagedEntry(t);
+}
+
+/** Le chemin existe-t-il (lien symbolique compris, jamais suivi) ? */
+function present(p: string): boolean {
   try {
-    if (!lstatSync(img).isFile() && !lstatSync(img).isSymbolicLink()) return null;
-    const root = realpathSync(dir);
-    const exe = realpathSync(execPath);
-    return exe.startsWith(root.endsWith(sep) ? root : root + sep) ? img : null;
+    lstatSync(p);
+    return true;
   } catch {
-    return null;
+    return false;
   }
 }
 
-const code = (e: unknown) => (e as NodeJS.ErrnoException)?.code;
-const errText = (e: unknown) => (code(e) ? `${code(e)}` : e instanceof Error ? e.message : String(e));
-
-async function fileHash(p: string): Promise<string> {
-  const h = createHash('sha256');
-  for await (const chunk of createReadStream(p)) h.update(chunk as Buffer);
-  return h.digest('hex');
-}
-
-/** Même contenu (taille puis SHA-256, lu en flux). */
-export async function sameContent(a: string, b: string): Promise<boolean> {
-  const [sa, sb] = await Promise.all([stat(a), stat(b)]);
-  if (sa.size !== sb.size) return false;
-  const [ha, hb] = await Promise.all([fileHash(a), fileHash(b)]);
-  return ha === hb;
-}
-
-const realOrNull = async (p: string) => realpath(p).catch(() => null);
+const foreign = (path: string) => `${path} n’a pas été créé par proc-watch (sans X-ProcWatch-Managed=1) : laissé en place`;
 
 // ---------------------------------------------------------------- installation
 
-
-/**
- * Copie `source` (l'AppImage lancée) dans ~/Applications/proc-watch.AppImage (0755, écriture atomique : temporaire, fsync,
- * rename), puis écrit l'entrée de menu (et l'icône) vers la copie. Idempotent : copie identique ou lancement depuis la copie
- * → rien n'est recopié. L'original n'est jamais touché ici.
- */
-export async function installAppImage(o: { source: string; roots: Roots; iconPng?: string }): Promise<InstallOutcome> {
-  const dest = appPaths(o.roots).appImage;
-  if (!isAbsolute(o.source)) throw new Error(`AppImage introuvable : ${o.source}`);
-  const st = await stat(o.source).catch(() => null);
-  if (!st?.isFile()) throw new Error(`AppImage introuvable : ${o.source}`);
-  const srcReal = await realpath(o.source);
-  const destReal = await realOrNull(dest);
-  const runningFromCopy = destReal === srcReal;
-  let status: InstallOutcome['status'];
-  if (runningFromCopy) status = 'already';
-  else {
-    const existing = await lstat(dest).catch(() => null);
-    if (existing?.isFile() && (await sameContent(o.source, dest))) {
-      status = 'already';
-      if ((existing.mode & 0o777) !== 0o755) await chmod(dest, 0o755);
-    } else {
-      await copyFileAtomicAsync(o.source, dest, 0o755);
-      status = existing ? 'updated' : 'installed';
-    }
+/** SHA-256 de la copie installée (dossiers ouverts sans suivre de lien), ou null si absente / pas un fichier ordinaire. */
+async function destInfo(r: Roots): Promise<{ sha256: string } | null> {
+  let parent;
+  try {
+    parent = openParent(rootList(r), appPaths(r).appImage, false);
+  } catch {
+    return null;
   }
-  const desktopFile = installDesktopEntry(dest, { XDG_DATA_HOME: o.roots.dataHome }, o.roots.home, o.iconPng);
-  let autostartUpdated = false;
-  if (autostartState(o.roots).enabled) {
-    setAutostart(true, dest, o.roots);
-    autostartUpdated = true;
+  if (!parent) return null;
+  try {
+    return await hashNoFollow(fdPath(parent.fd, parent.name));
+  } catch {
+    return null;
+  } finally {
+    closeSync(parent.fd);
   }
-  return { status, dest, desktopFile, source: o.source, runningFromCopy, canDeleteSource: !runningFromCopy, autostartUpdated };
 }
 
 /**
- * Supprime le fichier téléchargé, après accord explicite : exactement `source` (jamais un lien symbolique), distinct de la
- * copie, et seulement si la copie installée a le même contenu.
+ * Copie `source` (l'AppImage lancée, déjà vérifiée par realAppImage) dans ~/Applications/proc-watch.AppImage (0755) :
+ * dossiers ouverts sans suivre de lien, temporaire exclusif, fchmod, fsync, rename ; la copie relue a le même SHA-256.
+ * Idempotent (lancée depuis la copie, ou copie identique). Entrée de menu vers la copie, et démarrage automatique repointé,
+ * seulement s'ils sont absents ou écrits par proc-watch ; sinon laissés et signalés (`warnings`). L'original n'est jamais touché ici.
  */
-export async function deleteOriginal(o: { source: string; dest: string }): Promise<void> {
-  const [srcReal, destReal] = await Promise.all([realOrNull(o.source), realOrNull(o.dest)]);
-  if (!srcReal) throw new Error(`Fichier introuvable : ${o.source}`);
-  if (srcReal === destReal) throw new Error('C’est la copie installée : non supprimée');
-  const l = await lstat(o.source);
-  if (l.isSymbolicLink()) throw new Error(`${o.source} est un lien symbolique : non supprimé`);
-  if (!l.isFile()) throw new Error(`${o.source} n’est pas un fichier ordinaire : non supprimé`);
-  const d = await lstat(o.dest).catch(() => null);
-  if (!d?.isFile() || !(await sameContent(o.source, o.dest))) throw new Error('La copie installée ne correspond pas au fichier téléchargé : rien supprimé');
-  await unlink(o.source);
+export async function installAppImage(o: { source: string; roots: Roots; iconPng?: string }): Promise<InstallOutcome> {
+  const roots = rootList(o.roots);
+  const dest = appPaths(o.roots).appImage;
+  if (!isAbsolute(o.source)) throw new Error(`AppImage introuvable : ${o.source}`);
+  let src;
+  try {
+    src = await hashNoFollow(o.source);
+  } catch {
+    throw new Error(`AppImage introuvable : ${o.source}`);
+  }
+  const srcReal = await realpath(o.source);
+  const runningFromCopy = (await realOrNull(dest)) === srcReal;
+  let status: InstallOutcome['status'];
+  const existing = await destInfo(o.roots);
+  if (runningFromCopy || existing?.sha256 === src.sha256) {
+    status = 'already';
+    chmodSafe(roots, dest, 0o755); // fchmod sur un fd O_NOFOLLOW
+  } else {
+    const copied = await copyFileSafe(roots, o.source, dest, 0o755);
+    if (copied.sha256 !== src.sha256) throw new Error('La copie ne correspond pas à l’AppImage lancée (modifiée pendant la copie ?)');
+    status = present(dest) && existing ? 'updated' : 'installed';
+  }
+  const executable = await access(dest, C.X_OK).then(() => true, () => false);
+  const warnings: string[] = [];
+  if (!executable) warnings.push(`${dest} n’est pas exécutable (dossier monté en noexec ?) : relance impossible depuis la copie`);
+  let desktopFile: string | null = null;
+  try {
+    desktopFile = installDesktopEntry(dest, { XDG_DATA_HOME: o.roots.dataHome }, o.roots.home, o.iconPng);
+  } catch (e) {
+    warnings.push(`Entrée de menu : ${msg(e)}`);
+  }
+  let autostartUpdated = false;
+  const auto = appPaths(o.roots).autostart;
+  if (present(auto)) {
+    try {
+      setAutostart(true, dest, o.roots);
+      autostartUpdated = true;
+    } catch (e) {
+      warnings.push(`Démarrage avec la session : ${msg(e)}`);
+    }
+  }
+  return { status, dest, desktopFile, source: o.source, runningFromCopy, canDeleteSource: !runningFromCopy, autostartUpdated, sha256: src.sha256, executable, warnings };
+}
+
+// ---------------------------------------------------------------- suppression du fichier téléchargé (après relance)
+
+const DEL = '--delete-original=';
+const DEL_SHA = '--delete-original-sha256=';
+
+/** Consentement transmis à la copie relancée : chemin exact et SHA-256 du fichier téléchargé. */
+export const deleteOriginalArgs = (o: { path: string; sha256: string }) => [`${DEL}${o.path}`, `${DEL_SHA}${o.sha256}`];
+
+export function parseDeleteOriginalArgs(argv: readonly string[]): { path: string; sha256: string } | null {
+  const path = argv.find((a) => a.startsWith(DEL))?.slice(DEL.length);
+  const sha256 = argv.find((a) => a.startsWith(DEL_SHA))?.slice(DEL_SHA.length);
+  if (!path || !sha256 || !isAbsolute(path) || !/^[0-9a-f]{64}$/.test(sha256)) return null;
+  return { path, sha256 };
+}
+
+/**
+ * Dans la copie relancée (le main vérifie d'abord realAppImage() === la copie) : supprime exactement `path` s'il est
+ * toujours un fichier ordinaire (jamais un lien), distinct de la copie, au même SHA-256 que lors du consentement, et
+ * toujours le même inode juste avant l'unlink.
+ */
+export async function verifyAndDeleteOriginal(o: { path: string; sha256: string; copy: string }): Promise<void> {
+  if (!isAbsolute(o.path)) throw new Error(`Chemin refusé : ${o.path}`);
+  let l;
+  try {
+    l = await lstat(o.path);
+  } catch {
+    throw new Error(`Fichier introuvable : ${o.path}`);
+  }
+  if (l.isSymbolicLink()) throw new Error(`${o.path} est un lien symbolique : non supprimé`);
+  if (!l.isFile()) throw new Error(`${o.path} n’est pas un fichier ordinaire : non supprimé`);
+  const [a, b] = await Promise.all([realOrNull(o.path), realOrNull(o.copy)]);
+  if (a === b) throw new Error('C’est la copie installée : non supprimée');
+  const h = await hashNoFollow(o.path);
+  if (h.sha256 !== o.sha256) throw new Error(`${o.path} a changé depuis l’accord (empreinte différente) : non supprimé`);
+  if ((await lstat(o.path)).ino !== h.ino) throw new Error(`${o.path} a été remplacé : non supprimé`);
+  await unlink(o.path);
 }
 
 // ---------------------------------------------------------------- démarrage avec la session
@@ -140,57 +184,30 @@ export function launchTarget(o: { roots: Roots; appImage?: string; packaged: boo
 
 export function autostartState(r: Roots): { enabled: boolean; path: string } {
   const path = appPaths(r).autostart;
-  try {
-    lstatSync(path);
-    return { enabled: true, path };
-  } catch {
-    return { enabled: false, path };
-  }
+  return { enabled: present(path), path };
 }
 
-/** Retire un fichier de proc-watch : dernier élément jamais suivi (lien symbolique refusé), absent → false. */
-function removeOwnFile(path: string): boolean {
-  let parent: string;
-  try {
-    parent = realpathSync(dirname(path));
-  } catch (e) {
-    if (code(e) === 'ENOENT') return false;
-    throw e;
-  }
-  const target = join(parent, basename(path));
-  let st;
-  try {
-    st = lstatSync(target);
-  } catch (e) {
-    if (code(e) === 'ENOENT') return false;
-    throw e;
-  }
-  if (st.isSymbolicLink()) throw new Error(`${path} est un lien symbolique : non suivi, laissé en place`);
-  if (!st.isFile()) throw new Error(`${path} n’est pas un fichier ordinaire : laissé en place`);
-  unlinkSync(target);
-  return true;
-}
-
-/** Entrée .desktop écrite par proc-watch (X-ProcWatch-Managed=1) ? Lue sans suivre de lien ; illisible → non. */
-function managedEntry(path: string): boolean {
-  try {
-    if (!lstatSync(path).isFile()) return false;
-    return isManagedEntry(readFileSync(path, 'utf8'));
-  } catch {
-    return false;
-  }
-}
-
-/** ~/.config/autostart/proc-watch.desktop avec `--hidden` (écriture atomique), ou retiré. */
+/**
+ * ~/.config/autostart/proc-watch.desktop avec `--hidden`, ou retiré. Un fichier présent sans X-ProcWatch-Managed=1 n'est
+ * jamais écrasé ni retiré ; dossiers ouverts sans suivre de lien.
+ */
 export function setAutostart(on: boolean, target: string | null, r: Roots): void {
   const path = appPaths(r).autostart;
   if (!on) {
-    if (present(path) && !lstatSync(path).isSymbolicLink() && !managedEntry(path)) throw new Error(`${path} n’a pas été créé par proc-watch : laissé en place`);
-    removeOwnFile(path);
+    let isLink = false;
+    try {
+      isLink = lstatSync(path).isSymbolicLink();
+    } catch {
+      return; // absent
+    }
+    if (!isLink && !managedEntry(r, path)) throw new Error(foreign(path));
+    removeFileSafe(rootList(r), path);
     return;
   }
   if (!target) throw new Error('Disponible uniquement dans la version installée (AppImage ou .deb)');
-  writeFileAtomic(path, desktopEntryContent(target, { args: ['--hidden'], autostart: true }));
+  writeFileSafe(rootList(r), path, desktopEntryContent(target, { args: ['--hidden'], autostart: true }), 0o644, {
+    guard: (current) => (current !== null && !isManagedEntry(current) ? foreign(path) : null),
+  });
 }
 
 // ---------------------------------------------------------------- désinstallation
@@ -219,21 +236,10 @@ const LABELS: Record<UninstallKind, string> = {
 
 const allowedName = (name: string, files: string[], patterns: RegExp[]) => files.includes(name) || patterns.some((p) => p.test(name));
 
-/** Le chemin existe-t-il (lien symbolique compris, jamais suivi) ? */
-function present(p: string): boolean {
+/** Fichiers connus d'un dossier de proc-watch ; dossier remplacé par un lien → son contenu n'est jamais lu. */
+function ownFiles(r: Roots, dir: string, files: string[], patterns: RegExp[]): string[] {
   try {
-    lstatSync(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** Fichiers connus d'un dossier de proc-watch ; dossier remplacé par un lien symbolique → son contenu n'est jamais lu. */
-function ownFiles(dir: string, files: string[], patterns: RegExp[]): string[] {
-  try {
-    if (!lstatSync(dir).isDirectory()) return [];
-    return readdirSync(dir).filter((n) => allowedName(n, files, patterns)).sort().map((n) => join(dir, n));
+    return listDirSafe(rootList(r), dir).filter((n) => allowedName(n, files, patterns)).sort().map((n) => join(dir, n));
   } catch {
     return [];
   }
@@ -251,15 +257,15 @@ export function uninstallPlan(r: Roots, o: UninstallOptions): UninstallItem[] {
   for (const [kind, path] of [['autostart', p.autostart], ['desktop', p.desktop], ['icon', p.icon], ['service', p.unit]] as const) {
     if (!present(path)) continue;
     // .desktop : seulement ceux que proc-watch a écrits (un lien symbolique est listé pour être signalé, jamais suivi)
-    if ((kind === 'autostart' || kind === 'desktop') && !lstatSync(path).isSymbolicLink() && !managedEntry(path)) continue;
+    if ((kind === 'autostart' || kind === 'desktop') && !lstatSync(path).isSymbolicLink() && !managedEntry(r, path)) continue;
     out.push(item(kind, path));
   }
   if (o.history) {
-    for (const f of ownFiles(p.dataDir, DATA_FILES, DATA_PATTERNS)) out.push(item('history', f));
+    for (const f of ownFiles(r, p.dataDir, DATA_FILES, DATA_PATTERNS)) out.push(item('history', f));
     if (present(p.dataDir)) out.push(item('history', p.dataDir, true));
   }
   if (o.config) {
-    for (const f of ownFiles(p.configDir, CONFIG_FILES, CONFIG_PATTERNS)) out.push(item('config', f));
+    for (const f of ownFiles(r, p.configDir, CONFIG_FILES, CONFIG_PATTERNS)) out.push(item('config', f));
     if (present(p.configDir)) out.push(item('config', p.configDir, true));
   }
   if (present(p.appImage)) out.push(item('appimage', p.appImage));
@@ -282,103 +288,86 @@ function allowed(r: Roots, i: UninstallItem): boolean {
 }
 
 
+/** Réponse de l'arrêt du service : null (fait ou rien à arrêter), un message d'erreur, ou `keep` (unité laissée, dit). */
+export type ServiceStop = string | null | { error?: string | null; keep?: string; stopped?: boolean };
+
 export interface UninstallDeps {
-  /** Arrête et désactive le service avant de retirer son unité ; renvoie un message d'erreur ou null. */
-  service: { stop(unitPath: string): Promise<string | null>; reload(): Promise<void> };
+  /** Arrête et désactive le service avant de retirer son unité. */
+  service: { stop(unitPath: string): Promise<ServiceStop>; reload(): Promise<void> };
   /** Avant le premier fichier d'historique : fermer la base ouverte par l'app. */
   beforeHistory?: () => void;
   onRemoved?: (path: string) => void;
 }
 
-/** Dossier de proc-watch : jamais un lien symbolique (son contenu serait ailleurs). */
-function ownDirOk(dir: string): string | null {
-  try {
-    const st = lstatSync(dir);
-    if (st.isSymbolicLink()) return `${dir} est un lien symbolique : non suivi, laissé en place`;
-    if (!st.isDirectory()) return `${dir} n’est pas un dossier : laissé en place`;
-    return null;
-  } catch (e) {
-    return code(e) === 'ENOENT' ? null : errText(e);
-  }
-}
-
 /**
- * Exécute un plan confirmé. Chaque élément est revérifié : dans la liste autorisée, dernier élément jamais suivi (lstat),
- * parent résolu par realpath ; un dossier n'est retiré que vide. La copie de l'AppImage n'est retirée qu'en dernier et
- * seulement si rien n'a échoué avant (sinon elle reste, pour réessayer). Les échecs sont rapportés un par un.
+ * Exécute un plan confirmé. Chaque élément est revérifié : dans la liste autorisée ; chaque dossier ouvert sans suivre de
+ * lien et le fichier retiré relativement à lui (jamais de realpath) ; un dossier n'est retiré que vide. La copie de
+ * l'AppImage n'est retirée qu'en dernier, et seulement si rien n'a échoué ni n'est resté (unité) avant.
  */
 export async function runUninstall(plan: readonly UninstallItem[], r: Roots, deps: UninstallDeps): Promise<UninstallResult> {
   const res: UninstallResult = { removed: [], failed: [], kept: [], done: false };
+  const roots = rootList(r);
   const fail = (path: string, error: string) => res.failed.push({ path, error });
+  const removed = (path: string) => {
+    res.removed.push(path);
+    deps.onRemoved?.(path);
+  };
   let historyClosed = false;
+  let blocker: string | null = null;
   const ordered = [...plan.filter((i) => i.kind !== 'appimage'), ...plan.filter((i) => i.kind === 'appimage')];
   for (const i of ordered) {
     if (!allowed(r, i)) {
       fail(i.path, 'hors de la liste des fichiers de proc-watch : refusé');
       continue;
     }
-    if (i.kind === 'appimage' && res.failed.length) {
-      res.kept.push({ path: i.path, reason: 'gardée : des éléments n’ont pas pu être retirés (réessayer après correction)' });
+    if (i.kind === 'appimage' && (res.failed.length || blocker)) {
+      res.kept.push({ path: i.path, reason: blocker ?? 'gardée : des éléments n’ont pas pu être retirés (réessayer après correction)' });
       continue;
     }
     if (i.kind === 'history' && !historyClosed) {
       historyClosed = true;
       deps.beforeHistory?.();
     }
-    if ((i.kind === 'history' || i.kind === 'config') && !i.dir) {
-      const bad = ownDirOk(dirname(i.path));
-      if (bad) {
-        fail(i.path, bad);
-        continue;
-      }
-    }
     try {
       if (i.dir) {
-        const bad = ownDirOk(i.path);
-        if (bad) {
-          fail(i.path, bad);
-          continue;
-        }
-        try {
-          rmdirSync(i.path);
-          res.removed.push(i.path);
-          deps.onRemoved?.(i.path);
-        } catch (e) {
-          if (code(e) === 'ENOENT') continue;
-          if (code(e) === 'ENOTEMPTY' || code(e) === 'EEXIST') res.kept.push({ path: i.path, reason: 'dossier non vide : fichiers inconnus laissés' });
-          else fail(i.path, errText(e));
-        }
+        const d = removeDirIfEmptySafe(roots, i.path);
+        if (d === 'removed') removed(i.path);
+        else if (d === 'not-empty') res.kept.push({ path: i.path, reason: 'dossier non vide : fichiers inconnus laissés' });
         continue;
       }
       if (i.kind === 'service') {
-        if (!present(i.path)) continue;
-        const l = lstatSync(i.path);
+        let l;
+        try {
+          l = lstatSync(i.path);
+        } catch {
+          continue; // déjà absente
+        }
         if (l.isSymbolicLink()) {
-          fail(i.path, `${i.path} est un lien symbolique : non suivi, laissé en place`);
+          fail(i.path, `${i.path} : lien symbolique, refusé (jamais suivi)`);
           continue;
         }
-        const err = await deps.service.stop(i.path);
+        const s = await deps.service.stop(i.path);
+        const err = typeof s === 'string' ? s : s?.error ?? null;
         if (err) {
           fail(i.path, err);
           continue;
         }
-        if (removeOwnFile(i.path)) {
-          res.removed.push(i.path);
-          deps.onRemoved?.(i.path);
+        if (s && typeof s === 'object' && s.keep) {
+          res.kept.push({ path: i.path, reason: s.keep });
+          blocker = 'gardée : le service d’enregistrement est resté en place';
+          continue;
         }
+        if (removeFileSafe(roots, i.path) === 'removed') removed(i.path);
         await deps.service.reload();
         continue;
       }
-      if ((i.kind === 'autostart' || i.kind === 'desktop') && present(i.path) && !lstatSync(i.path).isSymbolicLink() && !managedEntry(i.path)) {
+      if ((i.kind === 'autostart' || i.kind === 'desktop') && present(i.path) && !lstatSync(i.path).isSymbolicLink() && !managedEntry(r, i.path)) {
         res.kept.push({ path: i.path, reason: 'pas créé par proc-watch (sans X-ProcWatch-Managed=1) : laissé' });
         continue;
       }
-      if (removeOwnFile(i.path)) {
-        res.removed.push(i.path);
-        deps.onRemoved?.(i.path);
-      }
+      if (removeFileSafe(roots, i.path) === 'removed') removed(i.path);
     } catch (e) {
-      fail(i.path, e instanceof Error && !code(e) ? e.message : errText(e));
+      fail(i.path, e instanceof Error && !code(e) ? e.message : `${code(e) ?? msg(e)}`);
     }
   }
   res.done = res.failed.length === 0 && !res.kept.some((k) => k.path === appPaths(r).appImage);
@@ -409,14 +398,23 @@ export function uninstallSummary(plan: readonly UninstallItem[], o: { deb: boole
 }
 
 /**
- * Arrête le service avant de retirer son unité. Jamais d'appel systemctl avec PROC_WATCH_NO_RECORDER_SYNC ; jamais d'arrêt
- * d'une unité chargée depuis un autre fichier (ex. app de test avec un XDG_CONFIG_HOME temporaire : le vrai service reste).
+ * Arrête le service avant de retirer son unité, en échouant fermé :
+ * - PROC_WATCH_NO_RECORDER_SYNC=1 : aucun appel systemctl, l'unité est laissée (et c'est dit) ;
+ * - `systemctl --user show` en échec : erreur (unité et AppImage gardées) ;
+ * - unité chargée depuis un autre fichier : erreur, jamais arrêtée ;
+ * - unité non chargée : retirée seulement sans lien default.target.wants restant ;
+ * - notre unité : `disable --now`.
  */
-export async function stopRecorderForUninstall(o: { unitPath: string; run: Systemctl; disabled: boolean }): Promise<{ stopped: boolean; error: string | null }> {
-  if (o.disabled) return { stopped: false, error: null };
+export async function stopRecorderForUninstall(o: { unitPath: string; run: Systemctl; disabled: boolean }): Promise<{ stopped: boolean; error: string | null; keep?: string }> {
+  if (o.disabled) return { stopped: false, error: null, keep: 'laissée : synchronisation du service désactivée (PROC_WATCH_NO_RECORDER_SYNC=1), systemctl jamais appelé' };
   const show = await o.run(['show', '-p', 'FragmentPath', '--value', UNIT_NAME]);
-  const frag = show.ok ? show.stdout.trim() : '';
-  if (!frag) return { stopped: false, error: null };
+  if (!show.ok) return { stopped: false, error: 'systemctl --user show a échoué : service et unité laissés (réessayer)' };
+  const frag = show.stdout.trim();
+  if (!frag) {
+    const wants = join(dirname(o.unitPath), 'default.target.wants', UNIT_NAME);
+    if (present(wants)) return { stopped: false, error: `unité non chargée mais ${wants} existe : laissée (systemctl --user daemon-reload, puis réessayer)` };
+    return { stopped: false, error: null };
+  }
   const same = (a: string, b: string) => {
     try {
       return realpathSync(a) === realpathSync(b);
@@ -424,7 +422,7 @@ export async function stopRecorderForUninstall(o: { unitPath: string; run: Syste
       return a === b;
     }
   };
-  if (!same(frag, o.unitPath)) return { stopped: false, error: null };
+  if (!same(frag, o.unitPath)) return { stopped: false, error: `service chargé depuis ${frag}, pas ${o.unitPath} : laissé` };
   const d = await o.run(['disable', '--now', UNIT_NAME]);
   return d.ok ? { stopped: true, error: null } : { stopped: false, error: 'systemctl --user disable --now a échoué : service laissé en place' };
 }

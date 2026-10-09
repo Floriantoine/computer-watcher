@@ -93,3 +93,22 @@ test('idempotent : deux installations, même contenu, aucun fichier temporaire l
   expect(readFileSync(a, 'utf8')).toBe(first);
   expect(readdirSync(join(home, '.local/share/applications'))).toEqual(['proc-watch.desktop']);
 });
+
+test('reproduction I1 [2] : entrée de menu existante sans X-ProcWatch-Managed=1 → jamais écrasée, erreur', () => {
+  const home = mkdtempSync(join(tmpdir(), 'procwatch-home-'));
+  const apps = join(home, '.local/share/applications');
+  mkdirSync(apps, { recursive: true });
+  writeFileSync(join(apps, 'proc-watch.desktop'), '[Desktop Entry]\nName=mine-menu\nExec=/usr/bin/my-own\n');
+  expect(() => installDesktopEntry('/x/app', {}, home)).toThrow(/pas été créé par proc-watch/);
+  expect(readFileSync(join(apps, 'proc-watch.desktop'), 'utf8')).toContain('my-own');
+});
+
+test('dossier applications remplacé par un lien : refusé, fichier du dossier visé intact', () => {
+  const home = mkdtempSync(join(tmpdir(), 'procwatch-home-'));
+  const victim = mkdtempSync(join(tmpdir(), 'procwatch-victim-'));
+  writeFileSync(join(victim, 'proc-watch.desktop'), 'FOREIGN');
+  mkdirSync(join(home, '.local/share'), { recursive: true });
+  symlinkSync(victim, join(home, '.local/share/applications'));
+  expect(() => installDesktopEntry('/x/app', {}, home)).toThrow(/lien symbolique/);
+  expect(readFileSync(join(victim, 'proc-watch.desktop'), 'utf8')).toBe('FOREIGN');
+});

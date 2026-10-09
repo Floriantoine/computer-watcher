@@ -1,9 +1,10 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import {
-  appPaths, appImageSource, autostartState, deleteOriginal, installAppImage, launchTarget, rootsFrom, runUninstall, setAutostart, stopRecorderForUninstall,
+  appPaths, autostartState, deleteOriginalArgs, installAppImage, parseDeleteOriginalArgs, verifyAndDeleteOriginal, launchTarget, rootsFrom, runUninstall, setAutostart, stopRecorderForUninstall,
   uninstallPlan, uninstallSummary, type Roots,
 } from './appInstall';
 
@@ -43,30 +44,6 @@ describe('chemins', () => {
     expect(p.configDir).toBe('/c/proc-watch');
     expect(p.dataDir).toBe('/d/proc-watch');
     expect(appPaths(rootsFrom({}, '/home/u')).autostart).toBe('/home/u/.config/autostart/proc-watch.desktop');
-  });
-});
-
-describe('mode AppImage (jamais APPIMAGE seul)', () => {
-  test('APPIMAGE + APPDIR + binaire dans APPDIR (realpath) : chemin de l’AppImage', () => {
-    const appdir = join(roots.home, 'mnt');
-    mkdirSync(appdir);
-    writeFileSync(join(appdir, 'proc-watch'), '');
-    const src = fakeAppImage();
-    expect(appImageSource({ APPIMAGE: src, APPDIR: appdir }, join(appdir, 'proc-watch'))).toBe(src);
-  });
-  test('APPDIR absent, binaire hors d’APPDIR, APPIMAGE relatif ou absent : null', () => {
-    const appdir = join(roots.home, 'mnt');
-    mkdirSync(appdir);
-    writeFileSync(join(appdir, 'proc-watch'), '');
-    const src = fakeAppImage();
-    expect(appImageSource({ APPIMAGE: src }, join(appdir, 'proc-watch'))).toBeNull();
-    expect(appImageSource({ APPIMAGE: src, APPDIR: appdir }, '/usr/bin/node')).toBeNull();
-    expect(appImageSource({ APPIMAGE: 'x.AppImage', APPDIR: appdir }, join(appdir, 'proc-watch'))).toBeNull();
-    expect(appImageSource({ APPDIR: appdir }, join(appdir, 'proc-watch'))).toBeNull();
-    // préfixe trompeur : /…/mnt-evil n'est pas dans /…/mnt
-    mkdirSync(join(roots.home, 'mnt-evil'));
-    writeFileSync(join(roots.home, 'mnt-evil', 'proc-watch'), '');
-    expect(appImageSource({ APPIMAGE: src, APPDIR: appdir }, join(roots.home, 'mnt-evil', 'proc-watch'))).toBeNull();
   });
 });
 
@@ -124,31 +101,80 @@ describe('installer l’AppImage', () => {
     expect(readFileSync(appPaths(roots).autostart, 'utf8')).toContain(`Exec="${r.dest}" --hidden`);
   });
 
+  test('copie : SHA-256 identique à l’original, exécutable', async () => {
+    const r = await installAppImage({ source: fakeAppImage(), roots });
+    expect(r.sha256).toBe(createHash('sha256').update('ELF-appimage-v1').digest('hex'));
+    expect(r.executable).toBe(true);
+  });
+
+  test('m3 : copie identique mais en 0644 → remise en 0755 (fchmod, sans suivre de lien)', async () => {
+    const src = fakeAppImage();
+    const r = await installAppImage({ source: src, roots });
+    chmodSync(r.dest, 0o644);
+    expect((await installAppImage({ source: src, roots })).status).toBe('already');
+    expect(statSync(r.dest).mode & 0o777).toBe(0o755);
+  });
+
+  test('reproduction I1 [2] : entrée de menu et démarrage automatique étrangers (sans marque) : laissés, signalés', async () => {
+    const p = appPaths(roots);
+    mkdirSync(dirname(p.autostart), { recursive: true });
+    writeFileSync(p.autostart, '[Desktop Entry]\nName=mine\nExec=/usr/bin/my-own --flag\n');
+    mkdirSync(dirname(p.desktop), { recursive: true });
+    writeFileSync(p.desktop, '[Desktop Entry]\nName=mine-menu\nExec=/usr/bin/my-own\n');
+    const r = await installAppImage({ source: fakeAppImage(), roots });
+    expect(readFileSync(p.autostart, 'utf8')).toContain('my-own');
+    expect(readFileSync(p.desktop, 'utf8')).toContain('my-own');
+    expect(r.desktopFile).toBeNull();
+    expect(r.autostartUpdated).toBe(false);
+    expect(r.warnings.join('\n')).toMatch(/applications\/proc-watch\.desktop.*pas été créé par proc-watch/);
+    expect(r.warnings.join('\n')).toMatch(/autostart\/proc-watch\.desktop.*pas été créé par proc-watch/);
+    expect(existsSync(p.appImage)).toBe(true); // la copie elle-même est faite
+  });
+
+  test('~/Applications remplacé par un lien : refusé, rien copié dans le dossier visé', async () => {
+    const victimDir = join(roots.home, 'victim-dir');
+    mkdirSync(victimDir);
+    symlinkSync(victimDir, join(roots.home, 'Applications'));
+    await expect(installAppImage({ source: fakeAppImage(), roots })).rejects.toThrow(/lien symbolique/);
+    expect(readdirSync(victimDir)).toEqual([]);
+  });
+
   test('source absente : erreur en français', async () => {
     await expect(installAppImage({ source: join(dl, 'nope.AppImage'), roots })).rejects.toThrow(/AppImage introuvable/);
   });
 });
 
-describe('supprimer le fichier téléchargé (accord explicite)', () => {
-  test('supprime exactement le fichier d’origine, une fois la copie vérifiée identique', async () => {
+describe('supprimer le fichier téléchargé (consentement passé à la copie relancée)', () => {
+  const sha = (t: string) => createHash('sha256').update(t).digest('hex');
+
+  test('arguments : --delete-original=<chemin absolu> et --delete-original-sha256=<64 hex>, sinon rien', () => {
+    const h = sha('x');
+    expect(parseDeleteOriginalArgs(['/a', `--delete-original=/home/u/dl/p.AppImage`, `--delete-original-sha256=${h}`])).toEqual({ path: '/home/u/dl/p.AppImage', sha256: h });
+    expect(parseDeleteOriginalArgs(['/a', '--delete-original=rel/p', `--delete-original-sha256=${h}`])).toBeNull();
+    expect(parseDeleteOriginalArgs(['/a', '--delete-original=/p', '--delete-original-sha256=abc'])).toBeNull();
+    expect(parseDeleteOriginalArgs(['/a', '--delete-original=/p'])).toBeNull();
+    expect(deleteOriginalArgs({ path: '/p q', sha256: h })).toEqual(['--delete-original=/p q', `--delete-original-sha256=${h}`]);
+  });
+
+  test('supprime exactement le fichier d’origine : même SHA-256, fichier ordinaire, distinct de la copie', async () => {
     const src = fakeAppImage();
     const other = fakeAppImage('autre.AppImage', 'x');
     const r = await installAppImage({ source: src, roots });
-    await deleteOriginal({ source: src, dest: r.dest });
+    await verifyAndDeleteOriginal({ path: src, sha256: r.sha256, copy: r.dest });
     expect(existsSync(src)).toBe(false);
     expect(existsSync(other)).toBe(true);
     expect(existsSync(r.dest)).toBe(true);
   });
-  test('refuse si la source est la copie installée', async () => {
+  test('refuse la copie elle-même', async () => {
     const r = await installAppImage({ source: fakeAppImage(), roots });
-    await expect(deleteOriginal({ source: r.dest, dest: r.dest })).rejects.toThrow(/copie installée/);
+    await expect(verifyAndDeleteOriginal({ path: r.dest, sha256: r.sha256, copy: r.dest })).rejects.toThrow(/copie installée/);
     expect(existsSync(r.dest)).toBe(true);
   });
-  test('refuse si la copie diffère (rien supprimé)', async () => {
+  test('refuse un fichier modifié depuis le consentement (SHA-256 différent)', async () => {
     const src = fakeAppImage();
     const r = await installAppImage({ source: src, roots });
     writeFileSync(src, 'modifié');
-    await expect(deleteOriginal({ source: src, dest: r.dest })).rejects.toThrow(/ne correspond pas/);
+    await expect(verifyAndDeleteOriginal({ path: src, sha256: r.sha256, copy: r.dest })).rejects.toThrow(/a changé/);
     expect(existsSync(src)).toBe(true);
   });
   test('refuse un lien symbolique (jamais suivi)', async () => {
@@ -156,8 +182,12 @@ describe('supprimer le fichier téléchargé (accord explicite)', () => {
     const r = await installAppImage({ source: real, roots });
     const link = join(dl, 'lien.AppImage');
     symlinkSync(real, link);
-    await expect(deleteOriginal({ source: link, dest: r.dest })).rejects.toThrow(/lien symbolique/);
+    await expect(verifyAndDeleteOriginal({ path: link, sha256: r.sha256, copy: r.dest })).rejects.toThrow(/lien symbolique/);
     expect(existsSync(real)).toBe(true);
+  });
+  test('reproduction I2 : un document (pas une AppImage) au même SHA est quand même refusé si ce n’est pas l’original consenti', async () => {
+    // le contrôle realAppImage de la copie se fait dans le main ; ici : un chemin relatif est refusé
+    await expect(verifyAndDeleteOriginal({ path: 'thesis.pdf', sha256: sha('x'), copy: '/x' })).rejects.toThrow();
   });
 });
 
@@ -183,6 +213,22 @@ describe('démarrer avec la session', () => {
   });
   test('activer sans cible (dev) : erreur', () => {
     expect(() => setAutostart(true, null, roots)).toThrow(/version installée/);
+  });
+  test('reproduction I1 [2b] : activer par-dessus un démarrage automatique étranger → refusé, laissé', () => {
+    const p = appPaths(roots).autostart;
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, '[Desktop Entry]\nName=mine\nExec=/usr/bin/my-own\n');
+    expect(() => setAutostart(true, '/x/proc-watch.AppImage', roots)).toThrow(/pas été créé par proc-watch/);
+    expect(readFileSync(p, 'utf8')).toContain('my-own');
+  });
+  test('reproduction I1 [3] : ~/.config/autostart remplacé par un lien → refusé, fichier du dossier visé intact', () => {
+    const victimDir = join(roots.home, 'victim-dir');
+    mkdirSync(victimDir);
+    writeFileSync(join(victimDir, 'proc-watch.desktop'), 'FOREIGN in victim dir\n');
+    mkdirSync(roots.configHome, { recursive: true });
+    symlinkSync(victimDir, join(roots.configHome, 'autostart'));
+    expect(() => setAutostart(true, '/x/proc-watch.AppImage', roots)).toThrow(/lien symbolique/);
+    expect(readFileSync(join(victimDir, 'proc-watch.desktop'), 'utf8')).toBe('FOREIGN in victim dir\n');
   });
   test('désactiver : un fichier sans X-ProcWatch-Managed=1 (pas créé par proc-watch) reste', () => {
     mkdirSync(join(roots.configHome, 'autostart'), { recursive: true });
@@ -325,6 +371,23 @@ describe('désinstaller', () => {
     expect(r.kept.map((k) => k.path)).toContain(p.desktop);
   });
 
+  test('m2 : ~/Applications et dossier des icônes remplacés par des liens → rien supprimé dans les dossiers visés', async () => {
+    const p = await fullInstall();
+    const victimDir = join(roots.home, 'victim-apps');
+    mkdirSync(victimDir);
+    writeFileSync(join(victimDir, 'proc-watch.AppImage'), 'autre');
+    writeFileSync(join(victimDir, 'proc-watch.png'), 'autre');
+    rmSync(join(roots.home, 'Applications'), { recursive: true });
+    symlinkSync(victimDir, join(roots.home, 'Applications'));
+    rmSync(dirname(p.icon), { recursive: true });
+    symlinkSync(victimDir, dirname(p.icon));
+    const r = await runUninstall(uninstallPlan(roots, { history: false, config: false }), roots, { service: okService() });
+    expect(readFileSync(join(victimDir, 'proc-watch.AppImage'), 'utf8')).toBe('autre');
+    expect(readFileSync(join(victimDir, 'proc-watch.png'), 'utf8')).toBe('autre');
+    expect(r.failed.map((f) => f.path)).toContain(p.icon);
+    expect(r.done).toBe(false);
+  });
+
   test('élément déjà absent au moment de la suppression : ni échec ni retiré', async () => {
     const p = await fullInstall();
     const plan = uninstallPlan(roots, { history: false, config: false });
@@ -345,7 +408,7 @@ describe('désinstaller', () => {
   });
 });
 
-describe('arrêt du service à la désinstallation', () => {
+describe('arrêt du service à la désinstallation (échoue fermé)', () => {
   const calls: string[][] = [];
   const run = (frag: string) => async (args: string[]) => {
     calls.push(args);
@@ -353,16 +416,31 @@ describe('arrêt du service à la désinstallation', () => {
   };
   beforeEach(() => void (calls.length = 0));
 
-  test('PROC_WATCH_NO_RECORDER_SYNC : aucun appel systemctl', async () => {
-    expect(await stopRecorderForUninstall({ unitPath: '/c/u.service', run: run('/c/u.service'), disabled: true })).toEqual({ stopped: false, error: null });
+  test('PROC_WATCH_NO_RECORDER_SYNC : aucun appel systemctl, unité laissée (et dit)', async () => {
+    const r = await stopRecorderForUninstall({ unitPath: '/c/u.service', run: run('/c/u.service'), disabled: true });
+    expect(r).toMatchObject({ stopped: false, error: null });
+    expect(r.keep).toMatch(/PROC_WATCH_NO_RECORDER_SYNC/);
     expect(calls).toEqual([]);
   });
-  test('unité chargée depuis un autre fichier (autre XDG_CONFIG_HOME) : jamais arrêtée', async () => {
-    expect(await stopRecorderForUninstall({ unitPath: '/tmp-cfg/u.service', run: run('/home/u/.config/systemd/user/u.service'), disabled: false })).toEqual({ stopped: false, error: null });
+  test('reproduction I3 [5] : systemctl --user show en échec → erreur (rien retiré)', async () => {
+    const failing = async (args: string[]) => (calls.push(args), { ok: false, stdout: '' });
+    const r = await stopRecorderForUninstall({ unitPath: '/c/u.service', run: failing, disabled: false });
+    expect(r.error).toMatch(/systemctl --user show a échoué/);
     expect(calls.map((c) => c[0])).toEqual(['show']);
   });
-  test('unité non chargée : rien à arrêter', async () => {
-    expect(await stopRecorderForUninstall({ unitPath: '/c/u.service', run: run(''), disabled: false })).toEqual({ stopped: false, error: null });
+  test('unité chargée depuis un autre fichier : erreur, jamais arrêtée', async () => {
+    const r = await stopRecorderForUninstall({ unitPath: '/tmp-cfg/u.service', run: run('/home/u/.config/systemd/user/u.service'), disabled: false });
+    expect(r.error).toMatch(/chargé depuis \/home\/u\/.config/);
+    expect(calls.map((c) => c[0])).toEqual(['show']);
+  });
+  test('unité non chargée et aucun lien d’activation : rien à arrêter', async () => {
+    expect(await stopRecorderForUninstall({ unitPath: join(roots.configHome, 'systemd/user/proc-watch-recorder.service'), run: run(''), disabled: false })).toEqual({ stopped: false, error: null });
+  });
+  test('unité non chargée mais lien default.target.wants présent : erreur', async () => {
+    const unit = join(roots.configHome, 'systemd/user/proc-watch-recorder.service');
+    mkdirSync(join(dirname(unit), 'default.target.wants'), { recursive: true });
+    symlinkSync(unit, join(dirname(unit), 'default.target.wants/proc-watch-recorder.service'));
+    expect((await stopRecorderForUninstall({ unitPath: unit, run: run(''), disabled: false })).error).toMatch(/default\.target\.wants/);
   });
   test('notre unité : disable --now', async () => {
     expect(await stopRecorderForUninstall({ unitPath: '/c/u.service', run: run('/c/u.service'), disabled: false })).toEqual({ stopped: true, error: null });
@@ -372,4 +450,29 @@ describe('arrêt du service à la désinstallation', () => {
     const failing = async (args: string[]) => (args[0] === 'show' ? { ok: true, stdout: '/c/u.service' } : { ok: false, stdout: '' });
     expect((await stopRecorderForUninstall({ unitPath: '/c/u.service', run: failing, disabled: false })).error).toMatch(/échoué/);
   });
+
+  test('reproduction I3 [5] de bout en bout : show en échec → unité ET AppImage gardées, échec rapporté', async () => {
+    const p = await fullInstall();
+    const plan = uninstallPlan(roots, { history: false, config: false });
+    const failing = async () => ({ ok: false, stdout: '' });
+    const r = await runUninstall(plan, roots, {
+      service: { stop: async (u) => stopRecorderForUninstall({ unitPath: u, run: failing, disabled: false }), reload: async () => {} },
+    });
+    expect(existsSync(p.unit)).toBe(true);
+    expect(existsSync(p.appImage)).toBe(true);
+    expect(r.failed.map((f) => f.path)).toEqual([p.unit]);
+    expect(r.done).toBe(false);
+  });
+  test('PROC_WATCH_NO_RECORDER_SYNC de bout en bout : unité jamais touchée, dit, AppImage gardée', async () => {
+    const p = await fullInstall();
+    const plan = uninstallPlan(roots, { history: false, config: false });
+    const r = await runUninstall(plan, roots, {
+      service: { stop: async (u) => stopRecorderForUninstall({ unitPath: u, run: async () => ({ ok: true, stdout: '' }), disabled: true }), reload: async () => {} },
+    });
+    expect(existsSync(p.unit)).toBe(true);
+    expect(r.kept.find((k) => k.path === p.unit)!.reason).toMatch(/PROC_WATCH_NO_RECORDER_SYNC/);
+    expect(existsSync(p.appImage)).toBe(true);
+    expect(r.done).toBe(false);
+  });
+
 });

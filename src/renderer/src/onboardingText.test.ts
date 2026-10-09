@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
-import { autostartResult, installResult, recorderResult, uninstallReport } from './onboardingText';
+import { autostartResult, installResult, originalDeletionResult, recorderResult, uninstallReport } from './onboardingText';
 
-const base = { dest: '/home/u/Applications/proc-watch.AppImage', desktopFile: '/home/u/.local/share/applications/proc-watch.desktop', source: '/home/u/Téléchargements/p.AppImage', autostartUpdated: false };
+const base = { dest: '/home/u/Applications/proc-watch.AppImage', desktopFile: '/home/u/.local/share/applications/proc-watch.desktop', source: '/home/u/Téléchargements/p.AppImage', autostartUpdated: false, sha256: 'a'.repeat(64), executable: true, warnings: [] as string[] };
 
 describe('installation', () => {
   test('installée : copie et entrée de menu, chemins exacts', () => {
@@ -13,6 +13,21 @@ describe('installation', () => {
     expect(installResult({ ...base, status: 'already', runningFromCopy: true, canDeleteSource: false }).lines[0]).toBe(`Déjà installée : ${base.dest}`);
     expect(installResult({ ...base, status: 'updated', runningFromCopy: false, canDeleteSource: true }).lines[0]).toBe(`Copie remplacée : ${base.dest}`);
     expect(installResult({ ...base, status: 'installed', runningFromCopy: false, canDeleteSource: true, autostartUpdated: true }).lines).toContain('Démarrage avec la session : repointé vers la copie');
+  });
+});
+
+describe('installation : avertissements', () => {
+  test('entrée étrangère laissée : ton « warn », chaque avertissement affiché, pas de ligne d’entrée de menu', () => {
+    const r = installResult({ ...base, desktopFile: null, status: 'installed', runningFromCopy: false, canDeleteSource: true, warnings: ['Entrée de menu : /x laissé en place'] });
+    expect(r.tone).toBe('warn');
+    expect(r.lines).toEqual([`Copiée dans ${base.dest}`, 'Entrée de menu : /x laissé en place']);
+  });
+});
+
+describe('suppression du fichier téléchargé (dans la copie relancée)', () => {
+  test('faite / refusée', () => {
+    expect(originalDeletionResult({ path: '/d/p.AppImage', ok: true, message: '' })).toEqual({ tone: 'ok', lines: ['Fichier téléchargé supprimé : /d/p.AppImage'] });
+    expect(originalDeletionResult({ path: '/d/p.AppImage', ok: false, message: 'a changé' })).toEqual({ tone: 'error', lines: ['Fichier téléchargé non supprimé : /d/p.AppImage — a changé'] });
   });
 });
 

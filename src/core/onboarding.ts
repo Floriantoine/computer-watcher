@@ -68,7 +68,8 @@ export function wizardKey(key: string, index: number, count: number, alt = false
 export interface InstallOutcome {
   status: 'installed' | 'updated' | 'already';
   dest: string;
-  desktopFile: string;
+  /** Entrée de menu écrite, ou null si une entrée étrangère a été laissée (voir `warnings`). */
+  desktopFile: string | null;
   source: string;
   /** L'app tourne déjà depuis la copie installée. */
   runningFromCopy: boolean;
@@ -76,6 +77,12 @@ export interface InstallOutcome {
   canDeleteSource: boolean;
   /** Démarrage automatique déjà actif : repointé vers la copie. */
   autostartUpdated: boolean;
+  /** SHA-256 de l'AppImage lancée, identique à celui de la copie relue. */
+  sha256: string;
+  /** La copie peut être exécutée (sinon : montage noexec, relance impossible). */
+  executable: boolean;
+  /** Éléments laissés en place (entrées étrangères…) ou problèmes non bloquants. */
+  warnings: string[];
 }
 
 export interface OnboardingInfo {
@@ -91,6 +98,8 @@ export interface OnboardingInfo {
   runningFromCopy: boolean;
   /** Dossier de l'historique (explication de l'étape Historique). */
   dataDir: string;
+  /** Copie relancée avec le consentement de supprimer le fichier téléchargé : résultat. */
+  originalDeletion?: { path: string; ok: boolean; message: string };
 }
 
 export interface AutostartInfo {

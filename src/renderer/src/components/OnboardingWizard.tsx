@@ -6,7 +6,7 @@ import { ONBOARDING_STEPS, stepPosition, wizardKey, type OnboardingInfo, type On
 import { setupNeed } from '../../../core/earlyoomSetup';
 import type { EarlyoomStatus, RecorderState } from '../../../core/types';
 import { useFocusTrap } from '../focusTrap';
-import { autostartResult, installResult, recorderResult, type ResultText } from '../onboardingText';
+import { autostartResult, installResult, originalDeletionResult, recorderResult, type ResultText } from '../onboardingText';
 import { ipcErrorMessage } from '../viewModel';
 import { runEarlyoomSetup } from './EarlyoomSetupPopup';
 import { Switch } from './settingsUi';
@@ -39,7 +39,9 @@ export function OnboardingWizard({ info, onClose, onToast }: {
   const steps = info.steps;
   const [index, setIndex] = useState(info.start);
   const step = steps[index]!;
-  const [results, setResults] = useState<Partial<Record<OnboardingStep, ResultText>>>({});
+  const [results, setResults] = useState<Partial<Record<OnboardingStep, ResultText>>>(() =>
+    info.originalDeletion ? { install: originalDeletionResult(info.originalDeletion) } : {},
+  );
   const setResult = (s: OnboardingStep, r: ResultText) => setResults((x) => ({ ...x, [s]: r }));
   const [busy, setBusy] = useState(false);
   const box = useRef<HTMLDivElement>(null);
@@ -172,11 +174,14 @@ export function OnboardingWizard({ info, onClose, onToast }: {
                 </span>
               </label>
             )}
-            <button className="primary" data-testid="onb-relaunch" disabled={busy} onClick={() => void relaunch()}>
+            <button className="primary" data-testid="onb-relaunch" disabled={busy || !installed.executable} onClick={() => void relaunch()}>
               <RotateCw size={14} strokeWidth={2} />
               Relancer depuis la copie
             </button>
-            <p className="hint">L’accueil reprend à l’étape suivante dans la copie relancée.</p>
+            <p className="hint">
+              L’accueil reprend à l’étape suivante dans la copie relancée.
+              {deleteOriginal && ' Le fichier téléchargé est supprimé par la copie, une fois démarrée, s’il n’a pas changé.'}
+            </p>
           </div>
         )}
       </>

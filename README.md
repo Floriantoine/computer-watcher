@@ -65,7 +65,7 @@ Le paquet ajoute l'entrée de menu et l'icône. Désinstaller le paquet : `sudo 
 
 1. Télécharger `proc-watch-<version>-x86_64.AppImage`.
 2. `chmod +x proc-watch-*.AppImage` puis le lancer.
-3. Au premier lancement, l'assistant d'accueil propose **Installer comme une app** : copie dans `~/Applications/proc-watch.AppImage`, entrée de menu et icône, puis relance depuis la copie. Il peut aussi supprimer le fichier téléchargé, seulement si la case est cochée (une confirmation montre le chemin exact). Les mises à jour automatiques remplacent ensuite cette copie.
+3. Au premier lancement, l'assistant d'accueil propose **Installer comme une app** : copie dans `~/Applications/proc-watch.AppImage`, entrée de menu et icône, puis relance depuis la copie. Il peut aussi supprimer le fichier téléchargé, seulement si la case est cochée (une confirmation montre le chemin exact) : la copie relancée le supprime après avoir démarré, s'il n'a pas changé (même SHA-256). Une entrée de menu ou de démarrage `proc-watch.desktop` déjà présente et qui n'a pas été écrite par proc-watch n'est jamais écrasée. Les mises à jour automatiques remplacent ensuite cette copie.
 
 Sur Ubuntu 22.04+, les AppImage demandent `libfuse2` : `sudo apt install libfuse2`.
 
@@ -97,7 +97,7 @@ Chaque étape affiche le résultat exact (chemins écrits) ou l'erreur. L'assist
 
 ### Désinstaller
 
-Réglages › À propos › **Désinstaller proc-watch…** : deux cases (supprimer aussi l'historique, la configuration) et la liste exacte de ce qui sera retiré, reprise dans une confirmation native. Sont retirés : le démarrage automatique, l'entrée de menu et l'icône (seulement celles écrites par proc-watch, marquées `X-ProcWatch-Managed=1`), le service d'enregistrement (arrêté, désactivé, unité supprimée), puis `~/Applications/proc-watch.AppImage` en dernier, et proc-watch quitte. Seuls les fichiers que proc-watch crée sont touchés (liste exacte, liens symboliques jamais suivis) ; earlyoom n'est jamais modifié. Si un élément ne peut pas être retiré, il est signalé et la copie de l'AppImage reste, pour réessayer. Avec le `.deb`, retirer ensuite le paquet avec `sudo apt remove proc-watch`.
+Réglages › À propos › **Désinstaller proc-watch…** : deux cases (supprimer aussi l'historique, la configuration) et la liste exacte de ce qui sera retiré, reprise dans une confirmation native. Sont retirés : le démarrage automatique, l'entrée de menu et l'icône (seulement celles écrites par proc-watch, marquées `X-ProcWatch-Managed=1`), le service d'enregistrement (arrêté, désactivé, unité supprimée), puis `~/Applications/proc-watch.AppImage` en dernier, et proc-watch quitte. Seuls les fichiers que proc-watch crée sont touchés (liste exacte, liens symboliques jamais suivis) ; earlyoom n'est jamais modifié. Si un élément ne peut pas être retiré (par exemple `systemctl --user` injoignable : le service et son unité restent), il est signalé et la copie de l'AppImage reste, pour réessayer. Avec le `.deb`, retirer ensuite le paquet avec `sudo apt remove proc-watch`.
 
 ### Depuis les sources
 

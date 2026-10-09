@@ -1,6 +1,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { copyFileAtomic, writeFileAtomic } from './atomicFile';
+import { readFileSync } from 'node:fs';
+import { writeFileSafe } from './safeFs';
 
 /**
  * Argument de Exec entre guillemets, selon la spécification Desktop Entry : d'abord la règle des guillemets (`"`, `` ` ``,
@@ -46,19 +47,23 @@ export function desktopEntryContent(execPath: string, o: EntryOptions = {}): str
 /**
  * Écrit l'entrée de menu et copie l'icône de l'app dans le thème hicolor de l'utilisateur (`Icon=proc-watch`).
  * Une icône introuvable n'empêche pas l'entrée : le bureau affichera son icône par défaut.
- * Écritures atomiques : un lien symbolique posé à l'un de ces chemins est remplacé, jamais suivi.
+ * Dossiers ouverts sans suivre de lien (refusés s'ils en sont un), écriture atomique ; une entrée existante sans
+ * X-ProcWatch-Managed=1 n'est jamais écrasée (erreur).
  */
 export function installDesktopEntry(target: string, env: NodeJS.ProcessEnv = process.env, home: string = homedir(), iconPng?: string): string {
   const data = env.XDG_DATA_HOME || join(home, '.local/share');
+  const roots = [home, data];
   const content = desktopEntryContent(target);
+  const file = join(data, 'applications', 'proc-watch.desktop');
+  const guard = (current: string | null) =>
+    current !== null && !isManagedEntry(current) ? `${file} n’a pas été créé par proc-watch (sans X-ProcWatch-Managed=1) : laissé en place` : null;
   if (iconPng) {
     try {
-      copyFileAtomic(iconPng, join(data, 'icons/hicolor/512x512/apps/proc-watch.png'));
+      writeFileSafe(roots, join(data, 'icons/hicolor/512x512/apps/proc-watch.png'), readFileSync(iconPng));
     } catch {
       // icône facultative
     }
   }
-  const file = join(data, 'applications', 'proc-watch.desktop');
-  writeFileAtomic(file, content);
+  writeFileSafe(roots, file, content, 0o644, { guard });
   return file;
 }
