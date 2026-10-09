@@ -13,10 +13,11 @@
 //  4. succès seulement si l'inode tenu n'a plus de lien (nlink) : si un autre objet a été glissé à sa place dans la
 //     quarantaine, l'élément choisi a survécu et rien n'est annoncé supprimé.
 import { execFile, spawn } from 'node:child_process';
-import { constants as FS, lstatSync, realpathSync, type BigIntStats } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { constants as FS, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync, type BigIntStats } from 'node:fs';
 import * as nodeFsp from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { cacheLabel, displayName, isTmpDeleteRequest, isValidEntryName, MAX_TMP_DELETE, suspectUser, systemEntry, TEST_ROOT_MARKER, TRASH_PREFIX } from '../core/tmpClean';
 import type { TmpConfirmSummary, TmpDeleteItem, TmpDeleteOutcome, TmpDeleteResult, TmpEntry, TmpListing } from '../core/tmpClean';
 import type { TmpCleanEvent } from '../core/history/events';
@@ -33,7 +34,6 @@ export interface CleanFs {
   mkdtemp(prefix: string): Promise<string>;
   rmdir(p: string): Promise<void>;
   open(p: string, flags: number): Promise<CleanHandle>;
-  appendFile(p: string, data: string): Promise<void>;
 }
 export interface CleanHandle {
   fd: number;
@@ -57,6 +57,8 @@ export interface CleanOptions {
   rmTimeoutMs?: number;
   /** Chemin de GNU rm (défaut /usr/bin/rm). */
   rmPath?: string;
+  /** Système de fichiers de la lecture de /proc (procfs ne bloque pas) ; défaut : `fs`. */
+  procFs?: CleanFs;
   /** « Vider la quarantaine » : délai de chaque appel au système de fichiers (défaut 5 s). */
   fsTimeoutMs?: number;
   /** « Vider la quarantaine » : durée totale (défaut 60 s), vérifiée avant chaque entrée. */
@@ -72,6 +74,8 @@ const RM_TIMEOUT_MS = 30_000;
 const FS_TIMEOUT_MS = 5_000;
 const QUARANTINE_BUDGET_MS = 60_000;
 const QUARANTINE_MAX_ENTRIES = 1_000;
+const INVENTORY_MAX_STATS = 200_000;
+const INVENTORY_BUDGET_MS = 5_000;
 const RECENT_MS = 5 * 60_000;
 const ALLOW_TTL_MS = 10 * 60_000;
 const LIST_DIRS = 30;
@@ -282,7 +286,7 @@ async function context(root: string, o: CleanOptions): Promise<Ctx> {
   const real = await fs.realpath(root);
   const rootSt = await fs.lstat(real, { bigint: true });
   if (!rootSt.isDirectory()) throw new Error('Racine introuvable');
-  const [mounts, users] = await Promise.all([readMounts(real, o), scanTmpUsers(real, o)]);
+  const [mounts, users] = await Promise.all([readMounts(real, o), scanTmpUsers(real, { ...o, fs: o.procFs ?? fs })]);
   return { root: real, rootDev: rootSt.dev, uid: o.uid ?? process.getuid!(), mounts, users, fs };
 }
 
@@ -371,8 +375,55 @@ interface Quarantine {
   close(): Promise<void>;
 }
 
-/** Marque, dans une quarantaine, les objets mis à l'écart après un échange (jamais choisis par l'utilisateur). */
-const SET_ASIDE = '.proc-watch-mis-a-l-ecart';
+/**
+ * Objets mis à l'écart après un échange (jamais choisis par l'utilisateur), par inode de quarantaine et nom d'entrée.
+ * Gardés par le main, jamais dans la quarantaine (un processus du même uid pourrait y planter un lien) : en mémoire, et
+ * dans le dossier de données de l'app (0600, écriture atomique) pour survivre à un redémarrage.
+ */
+export interface SetAsideStore {
+  has(quarantineIno: string, name: string): boolean;
+  add(quarantineIno: string, name: string): void;
+  /** Oublie une entrée, ou toute la quarantaine si `name` est absent. */
+  forget(quarantineIno: string, name?: string): void;
+}
+
+export function createSetAsideStore(path?: string): SetAsideStore {
+  let items: { quarantine: string; name: string }[] = [];
+  if (path) {
+    try {
+      const v = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+      if (Array.isArray(v))
+        items = v.filter((x): x is { quarantine: string; name: string } => typeof x?.quarantine === 'string' && /^\d{1,20}$/.test(x.quarantine) && typeof x?.name === 'string').map((x) => ({ quarantine: x.quarantine, name: x.name }));
+    } catch {
+      // absent ou illisible : liste vide
+    }
+  }
+  const save = () => {
+    if (!path) return;
+    try {
+      mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+      const tmp = `${path}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
+      writeFileSync(tmp, JSON.stringify(items), { mode: 0o600, flag: 'wx' });
+      renameSync(tmp, path);
+    } catch (e) {
+      console.error('proc-watch : liste des objets mis à l’écart non enregistrée :', e);
+    }
+  };
+  return {
+    has: (q, n) => items.some((x) => x.quarantine === q && x.name === n),
+    add: (q, n) => {
+      if (items.some((x) => x.quarantine === q && x.name === n)) return;
+      items.push({ quarantine: q, name: n });
+      save();
+    },
+    forget: (q, n) => {
+      const next = items.filter((x) => !(x.quarantine === q && (n === undefined || x.name === n)));
+      if (next.length === items.length) return;
+      items = next;
+      save();
+    },
+  };
+}
 
 /** Ouvre un dossier de quarantaine (O_DIRECTORY|O_NOFOLLOW) et vérifie qu'il est à nous, en 0700, sur le système de fichiers de la racine. */
 async function openQuarantine(fs: CleanFs, path: string, uid: number, rootDev: bigint): Promise<Quarantine> {
@@ -410,14 +461,15 @@ async function removeQuarantined(
   q: Quarantine,
   name: string,
   expect: ((st: BigIntStats) => boolean) | null,
+  onSetAside?: (name: string) => void,
 ): Promise<{ ok: true } | { ok: false; reason: string; partial?: boolean }> {
   const held = await fs.open(q.at(name), O_PATH | FS.O_NOFOLLOW).catch(() => null);
   if (!held) return { ok: false, reason: `disparu de la quarantaine ${q.path}` };
   try {
     const before = await held.stat({ bigint: true });
     if (expect && !expect(before)) {
-      // noté pour « Vider la quarantaine » : cet objet n'a jamais été choisi
-      await fs.appendFile(q.at(SET_ASIDE), `${JSON.stringify(name)}\n`).catch(() => {});
+      // noté par le main (jamais dans la quarantaine) pour « Vider la quarantaine » : cet objet n'a jamais été choisi
+      onSetAside?.(name);
       return { ok: false, reason: `un autre élément a pris sa place ; il a été mis à l’écart dans ${q.path} (non supprimé)` };
     }
     const rm = await runRm(rmPath, q.fd, name, timeoutMs);
@@ -474,48 +526,98 @@ function within<T>(p: Promise<T>, ms: number, late?: (v: T) => void): Promise<T>
   });
 }
 
-/**
- * Système de fichiers dont chaque appel est borné par `ms` : un appel bloqué (FUSE figé) ne retient jamais le verrou.
- * L'appel lui-même continue dans le pool de libuv (non annulable) ; un descripteur ouvert trop tard est refermé.
- */
-function timedFs(fs: CleanFs, ms: number): CleanFs {
-  const handle = (h: CleanHandle): CleanHandle => ({
-    fd: h.fd,
-    stat: (o) => within(h.stat(o), ms),
-    close: () => within(h.close(), ms).catch(() => {}),
-  });
+/** File d'au plus `slots` appels au système de fichiers en vol ; un appel figé garde sa place jusqu'à sa vraie fin. */
+export interface FsSlots {
+  run<T>(f: () => Promise<T>): { promise: Promise<T>; cancel(): void };
+  inFlight(): number;
+}
+export function createFsSlots(slots = 2): FsSlots {
+  let active = 0;
+  const queue: (() => void)[] = [];
+  const next = () => {
+    while (active < slots && queue.length) queue.shift()!();
+  };
   return {
-    lstat: (p, o) => within(fs.lstat(p, o), ms),
-    realpath: (p) => within(fs.realpath(p), ms),
-    readdir: (p) => within(fs.readdir(p), ms),
-    readlink: (p) => within(fs.readlink(p), ms),
-    readFile: (p, e) => within(fs.readFile(p, e), ms),
-    rename: (a, b) => within(fs.rename(a, b), ms),
-    mkdtemp: (p) => within(fs.mkdtemp(p), ms),
-    rmdir: (p) => within(fs.rmdir(p), ms),
-    appendFile: (p, d) => within(fs.appendFile(p, d), ms),
-    open: (p, f) => within(fs.open(p, f), ms, (h) => void h.close().catch(() => {})).then(handle),
+    inFlight: () => active,
+    run<T>(f: () => Promise<T>) {
+      let cancelled = false;
+      const promise = new Promise<T>((resolve, reject) => {
+        const start = () => {
+          if (cancelled) return; // délai passé dans la file : jamais lancé
+          active++;
+          f()
+            .then(resolve, reject)
+            .finally(() => {
+              active--;
+              next();
+            });
+        };
+        if (active < slots) start();
+        else queue.push(start);
+      });
+      return { promise, cancel: () => void (cancelled = true) };
+    },
   };
 }
 
-/** Place occupée sous `path` (sans suivre aucun lien), au plus `max` entrées ; pour l'affichage seulement. */
-async function sizeOf(fs: CleanFs, path: string, st: BigIntStats, max: number): Promise<number> {
+/**
+ * Système de fichiers de « Vider la quarantaine » : chaque appel est borné par `ms`, et au plus `slots` appels sont en
+ * vol à la fois (file partagée par le nettoyeur). Un délai n'annule pas l'appel : il continue dans le pool de libuv
+ * (4 fils par défaut) en gardant sa place dans la file ; des montages figés n'occupent donc jamais plus de 2 fils.
+ * Un descripteur ouvert après le délai est refermé.
+ */
+function timedFs(fs: CleanFs, ms: number, slots: FsSlots): CleanFs {
+  const t = <T,>(f: () => Promise<T>, late?: (v: T) => void): Promise<T> => {
+    const job = slots.run(f);
+    return within(job.promise, ms, late).catch((e) => {
+      job.cancel();
+      throw e;
+    });
+  };
+  const handle = (h: CleanHandle): CleanHandle => ({
+    fd: h.fd,
+    stat: (o) => t(() => h.stat(o)),
+    close: () => t(() => h.close()).catch(() => {}),
+  });
+  return {
+    lstat: (p, o) => t(() => fs.lstat(p, o)),
+    realpath: (p) => t(() => fs.realpath(p)),
+    readdir: (p) => t(() => fs.readdir(p)),
+    readlink: (p) => t(() => fs.readlink(p)),
+    readFile: (p, e) => t(() => fs.readFile(p, e)),
+    rename: (a, b) => t(() => fs.rename(a, b)),
+    mkdtemp: (p) => t(() => fs.mkdtemp(p)),
+    rmdir: (p) => t(() => fs.rmdir(p)),
+    open: (p, f) => t(() => fs.open(p, f), (h) => void h.close().catch(() => {})).then(handle),
+  };
+}
+
+/** Budget partagé de l'inventaire : nombre de lstat et échéance (horloge réelle). */
+interface InventoryBudget {
+  statsLeft: number;
+  deadline: number;
+}
+
+/** Place occupée sous `path` (sans suivre aucun lien), dans le budget partagé ; « au moins » si le budget est épuisé. */
+async function sizeOf(fs: CleanFs, path: string, st: BigIntStats, b: InventoryBudget): Promise<{ kb: number; atLeast: boolean }> {
   let kb = (Number(st.blocks) * 512) / 1024;
-  if (!st.isDirectory()) return Math.round(kb);
+  if (!st.isDirectory()) return { kb: Math.round(kb), atLeast: false };
   const stack = [path];
-  let n = 0;
-  while (stack.length && n < max) {
+  const out = () => b.statsLeft <= 0 || Date.now() > b.deadline;
+  while (stack.length) {
+    if (out()) return { kb: Math.round(kb), atLeast: true };
     const d = stack.pop()!;
     const names = await fs.readdir(d).catch(() => [] as string[]);
     for (const name of names) {
-      if (++n > max) break;
+      if (out()) return { kb: Math.round(kb), atLeast: true };
+      b.statsLeft--;
       const c = await fs.lstat(`${d}/${name}`, { bigint: true }).catch(() => null);
       if (!c) continue;
       kb += (Number(c.blocks) * 512) / 1024;
       if (c.isDirectory() && c.dev === st.dev) stack.push(`${d}/${name}`);
     }
   }
-  return Math.round(kb);
+  return { kb: Math.round(kb), atLeast: false };
 }
 
 interface Allowed {
@@ -533,6 +635,11 @@ export interface CleanerOptions extends CleanOptions {
   confirm: (s: TmpConfirmSummary) => Promise<boolean>;
   /** Durée de validité de la dernière liste (défaut 10 min). */
   allowTtlMs?: number;
+  /** Objets mis à l'écart après un échange (défaut : en mémoire seulement ; le main la garde dans son dossier de données). */
+  setAside?: SetAsideStore;
+  /** Inventaire de « Vider la quarantaine » : lstat au plus (défaut 200 000) et durée (défaut 5 s), pour toutes les entrées. */
+  inventoryMaxStats?: number;
+  inventoryBudgetMs?: number;
 }
 
 export interface TmpCleaner {
@@ -561,6 +668,8 @@ export function createTmpCleaner(root: string, o: CleanerOptions): TmpCleaner {
   };
   let allowed = new Map<string, Allowed>();
   let busy = false;
+  const setAside = o.setAside ?? createSetAsideStore();
+  const fsSlots = createFsSlots(2); // partagé par toutes les passes de « Vider la quarantaine »
 
   async function list(): Promise<TmpListing> {
     const [c0, off] = await Promise.all([context(root, o), disabled()]);
@@ -692,7 +801,8 @@ export function createTmpCleaner(root: string, o: CleanerOptions): TmpCleaner {
           continue;
         }
         const same = (m: BigIntStats) => m.ino === a.ino && m.dev === a.dev && m.uid === a.uid && kindOf(m) === a.kind;
-        const res = await removeQuarantined(fs, rmPath, rmTimeout, q, item.name, same);
+        const qq = q;
+        const res = await removeQuarantined(fs, rmPath, rmTimeout, q, item.name, same, (n) => setAside.add(String(qq.ino), n));
         if (res.ok) {
           results.set(item.name, { name: item.name, ok: true });
           freedKB += a.sizeKB;
@@ -716,12 +826,20 @@ export function createTmpCleaner(root: string, o: CleanerOptions): TmpCleaner {
   async function emptyQuarantine(): Promise<TmpDeleteOutcome> {
     if (busy) throw new Error('Une suppression est déjà en cours');
     busy = true;
-    const tfs = timedFs(fs, o.fsTimeoutMs ?? FS_TIMEOUT_MS);
-    const ot: CleanOptions = { ...o, fs: tfs };
+    const tfs = timedFs(fs, o.fsTimeoutMs ?? FS_TIMEOUT_MS, fsSlots);
+    // /proc et mountinfo : lus directement (procfs ne bloque pas) ; tout le reste passe par tfs
+    const ot: CleanOptions = { ...o, fs: tfs, procFs: fs };
     const budget = o.quarantineBudgetMs ?? QUARANTINE_BUDGET_MS;
     const maxEntries = o.quarantineMaxEntries ?? QUARANTINE_MAX_ENTRIES;
-    const start = now();
-    const opened: { name: string; q: Quarantine | null; error: string | null; entries: { name: string; ino: bigint; kind: TmpEntry['kind']; sizeKB: number; setAside: boolean }[]; more: number; marker: boolean }[] = [];
+    const inv: InventoryBudget = { statsLeft: o.inventoryMaxStats ?? INVENTORY_MAX_STATS, deadline: Date.now() + (o.inventoryBudgetMs ?? INVENTORY_BUDGET_MS) };
+    type Rec = {
+      name: string;
+      q: Quarantine | null;
+      error: string | null;
+      entries: { name: string; ino: bigint; kind: TmpEntry['kind']; sizeKB: number; atLeast: boolean; setAside: boolean }[];
+      more: number;
+    };
+    const opened: Rec[] = [];
     try {
       const off = await disabled();
       if (off) throw new Error(off);
@@ -729,10 +847,10 @@ export function createTmpCleaner(root: string, o: CleanerOptions): TmpCleaner {
       if (c0.mounts === null) throw new Error('impossible de vérifier (points de montage illisibles)');
       const found = (await leftoverQuarantines(c0)).filter((x) => x.eligible);
       if (!found.length) return { results: [], freedKB: 0 };
-      // 1) ouverture et inventaire (pour la confirmation)
-      let budgetLeft = maxEntries;
+      // 1) ouverture et inventaire (pour la confirmation), dans leur propre budget
+      let left = maxEntries;
       for (const x of found) {
-        const rec: (typeof opened)[number] = { name: x.name, q: null, error: null, entries: [], more: 0, marker: false };
+        const rec: Rec = { name: x.name, q: null, error: null, entries: [], more: 0 };
         opened.push(rec);
         const p = join(c0.root, x.name);
         if ([...c0.mounts].some((m) => m === p || m.startsWith(`${p}/`))) {
@@ -747,28 +865,16 @@ export function createTmpCleaner(root: string, o: CleanerOptions): TmpCleaner {
         try {
           rec.q = await openQuarantine(tfs, p, c0.uid, c0.rootDev);
           if (rec.q.ino !== x.ino) throw new Error('a changé depuis l’affichage');
-          const names = await tfs.readdir(`/proc/self/fd/${rec.q.fd}`);
-          rec.marker = names.includes(SET_ASIDE);
-          const aside = new Set<string>();
-          if (rec.marker) {
-            const text = await tfs.readFile(rec.q.at(SET_ASIDE), 'utf8').catch(() => '');
-            for (const line of text.split('\n')) {
-              try {
-                const n = JSON.parse(line) as unknown;
-                if (typeof n === 'string') aside.add(n);
-              } catch {
-                // ligne illisible
-              }
-            }
-          }
-          const real = names.filter((n) => n !== SET_ASIDE).sort();
-          const take = real.slice(0, Math.max(0, budgetLeft));
-          rec.more = real.length - take.length;
-          budgetLeft -= take.length;
+          const qino = String(rec.q.ino);
+          const names = (await tfs.readdir(`/proc/self/fd/${rec.q.fd}`)).sort();
+          const take = names.slice(0, Math.max(0, left));
+          rec.more = names.length - take.length;
+          left -= take.length;
           for (const n of take) {
             const st = await tfs.lstat(rec.q.at(n), { bigint: true }).catch(() => null);
             if (!st) continue;
-            rec.entries.push({ name: n, ino: st.ino, kind: kindOf(st), sizeKB: await sizeOf(tfs, rec.q.at(n), st, 20_000).catch(() => 0), setAside: aside.has(n) });
+            const size = await sizeOf(tfs, rec.q.at(n), st, inv).catch(() => ({ kb: 0, atLeast: true }));
+            rec.entries.push({ name: n, ino: st.ino, kind: kindOf(st), sizeKB: size.kb, atLeast: size.atLeast, setAside: setAside.has(qino, n) });
           }
         } catch (e) {
           rec.error = `refusée : ${code(e) ?? (e as Error).message}`;
@@ -778,41 +884,66 @@ export function createTmpCleaner(root: string, o: CleanerOptions): TmpCleaner {
       const results: TmpDeleteResult[] = opened.filter((r) => r.error).map((r) => ({ name: r.name, ok: false, reason: r.error! }));
       if (!usable.length) return { results, freedKB: 0 };
       // 2) confirmation native : chaque entrée, sa taille, et les objets jamais choisis
-      const kbOf = (r: (typeof opened)[number]) => r.entries.reduce((t, e) => t + e.sizeKB, 0);
+      const kbOf = (r: Rec) => r.entries.reduce((t, e) => t + e.sizeKB, 0);
       const ok = await o.confirm({
         purpose: 'quarantine',
         root: c0.root,
         items: usable.map((r) => ({ name: r.name, kind: 'dir' as const, sizeKB: kbOf(r), recent: false })),
         totalKB: usable.reduce((t, r) => t + kbOf(r), 0),
         uninspectable: c0.users.uninspectable,
-        quarantines: usable.map((r) => ({ name: r.name, entries: r.entries.map(({ name, kind, sizeKB, setAside }) => ({ name, kind, sizeKB, setAside })), more: r.more })),
+        quarantines: usable.map((r) => ({ name: r.name, entries: r.entries.map(({ name, kind, sizeKB, atLeast, setAside: sa }) => ({ name, kind, sizeKB, atLeast, setAside: sa })), more: r.more })),
       });
       if (!ok) return { results: [...results, ...usable.map((r) => ({ name: r.name, ok: false, reason: 'annulé' }))], freedKB: 0, cancelled: true };
-      // 3) suppression des seules entrées confirmées, par descripteur ; budget global
+      // 3) après la confirmation (la boîte a pu rester ouverte longtemps) : montages et usage relus, budget démarré
+      const mountsNow = await readMounts(c0.root, o);
+      const start = now();
       let partial = false;
       let freedKB = 0;
       const rmTimeout = o.rmTimeoutMs ?? RM_TIMEOUT_MS;
       for (const r of usable) {
         const q = r.q!;
+        const qino = String(q.ino);
+        const users = await scanTmpUsers(q.path, { ...o, fs });
         const errors: string[] = [];
         let late = 0;
         for (const e of r.entries) {
+          const ep = join(q.path, e.name);
+          const why =
+            mountsNow === null
+              ? 'impossible de vérifier (points de montage illisibles)'
+              : mountsNow.has(ep)
+                ? 'point de montage'
+                : [...mountsNow].some((m) => m.startsWith(`${ep}/`))
+                  ? 'contient un point de montage'
+                  : !users.complete
+                    ? 'impossible de vérifier'
+                    : users.users.has(e.name)
+                      ? usedBy(users.users.get(e.name)!)
+                      : null;
+          if (why) {
+            errors.push(`${e.name} : ${why}`);
+            continue;
+          }
           const spent = now() - start;
           if (spent > budget) {
             late++;
             continue;
           }
           const res = await removeQuarantined(tfs, rmPath, Math.max(1_000, Math.min(rmTimeout, budget - spent)), q, e.name, (st) => st.ino === e.ino);
-          if (res.ok) freedKB += e.sizeKB;
-          else errors.push(`${e.name} : ${res.reason}`);
+          if (res.ok) {
+            freedKB += e.sizeKB;
+            setAside.forget(qino, e.name);
+          } else errors.push(`${e.name} : ${res.reason}`);
         }
         if (late) errors.push(`temps écoulé (${late} entrée${late > 1 ? 's' : ''} non traitée${late > 1 ? 's' : ''})`);
         if (r.more) errors.push(`${r.more} entrée${r.more > 1 ? 's' : ''} non traitée${r.more > 1 ? 's' : ''} (plafond de ${maxEntries})`);
-        if (!errors.length && r.marker) await removeQuarantined(tfs, rmPath, rmTimeout, q, SET_ASIDE, null).catch(() => null);
         if (errors.length) {
           partial = true;
           results.push({ name: r.name, ok: false, reason: errors.join(' ; ') });
-        } else results.push({ name: r.name, ok: true });
+        } else {
+          results.push({ name: r.name, ok: true });
+          setAside.forget(qino);
+        }
       }
       return { results, freedKB, ...(partial ? { partial } : {}) };
     } finally {
@@ -832,7 +963,7 @@ export function confirmText(s: TmpConfirmSummary, formatKB: (kb: number) => stri
       const lines = q.entries.map((e) => {
         const d = displayName(e.name);
         const suffix = e.kind === 'link' ? ' (le lien seul)' : e.kind === 'dir' ? '/' : '';
-        return `   ${d.escaped ? '⚠ ' : ''}${d.text}${suffix} — ${formatKB(e.sizeKB)}${e.setAside ? ' — ⚠ mis à l’écart après un échange (jamais choisi)' : ''}`;
+        return `   ${d.escaped ? '⚠ ' : ''}${d.text}${suffix} — ${e.atLeast ? 'au moins ' : ''}${formatKB(e.sizeKB)}${e.setAside ? ' — ⚠ mis à l’écart après un échange (jamais choisi)' : ''}`;
       });
       if (q.more) lines.push(`   … et ${q.more} autre${q.more > 1 ? 's' : ''} (non traitée${q.more > 1 ? 's' : ''} cette fois : plafond)`);
       return [head, ...lines].join('\n');

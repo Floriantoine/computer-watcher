@@ -1,12 +1,12 @@
 // Toutes les racines sont sous ~/.cache/pw-tmpclean-* (jamais /tmp) et supprimées à la fin.
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, statSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:net';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, expect, test } from 'vitest';
 import type { TmpConfirmSummary, TmpDeleteItem } from '../core/tmpClean';
-import { checkGnuRm, confirmText, createTmpCleaner, scanTmpUsers, tmpCleanEvent, tmpRootFromEnv, type CleanerOptions } from './tmpClean';
+import { checkGnuRm, confirmText, createSetAsideStore, createTmpCleaner, scanTmpUsers, tmpCleanEvent, tmpRootFromEnv, type CleanerOptions } from './tmpClean';
 
 const cache = join(homedir(), '.cache');
 mkdirSync(cache, { recursive: true });
@@ -725,7 +725,9 @@ test('p2 : confirmation « Vider » : entrées de chaque quarantaine avec taille
   mkdirSync(join(root, 'item'));
   const fsp = await import('node:fs/promises');
   // échange pendant le déplacement : un autre objet est mis à l'écart dans la quarantaine (n2)
+  const storePath = join(base, 'data', 'tmp-set-aside.json');
   const swapping = cleaner(root, {
+    setAside: createSetAsideStore(storePath),
     fs: {
       ...fsp,
       rename: async (from: string, to: string) => {
@@ -740,7 +742,8 @@ test('p2 : confirmation « Vider » : entrées de chaque quarantaine avec taille
   expect((await swapping.delete([item(root, 'item')])).results[0].reason).toMatch(/^un autre élément a pris sa place/);
   const qname = readdirSync(root).find((n) => n.startsWith('.proc-watch-trash-'))!;
   writeFileSync(join(root, qname, 'reste'), Buffer.alloc(4096, 1));
-  const c = cleaner(root);
+  // nouvelle instance (redémarrage de l'app) : la liste est relue depuis le dossier de données
+  const c = cleaner(root, { setAside: createSetAsideStore(storePath) });
   await c.list();
   await c.emptyQuarantine();
   const s = c.asked.at(-1)!;
@@ -755,4 +758,148 @@ test('p2 : confirmation « Vider » : entrées de chaque quarantaine avec taille
   const t = confirmText(s, (kb) => `${kb} Ko`);
   expect(t.detail).toMatch(/item\/ — \d+ Ko — ⚠ mis à l’écart après un échange \(jamais choisi\)/);
   expect(t.detail).toMatch(/reste — \d+ Ko/);
+});
+
+
+/** Prépare un objet mis à l'écart (échange simulé pendant le déplacement), puis `after(quarantaine)` avant l'écriture. */
+function swappingFs(base: string, plant?: (q: string) => void) {
+  return import('node:fs/promises').then((fsp) => ({
+    ...fsp,
+    rename: async (from: string, to: string) => {
+      await fsp.rename(from, to);
+      const q = to.replace(/\/[^/]+$/, '');
+      plant?.(q);
+      await fsp.rename(to, join(base, `hold-${Date.now()}`));
+      await fsp.mkdir(to);
+    },
+  }));
+}
+
+test('signalement 1 : marque plantée en lien vers un fichier extérieur : jamais écrite ni lue, liste gardée par le main (0600)', async () => {
+  const { base, root } = setup();
+  mkdirSync(join(root, 'item'));
+  const outside = join(base, 'outside.txt');
+  writeFileSync(outside, 'original\n');
+  const storePath = join(base, 'data', 'tmp-set-aside.json');
+  const c = cleaner(root, {
+    setAside: createSetAsideStore(storePath),
+    // l'attaquant pose la marque en lien vers un fichier extérieur, dans la quarantaine (par le même descripteur)
+    fs: (await swappingFs(base, (q) => symlinkSync(outside, join(q, '.proc-watch-mis-a-l-ecart')))) as never,
+  });
+  await c.list();
+  const out = await c.delete([item(root, 'item')]);
+  expect(out.results[0].reason).toMatch(/^un autre élément a pris sa place/);
+  expect(readFileSync(outside, 'utf8')).toBe('original\n');
+  const qname = readdirSync(root).find((n) => n.startsWith('.proc-watch-trash-'))!;
+  const qino = String(lstatSync(join(root, qname), { bigint: true }).ino);
+  const saved = JSON.parse(readFileSync(storePath, 'utf8')) as { quarantine: string; name: string }[];
+  expect(saved).toEqual([{ quarantine: qino, name: 'item' }]);
+  expect(statSync(storePath).mode & 0o777).toBe(0o600);
+  // relecture : la marque plantée n'est jamais lue (elle n'étiquette rien), le lien est une entrée comme une autre
+  const c2 = cleaner(root, { setAside: createSetAsideStore(storePath) });
+  await c2.list();
+  await c2.emptyQuarantine();
+  expect(readFileSync(outside, 'utf8')).toBe('original\n');
+  expect(existsSync(outside)).toBe(true);
+  // vidée : l'entrée de la liste du main est oubliée
+  expect(JSON.parse(readFileSync(storePath, 'utf8'))).toEqual([]);
+});
+
+test('signalement 1 : liste du main illisible ou corrompue : ignorée sans erreur, réécrite atomiquement', () => {
+  const { base } = setup();
+  const p = join(base, 'data', 'tmp-set-aside.json');
+  mkdirSync(join(base, 'data'));
+  writeFileSync(p, '{pas du json');
+  const st = createSetAsideStore(p);
+  expect(st.has('1', 'a')).toBe(false);
+  st.add('7', 'a');
+  expect(createSetAsideStore(p).has('7', 'a')).toBe(true);
+  expect(readdirSync(join(base, 'data'))).toEqual(['tmp-set-aside.json']); // pas de fichier temporaire restant
+});
+
+test('signalement 2 : le budget de « Vider » démarre après la confirmation (lecture lente de la boîte)', async () => {
+  const { root } = setup();
+  const q = leftover(root, '.proc-watch-trash-Lente1', { a: 1, b: 1, c: 1 });
+  const c = cleaner(root, { quarantineBudgetMs: 1000, confirm: () => new Promise((r) => setTimeout(() => r(true), 1500)) });
+  await c.list();
+  const out = await c.emptyQuarantine();
+  expect(out.results).toEqual([{ name: '.proc-watch-trash-Lente1', ok: true }]);
+  expect(existsSync(q)).toBe(false);
+});
+
+test('signalement 2 : inventaire borné (lstat partagés) : tailles « au moins »', async () => {
+  const { root } = setup();
+  const q = leftover(root, '.proc-watch-trash-Gros1', {});
+  mkdirSync(join(q, 'd'));
+  for (let i = 0; i < 10; i++) writeFileSync(join(q, 'd', `f${i}`), Buffer.alloc(4096, 1));
+  const c = cleaner(root, { inventoryMaxStats: 3 });
+  await c.list();
+  await c.emptyQuarantine();
+  const e = c.asked.at(-1)!.quarantines![0].entries[0];
+  expect(e).toMatchObject({ name: 'd', atLeast: true });
+  expect(confirmText(c.asked.at(-1)!, (kb) => `${kb} Ko`).detail).toMatch(/d\/ — au moins \d+ Ko/);
+});
+
+test('signalement 2 : jamais plus de 2 appels au système de fichiers en vol pendant « Vider » (montages figés)', async () => {
+  const { root } = setup();
+  leftover(root, '.proc-watch-trash-Fige1', { a: 1 });
+  leftover(root, '.proc-watch-trash-Fige2', { b: 1 });
+  leftover(root, '.proc-watch-trash-Fige3', { c: 1 });
+  const fsp = await import('node:fs/promises');
+  let inFlight = 0;
+  let max = 0;
+  const hang = <T,>(): Promise<T> => {
+    inFlight++;
+    max = Math.max(max, inFlight);
+    return new Promise<T>(() => {}); // figé pour toujours (le fil reste occupé)
+  };
+  const c = cleaner(root, {
+    fsTimeoutMs: 100,
+    fs: { ...fsp, open: (p: string, f: number) => (p.includes('.proc-watch-trash-') ? hang() : fsp.open(p, f)) } as never,
+  });
+  await c.list();
+  const t0 = Date.now();
+  const out = await c.emptyQuarantine();
+  expect(Date.now() - t0).toBeLessThan(3000);
+  expect(out.results.every((r) => !r.ok)).toBe(true);
+  expect(max).toBeLessThanOrEqual(2);
+});
+
+test('signalement 3 : un processus qui se met à utiliser une entrée pendant la confirmation : entrée refusée, les autres supprimées', async () => {
+  const { root } = setup();
+  const q = leftover(root, '.proc-watch-trash-Usage1', { libre: 1 });
+  mkdirSync(join(q, 'work'));
+  let child: ChildProcess | null = null;
+  const c = cleaner(root, {
+    confirm: async () => {
+      child = spawn('sleep', ['30'], { cwd: join(q, 'work'), stdio: 'ignore' });
+      children.push(child);
+      await settled(child);
+      return true;
+    },
+  });
+  await c.list();
+  const out = await c.emptyQuarantine();
+  expect(out.results[0].ok).toBe(false);
+  expect(out.results[0].reason).toContain(`work : utilisé par sleep (pid ${child!.pid})`);
+  expect(existsSync(join(q, 'work'))).toBe(true);
+  expect(existsSync(join(q, 'libre'))).toBe(false);
+});
+
+test('signalement 3 : un montage apparu dans une entrée pendant la confirmation : entrée refusée', async () => {
+  const { root } = setup();
+  const q = leftover(root, '.proc-watch-trash-Mont1', {});
+  mkdirSync(join(q, 'm'));
+  let mounts: string[] = [];
+  const c = cleaner(root, {
+    mountPoints: async () => mounts,
+    confirm: async () => {
+      mounts = [join(q, 'm', 'sous')];
+      return true;
+    },
+  });
+  await c.list();
+  const out = await c.emptyQuarantine();
+  expect(out.results[0].reason).toContain('m : contient un point de montage');
+  expect(existsSync(join(q, 'm'))).toBe(true);
 });
