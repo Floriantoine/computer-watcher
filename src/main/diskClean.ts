@@ -82,6 +82,9 @@ function checkPath(p: string, homeDev: number, d: CleanDeps): string | null {
   let real: string;
   try {
     real = realpathSync(p);
+    // aucun lien entre la racine (HOME ou XDG, qui peut en être un : choix de l'utilisateur) et le dossier
+    const root = rootOf(d.roots, p);
+    if (real !== join(realpathSync(root), p.slice(root.replace(/\/+$/, '').length + 1))) return `${shown} : lien symbolique dans le chemin, refusé`;
   } catch (e) {
     return `vérification impossible (${(e as Error).message})`;
   }
@@ -209,7 +212,7 @@ export async function cleanFamilies(ids: readonly FamilyId[], d: CleanDeps): Pro
       removeFamily(id, d);
       done.push(id);
     } catch (e) {
-      refused.push({ id, reason: `${(e as Error).message} (en partie supprimé)` });
+      refused.push({ id, reason: `${(e as Error).message} (arrêté ; une partie a pu être supprimée)` });
     }
   }
   const after = avail();

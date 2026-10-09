@@ -241,3 +241,17 @@ test('root indisponible (pacman sans paccache) : refus avec la raison, pkexec ja
   expect(calls).toEqual([]);
   expect(asked).toHaveLength(0);
 });
+
+test('lien symbolique au milieu du chemin (~/.npm → ailleurs) : refus avant la confirmation, rien supprimé', async () => {
+  const { base, home, roots } = fakeHome();
+  const elsewhere = join(base, 'ailleurs-npm');
+  mkdirSync(join(elsewhere, '_cacache'), { recursive: true });
+  writeFileSync(join(elsewhere, '_cacache', 'garde'), 'x');
+  rmSync(join(home, '.npm'), { recursive: true });
+  symlinkSync(elsewhere, join(home, '.npm'));
+  const { d, asked } = deps(roots);
+  const r = await cleanFamilies(['npm'], d);
+  expect(r.refused).toEqual([{ id: 'npm', reason: expect.stringMatching(/lien symbolique dans le chemin/) }]);
+  expect(asked).toHaveLength(0);
+  expect(readdirSync(join(elsewhere, '_cacache'))).toEqual(['garde']);
+});
