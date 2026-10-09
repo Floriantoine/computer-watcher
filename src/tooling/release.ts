@@ -43,6 +43,9 @@ export const FIRST_RELEASE_NOTES = [
   '- AppImage et .deb ; nouvelles versions proposées dans l’app (installation sur demande pour l’AppImage).',
 ].join('\n');
 
+/** Nom affiché (APP_DISPLAY_NAME de src/core/appName.ts, recopié : ce fichier n'importe que des modules node:). */
+const DISPLAY_NAME = 'Computer Watcher';
+
 /** Sujets internes, jamais dans les notes publiques. */
 const HIDDEN = /^(chore|test|merge|ci|build|style|refactor)\b|revue/i;
 /** Références de revue en fin de sujet : (r1–r3), (p1–p4), (M1–M6), (B1 bis), (N1, N2). */
@@ -54,13 +57,13 @@ const REVIEW_REFS = /\s*\((?:[A-Za-z]\d+(?:\s*bis)?(?:\s*[–-]\s*[A-Za-z]?\d+)?
  * les sujets des commits depuis la version précédente, sans les sujets internes ni les références de revue.
  */
 export function tagMessage(version: string, subjects: string, o: { first?: boolean } = {}): string {
-  if (o.first) return `proc-watch v${version}\n\n${FIRST_RELEASE_NOTES}\n`;
+  if (o.first) return `${DISPLAY_NAME} v${version}\n\n${FIRST_RELEASE_NOTES}\n`;
   const lines = subjects
     .split('\n')
     .map((s) => s.trim())
     .filter((s) => s && !s.startsWith('chore(release)') && !HIDDEN.test(s))
     .map((s) => s.replace(REVIEW_REFS, ''));
-  return `proc-watch v${version}\n${lines.length ? `\n${lines.map((s) => `- ${s}`).join('\n')}\n` : ''}`;
+  return `${DISPLAY_NAME} v${version}\n${lines.length ? `\n${lines.map((s) => `- ${s}`).join('\n')}\n` : ''}`;
 }
 
 export function release(args: ReleaseArgs, d: { run: Run; readPkg: () => { version: string }; log: (m: string) => void }): string {

@@ -17,6 +17,7 @@ import { buildGroups, isOverThreshold } from '../core/grouping/buildGroups';
 import { claudeDirs } from '../core/grouping/claudeDirs';
 import { createProjectRootCache } from '../core/grouping/projectRootCache';
 import { recordSeparate, stickyIds } from '../core/grouping/stickyCards';
+import { APP_DISPLAY_NAME, APP_NAME } from '../core/appName';
 import { killRequest, planKill, sendSignals } from '../core/kill';
 import { compileProtection } from '../core/protection';
 import { formatAppEvent } from '../core/history/events';
@@ -44,6 +45,9 @@ import { createAlertOpener, createFocusWriter, initSeenUpTo, keepSeenUpTo, markS
 import { installDesktopEntry, refreshDesktopEntry } from './desktopEntry';
 import { installedAppImage, installedElsewhere } from './appImageTrust';
 import { acquireLock, blockingSleep } from './singleInstance';
+import { userDataPath } from './userDataPath';
+import { defaultSystemctlSync, migrateEarly, ownAppImageExes, migrateLate, migrationState, realDirUser, realLegacyInstance, waitPidGone, type MigrateDeps } from './migrateName';
+import { migrationLines, type MigrationReport } from '../core/nameMigration';
 import { createAppImageBackend } from './appImageUpdate';
 import { relaunchDetached, sanitizeAppImageEnv } from './relaunch';
 import { createPrefsStore, createReleasesApiBackend, createUpdateController, type UpdateBackend } from './updater';
@@ -69,16 +73,106 @@ import { autoManageService, defaultSystemctl, recorderSyncDisabled, ensureRecord
 // Service réseau dans le processus main : l'app ne charge que des fichiers locaux, un processus de moins (~20 Mo).
 app.commandLine.appendSwitch('enable-features', 'NetworkServiceInProcess2');
 
+// Nom technique et dossier userData (profil Chromium, verrou d'instance unique) fixés avant toute autre initialisation :
+// jamais déduits de productName ni du nom affiché ; userData = dossier de config de l'app (voir userDataPath).
+app.setName(APP_NAME);
+
+// Migration proc-watch → computer-watcher, premier temps : après le verrou d'instance unique (pris dans le dossier de config
+// résolu, l'ancien tant qu'il n'est pas déplacé), avant toute lecture de la config, de la base ou du service (arrêt de
+// l'ancien service, puis déplacement des dossiers) ; userData est ensuite re-résolu. Le second temps (nouveau service,
+// entrées du menu, copie AppImage) suit `ready`. Instance encore ouverte, dossier encore utilisé, XDG partiel : rien n'est
+// touché. Le démarrage peut attendre jusqu'à une trentaine de secondes au pire (systemctl bloqué, relance qui attend
+// l'instance précédente), sans fenêtre : voir defaultSystemctlSync.
+/** Relance (mise à jour, installation, « Réessayer ») : relevé avant acquireLock, qui retire ces variables. */
+const relaunching = process.env.PROC_WATCH_RELAUNCH === '1' || process.env.APPIMAGE_SILENT_INSTALL === 'true';
+function migrationDeps(): MigrateDeps {
+  const r = rootsFrom(process.env, homedir());
+  return {
+    roots: r,
+    env: process.env,
+    systemctl: defaultSystemctlSync,
+    mountinfo: () => {
+      try {
+        return readFileSync('/proc/self/mountinfo', 'utf8');
+      } catch {
+        return '';
+      }
+    },
+    legacyInstance: () => realLegacyInstance(r.configHome),
+    dirUser: (dir) => realDirUser(dir, { selfExes: ownAppImageExes() }),
+    relaunching,
+    sleep: blockingSleep,
+    writeNewService: async () => {
+      await ensureRecorderService({ enabled: config.recorder.enabled, args: execArgs(), path: unitPath(), run: defaultSystemctl, allowCreate: true });
+    },
+    iconPng: appIcon,
+    ownAppImage: () => ownImage,
+    // copie AppImage renommée : relance depuis elle, puis sortie (la nouvelle instance supprime l'ancienne copie)
+    relaunch: (target) =>
+      new Promise<void>((resolve, reject) => {
+        quitting = true;
+        relaunchDetached({
+          ...relaunchHooks(),
+          target,
+          onStarted: () => {
+            setTimeout(() => app.quit(), 50);
+            resolve();
+          },
+          onFailed: (m) => {
+            quitting = false;
+            reject(new Error(m));
+          },
+        });
+      }),
+    now: () => Date.now(),
+  };
+}
+app.setPath('userData', userDataPath());
+
 // Instance unique : un second lancement (bouton « Ouvrir » d'une notification, menu) réveille la fenêtre existante.
 // Relance après une mise à jour : la version précédente peut tenir encore le verrou quelques instants (voir acquireLock).
 const primary = acquireLock({ tryLock: () => app.requestSingleInstanceLock(), env: process.env, sleep: blockingSleep });
+let migration: MigrationReport = { status: 'nothing', done: [], errors: {}, leftInPlace: [], skipped: {} };
+if (primary) {
+  // « Réessayer » : l'instance précédente a passé son pid ; ses dossiers ne bougent qu'une fois qu'elle a réellement quitté
+  const waitPid = Number(process.env.PROC_WATCH_WAIT_PID);
+  delete process.env.PROC_WATCH_WAIT_PID;
+  const gone = !Number.isInteger(waitPid) || waitPid <= 1 || waitPidGone({ pid: waitPid, sleep: blockingSleep });
+  try {
+    migration = gone
+      ? migrateEarly(migrationDeps())
+      : { status: 'deferred', done: [], errors: {}, leftInPlace: [], skipped: {}, detail: `l'instance précédente (pid ${waitPid}) n'a pas quitté` };
+  } catch (e) {
+    console.error('migration :', e);
+    migration = { status: 'partial', done: [], errors: { 'move-dirs': e instanceof Error ? e.message : String(e) }, leftInPlace: [], skipped: {} };
+  }
+  // dossier de config déplacé : le profil Chromium suit (verrou d'instance compris, déplacé avec lui)
+  app.setPath('userData', userDataPath());
+} else {
+  // second lancement, ou ancienne instance qui tient le verrou de l'ancien dossier : jamais de migration ici
+  const holder = realLegacyInstance(rootsFrom(process.env, homedir()).configHome);
+  if (holder && migrationState(migrationDeps()).status !== 'done')
+    migration = { status: 'deferred', done: [], errors: {}, leftInPlace: [], skipped: {}, detail: `l'ancien dossier est encore utilisé par ${holder.name} (pid ${holder.pid}) ; quitter cette instance, puis relancer Computer Watcher` };
+}
+/** Différée faute de XDG cohérent (app d'essai) : dit dans le journal et À propos, jamais de boîte bloquante. */
+const xdgDeferred = () => migration.status === 'deferred' && /^XDG partiel/.test(migration.detail ?? '');
+/** L'ancien service n'est pas (encore) arrêté : jamais de nouveau service à côté de lui (deux enregistreurs). */
+const legacyServiceBlocked = () =>
+  (migration.status === 'partial' || migration.status === 'deferred') && !migration.done.includes('stop-legacy-service') && !migration.skipped['stop-legacy-service'];
 if (!primary) {
   // `npm run dev` / `npm start` pendant que l'app de l'utilisateur tourne avec la même config : pas un plantage.
   console.error(
-    "proc-watch est déjà ouvert avec cette configuration (XDG_CONFIG_HOME) : sa fenêtre est affichée et ce lancement s'arrête. " +
+    `${APP_DISPLAY_NAME} est déjà ouvert avec cette configuration (XDG_CONFIG_HOME) : sa fenêtre est affichée et ce lancement s'arrête. ` +
       'Pour une seconde instance, lancer avec un XDG_CONFIG_HOME temporaire.',
   );
-  app.quit();
+  // migration différée (ancienne version encore ouverte, qui tient le verrou) : le dire avant de s'arrêter
+  if (migration.status === 'deferred' && !xdgDeferred())
+    void app.whenReady().then(async () => {
+      const [message, ...detail] = migrationLines(migration);
+      await dialog.showMessageBox({ type: 'warning', title: APP_DISPLAY_NAME, message, detail: detail.join('\n'), buttons: ['OK'], noLink: true });
+      app.quit();
+    });
+  else app.quit();
 }
 
 const dir = configDir();
@@ -152,7 +246,7 @@ const relaunchHooks = () => ({
   releaseLock: () => app.releaseSingleInstanceLock(),
   reacquireLock: () => app.requestSingleInstanceLock(),
 });
-/** N1 : copie installée (~/Applications/proc-watch.AppImage) présente → le service pointe vers elle, jamais vers l'original. */
+/** N1 : copie installée (~/Applications/computer-watcher.AppImage) présente → le service pointe vers elle, jamais vers l'original. */
 const execArgs = () =>
   recorderExecArgs({ appImage: recorderAppImage(ownImage, installedAppImage(homedir())) ?? undefined, execPath: process.execPath, appPath: app.getAppPath() });
 
@@ -162,7 +256,7 @@ const execArgs = () =>
  */
 async function doSync(explicit: boolean, restart = false): Promise<boolean> {
   systemdOk = await systemctlAvailable(defaultSystemctl);
-  if (!systemdOk || recorderSyncDisabled() || uninstalling) return false;
+  if (!systemdOk || recorderSyncDisabled() || uninstalling || legacyServiceBlocked()) return false;
   // Au démarrage en dev (non empaqueté, sans PROC_WATCH_RECORDER_DEV) : jamais de création d'unité, mais une unité
   // existante est tenue à jour (ou retirée si l'historique est désactivé), comme en mode empaqueté.
   const allowCreate = explicit || autoManageService(app.isPackaged);
@@ -361,7 +455,7 @@ function createWindow(shown = true): void {
     width: 1200,
     height: 800,
     show: shown,
-    title: 'proc-watch',
+    title: APP_DISPLAY_NAME,
     icon: appIcon,
     backgroundColor: '#0b0c10',
     webPreferences: {
@@ -605,12 +699,12 @@ ipcMain.handle('history:top', (_e, r: unknown, o: unknown) => (isRange(r) && isT
 ipcMain.handle('history:events', (_e, r: unknown, groupKey: unknown) => (isRange(r) && isOptionalGroupKey(groupKey) ? history.events(r, groupKey) : []));
 /**
  * /tmp, sauf racine de test : PROC_WATCH_TMP_ROOT n'est retenu que si son chemin réel est sous ~/.cache/pw-… et contient
- * le fichier témoin .proc-watch-test-root (voir tmpRootFromEnv) ; ni NODE_ENV ni l'empaquetage n'entrent en compte.
+ * le fichier témoin .computer-watcher-test-root (ou .proc-watch-test-root) (voir tmpRootFromEnv) ; ni NODE_ENV ni l'empaquetage n'entrent en compte.
  */
 const tmpRootChoice = tmpRootFromEnv(process.env);
 const tmpRoot = tmpRootChoice.root;
-if (tmpRootChoice.warning) console.error(`proc-watch : ${tmpRootChoice.warning}`);
-if (tmpRoot !== '/tmp') console.error(`proc-watch : racine /tmp de test : ${tmpRoot}`);
+if (tmpRootChoice.warning) console.error(`${APP_DISPLAY_NAME} : ${tmpRootChoice.warning}`);
+if (tmpRoot !== '/tmp') console.error(`${APP_DISPLAY_NAME} : racine /tmp de test : ${tmpRoot}`);
 const tmpTopDirs = sharedScan(() => topTmpDirs(tmpRoot));
 ipcMain.handle('tmp:topDirs', () => tmpTopDirs());
 /** Tuiles de la page /tmp : taille et occupation (statfs), RAM totale ; lecture seule. */
@@ -856,7 +950,7 @@ ipcMain.handle('onboarding:relaunch', async (_e, del: unknown): Promise<{ relaun
       },
       onFailed: (m) => {
         quitting = false;
-        reject(new Error(`Copie installée, mais pas relancée : ${m}. Lancer proc-watch depuis le menu.`));
+        reject(new Error(`Copie installée, mais pas relancée : ${m}. Lancer ${APP_DISPLAY_NAME} depuis le menu.`));
       },
     }),
   );
@@ -888,7 +982,7 @@ async function deletePendingOriginal(): Promise<void> {
     // même fichier que la copie installée (dev+ino), pas seulement le même chemin réel
     const here = appImage ? await stat(appImage).catch(() => null) : null;
     const copy = await stat(paths.appImage).catch(() => null);
-    if (!here || !copy || here.dev !== copy.dev || here.ino !== copy.ino) throw new Error('proc-watch ne tourne pas depuis la copie installée : rien supprimé');
+    if (!here || !copy || here.dev !== copy.dev || here.ino !== copy.ino) throw new Error(`${APP_DISPLAY_NAME} ne tourne pas depuis la copie installée : rien supprimé`);
     await verifyAndDeleteOriginal({ path: c.path, sha256: c.sha256, ino: c.ino, copy: paths.appImage });
     originalDeletion = { path: c.path, ok: true, message: '' };
   } catch (e) {
@@ -912,7 +1006,51 @@ ipcMain.handle('about:info', (): AboutInfo => ({
   appImage,
   installedCopy: isFile(paths.appImage) ? paths.appImage : null,
   packaged: app.isPackaged,
+  migration: currentMigration(),
 }));
+
+/** Bilan affiché : celui de ce lancement, sinon l'état enregistré (migration faite lors d'un lancement précédent). */
+const currentMigration = (): MigrationReport => (migration.status === 'nothing' ? migrationState(migrationDeps()) : migration);
+ipcMain.handle('migration:state', () => currentMigration());
+/**
+ * « Réessayer » : les étapes d'après l'ouverture des dossiers (service, entrées, copie) sont refaites tout de suite ; l'arrêt
+ * de l'ancien service et le déplacement des dossiers, jamais sous les pieds de l'app : elle redémarre et les refait avant
+ * d'ouvrir quoi que ce soit.
+ */
+ipcMain.handle('migration:retry', async (): Promise<{ report: MigrationReport; relaunching: boolean }> => {
+  const now = currentMigration();
+  const early = now.status === 'deferred' || !now.done.includes('stop-legacy-service') && !now.skipped['stop-legacy-service'] || !now.done.includes('move-dirs');
+  if (early) {
+    quitting = true;
+    // la nouvelle instance attend que celle-ci ait réellement quitté avant de toucher aux dossiers
+    process.env.PROC_WATCH_WAIT_PID = String(process.pid);
+    if (appImage) {
+      await new Promise<void>((resolve, reject) =>
+        relaunchDetached({
+          ...relaunchHooks(),
+          target: appImage!,
+          onStarted: () => {
+            setTimeout(() => app.quit(), 50);
+            resolve();
+          },
+          onFailed: (m) => {
+            quitting = false;
+            delete process.env.PROC_WATCH_WAIT_PID;
+            reject(new Error(`relance impossible : ${m}`));
+          },
+        }),
+      );
+    } else {
+      process.env.PROC_WATCH_RELAUNCH = '1'; // la nouvelle instance réessaie le verrou le temps que celle-ci quitte
+      app.relaunch();
+      setTimeout(() => app.quit(), 50);
+    }
+    return { report: now, relaunching: true };
+  }
+  const late = await migrateLate(migrationDeps());
+  if (late.status !== 'nothing') migration = late;
+  return { report: currentMigration(), relaunching: false };
+});
 
 const isDeb = () => app.isPackaged && !appImage;
 ipcMain.handle('uninstall:plan', (_e, o: unknown) => {
@@ -925,7 +1063,7 @@ ipcMain.handle('uninstall:run', async (_e, o: unknown) => {
   if (!isUninstallOptions(o)) throw new Error('Requête invalide');
   const plan = uninstallPlan(roots, o);
   const s = uninstallSummary(plan, { deb: isDeb() });
-  if (!(await confirmNative({ title: 'Désinstaller proc-watch', message: s.message, detail: s.detail, confirm: 'Désinstaller' }))) return { cancelled: true as const };
+  if (!(await confirmNative({ title: `Désinstaller ${APP_DISPLAY_NAME}`, message: s.message, detail: s.detail, confirm: 'Désinstaller' }))) return { cancelled: true as const };
   uninstalling = true;
   await syncing.catch(() => {}); // pas de synchronisation du service en cours
   let stopped = false;
@@ -1095,7 +1233,7 @@ app.on('second-instance', (_e, argv) => {
 // Mises à jour : AppImage empaquetée → proposition puis installation sur demande ; .deb → notification seulement ;
 // sources → rien (sauf PROC_WATCH_UPDATE_FEED vers un flux de test local). Réglages dans updater.json.
 const updatePrefs = createPrefsStore(join(dir, 'updater.json'));
-// Copie installée (~/Applications/proc-watch.AppImage) présente mais pas lancée : l'original n'est pas mis à jour.
+// Copie installée (~/Applications/computer-watcher.AppImage) présente mais pas lancée : l'original n'est pas mis à jour.
 const updMode = updateMode({ isPackaged: app.isPackaged, appImage: ownImage, testFeed: updateFeed, installedElsewhere: !!ownImage && installedElsewhere(ownImage, homedir()) });
 let updateBackend: Promise<UpdateBackend> | null = null;
 const loadUpdateBackend = (): Promise<UpdateBackend> =>
@@ -1117,8 +1255,8 @@ const loadUpdateBackend = (): Promise<UpdateBackend> =>
                 quitting = false;
                 void dialog.showMessageBox({
                   type: 'warning',
-                  title: 'proc-watch',
-                  message: 'Mise à jour installée ; relance proc-watch depuis le menu.',
+                  title: APP_DISPLAY_NAME,
+                  message: `Mise à jour installée ; relance ${APP_DISPLAY_NAME} depuis le menu.`,
                   detail: m,
                   buttons: ['OK'],
                   noLink: true,
@@ -1210,6 +1348,20 @@ async function syncAfterUpdate(): Promise<void> {
 
 app.whenReady().then(async () => {
   if (!primary) return;
+  // Migration proc-watch → computer-watcher, second temps (avant la synchronisation du service ci-dessous)
+  if (migration.status === 'partial' || migration.status === 'done') {
+    try {
+      const late = await migrateLate(migrationDeps());
+      if (late.status !== 'nothing') migration = late;
+    } catch (e) {
+      console.error('migration :', e);
+    }
+    if (quitting) return; // relancée depuis computer-watcher.AppImage : cette instance s'arrête
+  }
+  if (migration.status === 'partial' || (migration.status === 'deferred' && !xdgDeferred())) {
+    const [message, ...detail] = migrationLines(migration);
+    void dialog.showMessageBox({ type: 'warning', title: APP_DISPLAY_NAME, message, detail: `${detail.join('\n')}\n\nRéglages › À propos : « Réessayer ».`, buttons: ['OK'], noLink: true });
+  }
   // `--hidden` (démarrage avec la session) : fenêtre cachée, puis dans la barre des tâches si l'icône existe, sinon réduite.
   const shown = startWindowShown(process.argv);
   await deletePendingOriginal(); // avant la fenêtre : l'accueil repris montre le résultat

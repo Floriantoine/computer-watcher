@@ -112,7 +112,7 @@ if [[ -e "$target" ]]; then
   while [[ -e "$bak" || -L "$bak" ]]; do i=$((i + 1)); bak="$first.$i"; done
   cp -p -- "$target" "$bak" || exit 12
 fi
-{ printf '%s\\n' "$line" > "$target.proc-watch.tmp" && chmod 644 "$target.proc-watch.tmp" && mv -f -- "$target.proc-watch.tmp" "$target"; } || { rm -f -- "$target.proc-watch.tmp"; exit 12; }
+{ printf '%s\\n' "$line" > "$target.computer-watcher.tmp" && chmod 644 "$target.computer-watcher.tmp" && mv -f -- "$target.computer-watcher.tmp" "$target"; } || { rm -f -- "$target.computer-watcher.tmp"; exit 12; }
 # Redémarre puis vérifie au bout de $pause s : service actif et aucun redémarrage automatique entre-temps.
 # NRestarts est lu juste après le restart manuel (qui remet le compteur à zéro) puis après l'attente :
 # une hausse signale une boucle de plantages (Restart=always) même si le service est vu actif.
@@ -166,13 +166,13 @@ export function applyExitMessage(code: number, line: string, stdout = ''): Apply
   }
 }
 
-/** /usr/bin/pkexec /usr/bin/bash -c SCRIPT proc-watch-earlyoom "<ligne>" : la ligne passe en argument, aucun fichier. */
+/** /usr/bin/pkexec /usr/bin/bash -c SCRIPT computer-watcher-earlyoom "<ligne>" : la ligne passe en argument, aucun fichier. */
 export async function applyEarlyoom(line: string, deps: { run?: ExecFn } = {}): Promise<ApplyResult> {
   const bad = checkEarlyoomLine(line);
   if (bad) return { ok: false, reason: 'invalid', message: `${bad} : rien n'a été modifié.` };
   const run = deps.run ?? defaultRun;
   try {
-    const r = await run(PKEXEC, ['/usr/bin/bash', '-c', EARLYOOM_APPLY_SCRIPT, 'proc-watch-earlyoom', line], { timeout: APPLY_TIMEOUT_MS });
+    const r = await run(PKEXEC, ['/usr/bin/bash', '-c', EARLYOOM_APPLY_SCRIPT, 'computer-watcher-earlyoom', line], { timeout: APPLY_TIMEOUT_MS });
     if (r.timedOut) return { ok: false, reason: 'failed', message: "Délai dépassé (120 s) : rien n'a été modifié si la fenêtre de mot de passe était encore ouverte." };
     return applyExitMessage(r.code, line, r.stdout);
   } catch (e) {

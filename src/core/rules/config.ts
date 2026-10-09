@@ -14,7 +14,7 @@ export const RULE_NAME_MAX = 80;
  * 1 à 100 caractères. Comparé tel quel (sans casse), jamais interprété comme regex.
  */
 export const MATCH_VALUE_RE = /^[A-Za-z0-9._+:@/()-][A-Za-z0-9 ._+:@/()-]{0,99}$/;
-/** Applis qu'une règle de prévision peut viser sur choix explicite (jamais Claude, Warp, ni Electron qui fait tourner proc-watch). */
+/** Applis qu'une règle de prévision peut viser sur choix explicite (jamais Claude, Warp, ni Electron qui fait tourner l'app). */
 export const OPT_IN_APPS: readonly string[] = [...APP_NAMES].filter((n) => !isNeverKillName(n) && n !== 'electron').sort();
 
 /** Erreurs de règles gardées (au-delà : une ligne « … et n autres »). */

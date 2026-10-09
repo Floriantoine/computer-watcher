@@ -3,10 +3,16 @@
 /** Au plus 50 éléments par demande de suppression. */
 export const MAX_TMP_DELETE = 50;
 
-/** Quarantaine d'un lot de suppression, dans la racine : jamais proposée (liste système), signalée si elle reste. */
-export const TRASH_PREFIX = '.proc-watch-trash-';
-/** Fichier témoin exigé dans une racine de test (PROC_WATCH_TMP_ROOT). */
-export const TEST_ROOT_MARKER = '.proc-watch-test-root';
+import { APP_NAME, LEGACY_APP_NAME } from './appName';
+
+/** Quarantaine d'un lot de suppression, dans la racine : jamais proposée (liste système), signalée si elle reste. Créée à ce préfixe. */
+export const TRASH_PREFIX = `.${APP_NAME}-trash-`;
+/** Préfixes reconnus (liste, refus, vidage, registre) : le nouveau et l'ancien nom de l'app, pour les quarantaines d'avant le renommage. */
+export const TRASH_PREFIXES: readonly string[] = [TRASH_PREFIX, `.${LEGACY_APP_NAME}-trash-`];
+export const isTrashName = (name: string): boolean => TRASH_PREFIXES.some((p) => name.startsWith(p));
+/** Fichier témoin exigé dans une racine de test (PROC_WATCH_TMP_ROOT) : l'un des deux noms. */
+export const TEST_ROOT_MARKERS: readonly string[] = [`.${APP_NAME}-test-root`, `.${LEGACY_APP_NAME}-test-root`];
+export const isTestRootMarker = (name: string): boolean => TEST_ROOT_MARKERS.includes(name);
 
 /** Élément de premier niveau tel qu'affiché ; `ino`/`dev` (décimaux, bigint) servent à vérifier que rien n'a changé. */
 export interface TmpEntry {
@@ -95,7 +101,7 @@ const SYSTEM: RegExp[] = [
   /^dbus-/,
   /^sddm-/,
   /^claude-/,
-  /^\.proc-watch-/, // quarantaines, fichier témoin, marques internes
+  /^\.(computer-watcher|proc-watch)-/, // quarantaines, fichier témoin, marques internes (nouveau et ancien nom)
   /^runtime-/,
   /^\.org\.chromium\./,
   /^snap-private-tmp$/,

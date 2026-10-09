@@ -1,11 +1,11 @@
-# proc-watch
+# Computer Watcher
 
 Voir ce qui tourne sur ta machine Linux, depuis combien de temps, ce que ça consomme — et le tuer en un clic.
 
 > [!IMPORTANT]
-> **Installe proc-watch avec l'AppImage** pour recevoir les mises à jour automatiques : télécharge `proc-watch-<version>-x86_64.AppImage` dans les [Releases](https://github.com/Floriantoine/computer-watcher/releases), rends-la exécutable (`chmod +x`), lance-la et choisis **Installer comme une app**. Le paquet `.deb` ne se met pas à jour tout seul : il signale seulement les nouvelles versions. Détails dans [Installation](#installation).
+> **Installe Computer Watcher avec l'AppImage** pour recevoir les mises à jour automatiques : télécharge `computer-watcher-<version>-x86_64.AppImage` dans les [Releases](https://github.com/Floriantoine/computer-watcher/releases), rends-la exécutable (`chmod +x`), lance-la et choisis **Installer comme une app**. Le paquet `.deb` ne se met pas à jour tout seul : il signale seulement les nouvelles versions. Détails dans [Installation](#installation).
 
-Né d'un PC gelé dix minutes par 19 Go de swap : vieilles sessions de terminal, serveurs de dev oubliés dans des worktrees supprimés, navigateur gourmand. proc-watch regroupe tout ça pour qu'on le voie et qu'on le nettoie avant d'en arriver là.
+Né d'un PC gelé dix minutes par 19 Go de swap : vieilles sessions de terminal, serveurs de dev oubliés dans des worktrees supprimés, navigateur gourmand. Computer Watcher regroupe tout ça pour qu'on le voie et qu'on le nettoie avant d'en arriver là.
 
 ![Détail d'un projet : instances classées, ports, doublon](docs/screenshot-main.png)
 
@@ -17,15 +17,15 @@ Né d'un PC gelé dix minutes par 19 Go de swap : vieilles sessions de terminal,
 - **Bandeau système** : RAM, swap, pression mémoire (PSI), charge.
 - **Page de détail** : arbre parent → enfants, commande complète, dossier de travail, CPU, RAM, swap.
 - **Kill** : `SIGTERM`, puis bouton « Forcer (SIGKILL) » si le processus résiste 3 secondes.
-- **Programmes protégés** : terminaux, shells, Claude, bureau… Les tuer demande une confirmation qui dit exactement ce qui va mourir. La liste se modifie dans les Réglages et est conservée dans `~/.config/proc-watch/config.json`.
+- **Programmes protégés** : terminaux, shells, Claude, bureau… Les tuer demande une confirmation qui dit exactement ce qui va mourir. La liste se modifie dans les Réglages et est conservée dans `~/.config/computer-watcher/config.json`.
 - **Mini-courbes** de mémoire sur chaque carte et **vue liste** compacte en alternative aux cartes.
 - **Historique en arrière-plan** et onglet **Métriques** (voir plus bas).
-- **Icône dans la barre des tâches** : un anneau montre la RAM utilisée, sa couleur suit la pression mémoire (normal, orange, rouge). Son menu donne la RAM, le swap, la pression et la charge, et propose « Ouvrir proc-watch », « Libérer de la mémoire… » et « Quitter ». Fermer la fenêtre la cache dans la barre au lieu de quitter ; la collecte est alors suspendue, comme fenêtre réduite. Les deux se coupent dans Réglages → Affichage. Sur un bureau sans zone de notification (pas de `StatusNotifierWatcher` sur le bus de session), pas d'icône et fermer la fenêtre quitte l'app.
-- proc-watch refuse de tuer lui-même, ses parents (ton terminal) et les processus des autres utilisateurs.
+- **Icône dans la barre des tâches** : un anneau montre la RAM utilisée, sa couleur suit la pression mémoire (normal, orange, rouge). Son menu donne la RAM, le swap, la pression et la charge, et propose « Ouvrir Computer Watcher », « Libérer de la mémoire… » et « Quitter ». Fermer la fenêtre la cache dans la barre au lieu de quitter ; la collecte est alors suspendue, comme fenêtre réduite. Les deux se coupent dans Réglages → Affichage. Sur un bureau sans zone de notification (pas de `StatusNotifierWatcher` sur le bus de session), pas d'icône et fermer la fenêtre quitte l'app.
+- Computer Watcher refuse de tuer lui-même, ses parents (ton terminal) et les processus des autres utilisateurs.
 
 ## Classement front / back et actions groupées
 
-Dans un projet, proc-watch découpe les processus en **instances** : un serveur et ses enfants (`npm run dev` → `vite` → `esbuild` donne une instance « vite »), classées dans une **catégorie** :
+Dans un projet, Computer Watcher découpe les processus en **instances** : un serveur et ses enfants (`npm run dev` → `vite` → `esbuild` donne une instance « vite »), classées dans une **catégorie** :
 
 | Catégorie | Exemples |
 |---|---|
@@ -48,7 +48,7 @@ Dans un projet, proc-watch découpe les processus en **instances** : un serveur 
 - **Kill groupé** : avec un filtre actif, « Tuer la sélection (n) » ; dans le détail d'un projet, « Tuer le front », « Tuer le back » et « Tout arrêter ». Tous ouvrent la même confirmation, qui liste exactement les instances visées (projet, catégorie, commande, ports, ancienneté, RAM, CPU instantané) avec des raccourcis « Toutes », « Inactives > 1 h », « Inactives > 1 j » et « Doublons seulement ». Garde-fous :
   - seuls les processus des **projets** (et des dossiers supprimés) sont visés : les applis, Claude et les services gardent leurs étiquettes mais ne sont jamais tués en groupe ;
   - les instances **protégées** (🔒) sont décochées par défaut et se cochent une par une ;
-  - le kill passe par le même chemin que le kill simple (`SIGTERM`, puis « Forcer » ; refus pour proc-watch lui-même, ses parents et les autres utilisateurs), au plus 2 000 processus par demande.
+  - le kill passe par le même chemin que le kill simple (`SIGTERM`, puis « Forcer » ; refus pour Computer Watcher lui-même, ses parents et les autres utilisateurs), au plus 2 000 processus par demande.
 - **Lanceurs** : `npm`, `pnpm`, `yarn`, `npx`, `concurrently`, `nodemon`, `turbo`… qui ne font que lancer un serveur ne forment pas d'instance : ils s'arrêtent d'eux-mêmes quand leurs enfants meurent. « Tout arrêter » les ajoute au kill du projet seulement si toutes les instances qu'ils lancent sont cochées. Les `sh -c` intermédiaires ne sont jamais visés : ils se terminent avec leur commande.
 - **Inactives** : une instance est « inactive depuis 1 h » si elle tourne depuis au moins 1 h et que l'historique n'a aucun échantillon à 1 % de CPU ou plus pour ses processus sur cette période. Ces raccourcis ont donc besoin du service d'enregistrement (voir plus bas) ; s'il est arrêté, ils sont désactivés. Au-delà de 30 minutes, seules les moyennes par minute sont lues : un pic de moins d'une minute peut passer inaperçu.
 
@@ -59,16 +59,16 @@ Les fichiers sont publiés dans les [Releases](https://github.com/Floriantoine/c
 ### Debian / Ubuntu (.deb)
 
 ```bash
-sudo apt install ./proc-watch-<version>-amd64.deb
+sudo apt install ./computer-watcher-<version>-amd64.deb
 ```
 
-Le paquet ajoute l'entrée de menu et l'icône. Désinstaller le paquet : `sudo apt remove proc-watch`.
+Le paquet ajoute l'entrée de menu et l'icône. Il remplace l'ancien paquet `proc-watch` s'il est installé (au lieu de s'installer à côté). Désinstaller le paquet : `sudo apt remove computer-watcher`.
 
 ### Toutes distributions (AppImage)
 
-1. Télécharger `proc-watch-<version>-x86_64.AppImage`.
-2. `chmod +x proc-watch-*.AppImage` puis le lancer.
-3. Au premier lancement, l'assistant d'accueil propose **Installer comme une app** : copie dans `~/Applications/proc-watch.AppImage`, entrée de menu et icône, puis relance depuis la copie. Il peut aussi supprimer le fichier téléchargé, seulement si la case est cochée (une confirmation montre le chemin exact) : la copie relancée le supprime après avoir démarré, s'il n'a pas changé (même SHA-256). Une entrée de menu ou de démarrage `proc-watch.desktop` déjà présente et qui n'a pas été écrite par proc-watch n'est jamais écrasée. Les mises à jour automatiques remplacent ensuite cette copie.
+1. Télécharger `computer-watcher-<version>-x86_64.AppImage`.
+2. `chmod +x computer-watcher-*.AppImage` puis le lancer.
+3. Au premier lancement, l'assistant d'accueil propose **Installer comme une app** : copie dans `~/Applications/computer-watcher.AppImage`, entrée de menu et icône, puis relance depuis la copie. Il peut aussi supprimer le fichier téléchargé, seulement si la case est cochée (une confirmation montre le chemin exact) : la copie relancée le supprime après avoir démarré, s'il n'a pas changé (même SHA-256). Une entrée de menu ou de démarrage `computer-watcher.desktop` déjà présente et qui n'a pas été écrite par Computer Watcher n'est jamais écrasée. Les mises à jour automatiques remplacent ensuite cette copie.
 
 Sur Ubuntu 22.04+, les AppImage demandent `libfuse2` : `sudo apt install libfuse2`.
 
@@ -81,18 +81,18 @@ Un paquet `computer-watcher-bin` est prévu ; en attendant, utiliser l'AppImage.
 `latest-linux.yml` donne le `sha512` de l'AppImage, encodé en base64 (c'est aussi ce que vérifient les mises à jour automatiques). Pour comparer :
 
 ```bash
-sha512sum proc-watch-<version>-x86_64.AppImage | cut -d' ' -f1 | xxd -r -p | base64 -w0; echo
-grep -A2 'proc-watch-<version>-x86_64.AppImage' latest-linux.yml
+sha512sum computer-watcher-<version>-x86_64.AppImage | cut -d' ' -f1 | xxd -r -p | base64 -w0; echo
+grep -A2 'computer-watcher-<version>-x86_64.AppImage' latest-linux.yml
 ```
 
-Les deux valeurs doivent être identiques. Le `.deb` n'y figure pas : comparer `sha256sum proc-watch-<version>-amd64.deb` à l'empreinte affichée par GitHub à côté du fichier.
+Les deux valeurs doivent être identiques. Le `.deb` n'y figure pas : comparer `sha256sum computer-watcher-<version>-amd64.deb` à l'empreinte affichée par GitHub à côté du fichier.
 
 ### Premier lancement
 
 Un assistant de 3 ou 4 écrans (« Passer » à tout moment, Échap ; Alt+← / Alt+→ pour naviguer) :
 
 1. **Installer comme une app** (AppImage seulement) : voir plus haut.
-2. **Démarrer avec la session** (coché par défaut) : `~/.config/autostart/proc-watch.desktop` lance proc-watch avec `--hidden`, caché dans la barre des tâches (fenêtre réduite si le bureau n'a pas de zone de notification). Réglable ensuite dans Réglages › Affichage.
+2. **Démarrer avec la session** (coché par défaut) : `~/.config/autostart/computer-watcher.desktop` lance Computer Watcher avec `--hidden`, caché dans la barre des tâches (fenêtre réduite si le bureau n'a pas de zone de notification). Réglable ensuite dans Réglages › Affichage.
 3. **Historique** : le service d'enregistrement (voir [Historique en arrière-plan](#historique-en-arrière-plan)) : ce qui est noté, où, combien de place.
 4. **Protection contre les gels** : état d'earlyoom et « Installer et configurer ».
 
@@ -100,18 +100,30 @@ Chaque étape affiche le résultat exact (chemins écrits) ou l'erreur. L'assist
 
 ### Désinstaller
 
-Réglages › À propos › **Désinstaller proc-watch…** : deux cases (supprimer aussi l'historique, la configuration — réglages, et profil de la fenêtre de l'app dans le même dossier) et la liste exacte de ce qui sera retiré, reprise dans une confirmation native. Sont retirés : le démarrage automatique, l'entrée de menu et l'icône (seulement celles écrites par proc-watch, marquées `X-ProcWatch-Managed=1`), le service d'enregistrement (arrêté, désactivé, unité supprimée), puis `~/Applications/proc-watch.AppImage` en dernier, et proc-watch quitte. Seuls les fichiers que proc-watch crée sont touchés (liste exacte, liens symboliques jamais suivis) ; earlyoom n'est jamais modifié. Si un élément ne peut pas être retiré (par exemple `systemctl --user` injoignable : le service et son unité restent), il est signalé et la copie de l'AppImage reste, pour réessayer. Avec le `.deb`, retirer ensuite le paquet avec `sudo apt remove proc-watch`.
+Réglages › À propos › **Désinstaller Computer Watcher…** : deux cases (supprimer aussi l'historique, la configuration — réglages, et profil de la fenêtre de l'app dans le même dossier) et la liste exacte de ce qui sera retiré, reprise dans une confirmation native. Sont retirés : le démarrage automatique, l'entrée de menu et l'icône (seulement celles écrites par Computer Watcher, marquées `X-ProcWatch-Managed=1`), le service d'enregistrement (arrêté, désactivé, unité supprimée), puis `~/Applications/computer-watcher.AppImage` en dernier, et Computer Watcher quitte. Seuls les fichiers que Computer Watcher crée sont touchés (liste exacte, liens symboliques jamais suivis) ; earlyoom n'est jamais modifié. Si un élément ne peut pas être retiré (par exemple `systemctl --user` injoignable : le service et son unité restent), il est signalé et la copie de l'AppImage reste, pour réessayer. Avec le `.deb`, retirer ensuite le paquet avec `sudo apt remove computer-watcher`. Les restes à l'ancien nom (`proc-watch`, voir [Venir de proc-watch](#venir-de-proc-watch)) sont retirés aussi, sous les mêmes contrôles.
 
 ### Mises à jour
 
-- **AppImage** (copie installée `~/Applications/proc-watch.AppImage`, ou AppImage lancée directement s'il n'y a pas de copie) : proc-watch vérifie les versions publiées 30 s après le lancement puis toutes les 6 h. Une nouvelle version s'annonce dans un pop-up (« Mettre à jour », « Plus tard », « Ignorer cette version ») ; rien n'est téléchargé sans accord. Le fichier est vérifié (sha512) puis installé au redémarrage : l'AppImage est remplacée dans son dossier, le service d'enregistrement et le raccourci du menu suivent le nouveau fichier.
-- AppImage lancée hors de la copie installée : le pop-up invite à lancer proc-watch depuis le menu (l'original téléchargé n'est pas mis à jour).
-- Fichier remplacé : electron-updater remplace le fichier désigné par `APPIMAGE`, que le runtime AppImage pose sur l'AppImage réellement lancée, donc la copie `~/Applications/proc-watch.AppImage` quand proc-watch tourne depuis elle. Son nom n'ayant pas de numéro de version, elle est écrasée sur place (même chemin pour le menu, le démarrage automatique et le service). proc-watch refuse l'installation si `APPIMAGE` n'est pas l'AppImage qu'il a vérifiée (montage FUSE, en-tête AppImage).
+- **AppImage** (copie installée `~/Applications/computer-watcher.AppImage`, ou AppImage lancée directement s'il n'y a pas de copie) : Computer Watcher vérifie les versions publiées 30 s après le lancement puis toutes les 6 h. Une nouvelle version s'annonce dans un pop-up (« Mettre à jour », « Plus tard », « Ignorer cette version ») ; rien n'est téléchargé sans accord. Le fichier est vérifié (sha512) puis installé au redémarrage : l'AppImage est remplacée dans son dossier, le service d'enregistrement et le raccourci du menu suivent le nouveau fichier.
+- AppImage lancée hors de la copie installée : le pop-up invite à lancer Computer Watcher depuis le menu (l'original téléchargé n'est pas mis à jour).
+- Fichier remplacé : electron-updater remplace le fichier désigné par `APPIMAGE`, que le runtime AppImage pose sur l'AppImage réellement lancée, donc la copie `~/Applications/computer-watcher.AppImage` quand Computer Watcher tourne depuis elle. Son nom n'ayant pas de numéro de version, elle est écrasée sur place (même chemin pour le menu, le démarrage automatique et le service). Computer Watcher refuse l'installation si `APPIMAGE` n'est pas l'AppImage qu'il a vérifiée (montage FUSE, en-tête AppImage).
 - Service d'enregistrement : dès que la copie installée existe, son unité pointe vers elle, jamais vers l'original téléchargé (qui peut être supprimé), y compris quand l'original est relancé.
 - **.deb** : le pop-up signale la nouvelle version et ouvre sa page ; la mise à jour se fait avec `apt`.
 - **Depuis les sources** : aucune vérification.
 
 Réglages › À propos : version, vérification automatique (activée par défaut), préversions (désactivées), « Vérifier maintenant ».
+
+### Venir de proc-watch
+
+L'app s'appelait proc-watch jusqu'à la v0.1.3. Au premier lancement de la nouvelle version (mise à jour automatique comprise), une migration unique reprend l'installation existante, sans rien perdre :
+
+1. l'ancien service `proc-watch-recorder` est arrêté, vérifié arrêté, puis désactivé (s'il appartient à autre chose, ou si `systemctl --user` échoue, rien ne bouge et le service est remis dans son état initial) ;
+2. les dossiers sont renommés en place : `~/.config/proc-watch` → `~/.config/computer-watcher` (réglages, profil de la fenêtre), `~/.local/share/proc-watch` → `~/.local/share/computer-watcher` (historique), ainsi que le cache des mises à jour (le dossier d'exécution `$XDG_RUNTIME_DIR/proc-watch`, éphémère, n'est jamais déplacé). Un lien symbolique ou un point de montage est refusé, de même qu'un dossier qu'un processus utilise encore (dossier courant, fichier ouvert ou projeté en mémoire : le message donne son pid et son nom) ; si le nouveau dossier existe déjà et n'est pas vide, rien n'est fusionné ni supprimé : l'ancien reste en place et c'est signalé ;
+3. le service `computer-watcher-recorder` remplace l'ancien (unité retirée seulement si c'est la nôtre) ;
+4. les entrées `proc-watch.desktop` (menu, démarrage automatique) deviennent `computer-watcher.desktop`, seulement si elles ont été écrites par l'app (`X-ProcWatch-Managed=1`) ; une entrée sans cette marque n'est jamais modifiée ni supprimée ;
+5. une copie `~/Applications/proc-watch.AppImage` devient `~/Applications/computer-watcher.AppImage` (copie vérifiée), l'app se relance depuis elle, et la nouvelle instance supprime l'ancienne copie si elle n'a pas changé.
+
+Tant qu'une ancienne version est encore ouverte, la migration attend (message au lancement, avec le pid et le nom du processus). Si `XDG_CONFIG_HOME`, `XDG_DATA_HOME` et `XDG_CACHE_HOME` ne sont pas toutes par défaut ou toutes définies (« XDG partiel », typiquement une app d'essai), rien n'est migré ni désinstallé hors de la racine de la configuration : c'est dit dans Réglages › À propos et dans le journal. Au premier lancement, la fenêtre peut tarder jusqu'à une trentaine de secondes au pire (`systemctl --user` bloqué, ou relance qui attend que l'instance précédente ait quitté). Si une étape échoue, les suivantes qui en dépendent n'ont pas lieu, rien n'est supprimé et l'app continue avec les anciens dossiers ; un message l'explique au démarrage, et Réglages › À propos montre l'état de la migration avec **Réessayer**. Les quarantaines `/tmp/.proc-watch-trash-*` restent reconnues et vidables.
 
 ### Depuis les sources
 
@@ -139,17 +151,17 @@ Avec npm 11.10+ (dont npm 12), les scripts d'installation des dépendances sont 
 
 Publier : `npm run release -- patch`, relire, puis `git push --atomic origin main vX.Y.Z`. Le workflow `release` a deux jobs. `build`, en lecture seule, vérifie que le commit étiqueté est sur `main` et que l'étiquette correspond à `package.json`, relance les types et les tests, puis construit l'AppImage, le .deb et `latest-linux.yml` (lu par les mises à jour). `publish`, seul à pouvoir écrire, n'exécute aucun code npm : il crée la version GitHub avec ces fichiers.
 
-Notes de version : le corps du message de l'étiquette annotée (tout sauf la première ligne) devient les notes de la version GitHub et de `latest-linux.yml`, affichées dans le pop-up de mise à jour. `npm run release` l'écrit : un texte rédigé pour la première version, puis les sujets des commits `feat` / `fix` depuis la version précédente, sans les commits internes ni les références de revue. Pour le modifier avant de pousser : `git tag -f -a vX.Y.Z -F notes.txt` (première ligne `proc-watch vX.Y.Z`, ligne vide, puis les notes).
+Notes de version : le corps du message de l'étiquette annotée (tout sauf la première ligne) devient les notes de la version GitHub et de `latest-linux.yml`, affichées dans le pop-up de mise à jour. `npm run release` l'écrit : un texte rédigé pour la première version, puis les sujets des commits `feat` / `fix` depuis la version précédente, sans les commits internes ni les références de revue. Pour le modifier avant de pousser : `git tag -f -a vX.Y.Z -F notes.txt` (première ligne `Computer Watcher vX.Y.Z`, ligne vide, puis les notes).
 
 La logique (lecture de `/proc`, regroupement, protection, kill) vit dans `src/core/`, sans dépendance à Electron, et se teste sur de faux répertoires `/proc`. Pour reconnaître une nouvelle appli multi-processus, modifier `src/core/grouping/rules.ts` ; pour classer un nouvel outil de dev (front, back…), `src/core/classify/rules.ts`.
 
 ## Historique en arrière-plan
 
-Au premier lancement de la version installée (AppImage, .deb), proc-watch installe automatiquement un service systemd utilisateur, `proc-watch-recorder` (sans sudo). Depuis un clone du dépôt (`npm run dev`), rien n'est installé en silence : activer le réglage Réglages → Enregistrement, ou lancer avec `PROC_WATCH_RECORDER_DEV=1`. Il échantillonne le système en continu, même quand la fenêtre est fermée, pour répondre à « qu'est-ce qui a fait geler la machine à 3 h du matin ? ».
+Au premier lancement de la version installée (AppImage, .deb), Computer Watcher installe automatiquement un service systemd utilisateur, `computer-watcher-recorder` (sans sudo). Depuis un clone du dépôt (`npm run dev`), rien n'est installé en silence : activer le réglage Réglages → Enregistrement, ou lancer avec `PROC_WATCH_RECORDER_DEV=1`. Il échantillonne le système en continu, même quand la fenêtre est fermée, pour répondre à « qu'est-ce qui a fait geler la machine à 3 h du matin ? ».
 
-- **Couper l'enregistrement** : Réglages → Enregistrement (arrête et supprime le service). `systemctl --user disable --now proc-watch-recorder` seul ne tient pas : tant que le réglage reste activé, l'app réactive le service à son prochain lancement.
+- **Couper l'enregistrement** : Réglages → Enregistrement (arrête et supprime le service). `systemctl --user disable --now computer-watcher-recorder` seul ne tient pas : tant que le réglage reste activé, l'app réactive le service à son prochain lancement.
 - **Ce qui est enregistré** : un échantillon toutes les 5 s. Un groupe est enregistré à part s'il dépasse 20 Mo (RAM+swap) ou 1 % de CPU ; les autres (souvent ~300 petites commandes) sont cumulés dans un seul groupe « Petits groupes ». Un processus seul n'est enregistré que s'il dépasse 50 Mo ou 1 % de CPU. Intervalle, seuils et rétention se règlent dans Réglages → Enregistrement.
-- **Données** : `~/.local/share/proc-watch/metrics.db` (SQLite, schéma v4). Rétention par défaut : 24 h détaillées (5 s), 30 jours résumés (par minute et par heure ; les plages de 7 et 30 jours lisent les heures). À la mise à jour du schéma, une copie `metrics.db.pre-v4-*` est faite avant migration si la place le permet (sinon la migration a lieu quand même, avec un avertissement dans Réglages) ; les copies plus vieilles que la rétention résumée sont supprimées. Une base d'une version plus récente n'est jamais écrasée : l'enregistrement se met en pause.
+- **Données** : `~/.local/share/computer-watcher/metrics.db` (SQLite, schéma v4). Rétention par défaut : 24 h détaillées (5 s), 30 jours résumés (par minute et par heure ; les plages de 7 et 30 jours lisent les heures). À la mise à jour du schéma, une copie `metrics.db.pre-v4-*` est faite avant migration si la place le permet (sinon la migration a lieu quand même, avec un avertissement dans Réglages) ; les copies plus vieilles que la rétention résumée sont supprimées. Une base d'une version plus récente n'est jamais écrasée : l'enregistrement se met en pause.
 - **Taille mesurée** (test à la cardinalité réelle, `npm run test:recorder`) : ~130 Mo pour les 24 h détaillées, ~3 Mo/jour de résumés pour les groupes et le système, et ~6 à 28 Mo/jour pour les processus selon le nombre de processus courts de plus de 50 Mo (lignes de commande comprises). Soit, à 30 jours, environ 0,4 Go sur une machine calme et jusqu'à ~1,1 Go lors de journées de développement intensives (~1 300 processus distincts > 50 Mo par heure). Monter le seuil mémoire des processus réduit surtout cette dernière part.
 - **Lecture** : chaque requête de l'onglet Métriques prend moins de 50 ms à 30 jours d'historique ; les plages de 7 et 30 jours ne se rafraîchissent qu'à la demande (bouton « Actualiser »).
 - **Coût mesuré** : sur ~750 processus, un tick du service dure environ 21 à 28 ms et le service occupe environ 34 à 48 Mo de PSS.
@@ -157,9 +169,9 @@ Au premier lancement de la version installée (AppImage, .deb), proc-watch insta
 - **Vie privée** : tout reste en local. La base contient les lignes de commande complètes des processus enregistrés (elles peuvent contenir des chemins ou des arguments sensibles) ; fichiers en 0600, dossier en 0700.
 - **Désinstaller** : désactiver Réglages → Enregistrement (arrête et supprime le service), ou à la main :
   ```sh
-  systemctl --user disable --now proc-watch-recorder
-  rm ~/.config/systemd/user/proc-watch-recorder.service
-  rm -rf ~/.local/share/proc-watch
+  systemctl --user disable --now computer-watcher-recorder
+  rm ~/.config/systemd/user/computer-watcher-recorder.service
+  rm -rf ~/.local/share/computer-watcher
   ```
 - **Kills earlyoom** : pour les enregistrer, l'utilisateur doit pouvoir lire le journal système (groupe `systemd-journal` ou `adm` sur la plupart des distributions, `wheel` sur certaines). Sans cet accès, Réglages → Enregistrement affiche « Kills earlyoom : indisponibles » et le reste fonctionne normalement.
 
@@ -188,16 +200,16 @@ L'onglet **/tmp** (en haut, après Métriques) ouvre la page /tmp ; « Voir /tmp
 
 Un élément n'est supprimable que s'il appartient à l'utilisateur, n'est ni un point de montage ni au-dessus d'un, ni un socket, une FIFO ou un périphérique, n'est pas dans la liste système (`.X11-unix`, `ssh-*`, `systemd-private-*`, `tmux-*`, `claude-*`…) et n'est utilisé par aucun processus de l'utilisateur (fichier ouvert, dossier courant, exécutable, bibliothèque projetée, socket Unix actif) ; sinon la ligne dit pourquoi (« utilisé par jest (pid 1234) », « autre utilisateur », « système », « impossible de vérifier »). Les processus à droits élevés (kwin, warp, polkit…) ne sont pas lisibles : un élément qui porte leur nom est refusé, la confirmation les cite, et un élément modifié il y a moins de 5 min est signalé. Les sockets des applications isolées (flatpak, bac à sable de Chromium) ne sont pas vus.
 
-Le main n'accepte que les éléments supprimables de sa dernière liste (nom, inode, périphérique), demande confirmation dans une boîte native (chemins exacts, taille totale, « Annuler » par défaut), puis, pour chaque élément : revérification complète, déplacement dans une quarantaine `.proc-watch-trash-*` de la racine, ouverte aussitôt et ensuite désignée par son descripteur (jamais par son chemin), contrôle que c'est bien le même inode, et suppression par GNU rm (`rm -r --one-file-system`, sans shell, avec délai) qui ne suit jamais un lien, même substitué pendant la suppression, et ne franchit aucun point de montage ; l'élément n'est annoncé supprimé que si son inode a vraiment disparu. Sans GNU rm, la suppression est désactivée. 50 éléments au plus par demande, jamais en root. Le résultat s'affiche en toast et un événement `tmp_clean` est ajouté au journal (y compris en cas d'échec partiel ; le reste est alors dans la quarantaine). Une quarantaine restée (suppression interrompue) est signalée sous la liste, quelle que soit sa taille, et comptée dans la tuile Quarantaine, avec « Vider la quarantaine » (même confirmation native, même suppression).
+Le main n'accepte que les éléments supprimables de sa dernière liste (nom, inode, périphérique), demande confirmation dans une boîte native (chemins exacts, taille totale, « Annuler » par défaut), puis, pour chaque élément : revérification complète, déplacement dans une quarantaine `.computer-watcher-trash-*` de la racine (les `.proc-watch-trash-*` d'avant le renommage restent reconnues et vidables), ouverte aussitôt et ensuite désignée par son descripteur (jamais par son chemin), contrôle que c'est bien le même inode, et suppression par GNU rm (`rm -r --one-file-system`, sans shell, avec délai) qui ne suit jamais un lien, même substitué pendant la suppression, et ne franchit aucun point de montage ; l'élément n'est annoncé supprimé que si son inode a vraiment disparu. Sans GNU rm, la suppression est désactivée. 50 éléments au plus par demande, jamais en root. Le résultat s'affiche en toast et un événement `tmp_clean` est ajouté au journal (y compris en cas d'échec partiel ; le reste est alors dans la quarantaine). Une quarantaine restée (suppression interrompue) est signalée sous la liste, quelle que soit sa taille, et comptée dans la tuile Quarantaine, avec « Vider la quarantaine » (même confirmation native, même suppression).
 
-Pour les vérifications de l'app, `PROC_WATCH_TMP_ROOT` remplace /tmp seulement si son chemin réel est sous `~/.cache/pw-…` et contient un fichier `.proc-watch-test-root` ; sinon il est ignoré (message sur la sortie d'erreur). La racine de test est affichée en tête de liste. `npm run test:tmp-page` vérifie la page /tmp de bout en bout sur une telle racine factice (sans rien supprimer).
+Pour les vérifications de l'app, `PROC_WATCH_TMP_ROOT` remplace /tmp seulement si son chemin réel est sous `~/.cache/pw-…` et contient un fichier `.computer-watcher-test-root` ; sinon il est ignoré (message sur la sortie d'erreur). La racine de test est affichée en tête de liste. `npm run test:tmp-page` vérifie la page /tmp de bout en bout sur une telle racine factice (sans rien supprimer).
 
 ### Pop-ups et notifications d'alerte
 
-- **Pop-ups** : chaque nouvelle alerte (kill earlyoom, fuite, fichiers en mémoire, pression) s'affiche en haut à droite de proc-watch et y reste jusqu'à « Fermer ». Au-delà de 3, un « + n autres » les regroupe (avec « Tout fermer »). L'onglet Métriques porte le nombre d'alertes non vues. Au premier lancement, les alertes déjà enregistrées ne s'affichent pas.
-- **Notifications du bureau** : envoyées par le service d'enregistrement, donc même quand proc-watch est fermé, avec `notify-send` (paquet libnotify ; absent : pas de notification, sans erreur). Elles sont « critiques » (KDE les garde jusqu'au clic) et ont un bouton « Ouvrir » si `notify-send` connaît `--action` (libnotify ≥ 0.7.9). Pas de notification quand la fenêtre de proc-watch a le focus : le pop-up suffit. (la fenêtre signale son focus au service par un petit fichier, `$XDG_RUNTIME_DIR/proc-watch/focus-<empreinte>.json`, propre à chaque dossier de données ; périmé au bout de 10 s si l'app est fermée).
+- **Pop-ups** : chaque nouvelle alerte (kill earlyoom, fuite, fichiers en mémoire, pression) s'affiche en haut à droite de Computer Watcher et y reste jusqu'à « Fermer ». Au-delà de 3, un « + n autres » les regroupe (avec « Tout fermer »). L'onglet Métriques porte le nombre d'alertes non vues. Au premier lancement, les alertes déjà enregistrées ne s'affichent pas.
+- **Notifications du bureau** : envoyées par le service d'enregistrement, donc même quand Computer Watcher est fermé, avec `notify-send` (paquet libnotify ; absent : pas de notification, sans erreur). Elles sont « critiques » (KDE les garde jusqu'au clic) et ont un bouton « Ouvrir » si `notify-send` connaît `--action` (libnotify ≥ 0.7.9). Pas de notification quand la fenêtre de Computer Watcher a le focus : le pop-up suffit. (la fenêtre signale son focus au service par un petit fichier, `$XDG_RUNTIME_DIR/computer-watcher/focus-<empreinte>.json`, propre à chaque dossier de données ; périmé au bout de 10 s si l'app est fermée).
 - **Réglages → Alertes** : pour chaque type, « Pop-up et bureau », « Pop-up seulement » ou « Rien » (par défaut : pression en pop-up seulement, le reste partout) ; au plus une notification du bureau par type toutes les 5 min (1 à 120).
-- **« Ouvrir »** lance proc-watch, ou affiche la fenêtre déjà ouverte (instance unique), sur l'instant de l'alerte (`--alert=<id>`). Le service trouve l'app à partir de son propre emplacement : AppImage → le fichier AppImage ; paquet → le binaire installé ; clone du dépôt lancé avec `npm start` (`electron-vite preview`) → `electron <dossier du clone>` (la sortie `out/` doit être construite). L'app est lancée sous le même utilisateur, via `systemd-run --user` quand il existe (hors du service : redémarrer le service ne la ferme pas). Sinon, la notification part sans bouton.
+- **« Ouvrir »** lance Computer Watcher, ou affiche la fenêtre déjà ouverte (instance unique), sur l'instant de l'alerte (`--alert=<id>`). Le service trouve l'app à partir de son propre emplacement : AppImage → le fichier AppImage ; paquet → le binaire installé ; clone du dépôt lancé avec `npm start` (`electron-vite preview`) → `electron <dossier du clone>` (la sortie `out/` doit être construite). L'app est lancée sous le même utilisateur, via `systemd-run --user` quand il existe (hors du service : redémarrer le service ne la ferme pas). Sinon, la notification part sans bouton.
 
 ### Règles automatiques
 
@@ -206,12 +218,12 @@ Réglages → Règles : le service d'enregistrement peut arrêter des processus 
 - **Conditions** : un groupe ou une instance (par nom, comparé tel quel, ou par catégorie) au-dessus de X Go (RAM + swap) pendant Y min ; une instance de projet (front, back…) inactive depuis T (aucune mesure CPU ≥ 1 % ; sans historique couvrant toute la période, rien n'est arrêté) ; la prévision « Mémoire bientôt épuisée » qui annonce l'épuisement dans moins de N min (cible : le plus gros groupe qui grossit ; les applis seulement si tu les coches).
 - **Simulation d'abord** : chaque nouvelle règle démarre en Simulation (journal « aurait arrêté… », aucun signal). Le passage en « Active » demande une confirmation ; une règle active dont la condition change repasse en Simulation. Trois modèles fournis, désactivés.
 - **Action** : SIGTERM, puis SIGKILL 5 s plus tard aux seuls processus encore vivants avec la même identité (pid + heure de démarrage).
-- **Garde-fous** (codés en dur, revérifiés juste avant chaque signal) : jamais Claude ni ce qu'il a lancé, les terminaux et les shells, le bureau (KWin, Plasma, X), systemd, D-Bus, PipeWire, earlyoom, proc-watch et ses parents, les programmes protégés, root ni les processus d'autres utilisateurs. Au plus 1 action par règle toutes les 5 min et 10 par heure en tout : au-delà, la règle se met en pause 1 h (notification).
+- **Garde-fous** (codés en dur, revérifiés juste avant chaque signal) : jamais Claude ni ce qu'il a lancé, les terminaux et les shells, le bureau (KWin, Plasma, X), systemd, D-Bus, PipeWire, earlyoom, Computer Watcher et ses parents, les programmes protégés, root ni les processus d'autres utilisateurs. Au plus 1 action par règle toutes les 5 min et 10 par heure en tout : au-delà, la règle se met en pause 1 h (notification).
 - **Journal** : chaque action et chaque simulation est une alerte (Métriques → Alertes, pop-up, notification du bureau pour les actions) ; Réglages → Règles montre le dernier déclenchement et le nombre sur 7 jours. Une règle invalide écrite à la main dans `config.json` est ignorée seule, avec son erreur affichée.
 
 ## Va bien avec earlyoom
 
-proc-watch ne tue jamais rien tout seul, sauf règles automatiques que tu as activées. Pour éviter qu'un manque de mémoire ne gèle la machine, installe [earlyoom](https://github.com/rfjakob/earlyoom). Si earlyoom manque ou est arrêté, proc-watch le signale au lancement et peut l'installer, le configurer et l'activer (Réglages › earlyoom), avec un seul mot de passe administrateur, après une confirmation qui montre le paquet, le gestionnaire et la ligne exacte. Le gestionnaire de paquets (pacman, apt-get, dnf ou zypper ; d'après `/etc/os-release` s'il y en a plusieurs) tourne sans questions et sans paquets recommandés ; apt-get ne supprime jamais rien (`--no-remove`). Attention : en mode non interactif, dnf importe automatiquement la clé GPG d'un dépôt qui la demande, et pacman importe une clé PGP inconnue (la confiance du trousseau reste exigée).
+Computer Watcher ne tue jamais rien tout seul, sauf règles automatiques que tu as activées. Pour éviter qu'un manque de mémoire ne gèle la machine, installe [earlyoom](https://github.com/rfjakob/earlyoom). Si earlyoom manque ou est arrêté, Computer Watcher le signale au lancement et peut l'installer, le configurer et l'activer (Réglages › earlyoom), avec un seul mot de passe administrateur, après une confirmation qui montre le paquet, le gestionnaire et la ligne exacte. Le gestionnaire de paquets (pacman, apt-get, dnf ou zypper ; d'après `/etc/os-release` s'il y en a plusieurs) tourne sans questions et sans paquets recommandés ; apt-get ne supprime jamais rien (`--no-remove`). Attention : en mode non interactif, dnf importe automatiquement la clé GPG d'un dépôt qui la demande, et pacman importe une clé PGP inconnue (la confiance du trousseau reste exigée).
 
 ## Licence
 

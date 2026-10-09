@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { cacheLabel, displayName, isTmpDeleteRequest, isValidEntryName, suspectUser, systemEntry, MAX_TMP_DELETE } from './tmpClean';
+import { cacheLabel, displayName, isTestRootMarker, isTmpDeleteRequest, isTrashName, isValidEntryName, suspectUser, systemEntry, MAX_TMP_DELETE, TEST_ROOT_MARKERS, TRASH_PREFIX, TRASH_PREFIXES } from './tmpClean';
 
 test('noms valides : un seul composant, jamais « . », « .. », « / » ni vide', () => {
   for (const ok of ['jest_rs', '.babel.json', 'a b', 'vite-123', '..x', 'x..']) expect(isValidEntryName(ok)).toBe(true);
@@ -10,7 +10,7 @@ test('liste système', () => {
   for (const s of [
     '.X11-unix', '.ICE-unix', '.XIM-unix', '.font-unix', '.Test-unix', 'systemd-private-abc-def', '.mount_App123', 'ssh-XXXX', 'pulse-abc',
     'tracker-extract-3-files.1000', 'krb5cc_1000', '.X0-lock', '.X1024-lock', 'xauth_abc', 'kde-u', 'plasma-csd-generator.abc', 'tmux-1000',
-    'claude-1000', '.proc-watch-trash-abc123', '.proc-watch-test-root', 'runtime-u', '.org.chromium.Chromium.abc', 'snap-private-tmp', 'gpg-abc', 'orbit-u',
+    'claude-1000', '.proc-watch-trash-abc123', '.proc-watch-test-root', '.computer-watcher-trash-abc123', '.computer-watcher-test-root', 'runtime-u', '.org.chromium.Chromium.abc', 'snap-private-tmp', 'gpg-abc', 'orbit-u',
   ])
     expect(systemEntry(s), s).toBe(true);
   for (const s of ['jest_rs', 'vite-x', 'ssh', 'Xfile', 'mon-dossier', 'claude', 'gpgx']) expect(systemEntry(s), s).toBe(false);
@@ -55,4 +55,19 @@ test('processus non vérifiables : nom qui contient leur comm ou un préfixe con
   expect(suspectUser('caps-test', u)).toBeNull(); // comm « ps » trop court pour une recherche par contenu
   expect(suspectUser('ps-abc', u)).toBe('ps'); // …mais compte en préfixe
   expect(suspectUser('jest_rs', u)).toBeNull();
+});
+
+test('renommage : quarantaines et fichier témoin reconnus sous l’ancien et le nouveau nom, créés au nouveau', () => {
+  expect(TRASH_PREFIX).toBe('.computer-watcher-trash-');
+  expect(TRASH_PREFIXES).toEqual(['.computer-watcher-trash-', '.proc-watch-trash-']);
+  expect(isTrashName('.proc-watch-trash-x')).toBe(true);
+  expect(isTrashName('.computer-watcher-trash-x')).toBe(true);
+  expect(isTrashName('.computer-watcher-trashx')).toBe(false);
+  expect(isTrashName('computer-watcher-trash-x')).toBe(false);
+  expect(isTrashName('x.proc-watch-trash-')).toBe(false);
+  expect(TEST_ROOT_MARKERS).toEqual(['.computer-watcher-test-root', '.proc-watch-test-root']);
+  expect(isTestRootMarker('.proc-watch-test-root')).toBe(true);
+  expect(isTestRootMarker('.computer-watcher-test-root')).toBe(true);
+  expect(isTestRootMarker('.computer-watcher-test-rootx')).toBe(false);
+  expect(systemEntry('.computer-watcherx')).toBe(false);
 });

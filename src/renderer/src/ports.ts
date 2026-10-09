@@ -1,3 +1,4 @@
+import { APP_DISPLAY_NAME } from '../../core/appName';
 import type { OpenPort, OpenPortsInfo } from '../../core/openPorts';
 import type { GroupKind, InstanceSummary } from '../../core/types';
 
@@ -57,8 +58,8 @@ export function portSearchEmpty(port: number, info: OpenPortsInfo): string {
   const uids = [...new Set(info.otherUsers.filter((o) => o.port === port).map((o) => o.uid))];
   if (uids.length > 0) {
     const who = uids.length === 1 ? `un autre utilisateur (uid ${uids[0]})` : `d'autres utilisateurs (uid ${uids.join(', ')})`;
-    return `:${port} est écouté par ${who} : non arrêtable depuis proc-watch`;
+    return `:${port} est écouté par ${who} : non arrêtable depuis ${APP_DISPLAY_NAME}`;
   }
-  if (info.unreadable.includes(port)) return `:${port} est écouté par un de vos processus illisible (processus trop gros, conteneur, autre espace de noms…) : non arrêtable depuis proc-watch`;
+  if (info.unreadable.includes(port)) return `:${port} est écouté par un de vos processus illisible (processus trop gros, conteneur, autre espace de noms…) : non arrêtable depuis ${APP_DISPLAY_NAME}`;
   return `Aucun processus n'écoute :${port}`;
 }

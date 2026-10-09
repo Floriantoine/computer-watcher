@@ -120,7 +120,7 @@ test('killErrorMessage', () => {
   expect(killErrorMessage({ pid: 1, ok: true })).toBeNull();
   expect(killErrorMessage({ pid: 1, ok: false, error: 'ESRCH' })).toBeNull();
   expect(killErrorMessage({ pid: 1, ok: false, error: 'EPERM' })).toBe('PID 1 : permission refusée');
-  expect(killErrorMessage({ pid: 1, ok: false, error: 'SELF' })).toBe('PID 1 : refusé, c\'est proc-watch ou l\'un de ses parents');
+  expect(killErrorMessage({ pid: 1, ok: false, error: 'SELF' })).toBe('PID 1 : refusé, c\'est Computer Watcher ou l\'un de ses parents');
 });
 
 describe('ipcErrorMessage', () => {
@@ -141,7 +141,7 @@ describe('killResultMessages', () => {
   });
   test('plusieurs SELF → un seul toast', () => {
     const rs = [1, 2, 3].map((pid) => ({ pid, ok: false, error: 'SELF' }));
-    expect(killResultMessages(rs)).toEqual(['3 processus refusés : c\'est proc-watch ou l\'un de ses parents']);
+    expect(killResultMessages(rs)).toEqual(['3 processus refusés : c\'est Computer Watcher ou l\'un de ses parents']);
   });
   test('plusieurs EPERM + un autre code → un toast par type d\'erreur', () => {
     const rs = [{ pid: 1, ok: false, error: 'EPERM' }, { pid: 2, ok: false, error: 'EPERM' }, { pid: 3, ok: false, error: 'EIO' }];

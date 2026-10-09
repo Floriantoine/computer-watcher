@@ -1,4 +1,5 @@
 // src/recorder/notify.ts — notifications du bureau par `notify-send` (execFile, jamais de shell).
+import { APP_DISPLAY_NAME } from '../core/appName';
 import { execFile, type ChildProcess } from 'node:child_process';
 import { accessSync, constants, statSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
@@ -23,7 +24,7 @@ const RETRY_MS = 600_000;
 
 export function notifyArgs(req: NotifyRequest, withActions: boolean): string[] {
   return [
-    '--app-name=proc-watch',
+    `--app-name=${APP_DISPLAY_NAME}`,
     `--urgency=${req.urgency}`,
     '--icon=dialog-warning',
     ...(withActions ? req.actions.map((a) => `--action=${a.id}=${a.label}`) : []),

@@ -1,5 +1,7 @@
 // Assistant d'accueil (logique pure) : étapes, fichier d'état (`onboarding.json` du dossier de config), ouverture, clavier.
 
+import type { MigrationReport } from './nameMigration';
+
 export type OnboardingStep = 'install' | 'autostart' | 'history' | 'earlyoom';
 
 export const ONBOARDING_STEPS: Record<OnboardingStep, { title: string; short: string }> = {
@@ -146,9 +148,11 @@ export interface AutostartInfo {
 export interface AboutInfo {
   version: string;
   appImage: string | null;
-  /** ~/Applications/proc-watch.AppImage si elle existe. */
+  /** ~/Applications/computer-watcher.AppImage si elle existe. */
   installedCopy: string | null;
   packaged: boolean;
+  /** Migration depuis proc-watch (état enregistré) ; absente d'une version qui ne la connaît pas. */
+  migration?: MigrationReport;
 }
 
 export interface UninstallOptions { history: boolean; config: boolean }

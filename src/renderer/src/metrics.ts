@@ -1,3 +1,4 @@
+import { APP_DISPLAY_NAME } from '../../core/appName';
 import { ruleEventText } from '../../core/alerts';
 import { topKeysByMax } from '../../core/history/series';
 import type { GroupsHistory, HistoryEvent, RangePreset, SystemSeries, TimeRange, TopOptions, TopResult } from '../../core/types';
@@ -98,7 +99,7 @@ function label(e: HistoryEvent): string {
         if (!Number.isFinite(from) || !Number.isFinite(to)) return "Trou d'enregistrement";
         return `Trou d'enregistrement (${Math.round((to - from) / 60_000)} min)`;
       }
-    case 'app_kill': return 'Kill depuis proc-watch';
+    case 'app_kill': return `Kill depuis ${APP_DISPLAY_NAME}`;
     case 'tmp_clean': {
       const n = Array.isArray(d.deleted) ? d.deleted.length : 0;
       return `Nettoyage de /tmp : ${n} élément${n > 1 ? 's' : ''}, ${formatKB(Math.round(Number(d.freedKB) || 0))} libérés`;

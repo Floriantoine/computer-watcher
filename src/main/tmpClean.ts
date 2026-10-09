@@ -18,7 +18,8 @@ import { constants as FS, lstatSync, mkdirSync, readFileSync, realpathSync, rena
 import * as nodeFsp from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { cacheLabel, displayName, isTmpDeleteRequest, isValidEntryName, MAX_TMP_DELETE, suspectUser, systemEntry, TEST_ROOT_MARKER, TRASH_PREFIX } from '../core/tmpClean';
+import { APP_DISPLAY_NAME } from '../core/appName';
+import { cacheLabel, displayName, isTmpDeleteRequest, isValidEntryName, MAX_TMP_DELETE, suspectUser, systemEntry, TEST_ROOT_MARKERS, TRASH_PREFIX, isTrashName } from '../core/tmpClean';
 import type { TmpConfirmSummary, TmpDeleteItem, TmpDeleteOutcome, TmpDeleteResult, TmpEntry, TmpListing } from '../core/tmpClean';
 import type { TmpCleanEvent } from '../core/history/events';
 import { mountPointsUnder, topTmpDirs } from './tmpUsage';
@@ -247,8 +248,8 @@ async function inspect(name: string, c: Ctx): Promise<Inspected> {
     return { refusal: 'disparu' };
   }
   if (c.mounts === null) return { refusal: noMounts, st };
-  if (c.uid === 0) return { refusal: 'refusé : proc-watch tourne en root', st };
-  if (name.startsWith(TRASH_PREFIX)) return { refusal: 'quarantaine de proc-watch (suppression interrompue), à vérifier', st };
+  if (c.uid === 0) return { refusal: `refusé : ${APP_DISPLAY_NAME} tourne en root`, st };
+  if (isTrashName(name)) return { refusal: `quarantaine de ${APP_DISPLAY_NAME} (suppression interrompue), à vérifier`, st };
   if (systemEntry(name)) return { refusal: 'système', st };
   for (const m of c.mounts) if (m.startsWith(`${p}/`)) return { refusal: 'contient un point de montage', st };
   if (st.uid !== B(c.uid)) return { refusal: 'autre utilisateur', st };
@@ -452,7 +453,7 @@ export function createSetAsideStore(path?: string): SetAsideStore {
       return true;
     } catch (e) {
       degraded = true; // en mémoire l'entrée existe, sur disque non : statut inconnu jusqu'au prochain « Vider » complet
-      console.error('proc-watch : liste des objets mis à l’écart non enregistrée (mode dégradé) :', e);
+      console.error(`${APP_DISPLAY_NAME} : liste des objets mis à l’écart non enregistrée (mode dégradé) :`, e);
       return false;
     }
   };
@@ -558,7 +559,7 @@ async function removeQuarantined(
 
 /** Quarantaines restées (suppression interrompue) au premier niveau ; éligibles au vidage : dossier à nous, 0700. */
 async function leftoverQuarantines(c: Ctx): Promise<{ name: string; eligible: boolean; ino: bigint | null }[]> {
-  const names = (await c.fs.readdir(c.root).catch(() => [] as string[])).filter((n) => n.startsWith(TRASH_PREFIX)).sort();
+  const names = (await c.fs.readdir(c.root).catch(() => [] as string[])).filter(isTrashName).sort();
   const out: { name: string; eligible: boolean; ino: bigint | null }[] = [];
   for (const name of names) {
     const p = join(c.root, name);
@@ -745,7 +746,7 @@ export function createTmpCleaner(root: string, o: CleanerOptions): TmpCleaner {
   const fsSlots = createFsSlots(2); // partagé par toutes les passes de « Vider la quarantaine »
 
   /**
-   * Élague la liste du main seulement sur preuve : readdir(racine) réussi, lstat réussi de chaque `.proc-watch-trash-*`,
+   * Élague la liste du main seulement sur preuve : readdir(racine) réussi, lstat réussi de chaque quarantaine (`.computer-watcher-trash-*` ou `.proc-watch-trash-*`),
    * montages lisibles ; une entrée est oubliée si son chemin donne ENOENT ou un autre inode. Toute erreur : rien n'est oublié.
    */
   async function pruneOnProof(c: Ctx): Promise<void> {
@@ -757,7 +758,7 @@ export function createTmpCleaner(root: string, o: CleanerOptions): TmpCleaner {
       return;
     }
     const inoAt = new Map<string, string>();
-    for (const n of names.filter((x) => x.startsWith(TRASH_PREFIX))) {
+    for (const n of names.filter(isTrashName)) {
       const p = join(c.root, n);
       if (c.mounts.has(p)) return; // jamais de lstat sur un montage : preuve incomplète
       try {
@@ -1079,7 +1080,7 @@ export function createTmpCleaner(root: string, o: CleanerOptions): TmpCleaner {
       // mode dégradé : on n'en sort qu'après un « Vider » complet, quand plus aucune quarantaine ne reste
       if (setAside.degraded() && !partial && results.every((x) => x.ok)) {
         const names = await tfs.readdir(c0.root).catch(() => null);
-        if (names && !names.some((n) => n.startsWith(TRASH_PREFIX))) setAside.recover();
+        if (names && !names.some(isTrashName)) setAside.recover();
       }
       return { results, freedKB, ...(partial ? { partial } : {}) };
     } finally {
@@ -1110,7 +1111,7 @@ export function confirmText(s: TmpConfirmSummary, formatKB: (kb: number) => stri
     if (s.quarantines?.some((q) => q.entries.some((e) => e.setAside)))
       parts.push('⚠ Les objets « mis à l’écart » ont pris la place d’un élément pendant une suppression : ils n’ont jamais été choisis. Ils seront supprimés aussi.');
     parts.push("C'est définitif, la corbeille ne libérerait pas la RAM (elle est sur disque).");
-    return { message: `Vider ${s.items.length > 1 ? `les ${s.items.length} quarantaines` : 'la quarantaine'} de proc-watch ?`, detail: parts.join('\n\n') };
+    return { message: `Vider ${s.items.length > 1 ? `les ${s.items.length} quarantaines` : 'la quarantaine'} de ${APP_DISPLAY_NAME} ?`, detail: parts.join('\n\n') };
   }
   const n = s.items.length;
   const lines = s.items.map((i) => {
@@ -1123,14 +1124,14 @@ export function confirmText(s: TmpConfirmSummary, formatKB: (kb: number) => stri
     const names = [...new Set(s.uninspectable.map((p) => p.name))].join(', ');
     parts.push(`Non vérifiable : un fichier ouvert par ces processus à droits élevés ne serait pas détecté : ${names}.`);
   }
-  parts.push("Les sockets des applications isolées (flatpak, bac à sable de Chromium) ne sont pas vus : /proc/net/unix ne montre que l'espace de noms réseau de proc-watch.");
+  parts.push(`Les sockets des applications isolées (flatpak, bac à sable de Chromium) ne sont pas vus : /proc/net/unix ne montre que l'espace de noms réseau de ${APP_DISPLAY_NAME}.`);
   return { message: `Supprimer définitivement ${n > 1 ? `ces ${n} éléments` : 'cet élément'} de ${s.root} ?`, detail: parts.join('\n\n') };
 }
 
 /**
  * Racine nettoyable : toujours /tmp, sauf pour les vérifications de l'app (jamais dans la vraie /tmp) : `PROC_WATCH_TMP_ROOT`
  * n'est retenu que si son chemin réel est un dossier strictement sous `~/.cache/pw-…` et qu'il contient le fichier témoin
- * `.proc-watch-test-root`. Sinon : /tmp, avec un avertissement.
+ * `.computer-watcher-test-root` (ou l'ancien `.proc-watch-test-root`). Sinon : /tmp, avec un avertissement.
  */
 export function tmpRootFromEnv(env: NodeJS.ProcessEnv, home = homedir()): { root: string; warning: string | null } {
   const r = env.PROC_WATCH_TMP_ROOT;
@@ -1141,10 +1142,17 @@ export function tmpRootFromEnv(env: NodeJS.ProcessEnv, home = homedir()): { root
     const cache = realpathSync(join(home, '.cache'));
     if (!real.startsWith(`${cache}/pw-`)) return refuse('pas sous ~/.cache/pw-');
     if (!lstatSync(real).isDirectory()) return refuse('pas un dossier');
-    if (!lstatSync(join(real, TEST_ROOT_MARKER)).isFile()) return refuse(`pas de fichier ${TEST_ROOT_MARKER}`);
+    const marked = TEST_ROOT_MARKERS.some((m) => {
+      try {
+        return lstatSync(join(real, m)).isFile();
+      } catch {
+        return false;
+      }
+    });
+    if (!marked) return refuse(`pas de fichier ${TEST_ROOT_MARKERS[0]}`);
     return { root: real, warning: null };
   } catch {
-    return refuse(`introuvable ou sans fichier ${TEST_ROOT_MARKER}`);
+    return refuse(`introuvable ou sans fichier ${TEST_ROOT_MARKERS[0]}`);
   }
 }
 

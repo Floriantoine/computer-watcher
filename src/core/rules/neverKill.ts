@@ -1,6 +1,8 @@
 // src/core/rules/neverKill.ts — liste « jamais tuer » des règles automatiques, codée en dur (indépendante de la liste
 // protégée modifiable). Appliquée par le moteur ET de nouveau juste avant chaque signal (ruleRunner).
 
+import { APP_SELF_NAMES } from '../appName';
+
 /** Longueur maximale du nom d'un processus (comm, TASK_COMM_LEN − 1) : au-delà, le noyau tronque. */
 export const COMM_MAX = 15;
 
@@ -20,7 +22,7 @@ export const SESSION_SERVICES: readonly (string | RegExp)[] = [
   /^systemd/, /^dbus/, /^pipewire/,
 ];
 
-/** Liste « jamais tuer » des règles : services de session, plus Claude, terminaux, shells et proc-watch. */
+/** Liste « jamais tuer » des règles : services de session, plus Claude, terminaux, shells et l'app (nouveau et ancien nom). */
 export const NEVER_KILL: readonly (string | RegExp)[] = [
   // Claude
   'claude', 'claude-desktop',
@@ -30,8 +32,8 @@ export const NEVER_KILL: readonly (string | RegExp)[] = [
   // shells
   'bash', 'zsh', 'fish', 'sh', 'dash', 'ksh', 'tcsh', 'csh', 'nu',
   ...SESSION_SERVICES,
-  // proc-watch
-  'proc-watch',
+  // l'app elle-même : computer-watcher, son comm tronqué computer-watche, et l'ancien nom proc-watch
+  ...APP_SELF_NAMES,
 ];
 
 /** Correspondance d'une liste : nom exact, regex, ou nom de 15 caractères (peut-être tronqué) qui commence un nom plus long. */
@@ -45,8 +47,11 @@ function matcher(list: readonly (string | RegExp)[]): (name: string) => boolean 
 /** Noms de Claude : leurs descendants sont aussi « jamais tuer » (outils, serveurs MCP, outils de dev lancés par Claude). */
 export const CLAUDE_NAMES: ReadonlySet<string> = new Set(['claude', 'claude-desktop']);
 
-/** Segment de chemin `proc-watch…` dans la ligne de commande : l'app (empaquetée, AppImage, dev) ou son service. */
-const PROC_WATCH_PATH = /(^|[\s/=])proc-watch[^\s/]*(\/|\s|$)/;
+/**
+ * Segment de chemin `computer-watcher…` ou `proc-watch…` (ancien nom) dans la ligne de commande : l'app (empaquetée,
+ * AppImage, dev) ou son service. Même forme qu'avant le renommage, pour chacun des deux noms.
+ */
+export const APP_PATH = /(^|[\s/=])(computer-watcher|proc-watch)[^\s/]*(\/|\s|$)/;
 const RECORDER_SCRIPT = /(^|[\s/])recorder\.js(\s|$)/;
 const CLAUDE_CMD = /(^|[\s/])(claude|claude-desktop)(\s|$)/;
 
@@ -67,13 +72,13 @@ export function isSessionService(name: string): boolean {
 }
 
 /**
- * Nom exact (ou regex) de la liste, ou ligne de commande qui lance l'app proc-watch elle-même (`appRoot`, ou un chemin
- * `…/proc-watch…`), son service (`recorder.js`) ou Claude.
+ * Nom exact (ou regex) de la liste, ou ligne de commande qui lance l'app elle-même (`appRoot`, ou un chemin
+ * `…/computer-watcher…` ou `…/proc-watch…`), son service (`recorder.js`) ou Claude.
  */
 export function isNeverKill(p: { name: string; cmdline: string }, appRoot: string | null): boolean {
   if (isNeverKillName(p.name)) return true;
   const cmd = p.cmdline;
-  if (PROC_WATCH_PATH.test(cmd) || RECORDER_SCRIPT.test(cmd) || CLAUDE_CMD.test(cmd.split(/\s+/, 1)[0] ?? '')) return true;
+  if (APP_PATH.test(cmd) || RECORDER_SCRIPT.test(cmd) || CLAUDE_CMD.test(cmd.split(/\s+/, 1)[0] ?? '')) return true;
   if (appRoot) {
     const root = appRoot.replace(/\/+$/, '');
     if (root.length > 1 && cmd.split(/\s+/).some((a) => a.replace(/^--[\w-]+=/, '') === root || a.replace(/^--[\w-]+=/, '').startsWith(`${root}/`))) return true;
@@ -116,7 +121,7 @@ function ownReason(pid: number, ctx: GuardContext, selfChain: ReadonlySet<number
   if (isNeverKill(p, ctx.appRoot)) return 'never-kill';
   if (ctx.isProtected(p.name)) return 'protected';
   if (isClaude(p, ctx)) return 'claude';
-  // ancêtre Claude (session, outil, outil de dev lancé par Claude) ou proc-watch (fenêtres de l'app) ; un ancêtre absent
+  // ancêtre Claude (session, outil, outil de dev lancé par Claude) ou l'app (fenêtres de l'app, sous ses deux noms) ; un ancêtre absent
   // de la lecture (course, entrée illisible) : refus, on ne sait pas qui est au-dessus
   const seen = new Set<number>([pid]);
   let cur: GuardProc = p;
@@ -126,13 +131,13 @@ function ownReason(pid: number, ctx: GuardContext, selfChain: ReadonlySet<number
     if (seen.has(parent.pid)) return 'unknown';
     seen.add(parent.pid);
     if (isClaude(parent, ctx)) return 'claude';
-    if (parent.pid === ctx.selfPid || parent.name === 'proc-watch' || PROC_WATCH_PATH.test(parent.cmdline)) return 'self';
+    if (parent.pid === ctx.selfPid || APP_SELF_NAMES.includes(parent.name) || APP_PATH.test(parent.cmdline)) return 'self';
     cur = parent;
   }
   return null;
 }
 
-/** proc-watch (le service) et ses ancêtres. */
+/** L'app (le service) et ses ancêtres. */
 function selfChainOf(ctx: GuardContext): Set<number> {
   const out = new Set<number>([ctx.selfPid]);
   for (let cur = ctx.byPid.get(ctx.selfPid); cur && !out.has(cur.ppid) && cur.ppid > 0; cur = ctx.byPid.get(cur.ppid)) out.add(cur.ppid);
@@ -141,7 +146,7 @@ function selfChainOf(ctx: GuardContext): Set<number> {
 
 /**
  * Filtre des cibles d'une règle : retire chaque processus « jamais tuer » (liste, Claude et ses descendants, protégés,
- * root, autres utilisateurs, proc-watch et ses ancêtres, inconnu), et tout processus dont un descendant est retiré
+ * root, autres utilisateurs, l’app et ses ancêtres, inconnu), et tout processus dont un descendant est retiré
  * (un signal au lanceur atteindrait ce descendant). Renvoie les pids gardés et la raison de chaque retrait.
  */
 export function filterTargets(pids: readonly number[], ctx: GuardContext): { kept: number[]; refused: Map<number, GuardReason> } {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link2, Trash2, TriangleAlert } from 'lucide-react';
+import { APP_DISPLAY_NAME } from '../../../core/appName';
 import { displayName, type TmpListing } from '../../../core/tmpClean';
 import { TMP_SCAN_LIMITS } from '../../../core/tmpScanLimits';
 import { formatKB } from '../format';
@@ -188,7 +189,7 @@ export function TmpCleanList({ clean, sort }: { clean: TmpClean; sort: TmpSort }
       {listing && listing.quarantines.length > 0 && (
         <div className="tmp-clean-quarantine" data-testid="tmp-clean-quarantine">
           <span className="sub partial">
-            <TriangleAlert size={11} strokeWidth={2.2} aria-hidden /> {listing.quarantines.length > 1 ? `${listing.quarantines.length} quarantaines` : 'Une quarantaine'} de proc-watch
+            <TriangleAlert size={11} strokeWidth={2.2} aria-hidden /> {listing.quarantines.length > 1 ? `${listing.quarantines.length} quarantaines` : 'Une quarantaine'} de {APP_DISPLAY_NAME}
             {listing.quarantines.length > 1 ? ' restées' : ' restée'} (suppression interrompue) : {listing.quarantines.map((q) => displayName(q.name).text).join(', ')}
           </span>
         </div>
@@ -225,7 +226,7 @@ export function TmpCleanList({ clean, sort }: { clean: TmpClean; sort: TmpSort }
             className="danger sm"
             data-testid="tmp-clean-delete"
             disabled={!sel.items.length || busy}
-            title="proc-watch demande confirmation (chemins exacts, total), puis revérifie chaque élément juste avant de le supprimer"
+            title={`${APP_DISPLAY_NAME} demande confirmation (chemins exacts, total), puis revérifie chaque élément juste avant de le supprimer`}
             onClick={() => void run()}
           >
             <Trash2 size={13} strokeWidth={2} /> {busy ? 'Suppression…' : sel.label}

@@ -1,3 +1,4 @@
+import { APP_DISPLAY_NAME } from '../../core/appName';
 import type { GroupSummary, InstanceSummary, KillResult, KillTarget, ProcInfo, SystemInfo } from '../../core/types';
 import { cpuOutOfOrder, memOutOfOrder, stableOrder } from './stableOrder';
 
@@ -136,7 +137,7 @@ export function trackKills(pending: Map<number, number>, presentPids: Set<number
 export function killErrorMessage(r: KillResult): string | null {
   if (r.ok || r.error === 'ESRCH') return null;
   if (r.error === 'EPERM') return `PID ${r.pid} : permission refusée`;
-  if (r.error === 'SELF') return `PID ${r.pid} : refusé, c'est proc-watch ou l'un de ses parents`;
+  if (r.error === 'SELF') return `PID ${r.pid} : refusé, c'est ${APP_DISPLAY_NAME} ou l'un de ses parents`;
   return `PID ${r.pid} : ${r.error}`;
 }
 
@@ -151,7 +152,7 @@ export function killResultMessages(results: KillResult[]): string[] {
   const out: string[] = [];
   for (const [error, rs] of byError) {
     if (rs.length === 1) out.push(killErrorMessage(rs[0]!)!);
-    else if (error === 'SELF') out.push(`${rs.length} processus refusés : c'est proc-watch ou l'un de ses parents`);
+    else if (error === 'SELF') out.push(`${rs.length} processus refusés : c'est ${APP_DISPLAY_NAME} ou l'un de ses parents`);
     else if (error === 'EPERM') out.push(`${rs.length} processus : permission refusée`);
     else out.push(`${rs.length} processus : ${error}`);
   }

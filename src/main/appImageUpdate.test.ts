@@ -2,10 +2,10 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { basename } from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { installAndRestart, installTarget } from './appImageUpdate';
+import { TEST_UPDATE_CONFIG, installAndRestart, installTarget } from './appImageUpdate';
 import { InstallError } from './updater';
 
-const COPY = '/home/u/Applications/proc-watch.AppImage';
+const COPY = '/home/u/Applications/computer-watcher.AppImage';
 
 describe('mise à jour de l’AppImage : la copie installée est remplacée, jamais l’original', () => {
   test('lancée depuis la copie : APPIMAGE (posé par le runtime) = la copie vérifiée → c’est elle qui est remplacée', () => {
@@ -20,7 +20,7 @@ describe('mise à jour de l’AppImage : la copie installée est remplacée, jam
     const src = readFileSync(createRequire(import.meta.url).resolve('electron-updater/out/AppImageUpdater.js'), 'utf8');
     expect(src).toMatch(/const appImageFile = process\.env\["APPIMAGE"\]/);
     expect(src).toMatch(/!\/\\d\+\\\.\\d\+\\\.\\d\+\/\.test\(existingBaseName\)\)\s*\{[^}]*destination = appImageFile/);
-    expect(/\d+\.\d+\.\d+/.test(basename(COPY))).toBe(false); // « proc-watch.AppImage » : pas de version → écrasé sur place
+    expect(/\d+\.\d+\.\d+/.test(basename(COPY))).toBe(false); // « computer-watcher.AppImage » : pas de version → écrasé sur place
   });
 });
 
@@ -65,4 +65,8 @@ describe('I-C : après l’installation, la nouvelle version est relancée par p
     expect(() => installAndRestart(fake(false).u, { appImage: COPY, takeError: () => null, pendingFile: () => null, restart: () => {}, onFailure: () => reset++ })).toThrow(InstallError);
     expect(reset).toBe(1);
   });
+});
+
+test('renommage : flux de test, cache de l’updater au nouveau nom', () => {
+  expect(TEST_UPDATE_CONFIG).toBe('updaterCacheDirName: computer-watcher-updater-test\n');
 });

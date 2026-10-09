@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { filterTargets, isNeverKill, NEVER_KILL, type GuardContext, type GuardProc } from './neverKill';
+import { APP_PATH, filterTargets, isNeverKill, NEVER_KILL, type GuardContext, type GuardProc } from './neverKill';
 
 const p = (name: string, cmdline = name) => ({ name, cmdline });
 
@@ -77,5 +77,41 @@ describe('filterTargets', () => {
     const r = filterTargets([810, 811, 820, 900, 500, 1, 12345], ctx());
     expect(r.kept).toEqual([]);
     expect(Object.fromEntries(r.refused)).toEqual({ 810: 'uid', 811: 'root', 820: 'protected', 900: 'self', 500: 'self', 1: 'self', 12345: 'unknown' });
+  });
+});
+
+describe('renommage : l’app se reconnaît sous ses deux noms', () => {
+  test.each([
+    ['computer-watche', '/home/u/Applications/computer-watcher.AppImage'],
+    ['computer-watcher', '/opt/computer-watcher/computer-watcher --hidden'],
+    ['proc-watch', '/opt/proc-watch/proc-watch'],
+    ['proc-watch', '/home/u/Applications/proc-watch.AppImage'],
+  ])('%s (%s) est reconnu comme l’app elle-même', (name, cmdline) => {
+    expect(isNeverKill(p(name, cmdline), null)).toBe(true);
+    // même avec un nom générique (electron, renderer) : la ligne de commande suffit
+    expect(isNeverKill(p('electron', `${cmdline} --type=renderer`), null)).toBe(true);
+    // ses enfants directs : « self », jamais visés
+    const procs: GuardProc[] = [
+      { pid: 500, ppid: 1, name: 'systemd', cmdline: 'systemd --user', uid: 1000 },
+      { pid: 40, ppid: 500, name, cmdline, uid: 1000 },
+      { pid: 41, ppid: 40, name: 'node', cmdline: 'node worker', uid: 1000 },
+      { pid: 50, ppid: 500, name: 'electron', cmdline, uid: 1000 },
+      { pid: 51, ppid: 50, name: 'node', cmdline: 'node worker', uid: 1000 },
+    ];
+    const ctx: GuardContext = { byPid: new Map(procs.map((x) => [x.pid, x])), currentUid: 1000, selfPid: 9999, appRoot: null, isProtected: () => false };
+    const r = filterTargets([40, 41, 50, 51], ctx);
+    expect(r.kept).toEqual([]);
+    expect(Object.fromEntries(r.refused)).toEqual({ 40: 'never-kill', 41: 'self', 50: 'never-kill', 51: 'self' });
+  });
+
+  test('les trois noms de processus sont dans la liste « jamais tuer »', () => {
+    for (const n of ['computer-watcher', 'computer-watche', 'proc-watch']) expect(NEVER_KILL, n).toContain(n);
+  });
+
+  test('un nom proche suit la même règle pour les deux noms (ni élargie ni réduite par le renommage)', () => {
+    // copie locale de l'ancienne regex (avant renommage)
+    const OLD_PROC_WATCH_PATH = /(^|[\s/=])proc-watch[^\s/]*(\/|\s|$)/;
+    for (const s of ['/usr/bin/proc-watch-evil', '/usr/bin/computer-watcher-evil', '/x/proc-watch.AppImage', '/x/computer-watcher.AppImage', '/x/computer-watcherx y', '/x/xcomputer-watcher', '/x/computer-watch'])
+      expect(APP_PATH.test(s), s).toBe(OLD_PROC_WATCH_PATH.test(s.replace('computer-watcher', 'proc-watch')));
   });
 });

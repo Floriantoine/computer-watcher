@@ -8,12 +8,12 @@ import { DEFAULT_RECORDER } from './defaults';
 const tmp = () => mkdtempSync(join(tmpdir(), 'procwatch-cfg-'));
 
 test('configDir suit XDG_CONFIG_HOME, sinon ~/.config', () => {
-  expect(configDir({ XDG_CONFIG_HOME: '/x' }, '/home/u')).toBe('/x/proc-watch');
-  expect(configDir({}, '/home/u')).toBe('/home/u/.config/proc-watch');
+  expect(configDir({ XDG_CONFIG_HOME: '/x' }, '/home/u')).toBe('/x/computer-watcher');
+  expect(configDir({}, '/home/u')).toBe('/home/u/.config/computer-watcher');
 });
 
 test('premier lancement : crée le fichier avec les valeurs par défaut', () => {
-  const dir = join(tmp(), 'proc-watch');
+  const dir = join(tmp(), 'computer-watcher');
   const r = loadConfig(dir);
   expect(r).toEqual({ config: DEFAULT_CONFIG, warning: null });
   expect(JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8'))).toEqual(DEFAULT_CONFIG);
@@ -61,7 +61,7 @@ test('écriture atomique : aucun fichier temporaire ne reste', () => {
 test('premier lancement en dossier illisible → défauts et avertissement, sans crash', () => {
   if (process.getuid?.() === 0) return; // root écrit partout
   const parent = tmp();
-  const dir = join(parent, 'proc-watch');
+  const dir = join(parent, 'computer-watcher');
   chmodSync(parent, 0o500);
   const r = loadConfig(dir);
   expect(r.config).toEqual(DEFAULT_CONFIG);
@@ -240,5 +240,5 @@ describe('rappel earlyoom (« Ne plus rappeler pendant 7 jours »)', () => {
 
 test('M-2 : XDG_CONFIG_HOME relatif ignoré', async () => {
   const { configDir } = await import('./config');
-  expect(configDir({ XDG_CONFIG_HOME: 'rel' }, '/home/u')).toBe('/home/u/.config/proc-watch');
+  expect(configDir({ XDG_CONFIG_HOME: 'rel' }, '/home/u')).toBe('/home/u/.config/computer-watcher');
 });

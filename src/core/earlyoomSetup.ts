@@ -76,7 +76,7 @@ export const PACKAGE_MANAGERS = [
   { name: 'pacman', varName: 'pacman', path: '/usr/bin/pacman', distros: ['arch'], args: ['-S', '--needed', '--noconfirm', 'earlyoom'] },
   {
     name: 'apt-get', varName: 'apt_get', path: '/usr/bin/apt-get', distros: ['debian', 'ubuntu'],
-    // confold : un /etc/default/earlyoom déjà présent est gardé sans question (proc-watch l'écrit ensuite, avec .bak).
+    // confold : un /etc/default/earlyoom déjà présent est gardé sans question (l'app l'écrit ensuite, avec .bak).
     args: ['-o', 'Dpkg::Options::=--force-confdef', '-o', 'Dpkg::Options::=--force-confold', 'install', '-y', '--no-install-recommends', '--no-remove', 'earlyoom'],
   },
   { name: 'dnf', varName: 'dnf', path: '/usr/bin/dnf', distros: ['fedora', 'rhel'], args: ['install', '-y', '--setopt=install_weak_deps=False', 'earlyoom'] },

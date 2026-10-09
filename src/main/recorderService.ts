@@ -5,15 +5,18 @@ import { isUsableAppImage } from './realAppImage';
 import { cleanEnv, systemBin } from '../core/childEnv';
 import { xdgHome } from '../core/paths';
 import { dirname, join } from 'node:path';
+import { APP_DISPLAY_NAME, APP_NAME, LEGACY_APP_NAME } from '../core/appName';
 
-export const UNIT_NAME = 'proc-watch-recorder.service';
+export const UNIT_NAME = `${APP_NAME}-recorder.service`;
+/** Unité d'avant le renommage : arrêtée et retirée par la migration (si c'est la nôtre), et par la désinstallation. */
+export const LEGACY_UNIT_NAME = `${LEGACY_APP_NAME}-recorder.service`;
 
 export function systemdQuote(arg: string): string {
   return '"' + arg.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%').replace(/\$/g, '$$$$') + '"';
 }
 
 /**
- * AppImage que lance le service (N1) : la copie installée (~/Applications/proc-watch.AppImage) dès qu'elle est utilisable
+ * AppImage que lance le service (N1) : la copie installée (~/Applications/computer-watcher.AppImage) dès qu'elle est utilisable
  * (en-tête AppImage, non vide : R2), même si
  * l'app tourne depuis l'original téléchargé, qui peut être supprimé ; sinon l'AppImage lancée (vérifiée par realAppImage) ;
  * null hors AppImage (.deb, sources : binaire lancé).
@@ -33,7 +36,7 @@ export function recorderUnit(args: string[]): string {
   if (args.some((a) => /[\x00-\x1f\x7f]/.test(a))) throw new Error('Argument refusé (caractère de contrôle)');
   return [
     '[Unit]',
-    'Description=proc-watch recorder (historique des processus)',
+    `Description=${APP_DISPLAY_NAME} recorder (historique des processus)`,
     // au plus 5 démarrages en 5 min : pas de boucle infinie si le binaire a disparu
     'StartLimitIntervalSec=300',
     'StartLimitBurst=5',
@@ -51,8 +54,8 @@ export function recorderUnit(args: string[]): string {
   ].join('\n');
 }
 
-export function unitPath(env: NodeJS.ProcessEnv = process.env, home: string = homedir()): string {
-  return join(xdgHome(env, 'XDG_CONFIG_HOME', join(home, '.config')), 'systemd/user', UNIT_NAME);
+export function unitPath(env: NodeJS.ProcessEnv = process.env, home: string = homedir(), name: string = UNIT_NAME): string {
+  return join(xdgHome(env, 'XDG_CONFIG_HOME', join(home, '.config')), 'systemd/user', name);
 }
 
 /**

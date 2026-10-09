@@ -1,4 +1,4 @@
-// Fichiers de proc-watch sous HOME / XDG, par descripteur de dossier : chaque dossier sous la racine est ouvert avec
+// Fichiers de l’app sous HOME / XDG, par descripteur de dossier : chaque dossier sous la racine est ouvert avec
 // O_DIRECTORY|O_NOFOLLOW (un dossier remplacé par un lien est refusé), et les fichiers sont créés, renommés ou supprimés
 // relativement à ce descripteur (`/proc/self/fd/<fd>/<nom>`, l'équivalent de openat). La racine elle-même (HOME,
 // XDG_CONFIG_HOME, XDG_DATA_HOME) peut être un lien : c'est le choix de l'utilisateur.
@@ -19,7 +19,7 @@ export interface Placed { root: string; dirs: string[]; name: string }
 /** Racine (la plus longue) sous laquelle se trouve `path`, dossiers intermédiaires et nom. Hors racine ou « .. » : erreur. */
 export function placeUnder(roots: readonly string[], path: string): Placed {
   const root = [...roots].filter((r) => path.startsWith(r.endsWith(sep) ? r : r + sep)).sort((a, b) => b.length - a.length)[0];
-  if (!root) throw new Error(`${path} : hors des dossiers de proc-watch`);
+  if (!root) throw new Error(`${path} : hors des dossiers de l’app`);
   const parts = path.slice(root.length).split(sep).filter(Boolean);
   if (!parts.length || parts.some((p) => p === '.' || p === '..')) throw new Error(`${path} : chemin refusé`);
   return { root, dirs: parts.slice(0, -1), name: parts.at(-1)! };
@@ -317,7 +317,7 @@ export function removeDirIfEmptySafe(roots: readonly string[], path: string): 'r
   }
 }
 
-/** Noms d'un dossier de proc-watch ouvert sans suivre de lien (lui compris) ; absent → [], lien → erreur. */
+/** Noms d’un dossier de l’app ouvert sans suivre de lien (lui compris) ; absent → [], lien → erreur. */
 export function listDirSafe(roots: readonly string[], path: string): string[] {
   const parent = openParent(roots, path, false);
   if (!parent) return [];
@@ -390,7 +390,7 @@ function emptyDir(dfd: number, real: string, dev: number, mounts: readonly strin
 }
 
 /**
- * Retire une arborescence de proc-watch (profil Chromium de l'app, cache de l'updater) par descripteurs de dossier, sans
+ * Retire une arborescence de l’app (profil Chromium de l'app, cache de l'updater) par descripteurs de dossier, sans
  * jamais suivre de lien ni traverser de point de montage (autre `dev`, ou montage listé dans /proc/self/mountinfo) : ces
  * sous-arbres sont laissés et signalés (erreur après avoir retiré le reste). `allowTopLink` : l'élément lui-même peut
  * être un lien (SingletonLock, cache remplacé par un lien), retiré sans être suivi.
@@ -425,6 +425,87 @@ export function removeTreeSafe(roots: readonly string[], path: string, o: { allo
     if (!complete) throw new Error(`point de montage sous ${path} : laissé (${skipped.join(', ')})`);
     rmdirSync(fdPath(parent.fd, parent.name));
     return 'removed';
+  } finally {
+    closeSync(parent.fd);
+  }
+}
+
+/**
+ * Retire un lien symbolique lui-même (jamais sa cible), relativement à son dossier ouvert sans suivre de lien ; absent →
+ * 'absent' ; autre type : refusé (laissé en place).
+ */
+export function removeLinkSafe(roots: readonly string[], path: string): 'removed' | 'absent' {
+  const parent = openParent(roots, path, false);
+  if (!parent) return 'absent';
+  try {
+    let st;
+    try {
+      st = lstatSync(fdPath(parent.fd, parent.name));
+    } catch (e) {
+      if (code(e) === 'ENOENT') return 'absent';
+      throw e;
+    }
+    if (!st.isSymbolicLink()) throw new Error(`${path} : pas un lien symbolique, laissé en place`);
+    unlinkSync(fdPath(parent.fd, parent.name));
+    return 'removed';
+  } finally {
+    closeSync(parent.fd);
+  }
+}
+
+/**
+ * Renommage proc-watch → computer-watcher : rename(2) d'un dossier de l'app vers un nom voisin (même dossier parent), relatif
+ * au parent ouvert sans suivre de lien : atomique, le contenu suit (metrics.db et ses -wal/-shm compris). Refus (erreur, rien
+ * touché) : ancien qui est un lien, pas un dossier, un point de montage (autre `dev` que son parent, ou listé dans
+ * mountinfo) ou qui contient un point de montage ; nouveau qui est un lien, pas un dossier, ou un dossier non vide (jamais de
+ * fusion). Un nouveau dossier vide est remplacé atomiquement par rename(2). Ancien absent : 'absent'.
+ */
+export function moveDirSafe(roots: readonly string[], from: string, to: string, o: { mountinfo: string }): 'moved' | 'absent' {
+  const a = placeUnder(roots, from);
+  const b = placeUnder(roots, to);
+  if (a.root !== b.root || a.dirs.join(sep) !== b.dirs.join(sep)) throw new Error(`${from} → ${to} : pas dans le même dossier, refusé`);
+  const parent = openParent(roots, from, false);
+  if (!parent) return 'absent';
+  try {
+    let st;
+    try {
+      st = lstatSync(fdPath(parent.fd, a.name));
+    } catch (e) {
+      if (code(e) === 'ENOENT') return 'absent';
+      throw e;
+    }
+    if (st.isSymbolicLink()) throw linkError(from);
+    if (!st.isDirectory()) throw new Error(`${from} : pas un dossier, laissé en place`);
+    if (st.dev !== fstatSync(parent.fd).dev) throw new Error(`${from} est un point de montage : laissé en place`);
+    const real = `${readlinkSync(`/proc/self/fd/${parent.fd}`).replace(/\/+$/, '')}/${a.name}`;
+    if (mountPointsOf(o.mountinfo).some((m) => m === real || isUnder(m, real))) throw new Error(`${from} est ou contient un point de montage : laissé en place`);
+    let next = null;
+    try {
+      next = lstatSync(fdPath(parent.fd, b.name));
+    } catch (e) {
+      if (code(e) !== 'ENOENT') throw e;
+    }
+    if (next) {
+      if (next.isSymbolicLink()) throw linkError(to);
+      if (!next.isDirectory()) throw new Error(`${to} existe et n’est pas un dossier : rien déplacé`);
+      const fd = openSync(fdPath(parent.fd, b.name), DIR_NOFOLLOW);
+      try {
+        if (readdirSync(`/proc/self/fd/${fd}`).length) throw new Error(`${to} existe déjà, non vide : rien déplacé (jamais de fusion)`);
+      } finally {
+        closeSync(fd);
+      }
+    }
+    try {
+      renameSync(fdPath(parent.fd, a.name), fdPath(parent.fd, b.name));
+    } catch (e) {
+      const c = code(e);
+      if (c === 'ENOTEMPTY' || c === 'EEXIST') throw new Error(`${to} existe déjà, non vide : rien déplacé (jamais de fusion)`);
+      if (c === 'ENOTDIR') throw new Error(`${to} a été remplacé (pas un dossier) : rien déplacé`);
+      if (c === 'EBUSY') throw new Error(`${from} est occupé (point de montage ?) : laissé en place`);
+      throw e;
+    }
+    fsyncDir(parent.fd);
+    return 'moved';
   } finally {
     closeSync(parent.fd);
   }

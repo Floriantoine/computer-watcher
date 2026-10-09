@@ -126,7 +126,7 @@ function run(o: RunOpts) {
   if (o.existing) writeFileSync(target, o.existing);
   if (o.binPresent) writeExec(earlyoom, ['#!/usr/bin/bash', 'exit 0']);
   const log = join(dir, 'log');
-  const r = spawnSync('/usr/bin/bash', ['-c', script, 'proc-watch-earlyoom-setup', ...o.args], {
+  const r = spawnSync('/usr/bin/bash', ['-c', script, 'computer-watcher-earlyoom-setup', ...o.args], {
     env: {
       PATH: '/usr/bin:/bin', FAKE_LOG: log,
       FAKE_RESTART: o.restart ?? '', FAKE_ACTIVE: o.active ?? '', FAKE_ENABLE: o.enable ?? '', FAKE_NRESTARTS: o.nrestarts ?? '', FAKE_DISABLE: o.disable ?? '',
@@ -440,7 +440,7 @@ describe('setupEarlyoom (pkexec simulé)', () => {
     const o = await setupEarlyoom('install', VALID, { run });
     expect(o.result).toEqual({ ok: true, line: VALID });
     expect(o.code).toBe(0);
-    expect(calls).toEqual([{ cmd: '/usr/bin/pkexec', args: ['/usr/bin/bash', '-c', EARLYOOM_SETUP_SCRIPT, 'proc-watch-earlyoom-setup', 'install', VALID], timeout: INSTALL_TIMEOUT_MS }]);
+    expect(calls).toEqual([{ cmd: '/usr/bin/pkexec', args: ['/usr/bin/bash', '-c', EARLYOOM_SETUP_SCRIPT, 'computer-watcher-earlyoom-setup', 'install', VALID], timeout: INSTALL_TIMEOUT_MS }]);
     expect(INSTALL_TIMEOUT_MS).toBe(600_000);
   });
   test('activation : délai de 120 s', async () => {

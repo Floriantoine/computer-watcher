@@ -8,6 +8,7 @@ import {
   appPaths, autostartState, installAppImage, verifyAndDeleteOriginal, launchTarget, rootsFrom, runUninstall, setAutostart, stopRecorderForUninstall,
   configSweepPlan, postExitSweepCommand, sweepTools, uninstallPlan, uninstallSummary, type Roots,
 } from './appInstall';
+import { desktopEntryContent } from './desktopEntry';
 
 // Racines temporaires sous ~/.cache/pw-onboard-* (jamais les vrais dossiers de l'utilisateur), retirées à la fin.
 const cache = join(homedir(), '.cache');
@@ -39,19 +40,30 @@ describe('chemins', () => {
   test('dérivés de HOME et des XDG injectés', () => {
     const r = rootsFrom({ XDG_CONFIG_HOME: '/c', XDG_DATA_HOME: '/d' }, '/home/u');
     const p = appPaths(r);
-    expect(p.appImage).toBe('/home/u/Applications/proc-watch.AppImage');
-    expect(p.autostart).toBe('/c/autostart/proc-watch.desktop');
-    expect(p.desktop).toBe('/d/applications/proc-watch.desktop');
-    expect(p.icon).toBe('/d/icons/hicolor/512x512/apps/proc-watch.png');
-    expect(p.unit).toBe('/c/systemd/user/proc-watch-recorder.service');
-    expect(p.configDir).toBe('/c/proc-watch');
-    expect(p.dataDir).toBe('/d/proc-watch');
-    expect(appPaths(rootsFrom({}, '/home/u')).autostart).toBe('/home/u/.config/autostart/proc-watch.desktop');
-    expect(appPaths(rootsFrom({ XDG_CACHE_HOME: '/k' }, '/home/u')).updaterCache).toBe('/k/proc-watch-updater');
-    expect(appPaths(rootsFrom({}, '/home/u')).updaterCache).toBe('/home/u/.cache/proc-watch-updater');
+    expect(p.appImage).toBe('/home/u/Applications/computer-watcher.AppImage');
+    expect(p.autostart).toBe('/c/autostart/computer-watcher.desktop');
+    expect(p.desktop).toBe('/d/applications/computer-watcher.desktop');
+    expect(p.icon).toBe('/d/icons/hicolor/512x512/apps/computer-watcher.png');
+    expect(p.unit).toBe('/c/systemd/user/computer-watcher-recorder.service');
+    expect(p.configDir).toBe('/c/computer-watcher');
+    expect(p.dataDir).toBe('/d/computer-watcher');
+    expect(appPaths(rootsFrom({}, '/home/u')).autostart).toBe('/home/u/.config/autostart/computer-watcher.desktop');
+    expect(appPaths(rootsFrom({ XDG_CACHE_HOME: '/k' }, '/home/u')).updaterCache).toBe('/k/computer-watcher-updater');
+    expect(appPaths(rootsFrom({}, '/home/u')).updaterCache).toBe('/home/u/.cache/computer-watcher-updater');
+    // anciens noms (restes d'avant le renommage)
+    expect(p.legacy).toEqual({
+      appImage: '/home/u/Applications/proc-watch.AppImage',
+      autostart: '/c/autostart/proc-watch.desktop',
+      desktop: '/d/applications/proc-watch.desktop',
+      icon: '/d/icons/hicolor/512x512/apps/proc-watch.png',
+      unit: '/c/systemd/user/proc-watch-recorder.service',
+      configDir: '/c/proc-watch',
+      dataDir: '/d/proc-watch',
+      updaterCache: '/home/u/.cache/proc-watch-updater',
+    });
     // M-2 : XDG relatifs ignorés
     expect(rootsFrom({ XDG_CONFIG_HOME: 'c', XDG_DATA_HOME: './d', XDG_CACHE_HOME: 'k' }, '/home/u')).toEqual({
-      home: '/home/u', configHome: '/home/u/.config', dataHome: '/home/u/.local/share', cacheHome: '/home/u/.cache',
+      home: '/home/u', configHome: '/home/u/.config', dataHome: '/home/u/.local/share', cacheHome: '/home/u/.cache', foreign: [],
     });
   });
 });
@@ -65,7 +77,7 @@ describe('installer l’AppImage', () => {
     expect(readFileSync(p.appImage)).toEqual(AI('appimage-v1'));
     expect(statSync(p.appImage).mode & 0o777).toBe(0o755);
     expect(readFileSync(p.desktop, 'utf8')).toContain(`Exec="${p.appImage}"`);
-    expect(readdirSync(join(roots.home, 'Applications'))).toEqual(['proc-watch.AppImage']);
+    expect(readdirSync(join(roots.home, 'Applications'))).toEqual(['computer-watcher.AppImage']);
     expect(existsSync(src)).toBe(true); // l'original n'est jamais touché sans accord
   });
 
@@ -135,8 +147,8 @@ describe('installer l’AppImage', () => {
     expect(readFileSync(p.desktop, 'utf8')).toContain('my-own');
     expect(r.desktopFile).toBeNull();
     expect(r.autostartUpdated).toBe(false);
-    expect(r.warnings.join('\n')).toMatch(/applications\/proc-watch\.desktop.*pas été créé par proc-watch/);
-    expect(r.warnings.join('\n')).toMatch(/autostart\/proc-watch\.desktop.*pas été créé par proc-watch/);
+    expect(r.warnings.join('\n')).toMatch(/applications\/computer-watcher\.desktop.*pas été créé par Computer Watcher/);
+    expect(r.warnings.join('\n')).toMatch(/autostart\/computer-watcher\.desktop.*pas été créé par Computer Watcher/);
     expect(existsSync(p.appImage)).toBe(true); // la copie elle-même est faite
   });
 
@@ -237,7 +249,7 @@ describe('démarrer avec la session', () => {
     writeFileSync(appPaths(roots).appImage, 'pas une AppImage');
     expect(launchTarget({ roots, appImage: src, packaged: true, execPath: '/x' })).toBe(src);
   });
-  test('activer : ~/.config/autostart/proc-watch.desktop avec --hidden ; désactiver : retiré ; deux fois : idempotent', () => {
+  test('activer : ~/.config/autostart/computer-watcher.desktop avec --hidden ; désactiver : retiré ; deux fois : idempotent', () => {
     setAutostart(true, '/home/u/Applications/proc-watch.AppImage', roots);
     setAutostart(true, '/home/u/Applications/proc-watch.AppImage', roots);
     const p = appPaths(roots).autostart;
@@ -255,22 +267,22 @@ describe('démarrer avec la session', () => {
     const p = appPaths(roots).autostart;
     mkdirSync(dirname(p), { recursive: true });
     writeFileSync(p, '[Desktop Entry]\nName=mine\nExec=/usr/bin/my-own\n');
-    expect(() => setAutostart(true, '/x/proc-watch.AppImage', roots)).toThrow(/pas été créé par proc-watch/);
+    expect(() => setAutostart(true, '/x/proc-watch.AppImage', roots)).toThrow(/pas été créé par Computer Watcher/);
     expect(readFileSync(p, 'utf8')).toContain('my-own');
   });
   test('reproduction I1 [3] : ~/.config/autostart remplacé par un lien → refusé, fichier du dossier visé intact', () => {
     const victimDir = join(roots.home, 'victim-dir');
     mkdirSync(victimDir);
-    writeFileSync(join(victimDir, 'proc-watch.desktop'), 'FOREIGN in victim dir\n');
+    writeFileSync(join(victimDir, 'computer-watcher.desktop'), 'FOREIGN in victim dir\n');
     mkdirSync(roots.configHome, { recursive: true });
     symlinkSync(victimDir, join(roots.configHome, 'autostart'));
     expect(() => setAutostart(true, '/x/proc-watch.AppImage', roots)).toThrow(/lien symbolique/);
-    expect(readFileSync(join(victimDir, 'proc-watch.desktop'), 'utf8')).toBe('FOREIGN in victim dir\n');
+    expect(readFileSync(join(victimDir, 'computer-watcher.desktop'), 'utf8')).toBe('FOREIGN in victim dir\n');
   });
-  test('désactiver : un fichier sans X-ProcWatch-Managed=1 (pas créé par proc-watch) reste', () => {
+  test('désactiver : un fichier sans X-ProcWatch-Managed=1 (pas créé par l’app) reste', () => {
     mkdirSync(join(roots.configHome, 'autostart'), { recursive: true });
     writeFileSync(appPaths(roots).autostart, '[Desktop Entry]\nExec=autre\n');
-    expect(() => setAutostart(false, null, roots)).toThrow(/pas été créé par proc-watch/);
+    expect(() => setAutostart(false, null, roots)).toThrow(/pas été créé par Computer Watcher/);
     expect(existsSync(appPaths(roots).autostart)).toBe(true);
   });
   test('désactiver avec un lien symbolique planté : refusé, cible intacte', () => {
@@ -321,13 +333,14 @@ describe('désinstaller', () => {
     const p = await fullInstall();
     writeFileSync(join(p.configDir, 'updater.json'), '{}');
     writeFileSync(join(p.configDir, '.updaterId'), 'id');
+    writeFileSync(join(p.configDir, 'migration.json'), '{}');
     mkdirSync(join(p.configDir, 'GPUCache/sub'), { recursive: true });
     writeFileSync(join(p.configDir, 'GPUCache/sub/data_0'), 'x');
     mkdirSync(join(p.configDir, 'Local Storage/leveldb'), { recursive: true });
     writeFileSync(join(p.configDir, 'Preferences'), '{}');
     symlinkSync('host-123', join(p.configDir, 'SingletonLock'));
     const plan = uninstallPlan(roots, { history: false, config: true });
-    for (const n of ['updater.json', '.updaterId', 'GPUCache', 'Local Storage', 'Preferences', 'SingletonLock']) expect(plan.map((i) => i.path)).toContain(join(p.configDir, n));
+    for (const n of ['updater.json', '.updaterId', 'migration.json', 'GPUCache', 'Local Storage', 'Preferences', 'SingletonLock']) expect(plan.map((i) => i.path)).toContain(join(p.configDir, n));
     const r = await runUninstall(plan, roots, { service: okService() });
     expect(r.failed).toEqual([]);
     expect(existsSync(p.configDir)).toBe(false);
@@ -396,7 +409,7 @@ describe('désinstaller', () => {
     writeFileSync(victim, 'précieux');
     const plan = [...uninstallPlan(roots, { history: false, config: false })];
     plan.splice(0, 0, { kind: 'desktop', path: victim, label: 'x' });
-    plan.splice(1, 0, { kind: 'history', path: join(p.dataDir, '..', 'proc-watch', '..', 'victim.txt'), label: 'x' });
+    plan.splice(1, 0, { kind: 'history', path: join(p.dataDir, '..', 'computer-watcher', '..', 'victim.txt'), label: 'x' });
     const r = await runUninstall(plan, roots, { service: okService() });
     expect(readFileSync(victim, 'utf8')).toBe('précieux');
     expect(r.failed.filter((f) => /hors de la liste/.test(f.error))).toHaveLength(2);
@@ -428,15 +441,15 @@ describe('désinstaller', () => {
     const p = await fullInstall();
     const victimDir = join(roots.home, 'victim-apps');
     mkdirSync(victimDir);
-    writeFileSync(join(victimDir, 'proc-watch.AppImage'), 'autre');
-    writeFileSync(join(victimDir, 'proc-watch.png'), 'autre');
+    writeFileSync(join(victimDir, 'computer-watcher.AppImage'), 'autre');
+    writeFileSync(join(victimDir, 'computer-watcher.png'), 'autre');
     rmSync(join(roots.home, 'Applications'), { recursive: true });
     symlinkSync(victimDir, join(roots.home, 'Applications'));
     rmSync(dirname(p.icon), { recursive: true });
     symlinkSync(victimDir, dirname(p.icon));
     const r = await runUninstall(uninstallPlan(roots, { history: false, config: false }), roots, { service: okService() });
-    expect(readFileSync(join(victimDir, 'proc-watch.AppImage'), 'utf8')).toBe('autre');
-    expect(readFileSync(join(victimDir, 'proc-watch.png'), 'utf8')).toBe('autre');
+    expect(readFileSync(join(victimDir, 'computer-watcher.AppImage'), 'utf8')).toBe('autre');
+    expect(readFileSync(join(victimDir, 'computer-watcher.png'), 'utf8')).toBe('autre');
     expect(r.failed.map((f) => f.path)).toContain(p.icon);
     expect(r.done).toBe(false);
   });
@@ -457,7 +470,9 @@ describe('désinstaller', () => {
     for (const x of [p.autostart, p.desktop, p.icon, p.unit, p.appImage]) expect(s.detail).toContain(x);
     expect(s.detail).toMatch(/earlyoom n’est pas modifié/);
     expect(s.detail).toMatch(/Historique et configuration : gardés/);
-    expect(uninstallSummary([], { deb: true }).detail).toMatch(/apt remove proc-watch/);
+    expect(uninstallSummary([], { deb: true }).detail).toMatch(/apt remove computer-watcher/);
+    expect(s.message).toBe('Désinstaller Computer Watcher ?');
+    expect(s.detail).toMatch(/Computer Watcher se fermera ensuite/);
   });
 });
 
@@ -487,17 +502,17 @@ describe('arrêt du service à la désinstallation (échoue fermé)', () => {
     expect(calls.map((c) => c[0])).toEqual(['show']);
   });
   test('unité non chargée et aucun lien d’activation : rien à arrêter', async () => {
-    expect(await stopRecorderForUninstall({ unitPath: join(roots.configHome, 'systemd/user/proc-watch-recorder.service'), run: run(''), disabled: false })).toEqual({ stopped: false, error: null });
+    expect(await stopRecorderForUninstall({ unitPath: join(roots.configHome, 'systemd/user/computer-watcher-recorder.service'), run: run(''), disabled: false })).toEqual({ stopped: false, error: null });
   });
   test('unité non chargée mais lien default.target.wants présent : erreur', async () => {
-    const unit = join(roots.configHome, 'systemd/user/proc-watch-recorder.service');
+    const unit = join(roots.configHome, 'systemd/user/computer-watcher-recorder.service');
     mkdirSync(join(dirname(unit), 'default.target.wants'), { recursive: true });
-    symlinkSync(unit, join(dirname(unit), 'default.target.wants/proc-watch-recorder.service'));
+    symlinkSync(unit, join(dirname(unit), 'default.target.wants/computer-watcher-recorder.service'));
     expect((await stopRecorderForUninstall({ unitPath: unit, run: run(''), disabled: false })).error).toMatch(/default\.target\.wants/);
   });
   test('notre unité : disable --now', async () => {
     expect(await stopRecorderForUninstall({ unitPath: '/c/u.service', run: run('/c/u.service'), disabled: false })).toEqual({ stopped: true, error: null });
-    expect(calls[1]).toEqual(['disable', '--now', 'proc-watch-recorder.service']);
+    expect(calls[1]).toEqual(['disable', '--now', 'computer-watcher-recorder.service']);
   });
   test('disable qui échoue : erreur signalée', async () => {
     const failing = async (args: string[]) => (args[0] === 'show' ? { ok: true, stdout: '/c/u.service' } : { ok: false, stdout: '' });
@@ -530,7 +545,7 @@ describe('arrêt du service à la désinstallation (échoue fermé)', () => {
 
 });
 
-describe('cache de l’updater (proc-watch-updater) avec « Supprimer la configuration »', () => {
+describe('cache de l’updater (computer-watcher-updater) avec « Supprimer la configuration »', () => {
   test('listé et retiré seulement avec la configuration ; contenu retiré sans suivre de lien', async () => {
     const p = await fullInstall();
     mkdirSync(join(p.updaterCache, 'pending'), { recursive: true });
@@ -634,5 +649,105 @@ describe('après la sortie : « Session Storage » recréé par Chromium en quit
     symlinkSync(real, expected); // le chemin attendu est maintenant un lien vers un autre dossier
     runSweep(expected);
     expect(existsSync(join(real, 'Session Storage/x'))).toBe(true);
+  });
+});
+
+describe('renommage : restes à l’ancien nom (proc-watch)', () => {
+  const managed = (path: string, exec: string, args: string[] = []) => {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, desktopEntryContent(exec, { args, autostart: args.length > 0 }));
+  };
+
+  test('la désinstallation retire aussi les restes marqués à l’ancien nom, jamais une entrée non marquée', async () => {
+    const p = appPaths(roots);
+    managed(p.legacy.desktop, p.legacy.appImage);
+    mkdirSync(dirname(p.legacy.autostart), { recursive: true });
+    writeFileSync(p.legacy.autostart, '[Desktop Entry]\nName=autre\nExec=/usr/bin/autre\n'); // non marquée
+    mkdirSync(dirname(p.legacy.icon), { recursive: true });
+    writeFileSync(p.legacy.icon, 'png');
+    mkdirSync(dirname(p.legacy.appImage), { recursive: true });
+    writeFileSync(p.legacy.appImage, AI('v0.1.3'));
+    const plan = uninstallPlan(roots, { history: false, config: false });
+    expect(plan.map((i) => i.path)).toEqual([p.legacy.desktop, p.legacy.icon, p.legacy.appImage]);
+    const res = await runUninstall(plan, roots, { service: okService() });
+    expect(res.failed).toEqual([]);
+    expect(res.done).toBe(true);
+    expect(existsSync(p.legacy.desktop)).toBe(false);
+    expect(existsSync(p.legacy.icon)).toBe(false);
+    expect(existsSync(p.legacy.appImage)).toBe(false);
+    expect(readFileSync(p.legacy.autostart, 'utf8')).toContain('Name=autre');
+  });
+
+  test('ancienne unité, anciens dossiers d’historique, de config et de cache : listés et retirés sous les mêmes contrôles', async () => {
+    const p = await fullInstall();
+    const L = p.legacy;
+    mkdirSync(dirname(L.unit), { recursive: true });
+    writeFileSync(L.unit, '[Unit]\n');
+    mkdirSync(L.dataDir, { recursive: true });
+    writeFileSync(join(L.dataDir, 'metrics.db'), 'ancien');
+    writeFileSync(join(L.dataDir, 'notes-perso.txt'), 'à moi');
+    mkdirSync(L.configDir, { recursive: true });
+    writeFileSync(join(L.configDir, 'config.json'), '{}');
+    mkdirSync(join(L.updaterCache, 'pending'), { recursive: true });
+    const stopped: string[] = [];
+    const plan = uninstallPlan(roots, { history: true, config: true });
+    const paths = plan.map((i) => i.path);
+    for (const x of [L.unit, join(L.dataDir, 'metrics.db'), L.dataDir, join(L.configDir, 'config.json'), L.configDir, L.updaterCache]) expect(paths).toContain(x);
+    expect(paths).not.toContain(join(L.dataDir, 'notes-perso.txt'));
+    expect(plan.at(-1)!.path).toBe(p.appImage);
+    const r = await runUninstall(plan, roots, { service: { stop: async (u) => (stopped.push(u), null), reload: async () => {} } });
+    expect(r.failed).toEqual([]);
+    expect(stopped).toEqual([p.unit, L.unit]);
+    for (const x of [L.unit, join(L.dataDir, 'metrics.db'), L.configDir, L.updaterCache]) expect(existsSync(x), x).toBe(false);
+    expect(readFileSync(join(L.dataDir, 'notes-perso.txt'), 'utf8')).toBe('à moi');
+    expect(r.kept.map((k) => k.path)).toContain(L.dataDir);
+  });
+
+  test('plan forgé : un chemin voisin de l’ancien nom reste hors de la liste autorisée', async () => {
+    const p = appPaths(roots);
+    const victim = join(roots.configHome, 'proc-watch-autre', 'config.json');
+    mkdirSync(dirname(victim), { recursive: true });
+    writeFileSync(victim, 'précieux');
+    const r = await runUninstall([{ kind: 'config', path: victim, label: 'x' }, { kind: 'config', path: dirname(victim), label: 'x', dir: true }], roots, { service: okService() });
+    expect(r.failed).toHaveLength(2);
+    expect(readFileSync(victim, 'utf8')).toBe('précieux');
+    expect(p.legacy.configDir).not.toBe(dirname(victim));
+  });
+
+  test('arrêt de l’ancienne unité : systemctl vise proc-watch-recorder.service', async () => {
+    const calls: string[][] = [];
+    const unit = appPaths(roots).legacy.unit;
+    const run = async (args: string[]) => (calls.push(args), { ok: true, stdout: args[0] === 'show' ? `${unit}\n` : '' });
+    expect(await stopRecorderForUninstall({ unitPath: unit, run, disabled: false })).toEqual({ stopped: true, error: null });
+    expect(calls).toEqual([['show', '-p', 'FragmentPath', '--value', 'proc-watch-recorder.service'], ['disable', '--now', 'proc-watch-recorder.service']]);
+  });
+});
+
+describe('revue M4 : XDG partiel, la désinstallation ne liste jamais les dossiers d’une autre racine', () => {
+  test('config temporaire, données et cache par défaut (les vrais) : seuls config, menu de HOME… et unité de la racine de config', async () => {
+    const home = roots.home;
+    const cfg = join(home, 'tmpcfg');
+    const r = rootsFrom({ XDG_CONFIG_HOME: cfg }, home);
+    expect(r.foreign).toEqual(['data', 'cache']);
+    const p = appPaths(r);
+    for (const d of [p.dataDir, p.legacy.dataDir, p.configDir, p.updaterCache, p.legacy.updaterCache]) mkdirSync(d, { recursive: true });
+    writeFileSync(join(p.dataDir, 'metrics.db'), 'vrai historique');
+    writeFileSync(join(p.legacy.dataDir, 'metrics.db'), 'vrai historique');
+    writeFileSync(join(p.configDir, 'config.json'), '{}');
+    mkdirSync(dirname(p.desktop), { recursive: true });
+    writeFileSync(p.desktop, desktopEntryContent('/x/app'));
+    const plan = uninstallPlan(r, { history: true, config: true });
+    const paths = plan.map((i) => i.path);
+    expect(paths.filter((x) => x.startsWith(r.dataHome) || x.startsWith(r.cacheHome))).toEqual([]);
+    expect(paths).toContain(join(p.configDir, 'config.json'));
+    // plan forgé vers la racine étrangère : refusé à l'exécution
+    const res = await runUninstall([{ kind: 'history', path: join(p.dataDir, 'metrics.db'), label: 'x' }, { kind: 'desktop', path: p.desktop, label: 'x' }], r, { service: okService() });
+    expect(res.failed.map((f) => f.path)).toEqual([join(p.dataDir, 'metrics.db'), p.desktop]);
+    expect(readFileSync(join(p.dataDir, 'metrics.db'), 'utf8')).toBe('vrai historique');
+  });
+  test('racines cohérentes : rien d’étranger', () => {
+    expect(rootsFrom({}, '/home/u').foreign).toEqual([]);
+    expect(rootsFrom({ XDG_CONFIG_HOME: '/c', XDG_DATA_HOME: '/d', XDG_CACHE_HOME: '/k' }, '/home/u').foreign).toEqual([]);
+    expect(rootsFrom({ XDG_DATA_HOME: '/d' }, '/home/u').foreign).toEqual(['data']);
   });
 });

@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { hasControlChars } from './appImageTrust';
 import { xdgHome } from '../core/paths';
 import { readFileSafe, writeFileSafe } from './safeFs';
+import { APP_DISPLAY_NAME, APP_NAME } from '../core/appName';
 
 /**
  * Argument de Exec entre guillemets, selon la spécification Desktop Entry : d'abord la règle des guillemets (`"`, `` ` ``,
@@ -17,7 +18,7 @@ export function quoteExecArg(arg: string): string {
   return `"${str.replace(/%/g, '%%')}"`;
 }
 
-/** Marque des entrées écrites par proc-watch (menu, démarrage automatique) : seules celles-ci sont repointées ou retirées. */
+/** Marque des entrées écrites par l'app (menu, démarrage automatique ; nom interne inchangé depuis proc-watch) : seules celles-ci sont repointées ou retirées. */
 export const MANAGED_LINE = 'X-ProcWatch-Managed=1';
 /** Nom gardé pour le code des mises à jour. */
 export const MANAGED_KEY = MANAGED_LINE;
@@ -37,10 +38,11 @@ export function desktopEntryContent(execPath: string, o: EntryOptions = {}): str
   return [
     '[Desktop Entry]',
     'Type=Application',
-    'Name=proc-watch',
+    `Name=${APP_DISPLAY_NAME}`,
     'Comment=Voir et tuer les processus gourmands',
     `Exec=${exec}`,
-    'Icon=proc-watch',
+    `Icon=${APP_NAME}`,
+    `StartupWMClass=${APP_NAME}`,
     'Terminal=false',
     MANAGED_LINE,
     ...(o.autostart ? ['X-GNOME-Autostart-enabled=true'] : ['Categories=System;Monitor;']),
@@ -49,7 +51,7 @@ export function desktopEntryContent(execPath: string, o: EntryOptions = {}): str
 }
 
 /**
- * Écrit l'entrée de menu et copie l'icône de l'app dans le thème hicolor de l'utilisateur (`Icon=proc-watch`).
+ * Écrit l'entrée de menu et copie l'icône de l'app dans le thème hicolor de l'utilisateur (`Icon=computer-watcher`).
  * Une icône introuvable n'empêche pas l'entrée : le bureau affichera son icône par défaut.
  * Dossiers ouverts sans suivre de lien (refusés s'ils en sont un), écriture atomique ; une entrée existante sans
  * X-ProcWatch-Managed=1 n'est jamais écrasée (erreur).
@@ -59,12 +61,12 @@ export function installDesktopEntry(target: string, env: NodeJS.ProcessEnv = pro
   const data = xdgHome(env, 'XDG_DATA_HOME', join(home, '.local/share'));
   const roots = [home, data];
   const content = desktopEntryContent(target);
-  const file = join(data, 'applications', 'proc-watch.desktop');
+  const file = join(data, 'applications', `${APP_NAME}.desktop`);
   const guard = (current: string | null) =>
-    current !== null && !isManagedEntry(current) ? `${file} n’a pas été créé par proc-watch (sans X-ProcWatch-Managed=1) : laissé en place` : null;
+    current !== null && !isManagedEntry(current) ? `${file} n’a pas été créé par ${APP_DISPLAY_NAME} (sans X-ProcWatch-Managed=1) : laissé en place` : null;
   if (iconPng) {
     try {
-      writeFileSafe(roots, join(data, 'icons/hicolor/512x512/apps/proc-watch.png'), readFileSync(iconPng));
+      writeFileSafe(roots, join(data, `icons/hicolor/512x512/apps/${APP_NAME}.png`), readFileSync(iconPng));
     } catch {
       // icône facultative
     }
@@ -75,16 +77,25 @@ export function installDesktopEntry(target: string, env: NodeJS.ProcessEnv = pro
 
 /** Inverse de quoteExecArg pour la ligne `Exec="…"` d'une entrée de menu (sans argument) ; autre forme → null. */
 export function execPathFromEntry(text: string): string | null {
-  const m = /^Exec="(.*)"$/m.exec(text);
+  const e = execFromEntry(text);
+  return e && e.args.length === 0 ? e.path : null;
+}
+
+/**
+ * Ligne `Exec="…" [arguments simples]` écrite par desktopEntryContent : chemin (inverse de quoteExecArg) et arguments
+ * (seulement ceux de SAFE_ARG, comme `--hidden`) ; autre forme → null.
+ */
+export function execFromEntry(text: string): { path: string; args: string[] } | null {
+  const m = /^Exec="(.*)"((?: [A-Za-z0-9_\-=./]+)*)$/m.exec(text);
   if (!m) return null;
   // règle des chaînes (\\ → \, \n, \t, \r, \s), puis règle des guillemets (\X → X), et %% → %
   const str = m[1]!.replace(/%%/g, '%').replace(/\\([\\nrts])/g, (_, c: string) => ({ '\\': '\\', n: '\n', r: '\r', t: '\t', s: ' ' })[c]!);
-  return str.replace(/\\(.)/g, '$1');
+  return { path: str.replace(/\\(.)/g, '$1'), args: m[2]!.split(' ').filter(Boolean) };
 }
 
 /**
  * Après une mise à jour de l'AppImage sous un nouveau nom (electron-updater supprime l'ancienne et place la nouvelle dans le
- * même dossier) : le raccourci écrit par proc-watch (clé X-ProcWatch-Managed) est repointé sur `appImage`, seulement si
+ * même dossier) : le raccourci écrit par l'app (clé X-ProcWatch-Managed) est repointé sur `appImage`, seulement si
  * son ancienne cible n'existe plus et que `appImage` est dans le même dossier. Lancer une autre copie ne le détourne jamais.
  * Lecture et écriture sans suivre de lien (dossiers compris).
  */
@@ -96,7 +107,7 @@ export function refreshDesktopEntry(
   if (hasControlChars(appImage)) return 'refused';
   const data = xdgHome(env, 'XDG_DATA_HOME', join(home, '.local/share'));
   const roots = [home, data];
-  const file = join(data, 'applications', 'proc-watch.desktop');
+  const file = join(data, 'applications', `${APP_NAME}.desktop`);
   const text = readFileSafe(roots, file);
   if (text === null) return 'absent';
   const want = desktopEntryContent(appImage);

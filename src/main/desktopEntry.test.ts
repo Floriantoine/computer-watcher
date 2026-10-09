@@ -2,23 +2,25 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'vitest';
-import { desktopEntryContent, execPathFromEntry, installDesktopEntry, refreshDesktopEntry } from './desktopEntry';
+import { desktopEntryContent, execFromEntry, execPathFromEntry, installDesktopEntry, refreshDesktopEntry } from './desktopEntry';
 
 test('contenu .desktop', () => {
-  const c = desktopEntryContent('/home/u/Apps/proc-watch.AppImage');
-  expect(c).toContain('Exec="/home/u/Apps/proc-watch.AppImage"');
-  expect(c).toContain('Name=proc-watch');
+  const c = desktopEntryContent('/home/u/Apps/computer-watcher.AppImage');
+  expect(c).toContain('Exec="/home/u/Apps/computer-watcher.AppImage"');
+  expect(c).toContain('\nName=Computer Watcher\n');
+  expect(c).toContain('\nStartupWMClass=computer-watcher\n');
+  expect(c).toContain('\nX-ProcWatch-Managed=1\n');
   expect(c.startsWith('[Desktop Entry]\n')).toBe(true);
 });
 
 test('écrit dans XDG_DATA_HOME/applications, sinon ~/.local/share/applications', () => {
   const home = mkdtempSync(join(tmpdir(), 'procwatch-home-'));
   const file = installDesktopEntry('/x/app', {}, home);
-  expect(file).toBe(join(home, '.local/share/applications/proc-watch.desktop'));
+  expect(file).toBe(join(home, '.local/share/applications/computer-watcher.desktop'));
   expect(readFileSync(file, 'utf8')).toContain('Exec="/x/app"');
 
   const data = mkdtempSync(join(tmpdir(), 'procwatch-data-'));
-  expect(installDesktopEntry('/x/app', { XDG_DATA_HOME: data }, home)).toBe(join(data, 'applications/proc-watch.desktop'));
+  expect(installDesktopEntry('/x/app', { XDG_DATA_HOME: data }, home)).toBe(join(data, 'applications/computer-watcher.desktop'));
 });
 
 test('échappe selon la spécification Desktop Entry (guillemets, puis chaîne) : \\ " ` $ et %', () => {
@@ -113,13 +115,13 @@ test('refreshDesktopEntry : raccourci non marqué (écrit à la main, ancienne v
   expect(readFileSync(file, 'utf8')).toContain('--free');
 });
 
-test('icône de l\'app : Icon=proc-watch, PNG copiée dans le thème hicolor', () => {
-  expect(desktopEntryContent('/x/app')).toContain('Icon=proc-watch\n');
+test('icône de l\'app : Icon=computer-watcher, PNG copiée dans le thème hicolor', () => {
+  expect(desktopEntryContent('/x/app')).toContain('Icon=computer-watcher\n');
   const home = mkdtempSync(join(tmpdir(), 'procwatch-home-'));
   const src = mkdtempSync(join(tmpdir(), 'procwatch-icons-'));
   writeFileSync(join(src, 'icon.png'), 'png');
   installDesktopEntry('/x/app', {}, home, join(src, 'icon.png'));
-  expect(existsSync(join(home, '.local/share/icons/hicolor/512x512/apps/proc-watch.png'))).toBe(true);
+  expect(existsSync(join(home, '.local/share/icons/hicolor/512x512/apps/computer-watcher.png'))).toBe(true);
 });
 
 test('icône absente : l\'entrée est quand même écrite', () => {
@@ -136,15 +138,15 @@ test('lien symbolique posé à la place de l’entrée ou de l’icône : rempla
   const icons = join(home, '.local/share/icons/hicolor/512x512/apps');
   mkdirSync(apps, { recursive: true });
   mkdirSync(icons, { recursive: true });
-  symlinkSync(victim, join(apps, 'proc-watch.desktop'));
-  symlinkSync(victim, join(icons, 'proc-watch.png'));
+  symlinkSync(victim, join(apps, 'computer-watcher.desktop'));
+  symlinkSync(victim, join(icons, 'computer-watcher.png'));
   const src = join(home, 'icon.png');
   writeFileSync(src, 'png');
   installDesktopEntry('/x/app', {}, home, src);
   expect(readFileSync(victim, 'utf8')).toBe('précieux');
-  expect(lstatSync(join(apps, 'proc-watch.desktop')).isSymbolicLink()).toBe(false);
-  expect(readFileSync(join(apps, 'proc-watch.desktop'), 'utf8')).toContain('Exec="/x/app"');
-  expect(readFileSync(join(icons, 'proc-watch.png'), 'utf8')).toBe('png');
+  expect(lstatSync(join(apps, 'computer-watcher.desktop')).isSymbolicLink()).toBe(false);
+  expect(readFileSync(join(apps, 'computer-watcher.desktop'), 'utf8')).toContain('Exec="/x/app"');
+  expect(readFileSync(join(icons, 'computer-watcher.png'), 'utf8')).toBe('png');
 });
 
 test('idempotent : deux installations, même contenu, aucun fichier temporaire laissé', () => {
@@ -153,26 +155,26 @@ test('idempotent : deux installations, même contenu, aucun fichier temporaire l
   const first = readFileSync(a, 'utf8');
   installDesktopEntry('/x/app', {}, home);
   expect(readFileSync(a, 'utf8')).toBe(first);
-  expect(readdirSync(join(home, '.local/share/applications'))).toEqual(['proc-watch.desktop']);
+  expect(readdirSync(join(home, '.local/share/applications'))).toEqual(['computer-watcher.desktop']);
 });
 
 test('reproduction I1 [2] : entrée de menu existante sans X-ProcWatch-Managed=1 → jamais écrasée, erreur', () => {
   const home = mkdtempSync(join(tmpdir(), 'procwatch-home-'));
   const apps = join(home, '.local/share/applications');
   mkdirSync(apps, { recursive: true });
-  writeFileSync(join(apps, 'proc-watch.desktop'), '[Desktop Entry]\nName=mine-menu\nExec=/usr/bin/my-own\n');
-  expect(() => installDesktopEntry('/x/app', {}, home)).toThrow(/pas été créé par proc-watch/);
-  expect(readFileSync(join(apps, 'proc-watch.desktop'), 'utf8')).toContain('my-own');
+  writeFileSync(join(apps, 'computer-watcher.desktop'), '[Desktop Entry]\nName=mine-menu\nExec=/usr/bin/my-own\n');
+  expect(() => installDesktopEntry('/x/app', {}, home)).toThrow(/pas été créé par Computer Watcher/);
+  expect(readFileSync(join(apps, 'computer-watcher.desktop'), 'utf8')).toContain('my-own');
 });
 
 test('dossier applications remplacé par un lien : refusé, fichier du dossier visé intact', () => {
   const home = mkdtempSync(join(tmpdir(), 'procwatch-home-'));
   const victim = mkdtempSync(join(tmpdir(), 'procwatch-victim-'));
-  writeFileSync(join(victim, 'proc-watch.desktop'), 'FOREIGN');
+  writeFileSync(join(victim, 'computer-watcher.desktop'), 'FOREIGN');
   mkdirSync(join(home, '.local/share'), { recursive: true });
   symlinkSync(victim, join(home, '.local/share/applications'));
   expect(() => installDesktopEntry('/x/app', {}, home)).toThrow(/lien symbolique/);
-  expect(readFileSync(join(victim, 'proc-watch.desktop'), 'utf8')).toBe('FOREIGN');
+  expect(readFileSync(join(victim, 'computer-watcher.desktop'), 'utf8')).toBe('FOREIGN');
 });
 
 test('execPathFromEntry : inverse exact de l’échappement (\\ " ` $ % espaces)', () => {
@@ -180,4 +182,24 @@ test('execPathFromEntry : inverse exact de l’échappement (\\ " ` $ % espaces)
     expect(execPathFromEntry(desktopEntryContent(p))).toBe(p);
   }
   expect(execPathFromEntry('[Desktop Entry]\nExec=/x --y\n')).toBeNull();
+});
+
+test('renommage : une entrée proc-watch.desktop (ancien nom) n’est jamais touchée par l’installation au nouveau nom', () => {
+  const home = mkdtempSync(join(tmpdir(), 'procwatch-home-'));
+  const apps = join(home, '.local/share/applications');
+  mkdirSync(apps, { recursive: true });
+  writeFileSync(join(apps, 'proc-watch.desktop'), '[Desktop Entry]\nName=à moi\nExec=/usr/bin/x\n');
+  installDesktopEntry('/x/app', {}, home);
+  expect(readFileSync(join(apps, 'proc-watch.desktop'), 'utf8')).toContain('Name=à moi');
+  expect(readdirSync(apps).sort()).toEqual(['computer-watcher.desktop', 'proc-watch.desktop']);
+});
+
+test('renommage : execFromEntry relit le chemin et les arguments (démarrage automatique avec --hidden)', () => {
+  for (const p of ['/home/u/Applications/proc-watch.AppImage', '/a/b"c$d%e`f\\g', '/home/u/Mes Apps/x\ny.AppImage']) {
+    expect(execFromEntry(desktopEntryContent(p, { args: ['--hidden'], autostart: true }))).toEqual({ path: p, args: ['--hidden'] });
+    expect(execFromEntry(desktopEntryContent(p))).toEqual({ path: p, args: [] });
+  }
+  expect(execFromEntry('[Desktop Entry]\nExec=/usr/bin/x --flag\n')).toBeNull();
+  expect(execFromEntry('[Desktop Entry]\nExec="/x" $(id)\n')).toBeNull();
+  expect(execPathFromEntry(desktopEntryContent('/x', { args: ['--hidden'] }))).toBeNull();
 });

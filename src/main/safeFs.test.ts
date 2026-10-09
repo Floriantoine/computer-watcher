@@ -4,7 +4,7 @@ import { chmodSync, existsSync, realpathSync, lstatSync, mkdirSync, mkdtempSync,
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
-import { mountPointsOf, copyFileSafe, placeUnder, readFileSafe, removeDirIfEmptySafe, removeFileSafe, removeTreeSafe, writeFileSafe } from './safeFs';
+import { mountPointsOf, copyFileSafe, moveDirSafe, placeUnder, readFileSafe, removeDirIfEmptySafe, removeFileSafe, removeLinkSafe, removeTreeSafe, writeFileSafe } from './safeFs';
 
 const cache = join(homedir(), '.cache');
 mkdirSync(cache, { recursive: true });
@@ -216,5 +216,93 @@ try { removeTreeSafe([${JSON.stringify(root)}], ${JSON.stringify(t)}); console.l
     expect(out).toMatch(/ERR .*point de montage/);
     expect(readdirSync(victim).sort()).toEqual(['f0', 'f1', 'f2', 'f3', 'f4']);
     expect(existsSync(join(t, 'ordinaire'))).toBe(false);
+  });
+});
+
+describe('renommage : déplacement d’un dossier de l’app (proc-watch → computer-watcher)', () => {
+  const noMounts = '';
+  const fill = (d: string) => {
+    mkdirSync(join(d, 'sous'), { recursive: true });
+    writeFileSync(join(d, 'metrics.db'), 'historique');
+    writeFileSync(join(d, 'sous', 'f'), 'x');
+  };
+  test('nouveau absent : rename dans le même parent, contenu identique, ancien absent', () => {
+    const from = join(root, '.config/proc-watch');
+    const to = join(root, '.config/computer-watcher');
+    fill(from);
+    const ino = statSync(from).ino;
+    expect(moveDirSafe([root], from, to, { mountinfo: noMounts })).toBe('moved');
+    expect(existsSync(from)).toBe(false);
+    expect(statSync(to).ino).toBe(ino); // rename(2), pas une copie
+    expect(readFileSync(join(to, 'metrics.db'), 'utf8')).toBe('historique');
+  });
+  test('ancien absent : rien', () => {
+    expect(moveDirSafe([root], join(root, '.config/proc-watch'), join(root, '.config/computer-watcher'), { mountinfo: noMounts })).toBe('absent');
+  });
+  test('nouveau vide : remplacé atomiquement ; nouveau non vide : refusé, rien touché', () => {
+    const from = join(root, 'c/proc-watch');
+    const to = join(root, 'c/computer-watcher');
+    fill(from);
+    mkdirSync(to);
+    expect(moveDirSafe([root], from, to, { mountinfo: noMounts })).toBe('moved');
+    expect(readFileSync(join(to, 'metrics.db'), 'utf8')).toBe('historique');
+    fill(from);
+    expect(() => moveDirSafe([root], from, to, { mountinfo: noMounts })).toThrow(/non vide/);
+    expect(existsSync(join(from, 'metrics.db'))).toBe(true);
+  });
+  test('ancien en lien symbolique : refusé, la cible du lien intacte', () => {
+    const from = join(root, 'c/proc-watch');
+    mkdirSync(join(root, 'c'), { recursive: true });
+    symlinkSync(victimDir, from);
+    expect(() => moveDirSafe([root], from, join(root, 'c/computer-watcher'), { mountinfo: noMounts })).toThrow(/lien symbolique/);
+    expect(lstatSync(from).isSymbolicLink()).toBe(true);
+    expect(readdirSync(victimDir)).toEqual(['proc-watch.desktop']);
+  });
+  test('nouveau en lien symbolique : refusé, rien déplacé vers la cible', () => {
+    const from = join(root, 'c/proc-watch');
+    fill(from);
+    symlinkSync(victimDir, join(root, 'c/computer-watcher'));
+    expect(() => moveDirSafe([root], from, join(root, 'c/computer-watcher'), { mountinfo: noMounts })).toThrow(/lien symbolique/);
+    expect(readdirSync(victimDir)).toEqual(['proc-watch.desktop']);
+    expect(existsSync(join(from, 'metrics.db'))).toBe(true);
+  });
+  test('parent remplacé par un lien : refusé', () => {
+    mkdirSync(join(victimDir, 'proc-watch'));
+    symlinkSync(victimDir, join(root, 'c'));
+    expect(() => moveDirSafe([root], join(root, 'c/proc-watch'), join(root, 'c/computer-watcher'), { mountinfo: noMounts })).toThrow(/lien symbolique/);
+    expect(existsSync(join(victimDir, 'proc-watch'))).toBe(true);
+  });
+  test('point de montage (l’ancien lui-même, ou un montage dessous) : refusé, rien déplacé', () => {
+    const from = join(root, 'c/proc-watch');
+    fill(from);
+    const real = realpathSync(from);
+    expect(() => moveDirSafe([root], from, join(root, 'c/computer-watcher'), { mountinfo: `1 2 0:5 / ${real} rw - tmpfs t rw\n` })).toThrow(/point de montage/);
+    expect(() => moveDirSafe([root], from, join(root, 'c/computer-watcher'), { mountinfo: `1 2 0:5 / ${real}/sous rw - tmpfs t rw\n` })).toThrow(/point de montage/);
+    expect(existsSync(join(from, 'metrics.db'))).toBe(true);
+    expect(existsSync(join(root, 'c/computer-watcher'))).toBe(false);
+  });
+  test('pas dans le même dossier parent : refusé', () => {
+    const from = join(root, 'a/proc-watch');
+    fill(from);
+    expect(() => moveDirSafe([root], from, join(root, 'b/computer-watcher'), { mountinfo: noMounts })).toThrow(/même dossier/);
+  });
+  test('l’ancien est un fichier : refusé', () => {
+    mkdirSync(join(root, 'c'));
+    writeFileSync(join(root, 'c/proc-watch'), 'x');
+    expect(() => moveDirSafe([root], join(root, 'c/proc-watch'), join(root, 'c/computer-watcher'), { mountinfo: noMounts })).toThrow(/pas un dossier/);
+  });
+});
+
+describe('renommage : retrait d’un lien symbolique (default.target.wants de l’ancienne unité)', () => {
+  test('le lien seul est retiré, jamais sa cible ; un fichier ordinaire est refusé', () => {
+    const d = join(root, '.config/systemd/user/default.target.wants');
+    mkdirSync(d, { recursive: true });
+    symlinkSync(join(victimDir, 'proc-watch.desktop'), join(d, 'l'));
+    expect(removeLinkSafe([root], join(d, 'l'))).toBe('removed');
+    expect(readFileSync(join(victimDir, 'proc-watch.desktop'), 'utf8')).toBe('FOREIGN');
+    expect(removeLinkSafe([root], join(d, 'l'))).toBe('absent');
+    writeFileSync(join(d, 'f'), 'x');
+    expect(() => removeLinkSafe([root], join(d, 'f'))).toThrow(/pas un lien/);
+    expect(existsSync(join(d, 'f'))).toBe(true);
   });
 });

@@ -3,6 +3,7 @@ import type { AlertEvent } from '../core/alerts';
 import type { EarlyoomSettings } from '../core/earlyoom';
 import type { EarlyoomSetupMode } from '../core/earlyoomSetup';
 import type { AboutInfo, AutostartInfo, InstallOutcome, OnboardingInfo, UninstallItem, UninstallOptions, UninstallResult } from '../core/onboarding';
+import type { MigrationReport } from '../core/nameMigration';
 import type { RuleStats } from '../core/rules/types';
 import type { SwapView } from '../core/swap';
 import type { TmpDeleteItem, TmpDeleteOutcome, TmpListing } from '../core/tmpClean';
@@ -140,18 +141,24 @@ const api = {
     get: (): Promise<OnboardingInfo> => ipcRenderer.invoke('onboarding:get'),
     /** Terminé ou « Passer » : ne revient plus au lancement. */
     finish: (): Promise<void> => ipcRenderer.invoke('onboarding:finish'),
-    /** AppImage seulement : copie dans ~/Applications/proc-watch.AppImage et entrée de menu vers la copie. */
+    /** AppImage seulement : copie dans ~/Applications/computer-watcher.AppImage et entrée de menu vers la copie. */
     install: (): Promise<InstallOutcome> => ipcRenderer.invoke('onboarding:install'),
     /** Relance depuis la copie ; `deleteOriginal` : supprime d'abord le fichier téléchargé (confirmation native du main). */
     relaunch: (deleteOriginal: boolean): Promise<{ relaunched: boolean }> => ipcRenderer.invoke('onboarding:relaunch', deleteOriginal),
   },
-  /** Démarrer avec la session (~/.config/autostart/proc-watch.desktop, `--hidden`). */
+  /** Démarrer avec la session (~/.config/autostart/computer-watcher.desktop, `--hidden`). */
   autostart: {
     get: (): Promise<AutostartInfo> => ipcRenderer.invoke('autostart:get'),
     set: (on: boolean): Promise<AutostartInfo> => ipcRenderer.invoke('autostart:set', on),
   },
   about: {
     info: (): Promise<AboutInfo> => ipcRenderer.invoke('about:info'),
+  },
+  /** Migration depuis proc-watch (Réglages › À propos). */
+  migration: {
+    state: (): Promise<MigrationReport> => ipcRenderer.invoke('migration:state'),
+    /** Refait les étapes restantes ; celles d'avant l'ouverture des dossiers (service, déplacement) relancent l'app. */
+    retry: (): Promise<{ report: MigrationReport; relaunching: boolean }> => ipcRenderer.invoke('migration:retry'),
   },
   uninstall: {
     /** Aperçu : exactement ce qui sera retiré, et le texte de la confirmation native. */

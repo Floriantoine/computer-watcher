@@ -96,7 +96,7 @@ export interface Watch {
 
 export interface Snapshot {
   takenAt: number;
-  /** UID de l'utilisateur qui fait tourner proc-watch */
+  /** UID de l'utilisateur qui fait tourner l'app */
   currentUid: number;
   system: SystemInfo;
   /** Les sous-groupes de « Autres » ne sont détaillés que quand « Autres » est déplié, ou lui ou l'un d'eux suivi (sinon liste vide). */

@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { autoManageService, recorderSyncDisabled, ensureRecorderService, recorderAppImage, recorderExecArgs, recorderUnit, systemdQuote, unitPath, type Systemctl } from './recorderService';
+import { LEGACY_UNIT_NAME, UNIT_NAME, autoManageService, recorderSyncDisabled, ensureRecorderService, recorderAppImage, recorderExecArgs, recorderUnit, systemdQuote, unitPath, type Systemctl } from './recorderService';
 
 test('systemdQuote échappe \\ " $ % et entoure de guillemets', () => {
   expect(systemdQuote('/opt/My App/p%w$x"y\\z')).toBe('"/opt/My App/p%%w$$x\\"y\\\\z"');
@@ -25,6 +25,7 @@ test('recorderExecArgs : .deb / dev → binaire + script', () => {
 
 test('recorderUnit', () => {
   const unit = recorderUnit(['/opt/My App/pw', '/opt/My App/r.js']);
+  expect(unit).toContain('\nDescription=Computer Watcher recorder (historique des processus)\n');
   expect(unit).toContain('Environment=ELECTRON_RUN_AS_NODE=1\n');
   expect(unit).toContain('ExecStart="/opt/My App/pw" "/opt/My App/r.js"\n');
   expect(unit).toContain('Restart=on-failure\n');
@@ -32,8 +33,8 @@ test('recorderUnit', () => {
 });
 
 test('unitPath', () => {
-  expect(unitPath({ XDG_CONFIG_HOME: '/c' }, '/home/u')).toBe('/c/systemd/user/proc-watch-recorder.service');
-  expect(unitPath({}, '/home/u')).toBe('/home/u/.config/systemd/user/proc-watch-recorder.service');
+  expect(unitPath({ XDG_CONFIG_HOME: '/c' }, '/home/u')).toBe('/c/systemd/user/computer-watcher-recorder.service');
+  expect(unitPath({}, '/home/u')).toBe('/home/u/.config/systemd/user/computer-watcher-recorder.service');
 });
 
 function fake() {
@@ -46,24 +47,24 @@ function fake() {
 }
 
 test('ensure : installe, puis inchangé, puis mis à jour, puis retiré', async () => {
-  const path = join(mkdtempSync(join(tmpdir(), 'pw-s-')), 'systemd/user/proc-watch-recorder.service');
+  const path = join(mkdtempSync(join(tmpdir(), 'pw-s-')), 'systemd/user/computer-watcher-recorder.service');
   const f = fake();
   expect(await ensureRecorderService({ enabled: true, args: ['/a', '/b'], path, run: f.run })).toBe('installed');
   expect(readFileSync(path, 'utf8')).toBe(recorderUnit(['/a', '/b']));
-  expect(f.calls).toEqual([['daemon-reload'], ['enable', '--now', 'proc-watch-recorder.service']]);
+  expect(f.calls).toEqual([['daemon-reload'], ['enable', '--now', 'computer-watcher-recorder.service']]);
 
   f.calls.length = 0;
   expect(await ensureRecorderService({ enabled: true, args: ['/a', '/b'], path, run: f.run })).toBe('unchanged');
-  expect(f.calls).toEqual([['enable', '--now', 'proc-watch-recorder.service']]);
+  expect(f.calls).toEqual([['enable', '--now', 'computer-watcher-recorder.service']]);
 
   f.calls.length = 0;
   expect(await ensureRecorderService({ enabled: true, args: ['/moved', '/b'], path, run: f.run })).toBe('updated');
-  expect(f.calls).toEqual([['daemon-reload'], ['enable', 'proc-watch-recorder.service'], ['restart', 'proc-watch-recorder.service']]);
+  expect(f.calls).toEqual([['daemon-reload'], ['enable', 'computer-watcher-recorder.service'], ['restart', 'computer-watcher-recorder.service']]);
 
   f.calls.length = 0;
   expect(await ensureRecorderService({ enabled: false, args: ['/moved', '/b'], path, run: f.run })).toBe('removed');
   expect(existsSync(path)).toBe(false);
-  expect(f.calls).toEqual([['disable', '--now', 'proc-watch-recorder.service'], ['daemon-reload']]);
+  expect(f.calls).toEqual([['disable', '--now', 'computer-watcher-recorder.service'], ['daemon-reload']]);
 
   f.calls.length = 0;
   expect(await ensureRecorderService({ enabled: false, args: [], path, run: f.run })).toBe('absent');
@@ -71,7 +72,7 @@ test('ensure : installe, puis inchangé, puis mis à jour, puis retiré', async 
 });
 
 test('ensure sans création (dev) : rien si l\'unité n\'existe pas ; mise à jour ou retrait si elle existe', async () => {
-  const path = join(mkdtempSync(join(tmpdir(), 'pw-s-')), 'systemd/user/proc-watch-recorder.service');
+  const path = join(mkdtempSync(join(tmpdir(), 'pw-s-')), 'systemd/user/computer-watcher-recorder.service');
   const f = fake();
   expect(await ensureRecorderService({ enabled: true, args: ['/a'], path, run: f.run, allowCreate: false })).toBe('absent');
   expect(existsSync(path)).toBe(false);
@@ -81,12 +82,12 @@ test('ensure sans création (dev) : rien si l\'unité n\'existe pas ; mise à jo
   writeFileSync(path, recorderUnit(['/old']));
   expect(await ensureRecorderService({ enabled: true, args: ['/new'], path, run: f.run, allowCreate: false })).toBe('updated');
   expect(readFileSync(path, 'utf8')).toBe(recorderUnit(['/new']));
-  expect(f.calls).toEqual([['daemon-reload'], ['enable', 'proc-watch-recorder.service'], ['restart', 'proc-watch-recorder.service']]);
+  expect(f.calls).toEqual([['daemon-reload'], ['enable', 'computer-watcher-recorder.service'], ['restart', 'computer-watcher-recorder.service']]);
 
   f.calls.length = 0;
   expect(await ensureRecorderService({ enabled: false, args: ['/new'], path, run: f.run, allowCreate: false })).toBe('removed');
   expect(existsSync(path)).toBe(false);
-  expect(f.calls).toEqual([['disable', '--now', 'proc-watch-recorder.service'], ['daemon-reload']]);
+  expect(f.calls).toEqual([['disable', '--now', 'computer-watcher-recorder.service'], ['daemon-reload']]);
 });
 
 test('recorderUnit : redémarrages limités (pas de boucle infinie si le binaire disparaît)', () => {
@@ -111,7 +112,7 @@ test('PROC_WATCH_NO_RECORDER_SYNC=1 : l\'app ne touche jamais au service (mesure
 
 test('restart : unité inchangée mais nouvelle version de l’app → le service est relancé (nouveau code)', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'procwatch-unit-restart-'));
-  const path = join(dir, 'proc-watch-recorder.service');
+  const path = join(dir, 'computer-watcher-recorder.service');
   const calls: string[][] = [];
   const run = async (a: string[]) => {
     calls.push(a);
@@ -120,7 +121,7 @@ test('restart : unité inchangée mais nouvelle version de l’app → le servic
   await ensureRecorderService({ enabled: true, args: ['/a'], path, run });
   calls.length = 0;
   expect(await ensureRecorderService({ enabled: true, args: ['/a'], path, run, restart: true })).toBe('restarted');
-  expect(calls).toEqual([['enable', '--now', 'proc-watch-recorder.service'], ['restart', 'proc-watch-recorder.service']]);
+  expect(calls).toEqual([['enable', '--now', 'computer-watcher-recorder.service'], ['restart', 'computer-watcher-recorder.service']]);
   // unité absente en mode dev : restart ne crée rien
   rmSync(path);
   calls.length = 0;
@@ -129,7 +130,7 @@ test('restart : unité inchangée mais nouvelle version de l’app → le servic
 });
 
 test('caractère de contrôle dans un argument (chemin d’AppImage) : refusé, unité jamais écrite', async () => {
-  const path = join(mkdtempSync(join(tmpdir(), 'pw-ctl-')), 'proc-watch-recorder.service');
+  const path = join(mkdtempSync(join(tmpdir(), 'pw-ctl-')), 'computer-watcher-recorder.service');
   const f = fake();
   expect(() => recorderUnit(['/home/u/a\nExecStartPre=/bin/x.AppImage'])).toThrow();
   await expect(ensureRecorderService({ enabled: true, args: ['/home/u/a\rb'], path, run: f.run })).rejects.toThrow();
@@ -138,7 +139,7 @@ test('caractère de contrôle dans un argument (chemin d’AppImage) : refusé, 
 });
 
 describe('N1 : le service pointe vers la copie installée quand elle existe', () => {
-  const copy = '/home/u/Applications/proc-watch.AppImage';
+  const copy = '/home/u/Applications/computer-watcher.AppImage';
   const dl = '/home/u/Téléchargements/proc-watch-1.0.0-x86_64.AppImage';
   test('lancée depuis l’original téléchargé, copie présente → la copie, jamais l’original', () => {
     expect(recorderAppImage(dl, copy, (p) => p === copy)).toBe(copy);
@@ -156,7 +157,7 @@ describe('N1 : le service pointe vers la copie installée quand elle existe', ()
   });
   test('resynchro au démarrage depuis l’original : l’unité qui vise la copie n’est jamais réécrite vers l’original', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'pw-n1-'));
-    const path = join(dir, 'proc-watch-recorder.service');
+    const path = join(dir, 'computer-watcher-recorder.service');
     const run: Systemctl = async () => ({ ok: true, stdout: '' });
     const args = () => recorderExecArgs({ appImage: recorderAppImage(dl, copy, (p) => p === copy) ?? undefined, execPath: '/x', appPath: '/y' });
     expect(await ensureRecorderService({ enabled: true, args: args(), path, run })).toBe('installed');
@@ -169,7 +170,7 @@ describe('N1 : le service pointe vers la copie installée quand elle existe', ()
 describe('R2 : copie installée inutilisable → l’AppImage lancée', () => {
   test('fichier vide laissé par une mise à jour ratée, ou sans en-tête AppImage : jamais choisi', () => {
     const dir = mkdtempSync(join(tmpdir(), 'pw-r2-'));
-    const copy = join(dir, 'proc-watch.AppImage');
+    const copy = join(dir, 'computer-watcher.AppImage');
     const own = '/home/u/dl/proc-watch-1.0.0-x86_64.AppImage';
     writeFileSync(copy, '');
     expect(recorderAppImage(own, copy)).toBe(own);
@@ -181,5 +182,11 @@ describe('R2 : copie installée inutilisable → l’AppImage lancée', () => {
 });
 
 test('M-2 : unité sous ~/.config si XDG_CONFIG_HOME est relatif', () => {
-  expect(unitPath({ XDG_CONFIG_HOME: 'rel' }, '/home/u')).toBe('/home/u/.config/systemd/user/proc-watch-recorder.service');
+  expect(unitPath({ XDG_CONFIG_HOME: 'rel' }, '/home/u')).toBe('/home/u/.config/systemd/user/computer-watcher-recorder.service');
+});
+
+test('renommage : nom de l’unité, ancien nom, et chemin d’une unité nommée', () => {
+  expect(UNIT_NAME).toBe('computer-watcher-recorder.service');
+  expect(LEGACY_UNIT_NAME).toBe('proc-watch-recorder.service');
+  expect(unitPath({}, '/home/u', LEGACY_UNIT_NAME)).toBe('/home/u/.config/systemd/user/proc-watch-recorder.service');
 });

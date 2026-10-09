@@ -1,3 +1,4 @@
+import { APP_DISPLAY_NAME } from '../../../core/appName';
 import { Network } from 'lucide-react';
 import type { OpenPort, OpenPortsInfo } from '../../../core/openPorts';
 import { otherUsersNote, tooBigNote, unreadableNote } from '../ports';
@@ -21,7 +22,7 @@ export function OpenPortsPanel({ info, pendingPids, onFree, onOpenGroup }: Props
         {info && info.ports.length > 0 && <span className="count">{info.ports.length}</span>}
         <span className="spacer" />
         {note && (
-          <span className="sub port-note" data-testid="other-users-note" title="Visibles dans /proc/net, mais leurs processus ne sont pas lisibles : non arrêtables depuis proc-watch">
+          <span className="sub port-note" data-testid="other-users-note" title={`Visibles dans /proc/net, mais leurs processus ne sont pas lisibles : non arrêtables depuis ${APP_DISPLAY_NAME}`}>
             {note}
           </span>
         )}

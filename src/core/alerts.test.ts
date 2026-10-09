@@ -124,7 +124,7 @@ describe('desktopMessage (texte non fiable vers notify-send)', () => {
   ];
   test.each(all)('$type : titre fixe, corps échappé, sans caractère de contrôle, longueur bornée', (e) => {
     const m = desktopMessage(e);
-    expect(m.title).toBe(`proc-watch — ${DESKTOP_TITLES[e.type]}`);
+    expect(m.title).toBe(`Computer Watcher — ${DESKTOP_TITLES[e.type]}`);
     expect(m.body).not.toMatch(/[<>"'\u0000-\u001f\u007f]/);
     // tout « & » est le début d'une entité
     expect(m.body.replace(/&(amp|lt|gt|quot|#39);/g, '')).not.toContain('&');

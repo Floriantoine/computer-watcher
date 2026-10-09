@@ -44,8 +44,8 @@ describe('nextVersion', () => {
 
 describe('tagMessage', () => {
   test('liste des commits depuis la version précédente, sans les commits de version', () => {
-    expect(tagMessage('0.1.1', 'feat: une chose\nfix: une autre\nchore(release): v0.1.0\n')).toBe('proc-watch v0.1.1\n\n- feat: une chose\n- fix: une autre\n');
-    expect(tagMessage('0.1.1', '')).toBe('proc-watch v0.1.1\n');
+    expect(tagMessage('0.1.1', 'feat: une chose\nfix: une autre\nchore(release): v0.1.0\n')).toBe('Computer Watcher v0.1.1\n\n- feat: une chose\n- fix: une autre\n');
+    expect(tagMessage('0.1.1', '')).toBe('Computer Watcher v0.1.1\n');
   });
   test('jargon de revue retiré : sujets « revue », références (r1–r3), (p1–p4), (M1–M6), (B1 bis), chore/test/merge', () => {
     const subjects = [
@@ -59,12 +59,12 @@ describe('tagMessage', () => {
       'feat(processus): les tuiles du haut trient les groupes',
     ].join('\n');
     expect(tagMessage('0.1.2', subjects)).toBe(
-      'proc-watch v0.1.2\n\n- fix(tmp): revérification par le chemin réel\n- feat(tmp): supprimer des éléments de /tmp\n- feat(processus): les tuiles du haut trient les groupes\n',
+      'Computer Watcher v0.1.2\n\n- fix(tmp): revérification par le chemin réel\n- feat(tmp): supprimer des éléments de /tmp\n- feat(processus): les tuiles du haut trient les groupes\n',
     );
   });
   test('première version (aucune étiquette précédente) : message rédigé, pas de liste de commits', () => {
     const m = tagMessage('0.1.0', 'fix: x (revue N1)\nfeat: y', { first: true });
-    expect(m.startsWith('proc-watch v0.1.0\n\nPremière version publique.')).toBe(true);
+    expect(m.startsWith('Computer Watcher v0.1.0\n\nPremière version publique.')).toBe(true);
     expect(m).not.toContain('revue');
     expect(m).toContain('- ');
   });
@@ -109,7 +109,7 @@ describe('release', () => {
       'npm version 0.2.0 --no-git-tag-version',
       'git add package.json package-lock.json',
       'git commit -m chore(release): v0.2.0',
-      'git tag -a v0.2.0 -m proc-watch v0.2.0\n\n- feat: une chose\n- fix: une autre\n',
+      'git tag -a v0.2.0 -m Computer Watcher v0.2.0\n\n- feat: une chose\n- fix: une autre\n',
     ]);
     expect(f.calls).toContain('git log --no-merges --pretty=format:%s v0.1.0..HEAD');
     expect(f.calls.some((c) => c.startsWith('git push'))).toBe(false);

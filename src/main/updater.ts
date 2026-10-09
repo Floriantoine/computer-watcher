@@ -1,6 +1,7 @@
 // Mises à jour (main) : vérifications planifiées, pop-up, téléchargement et installation sur demande seulement.
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { APP_NAME } from '../core/appName';
 import {
   CHECK_EVERY_MS,
   FIRST_CHECK_DELAY_MS,
@@ -210,13 +211,16 @@ async function readCapped(res: Response, max: number): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
+/** User-Agent de la vérification par l'API publique de GitHub. */
+export const UPDATE_CHECK_USER_AGENT = `${APP_NAME}-update-check`;
+
 /** Mode notification : un GET HTTPS de l'API publique, délai de 15 s, réponse limitée à 2 Mo (lue en flux). */
 export function createReleasesApiBackend(o: { url: string; fetch: typeof fetch; timeoutMs?: number }): UpdateBackend {
   return {
     async check(allowPrerelease) {
       const res = await o.fetch(o.url, {
         signal: AbortSignal.timeout(o.timeoutMs ?? 15_000),
-        headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'proc-watch-update-check' },
+        headers: { Accept: 'application/vnd.github+json', 'User-Agent': UPDATE_CHECK_USER_AGENT },
         redirect: 'error',
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);

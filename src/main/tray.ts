@@ -1,3 +1,4 @@
+import { APP_DISPLAY_NAME } from '../core/appName';
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { cleanEnv, systemBin } from '../core/childEnv';
@@ -89,7 +90,7 @@ export function createTrayController(deps: TrayDeps): TrayController {
       { label: l.mem, enabled: false },
       { label: l.pressure, enabled: false },
       { type: 'separator' },
-      { label: 'Ouvrir proc-watch', click: () => deps.onOpen() },
+      { label: `Ouvrir ${APP_DISPLAY_NAME}`, click: () => deps.onOpen() },
       { label: 'Libérer de la mémoire…', click: () => deps.onFree() },
       { type: 'separator' },
       { label: 'Quitter', click: () => deps.onQuit() },

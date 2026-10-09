@@ -50,7 +50,7 @@ jobs:
       - name: Notes de version
         run: |
           git tag -l --format='%(contents:body)' "$GITHUB_REF_NAME" > release-notes.md
-          if [ ! -s release-notes.md ]; then echo "proc-watch $GITHUB_REF_NAME" > release-notes.md; fi
+          if [ ! -s release-notes.md ]; then echo "Computer Watcher $GITHUB_REF_NAME" > release-notes.md; fi
           cat release-notes.md
       # AppImage, .deb et latest-linux.yml (lu par electron-updater, notes comprises), sans publier.
       - run: npx electron-builder --linux --publish never -c.releaseInfo.releaseNotesFile=release-notes.md
@@ -94,6 +94,6 @@ jobs:
           gh release create "${pre[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
-            --title "proc-watch $GITHUB_REF_NAME" \
+            --title "Computer Watcher $GITHUB_REF_NAME" \
             --notes-file release-notes.md \
             -- "$GITHUB_REF_NAME" "${files[@]}"

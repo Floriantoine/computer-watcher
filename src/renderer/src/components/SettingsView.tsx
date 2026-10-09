@@ -1,3 +1,4 @@
+import { APP_DISPLAY_NAME } from '../../../core/appName';
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
 import { AnimatePresence } from 'motion/react';
 import {
@@ -542,7 +543,7 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
             'recorder-panel',
             <>
               <Card title="Service" icon={<HardDrive size={14} strokeWidth={2} />}>
-                <p className="hint">Un service en arrière-plan note la mémoire, le CPU et les événements pour l'onglet Métriques, même quand proc-watch est fermé.</p>
+                <p className="hint">Un service en arrière-plan note la mémoire, le CPU et les événements pour l'onglet Métriques, même quand {APP_DISPLAY_NAME} est fermé.</p>
                 <Row label="Enregistrer l'historique" help={rec && !rec.available ? undefined : 'Démarre ou arrête le service systemd utilisateur.'}>
                   {(id) => (
                     <Switch id={id} checked={!!rec?.enabled} label="Enregistrer l'historique" disabled={!rec || !rec.available || busy} onToggle={() => void toggleRecorder()} />
@@ -613,7 +614,7 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
             'desktop-panel',
             <Card title="Raccourci" icon={<AppWindow size={14} strokeWidth={2} />}>
               <div className="s-danger-row">
-                <p className="hint" style={{ margin: 0 }}>Crée un raccourci proc-watch dans le menu de ton bureau (version AppImage ou .deb).</p>
+                <p className="hint" style={{ margin: 0 }}>Crée un raccourci {APP_DISPLAY_NAME} dans le menu de ton bureau (version AppImage ou .deb).</p>
                 <button className="primary" onClick={onInstallDesktop}>Ajouter au menu des applications</button>
               </div>
             </Card>,

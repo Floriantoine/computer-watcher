@@ -101,7 +101,7 @@ describe('trayMenuLabels', () => {
     expect(trayMenuLabels(s)).toEqual({
       mem: 'RAM 10,4 Go · Swap 12,4 Go',
       pressure: 'Pression 0 % · Charge 1,5',
-      tooltip: 'proc-watch — RAM 33 %',
+      tooltip: 'Computer Watcher — RAM 33 %',
     });
   });
   test('PSI indisponible → « Pression — »', () => {

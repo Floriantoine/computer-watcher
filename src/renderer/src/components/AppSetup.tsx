@@ -1,7 +1,9 @@
 // Réglages : « Démarrer avec la session » (Affichage) et À propos (version, accueil, désinstallation).
+import { APP_DISPLAY_NAME } from '../../../core/appName';
 import { useEffect, useState } from 'react';
 import { Info, RotateCcw, Trash2, TriangleAlert } from 'lucide-react';
 import type { AboutInfo, AutostartInfo, UninstallItem, UninstallOptions } from '../../../core/onboarding';
+import { migrationLines, type MigrationReport } from '../../../core/nameMigration';
 import { uninstallReport, type ResultText } from '../onboardingText';
 import { ipcErrorMessage } from '../viewModel';
 import { Card, Row, Switch } from './settingsUi';
@@ -42,6 +44,27 @@ export function AutostartRow({ onToast }: { onToast: ToastFn }) {
   );
 }
 
+/** État de la migration depuis proc-watch (rien quand il n'y a rien eu à migrer) ; « Réessayer » si partielle ou différée. */
+export function MigrationStatus({ report, busy, onRetry }: { report: MigrationReport | undefined; busy: boolean; onRetry: () => void }) {
+  const lines = report ? migrationLines(report) : [];
+  if (!report || !lines.length) return null;
+  const retry = report.status === 'partial' || report.status === 'deferred';
+  return (
+    <div className="about-row" data-testid="migration-status">
+      <div className="hint" style={{ margin: 0 }}>
+        {lines.map((l, i) => (
+          <div key={i} className={i === 0 ? undefined : 'mono'}>{l}</div>
+        ))}
+      </div>
+      {retry && (
+        <button data-testid="migration-retry" disabled={busy} onClick={onRetry}>
+          <RotateCcw size={13} strokeWidth={2} /> Réessayer
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function AboutSetup({ onToast, onReopenOnboarding }: { onToast: ToastFn; onReopenOnboarding: () => void }) {
   const [info, setInfo] = useState<AboutInfo | null>(null);
   const [open, setOpen] = useState(false);
@@ -63,6 +86,22 @@ export function AboutSetup({ onToast, onReopenOnboarding }: { onToast: ToastFn; 
       alive = false;
     };
   }, [open, opts]);
+
+  const [migrating, setMigrating] = useState(false);
+  const retryMigration = async () => {
+    if (migrating) return;
+    setMigrating(true);
+    try {
+      const r = await window.procWatch.migration.retry();
+      if (r.relaunching) return; // l'app redémarre pour déplacer les dossiers avant de les ouvrir
+      setInfo((i) => (i ? { ...i, migration: r.report } : i));
+      if (r.report.status === 'done') onToast('Migration depuis proc-watch terminée', 'info');
+    } catch (e) {
+      onToast(`Migration impossible : ${ipcErrorMessage(e)}`);
+    } finally {
+      setMigrating(false);
+    }
+  };
 
   const uninstall = async () => {
     if (busy) return;
@@ -87,6 +126,7 @@ export function AboutSetup({ onToast, onReopenOnboarding }: { onToast: ToastFn; 
             {!info ? '' : info.installedCopy ? <>Installée : <code>{info.installedCopy}</code></> : info.appImage ? 'AppImage non installée' : info.packaged ? 'Paquet .deb' : 'Version de développement'}
           </span>
         </div>
+        <MigrationStatus report={info?.migration} busy={migrating} onRetry={() => void retryMigration()} />
         <div className="about-row">
           <p className="hint" style={{ margin: 0 }}>Installer comme une app, démarrage avec la session, historique et earlyoom.</p>
           <button data-testid="about-reopen-onboarding" onClick={onReopenOnboarding}>
@@ -103,7 +143,7 @@ export function AboutSetup({ onToast, onReopenOnboarding }: { onToast: ToastFn; 
           </p>
           {!open && (
             <button className="danger" data-testid="about-uninstall-open" onClick={() => setOpen(true)}>
-              <Trash2 size={13} strokeWidth={2} /> Désinstaller proc-watch…
+              <Trash2 size={13} strokeWidth={2} /> Désinstaller {APP_DISPLAY_NAME}…
             </button>
           )}
         </div>
@@ -121,7 +161,7 @@ export function AboutSetup({ onToast, onReopenOnboarding }: { onToast: ToastFn; 
             </div>
             <p className="hint" style={{ margin: '8px 0 0' }}>Sera retiré (une confirmation reprend cette liste) :</p>
             <ul className="about-plan" data-testid="uninstall-plan">
-              {plan === null ? <li>…</li> : plan.length === 0 ? <li>Aucun fichier de proc-watch trouvé.</li> : plan.map((i) => (
+              {plan === null ? <li>…</li> : plan.length === 0 ? <li>Aucun fichier de {APP_DISPLAY_NAME} trouvé.</li> : plan.map((i) => (
                 <li key={i.path}>{i.label}{i.dir ? ' (dossier, s’il est vide)' : i.tree ? ' (profil de l’app, avec son contenu)' : ''} : <code>{i.path}</code></li>
               ))}
             </ul>

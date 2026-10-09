@@ -1,3 +1,4 @@
+import { APP_DISPLAY_NAME } from '../../../core/appName';
 import { useEffect, useId, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { AnimatePresence } from 'motion/react';
 import { Bot, ChevronDown, FlaskConical, LayoutTemplate, Pencil, Plus, ShieldAlert, Trash2, TriangleAlert } from 'lucide-react';
@@ -185,7 +186,7 @@ export function RulesPanel({ config, issues, onSaved, onFormState }: Props) {
           <ShieldAlert size={15} strokeWidth={2} aria-hidden />
           <span>
             Les règles tournent dans le service d'enregistrement, même app fermée. Jamais les programmes protégés ni Claude, Warp, les
-            shells, le bureau, systemd et proc-watch. 10 actions par heure au plus.
+            shells, le bureau, systemd et {APP_DISPLAY_NAME}. 10 actions par heure au plus.
           </span>
         </p>
         <Row label="Règles automatiques" help="Éteint : rien ne tourne, pas même les simulations. Chaque nouvelle règle démarre en Simulation (journal « aurait arrêté… », aucun signal).">
