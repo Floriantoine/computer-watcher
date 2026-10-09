@@ -4,8 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import type { DatabaseSync } from 'node:sqlite';
-import { openHistoryDb } from './db';
-import { createV3Db } from './testDb';
+import { createV3Db, openTestDb } from './testDb';
 import { aggregateMinute } from './maintenance';
 import { bucketMs, historyCovers, queryRuleStats, pickSource, queryInactive, queryCulprits, queryEvents, queryGroup, queryGroups, PROC_TREE_MAX, queryProcs, queryProcsAt, queryProcTree, querySystem, queryTop, rangeFromPreset, historyCoverage, historyFrom, pruneLastActiveCache, queryLastActive } from './queries';
 
@@ -15,9 +14,9 @@ const opts = (now: number) => ({ now, detailHours: 24, intervalSec: 5 });
 
 function seeded() {
   const path = join(mkdtempSync(join(tmpdir(), 'pw-q-')), 'm.db');
-  const { db } = openHistoryDb(path);
+  const { db } = openTestDb(path);
   db.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'app:chrome','Chrome','app'), (2,'project:/a','a','project');
-           INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id) VALUES (1,10,100,'chrome','chrome',1);`);
+           INSERT INTO procs_in(id,pid,start_ticks,name,cmdline,group_id) VALUES (1,10,100,'chrome','chrome',1);`);
   // 10 minutes, un tick toutes les 5 s ; Chrome monte de 1 Mo par tick, a reste à 500 Mo
   for (let ts = 0; ts < 10 * M; ts += 5000) {
     const chrome = 1000 * 1024 + (ts / 5000) * 1024;
@@ -93,7 +92,7 @@ test('queryCulprits : hausse sur les 5 min avant ts, triée', () => {
 
 function culpritDb(table: 'group_samples' | 'group_minute', rows: [number, number, number][]) {
   const path = join(mkdtempSync(join(tmpdir(), 'pw-c-')), 'm.db');
-  const { db } = openHistoryDb(path);
+  const { db } = openTestDb(path);
   db.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'app:flat','Flat','app'), (2,'app:new','New','app')`);
   for (const [ts, gid, mem] of rows) {
     if (table === 'group_samples') db.prepare('INSERT INTO group_samples VALUES (?,?,?,?,?,?)').run(ts, gid, mem, 0, 5, 3);
@@ -186,7 +185,7 @@ test('queryTop by max : un pic court et une moyenne basse remontent par le max, 
 
 test('lecture seule pendant qu\'un écrivain tient une transaction : pas d\'erreur', () => {
   const { db, path } = seeded();
-  const reader = openHistoryDb(path, { readOnly: true }).db;
+  const reader = openTestDb(path, { readOnly: true }).db;
   db.exec('BEGIN');
   db.prepare('INSERT INTO system_samples(ts, mem_used_kb, mem_total_kb, swap_used_kb, swap_total_kb, psi_some10, load1, cpu_percent) VALUES (?,?,?,?,?,?,?,?)').run(10 * M, 1, 1, 1, 1, null, 0, 0);
   expect(() => querySystem(reader, { from: 0, to: 11 * M }, opts(11 * M))).not.toThrow();
@@ -196,7 +195,7 @@ test('lecture seule pendant qu\'un écrivain tient une transaction : pas d\'erre
 
 test('au plus 1000 points même quand from n\'est pas aligné sur le bucket', () => {
   const path = join(mkdtempSync(join(tmpdir(), 'pw-q-')), 'm.db');
-  const { db } = openHistoryDb(path);
+  const { db } = openTestDb(path);
   db.exec('BEGIN');
   const ins = db.prepare('INSERT INTO system_samples(ts, mem_used_kb, mem_total_kb, swap_used_kb, swap_total_kb, psi_some10, load1, cpu_percent) VALUES (?,?,?,?,?,?,?,?)');
   for (let ts = 0; ts <= 5_010_000; ts += 1000) ins.run(ts, 1, 1, 1, 1, null, 0, 0);
@@ -209,7 +208,7 @@ test('au plus 1000 points même quand from n\'est pas aligné sur le bucket', ()
 
 test('queryProcs : une série par processus du groupe (pas de collision avec groups.key)', () => {
   const { db } = seeded();
-  db.exec(`INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id) VALUES (2,11,200,'chrome','chrome --type=renderer',1);`);
+  db.exec(`INSERT INTO procs_in(id,pid,start_ticks,name,cmdline,group_id) VALUES (2,11,200,'chrome','chrome --type=renderer',1);`);
   for (let ts = 0; ts < 10 * M; ts += 5000) db.prepare('INSERT INTO proc_samples VALUES (?,?,?,?,?)').run(ts, 2, 300 * 1024, 0, 1);
   for (let m = 0; m < 10; m++) aggregateMinute(db, m * M);
   for (const range of [{ from: 0, to: 10 * M }, { from: 0, to: 30 * H }]) {
@@ -220,9 +219,9 @@ test('queryProcs : une série par processus du groupe (pas de collision avec gro
 });
 
 test('queryProcsAt : état à l\'instant demandé, mort/naissance, tri, repli minute', () => {
-  const { db } = openHistoryDb(join(mkdtempSync(join(tmpdir(), 'pw-at-')), 'm.db'));
+  const { db } = openTestDb(join(mkdtempSync(join(tmpdir(), 'pw-at-')), 'm.db'));
   db.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'g','g','app');
-           INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id,ppid) VALUES
+           INSERT INTO procs_in(id,pid,start_ticks,name,cmdline,group_id,ppid) VALUES
              (1,10,1,'root','root',1,1), (2,11,1,'dead','dead',1,10), (3,12,1,'late','late',1,10);`);
   const ins = db.prepare('INSERT INTO proc_samples VALUES (?,?,?,?,?)');
   for (let ts = 0; ts <= 100_000; ts += 5000) {
@@ -248,7 +247,7 @@ test('queryProcsAt : état à l\'instant demandé, mort/naissance, tri, repli mi
 
 test('queryProcsAt sur une base v1 avec lignes, ouverte en lecture seule : ppid null', () => {
   const p = join(mkdtempSync(join(tmpdir(), 'pw-v1-')), 'm.db');
-  const w = openHistoryDb(p).db;
+  const w = createV3Db(p); // schéma figé, ramené en v1
   w.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'g','g','app');
           ALTER TABLE procs DROP COLUMN ppid;
           INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id) VALUES (1,10,1,'a','a',1);
@@ -256,7 +255,7 @@ test('queryProcsAt sur une base v1 avec lignes, ouverte en lecture seule : ppid 
           INSERT INTO proc_minute VALUES (0,1,505,600,2);
           PRAGMA user_version = 1;`);
   w.close();
-  const { db } = openHistoryDb(p, { readOnly: true });
+  const { db } = openTestDb(p, { readOnly: true });
   const want = { pid: 10, startTicks: 1, ppid: null, name: 'a', cmdline: 'a' };
   expect(queryProcsAt(db, 'g', 1000, { now: 2000, detailHours: 24, intervalSec: 5 })).toEqual([{ ...want, rssKB: 500, swapKB: 5, cpu: 2 }]);
   expect(queryProcsAt(db, 'g', 1000, { now: 100 * H, detailHours: 24, intervalSec: 5 })).toEqual([{ ...want, rssKB: 505, swapKB: null, cpu: 2 }]);
@@ -280,9 +279,9 @@ test('queryTop : moyenne et pic en un seul parcours GROUP BY', () => {
 });
 
 function hourSeeded() {
-  const { db } = openHistoryDb(join(mkdtempSync(join(tmpdir(), 'pw-q-')), 'm.db'));
+  const { db } = openTestDb(join(mkdtempSync(join(tmpdir(), 'pw-q-')), 'm.db'));
   db.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'app:a','A','app'), (2,'others:small','Petits groupes','others');
-           INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id) VALUES (1,10,100,'a','a',1);`);
+           INSERT INTO procs_in(id,pid,start_ticks,name,cmdline,group_id) VALUES (1,10,100,'a','a',1);`);
   // 10 jours : seules les tables horaires (et proc_minute) sont remplies, pour vérifier la source choisie
   for (let h = 0; h < 240; h++) {
     db.prepare('INSERT INTO group_hour VALUES (?,?,?,?,?,?)').run(h * H, 1, 1000 + h, 0, 2000 + h, 5);
@@ -312,7 +311,7 @@ test('plages > 48 h : système, groupes, groupe, top et processus lus dans les t
 
 test('base v2 (sans tables horaires, lecture seule) : les plages > 48 h retombent sur les minutes', () => {
   const path = join(mkdtempSync(join(tmpdir(), 'pw-q-')), 'm.db');
-  const { db: w } = openHistoryDb(path);
+  const { db: w } = openTestDb(path);
   w.exec(`DROP TABLE group_hour; DROP TABLE system_hour; PRAGMA user_version = 2;
           INSERT INTO groups(id,key,label,kind) VALUES (1,'app:a','A','app');`);
   for (let m = 0; m < 3; m++) {
@@ -320,7 +319,7 @@ test('base v2 (sans tables horaires, lecture seule) : les plages > 48 h retomben
     w.prepare('INSERT INTO system_minute(ts, mem_used_kb_avg, mem_used_kb_max, mem_total_kb, swap_used_kb_avg, swap_used_kb_max, swap_total_kb, psi_avg, psi_max, load1_avg, cpu_avg) VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(100 * H + m * M, 1, 1, 8, 0, 0, 1, null, null, 0, 0);
   }
   w.close();
-  const { db } = openHistoryDb(path, { readOnly: true });
+  const { db } = openTestDb(path, { readOnly: true });
   const r = rangeFromPreset('7d', 101 * H);
   expect(querySystem(db, r, opts(101 * H)).ts.length).toBeGreaterThan(0);
   expect(queryTop(db, r, opts(101 * H)).byAvg.map((t) => t.key)).toEqual(['app:a']);
@@ -330,9 +329,9 @@ describe('queryInactive (« inactives depuis »)', () => {
   /** p 20 : CPU 5 % il y a 10 min, 0 % sinon ; p 21 : CPU 0,5 % ; p 22 : jamais enregistré. now = 2 h. */
   function inactiveDb() {
     const path = join(mkdtempSync(join(tmpdir(), 'pw-q-')), 'm.db');
-    const { db } = openHistoryDb(path);
+    const { db } = openTestDb(path);
     db.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'project:/a','a','project');
-             INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id) VALUES (1,20,200,'vite','vite',1), (2,21,210,'node','node',1);`);
+             INSERT INTO procs_in(id,pid,start_ticks,name,cmdline,group_id) VALUES (1,20,200,'vite','vite',1), (2,21,210,'node','node',1);`);
     const now = 2 * H;
     for (let ts = now - 60 * M; ts < now; ts += 5000) {
       db.prepare('INSERT INTO proc_samples VALUES (?,?,?,?,?)').run(ts, 1, 1000, 0, ts === now - 10 * M ? 5 : 0);
@@ -382,9 +381,9 @@ describe('queryProcTree (rejeu de l\'arbre)', () => {
   const o = opts(now);
   /** A (10) → D (11) ; C (12, enfant de A) mort à ts − 30 s ; B (13) né à ts + 60 s ; h (groupe voisin) : E (20). */
   function treeDb() {
-    const { db } = openHistoryDb(join(mkdtempSync(join(tmpdir(), 'pw-tree-')), 'm.db'));
+    const { db } = openTestDb(join(mkdtempSync(join(tmpdir(), 'pw-tree-')), 'm.db'));
     db.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'g','g','app'), (2,'h','h','app');
-             INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id,ppid) VALUES
+             INSERT INTO procs_in(id,pid,start_ticks,name,cmdline,group_id,ppid) VALUES
                (1,10,1,'A','a',1,1), (2,11,1,'D','d',1,10), (3,12,1,'C','c',1,10), (4,13,1,'B','b',1,10), (5,20,1,'E','e',2,1);`);
     const ins = db.prepare('INSERT INTO proc_samples VALUES (?,?,?,?,?)');
     ins.run(ts - 3000, 1, 1000, 10, 1);
@@ -432,9 +431,9 @@ describe('queryProcTree (rejeu de l\'arbre)', () => {
   });
 
   test(`au plus ${PROC_TREE_MAX} processus (les plus gros), le reste compté dans omitted`, () => {
-    const { db } = openHistoryDb(join(mkdtempSync(join(tmpdir(), 'pw-cap-')), 'm.db'));
+    const { db } = openTestDb(join(mkdtempSync(join(tmpdir(), 'pw-cap-')), 'm.db'));
     db.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'g','g','app')`);
-    const pr = db.prepare('INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id,ppid) VALUES (?,?,?,?,?,?,?)');
+    const pr = db.prepare('INSERT INTO procs_in(id,pid,start_ticks,name,cmdline,group_id,ppid) VALUES (?,?,?,?,?,?,?)');
     const ps = db.prepare('INSERT INTO proc_samples VALUES (?,?,?,?,?)');
     db.exec('BEGIN');
     for (let i = 1; i <= PROC_TREE_MAX + 5; i++) {
@@ -462,7 +461,7 @@ describe('queryProcTree (rejeu de l\'arbre)', () => {
 
   test('base v1 (procs sans ppid), lecture seule : ppid null', () => {
     const p = join(mkdtempSync(join(tmpdir(), 'pw-v1t-')), 'm.db');
-    const w = openHistoryDb(p).db;
+    const w = createV3Db(p); // schéma figé, ramené en v1
     w.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'g','g','app');
             ALTER TABLE procs DROP COLUMN ppid;
             INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id) VALUES (1,10,1,'a','a',1);
@@ -470,7 +469,7 @@ describe('queryProcTree (rejeu de l\'arbre)', () => {
             INSERT INTO proc_minute VALUES (0,1,505,600,2);
             PRAGMA user_version = 1;`);
     w.close();
-    const { db } = openHistoryDb(p, { readOnly: true });
+    const { db } = openTestDb(p, { readOnly: true });
     expect(queryProcTree(db, 'g', 1000, { now: 2000, detailHours: 24, intervalSec: 5 }).procs[0]).toMatchObject({ pid: 10, ppid: null, swapKB: 5 });
     expect(queryProcTree(db, 'g', 1000, { now: 100 * H, detailHours: 24, intervalSec: 5 }).procs[0]).toMatchObject({ pid: 10, ppid: null, swapKB: null });
     db.close();
@@ -483,9 +482,9 @@ describe('queryEvents filtré par groupe (alertes du détail)', () => {
   const t = now - H;
   /** g : proc 10 (échantillonné 30 s avant t), proc 11 (dernier échantillon 1 h avant t) ; h : proc 20. */
   function eventsDb() {
-    const { db } = openHistoryDb(join(mkdtempSync(join(tmpdir(), 'pw-ev-')), 'm.db'));
+    const { db } = openTestDb(join(mkdtempSync(join(tmpdir(), 'pw-ev-')), 'm.db'));
     db.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'g','G','app'), (2,'h','H','app');
-             INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id) VALUES (1,10,1,'a','a',1), (2,11,1,'b','b',1), (3,20,1,'c','c',2), (4,30,1,'d','d',1);`);
+             INSERT INTO procs_in(id,pid,start_ticks,name,cmdline,group_id) VALUES (1,10,1,'a','a',1), (2,11,1,'b','b',1), (3,20,1,'c','c',2), (4,30,1,'d','d',1);`);
     const ps = db.prepare('INSERT INTO proc_samples VALUES (?,?,?,?,?)');
     ps.run(t - 30_000, 1, 1000, 0, 1);
     ps.run(t - H, 2, 1000, 0, 1);
@@ -581,7 +580,7 @@ describe('querySystem : Shmem et somme des groupes (découpage du Reste)', () =>
     w.prepare('INSERT INTO system_minute VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(0, 1, 1, 8, 0, 0, 1, null, null, 0, 0);
     w.prepare('INSERT INTO system_hour VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(0, 1, 1, 8, 0, 0, 1, null, null, 0, 0);
     w.close();
-    const { db } = openHistoryDb(path, { readOnly: true });
+    const { db } = openTestDb(path, { readOnly: true });
     const d = querySystem(db, { from: 0, to: 2 * M }, opts(2 * M));
     expect(d.ts.length).toBeGreaterThan(0);
     expect(d.shmemKB.every((v) => v === null)).toBe(true);
@@ -601,12 +600,12 @@ test('historyCovers : premier agrégat ≤ since + 5 min et aucun trou depuis', 
   db.prepare("INSERT INTO events(ts,type,group_id,detail) VALUES (?, 'gap', NULL, '{}')").run(8 * M);
   expect(historyCovers(db, 0, 10 * M)).toBe(false);
   expect(historyCovers(db, 9 * M, 10 * M)).toBe(true); // trou avant la période
-  const empty = openHistoryDb(join(mkdtempSync(join(tmpdir(), 'pw-q-')), 'e.db')).db;
+  const empty = openTestDb(join(mkdtempSync(join(tmpdir(), 'pw-q-')), 'e.db')).db;
   expect(historyCovers(empty, 0, M)).toBe(false);
 });
 
 test('queryRuleStats : rule_action + rule_dry_run des 7 derniers jours par ruleId ; plus vieux et sans ruleId ignorés', () => {
-  const { db } = openHistoryDb(join(mkdtempSync(join(tmpdir(), 'pw-q-')), 'r.db'));
+  const { db } = openTestDb(join(mkdtempSync(join(tmpdir(), 'pw-q-')), 'r.db'));
   const D = 86400_000;
   const now = 20 * D;
   const ins = (ts: number, type: string, detail: object | string) =>
@@ -647,10 +646,10 @@ describe('queryLastActive / historyFrom (vue swap)', () => {
   /** p 30 : 5 % il y a 3 h (détail, minute agrégée) ; p 31 : 4 % il y a 3 j (minute seulement) ; p 32 : toujours 0,2 % ; p 33 : jamais enregistré. */
   function lastActiveDb() {
     const path = join(mkdtempSync(join(tmpdir(), 'pw-q-')), 'm.db');
-    const { db } = openHistoryDb(path);
+    const { db } = openTestDb(path);
     const now = 10 * D;
     db.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'project:/a','a','project');
-             INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id) VALUES (1,30,300,'vite','vite',1), (2,31,310,'node','node',1), (3,32,320,'pg','pg',1);`);
+             INSERT INTO procs_in(id,pid,start_ticks,name,cmdline,group_id) VALUES (1,30,300,'vite','vite',1), (2,31,310,'node','node',1), (3,32,320,'pg','pg',1);`);
     const ins = db.prepare('INSERT INTO proc_samples VALUES (?,?,?,?,?)');
     for (let ts = now - 4 * H; ts < now; ts += 5000) {
       // p 30 : 5 % pendant la minute qui précède « il y a 3 h » (dernier échantillon actif : now − 3 h − 5 s)
@@ -730,7 +729,7 @@ describe('queryLastActive / historyFrom (vue swap)', () => {
   });
 
   test('historyFrom : base vide → null ; sinon le plus ancien instant des tables système détail / minute', () => {
-    const { db } = openHistoryDb(join(mkdtempSync(join(tmpdir(), 'pw-q-')), 'm.db'));
+    const { db } = openTestDb(join(mkdtempSync(join(tmpdir(), 'pw-q-')), 'm.db'));
     expect(historyFrom(db)).toBeNull();
     db.prepare('INSERT INTO system_samples(ts, mem_used_kb, mem_total_kb, swap_used_kb, swap_total_kb, psi_some10, load1, cpu_percent) VALUES (?,?,?,?,?,?,?,?)').run(5 * H, 1, 1, 0, 0, null, 0, 0);
     expect(historyFrom(db)).toBe(5 * H);
@@ -743,7 +742,7 @@ describe('historyCoverage (vue swap : trous de l\'historique)', () => {
   const D = 24 * H;
   const now = 10 * D;
   function coverageDb(minutes: number[], latestDetail: number | null) {
-    const { db } = openHistoryDb(join(mkdtempSync(join(tmpdir(), 'pw-q-')), 'm.db'));
+    const { db } = openTestDb(join(mkdtempSync(join(tmpdir(), 'pw-q-')), 'm.db'));
     const ins = db.prepare('INSERT INTO system_minute VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)');
     for (const t of minutes) ins.run(t, 1, 1, 8, 0, 0, 1, null, null, 0, 0, null, null);
     if (latestDetail !== null)

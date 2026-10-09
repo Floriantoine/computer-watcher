@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'vitest';
 import type { Group, ProcInfo, SystemInfo } from '../types';
-import { openHistoryDb } from './db';
+import { cmdlineHash, openHistoryDb } from './db';
 import { HistoryWriter, SMALL_GROUPS_KEY } from './writer';
 
 const sys: SystemInfo = { memTotalKB: 1000, memAvailableKB: 400, swapTotalKB: 2000, swapFreeKB: 500, load1: 1.5, psiSome10: 3, shmemKB: 77 };
@@ -41,7 +41,7 @@ test('PID réutilisé : deux processus distincts', () => {
   const b = proc(10, { rssKB: 60 * 1024, startTicks: 999, cmdline: 'autre' });
   w.writeTick({ ts: 1000, system: sys, cpuPercent: 0, groups: [group('g', [a])], procs: [a] }, T);
   w.writeTick({ ts: 6000, system: sys, cpuPercent: 0, groups: [group('g', [b])], procs: [b] }, T);
-  expect(db.prepare('SELECT pid, start_ticks, cmdline FROM procs ORDER BY start_ticks').all()).toEqual([
+  expect(db.prepare('SELECT p.pid, p.start_ticks, c.text AS cmdline FROM procs p JOIN cmdlines c ON c.id = p.cmdline_id ORDER BY p.start_ticks').all()).toEqual([
     { pid: 10, start_ticks: 100, cmdline: 'node x' },
     { pid: 10, start_ticks: 999, cmdline: 'autre' },
   ]);
@@ -118,4 +118,43 @@ test('aucun petit groupe : pas de ligne « Petits groupes »', () => {
   const big = proc(10, { rssKB: 30 * 1024 });
   new HistoryWriter(db).writeTick({ ts: 1, system: sys, cpuPercent: 0, groups: [group('app:big', [big])], procs: [big] }, { ...T, groupMinMemMB: 20 });
   expect(db.prepare('SELECT key FROM groups').all()).toEqual([{ key: 'app:big' }]);
+});
+
+test('lignes de commande dédupliquées : une ligne cmdlines pour deux processus, même id après forget()', () => {
+  const db = open();
+  const w = new HistoryWriter(db);
+  const a = proc(10, { rssKB: 60 * 1024, cmdline: 'node vite --port 5173' });
+  const b = proc(11, { rssKB: 60 * 1024, cmdline: 'node vite --port 5173' });
+  const c = proc(12, { rssKB: 60 * 1024, cmdline: 'bash -l' });
+  w.writeTick({ ts: 1000, system: sys, cpuPercent: 0, groups: [group('g', [a, b, c])], procs: [a, b, c] }, T);
+  expect(db.prepare('SELECT id, text FROM cmdlines ORDER BY id').all()).toEqual([{ id: 1, text: 'node vite --port 5173' }, { id: 2, text: 'bash -l' }]);
+  expect(db.prepare('SELECT pid, cmdline_id FROM procs ORDER BY pid').all()).toEqual([
+    { pid: 10, cmdline_id: 1 }, { pid: 11, cmdline_id: 1 }, { pid: 12, cmdline_id: 2 },
+  ]);
+  w.forget();
+  const d = proc(13, { rssKB: 60 * 1024, cmdline: 'node vite --port 5173' });
+  w.writeTick({ ts: 6000, system: sys, cpuPercent: 0, groups: [group('g', [a, d])], procs: [a, d] }, T);
+  expect(db.prepare('SELECT COUNT(*) n FROM cmdlines').get()).toEqual({ n: 2 });
+  expect(db.prepare('SELECT pid, cmdline_id FROM procs WHERE pid = 13').get()).toEqual({ pid: 13, cmdline_id: 1 });
+  expect(db.prepare('SELECT COUNT(*) n FROM procs').get()).toEqual({ n: 4 });
+});
+
+test('ligne de commande purgée entre deux ticks (cache vidé par forget) : recréée, pas d’id périmé', () => {
+  const db = open();
+  const w = new HistoryWriter(db);
+  const a = proc(10, { rssKB: 60 * 1024, cmdline: 'x' });
+  w.writeTick({ ts: 1000, system: sys, cpuPercent: 0, groups: [group('g', [a])], procs: [a] }, T);
+  db.exec('DELETE FROM proc_samples; DELETE FROM procs; DELETE FROM cmdlines');
+  w.forget();
+  w.writeTick({ ts: 6000, system: sys, cpuPercent: 0, groups: [group('g', [a])], procs: [a] }, T);
+  expect(db.prepare('SELECT c.text FROM procs p JOIN cmdlines c ON c.id = p.cmdline_id').all()).toEqual([{ text: 'x' }]);
+});
+
+test('condensé en collision (même hash, autre texte) : nouvelle ligne cmdlines, jamais le texte d’un autre', () => {
+  const db = open();
+  db.prepare('INSERT INTO cmdlines(hash, text) VALUES (?, ?)').run(cmdlineHash('node x'), 'collision');
+  const w = new HistoryWriter(db);
+  const a = proc(10, { rssKB: 60 * 1024 });
+  w.writeTick({ ts: 1000, system: sys, cpuPercent: 0, groups: [group('g', [a])], procs: [a] }, T);
+  expect(db.prepare('SELECT c.id, c.text FROM procs p JOIN cmdlines c ON c.id = p.cmdline_id').all()).toEqual([{ id: 2, text: 'node x' }]);
 });
