@@ -416,7 +416,7 @@ test('délai de rm dépassé : SIGKILL, l’élément reste en quarantaine, la s
   writeFileSync(join(root, 'g'), 'x');
   await c.list();
   await expect(c.delete([item(root, 'g')])).resolves.toBeTruthy(); // verrou relâché
-});
+}, 30_000); // attend un vrai délai de rm : marge sous charge
 
 test('racine donnée par un lien : résolue, la suppression reste dans la racine réelle', async () => {
   const { root, base, outside } = setup();
