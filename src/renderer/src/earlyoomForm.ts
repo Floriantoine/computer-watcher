@@ -1,11 +1,13 @@
 import { buildEarlyoomArgs, checkRegexPart, EARLYOOM_MAX_PREFER, type EarlyoomSettings } from '../../core/earlyoom';
+import { EARLYOOM_DEFAULT_SETTINGS } from '../../core/earlyoomSetup';
 import type { EarlyoomStatus, HistoryEvent } from '../../core/types';
 
 /** Champs du formulaire (texte brut) ; `prefer` : un motif par ligne. */
 export interface EarlyoomForm { memTerm: string; memKill: string; swapTerm: string; swapKill: string; prefer: string }
 export type EarlyoomFormErrors = Partial<Record<keyof EarlyoomForm, string>>;
 
-const DEFAULT_FORM: EarlyoomForm = { memTerm: '8', memKill: '5', swapTerm: '35', swapKill: '25', prefer: '' };
+const D = EARLYOOM_DEFAULT_SETTINGS;
+const DEFAULT_FORM: EarlyoomForm = { memTerm: String(D.memTerm), memKill: String(D.memKill), swapTerm: String(D.swapTerm), swapKill: String(D.swapKill), prefer: '' };
 
 /** Fichier lu, sinon 8,5 / 35,25 / prefer vide. */
 export function formFromStatus(st: EarlyoomStatus): EarlyoomForm {

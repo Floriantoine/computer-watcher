@@ -114,15 +114,14 @@ describe('sectionAttention', () => {
   test('tout va bien → aucun point', () => {
     expect(sectionAttention(calm)).toEqual({});
   });
-  test('earlyoom absent ou inactif → point d’avertissement', () => {
-    expect(sectionAttention({ ...calm, earlyoom: { ...calm.earlyoom, status: { installed: false, active: 'unknown' } } }).earlyoom).toEqual({
-      tone: 'warn',
-      reasons: ['earlyoom n’est pas installé'],
-    });
-    expect(sectionAttention({ ...calm, earlyoom: { ...calm.earlyoom, status: { installed: true, active: 'failed' } } }).earlyoom).toEqual({
-      tone: 'warn',
-      reasons: ['earlyoom n’est pas actif'],
-    });
+  test('earlyoom absent, inactif ou pas lancé au démarrage → point ROUGE tant que ce n’est pas réglé (B8 bis)', () => {
+    const eo = (status: AttentionInput['earlyoom']['status']) => sectionAttention({ ...calm, earlyoom: { ...calm.earlyoom, status } }).earlyoom;
+    expect(eo({ installed: false, active: 'unknown' })).toEqual({ tone: 'error', reasons: ['earlyoom n’est pas installé'] });
+    expect(eo({ installed: true, active: 'failed' })).toEqual({ tone: 'error', reasons: ['earlyoom n’est pas actif'] });
+    expect(eo({ installed: true, active: 'inactive', enabled: 'disabled' })).toEqual({ tone: 'error', reasons: ['earlyoom n’est pas actif'] });
+    expect(eo({ installed: true, active: 'active', enabled: 'disabled' })).toEqual({ tone: 'error', reasons: ['earlyoom ne démarre pas avec le système'] });
+    expect(eo({ installed: true, active: 'active', enabled: 'enabled' })).toBeUndefined();
+    expect(eo({ installed: true, active: 'active', enabled: 'masked' })).toBeUndefined();
   });
   test('earlyoom pas encore lu → pas de point', () => {
     expect(sectionAttention({ ...calm, earlyoom: { ...calm.earlyoom, status: null } }).earlyoom).toBeUndefined();
@@ -146,7 +145,7 @@ describe('sectionAttention', () => {
       ...calm,
       earlyoom: { status: { installed: true, active: 'inactive' }, dirty: true, invalid: false },
     }).earlyoom;
-    expect(a).toEqual({ tone: 'dirty', reasons: ['Modifications non enregistrées', 'earlyoom n’est pas actif'] });
+    expect(a).toEqual({ tone: 'error', reasons: ['Modifications non enregistrées', 'earlyoom n’est pas actif'] });
   });
   test('Protégés : texte saisi mais pas ajouté → modifié ; déjà dans la liste ou vide → rien', () => {
     expect(sectionAttention({ ...calm, protectedEntry: ' code ' }).protected).toEqual({ tone: 'dirty', reasons: ['Saisie pas encore ajoutée'] });

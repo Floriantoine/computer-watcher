@@ -5,7 +5,7 @@ import { formFromStatus, lastEarlyoomKills, validateEarlyoomForm, type EarlyoomF
 const LINE = 'EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(claude|claude-desktop|warp|zsh|bash|kwin_wayland|kwin_wayland_wr|plasmashell|Xwayland|sddm|systemd.*)$ --prefer ^(chrome|vitest|node..vitest.|node-MainThread|node|npm)$"';
 
 const status = (file: EarlyoomStatus['file']): EarlyoomStatus => ({
-  installed: true, version: '1.9.0', active: 'active', file, installHint: 'x',
+  installed: true, version: '1.9.0', active: 'active', enabled: 'enabled', file, installHint: 'x',
 });
 
 const VALID: EarlyoomForm = { memTerm: '8', memKill: '5', swapTerm: '35', swapKill: '25', prefer: 'chrome\nvitest\nnode..vitest.\nnode-MainThread\nnode\nnpm' };

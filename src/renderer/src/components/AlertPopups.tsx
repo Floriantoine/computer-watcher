@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { BellRing, Bot, FlaskConical, FolderOpen, Gauge, Hourglass, Settings2, Skull, TrendingUp, X, type LucideIcon } from 'lucide-react';
 import { alertMessage, type AlertEvent, type AlertType, type AlertsConfig } from '../../../core/alerts';
@@ -74,10 +74,12 @@ interface Props {
   onFree: () => void;
   /** « Ignorer 30 min » d'une alerte de prévision (le service n'alerte plus pendant 30 min), puis fermeture. */
   onSnooze: (id: number) => void;
+  /** Pop-up en tête de pile, hors alertes enregistrées (earlyoom absent au lancement, B8 bis) ; élément avec une `key`. */
+  lead?: ReactNode;
 }
 
 /** Pop-ups en haut à droite : restent jusqu'à fermeture, 3 au plus, le reste regroupé en « + n autres ». */
-export const AlertPopups = memo(function AlertPopups({ pending, onClose, onCloseAll, groupPresent, onNavigate, onFree, onSnooze }: Props) {
+export const AlertPopups = memo(function AlertPopups({ pending, onClose, onCloseAll, groupPresent, onNavigate, onFree, onSnooze, lead }: Props) {
   const { visible, more } = popupStack(pending);
   // Mesure de mise en page seulement quand la pile change (pas à chaque snapshot).
   const stackKey = `${visible.map((e) => e.id).join(',')}|${more > 0}`;
@@ -85,6 +87,7 @@ export const AlertPopups = memo(function AlertPopups({ pending, onClose, onClose
   return (
     <div className="alert-popups" role="region" aria-label="Alertes" aria-live="polite" data-testid="alert-popups">
       <AnimatePresence initial={false}>
+        {lead}
         {visible.map((e) => {
           const Icon = ICONS[e.type] ?? BellRing;
           const { title, body } = alertMessage(e);

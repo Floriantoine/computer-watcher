@@ -82,7 +82,7 @@ export function breakdownAt(inv: { ts: number[]; layers: { key: string; values: 
 
 const COLORS: Record<string, string> = {
   earlyoom_kill: '#ff5c8a', pressure: '#ffb547', gap: '#8b91a0', app_kill: '#a07cff', leak: '#ff8a3d', tmpfs: REST_TONES.shmem, forecast: '#ffb547',
-  rule_action: '#ff5c8a', rule_dry_run: '#8b91a0',
+  rule_action: '#ff5c8a', rule_dry_run: '#8b91a0', earlyoom_setup: '#5ee0b8',
 };
 
 function label(e: HistoryEvent): string {
@@ -109,6 +109,12 @@ function label(e: HistoryEvent): string {
     case 'rule_action':
     case 'rule_dry_run':
       return ruleEventText(e.type, d).title;
+    case 'earlyoom_setup': {
+      const install = d.mode === 'install';
+      if (d.ok === true) return install ? 'earlyoom installé et configuré' : 'earlyoom activé';
+      const why = d.timedOut === true ? 'délai dépassé' : `code ${String(d.code ?? '?')}`;
+      return `Échec de ${install ? 'l’installation' : 'l’activation'} d’earlyoom (${why})`;
+    }
     default: return e.type;
   }
 }
@@ -118,7 +124,7 @@ export function eventMarkers(events: HistoryEvent[]) {
 }
 
 export function alertsFrom(events: HistoryEvent[]): HistoryEvent[] {
-  return events.filter((e) => e.type !== 'app_kill').sort((a, b) => b.ts - a.ts);
+  return events.filter((e) => e.type !== 'app_kill' && e.type !== 'earlyoom_setup').sort((a, b) => b.ts - a.ts);
 }
 
 const p2 = (n: number) => String(n).padStart(2, '0');

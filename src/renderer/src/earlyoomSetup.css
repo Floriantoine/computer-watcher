@@ -1,0 +1,8 @@
+/* Pop-up « earlyoom n'est pas installé » (B8 bis) : fichier à part, mêmes jetons que les pop-ups d'alerte. */
+.eo-setup-popup { --alert: var(--amber); }
+.eo-setup-popup .alert-popup-head strong { white-space: normal; }
+.eo-setup-actions { flex-wrap: wrap; }
+.eo-setup-actions button { display: inline-flex; align-items: center; gap: 5px; }
+.eo-setup-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.eo-setup-row .hint { margin: 0; }
+.eo-manual { margin: 10px 0 4px; }

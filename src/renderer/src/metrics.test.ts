@@ -214,3 +214,17 @@ test('eventMarkers : règles (⑥) — libellés et couleurs ; alertsFrom les ga
   expect(m.map((x) => x.color)).toEqual(['#ff5c8a', '#ff5c8a', '#8b91a0']);
   expect(alertsFrom([ev('rule_action', d), ev('rule_dry_run', d)])).toHaveLength(2);
 });
+
+test('eventMarkers : earlyoom_setup (installation / activation depuis l’app) ; pas une alerte', () => {
+  const ev = (detail: Record<string, unknown>) => ({ ts: 1, type: 'earlyoom_setup', groupKey: null, groupLabel: null, detail });
+  const m = eventMarkers([ev({ mode: 'install', ok: true, code: 0 }), ev({ mode: 'activate', ok: true, code: 0 }), ev({ mode: 'install', ok: false, code: 21 }), ev({ mode: 'activate', ok: false, code: null, timedOut: true })]);
+  expect(m.map((x) => x.label)).toEqual([
+    'earlyoom installé et configuré',
+    'earlyoom activé',
+    'Échec de l’installation d’earlyoom (code 21)',
+    'Échec de l’activation d’earlyoom (délai dépassé)',
+  ]);
+  expect(m[0]!.color).toBe('#5ee0b8');
+  expect(m[2]!.color).toBe('#5ee0b8');
+  expect(alertsFrom([ev({ mode: 'install', ok: true, code: 0 })])).toEqual([]);
+});

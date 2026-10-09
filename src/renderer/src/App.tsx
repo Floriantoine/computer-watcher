@@ -4,6 +4,7 @@ import { compileProtection } from '../../core/protection';
 import type { Category, Config, ConfigState, Culprit, GroupSummary, InstanceSummary, KillResult, KillSignal, KillTarget, ProcNode, Snapshot } from '../../core/types';
 import { bulkDialogTitle, chunkTargets, freeBlockedReason, freeCandidates, runBulkKill, type BulkRequest, type Preset } from './bulkKill';
 import { AlertPopups, useAlertPopups } from './components/AlertPopups';
+import { EarlyoomSetupPopup, useEarlyoomReminder } from './components/EarlyoomSetupPopup';
 import { BulkKillDialog } from './components/BulkKillDialog';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { DetailView } from './components/DetailView';
@@ -174,6 +175,15 @@ export function App() {
     setToasts((t) => [...t, { id, message, kind }]);
     setTimeout(() => setToasts((t) => t.slice(1)), 5000);
   };
+
+  // B8 bis : earlyoom absent ou arrêté → pop-up au lancement (élément mémoïsé : AlertPopups reste mémoïsé entre deux snapshots).
+  const eoReminder = useEarlyoomReminder({ onState: setConfigState, onToast: (m, kind) => pushToast(m, kind) });
+  const eoLead = useMemo(
+    () => eoReminder.mode && (
+      <EarlyoomSetupPopup key="earlyoom-setup" mode={eoReminder.mode} busy={eoReminder.busy} onSetup={eoReminder.setup} onLater={eoReminder.remindLater} />
+    ),
+    [eoReminder.mode, eoReminder.busy, eoReminder.setup, eoReminder.remindLater],
+  );
 
   /** Mémorise les SIGTERM envoyés (boutons qui pulsent, puis « Forcer » avec le même startTicks). */
   function noteSent(targets: KillTarget[], results: KillResult[], signal: KillSignal) {
@@ -541,6 +551,7 @@ export function App() {
           onNavigate={setRoute}
           onFree={requestFree}
           onSnooze={snoozeForecast}
+          lead={eoLead}
         />
       </div>
     </MotionConfig>

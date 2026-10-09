@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Activity, Copy, KeyRound, TriangleAlert } from 'lucide-react';
+import { Activity, Copy, KeyRound, ShieldCheck, TriangleAlert } from 'lucide-react';
 import { ignoreConversions, ignoreList } from '../../../core/earlyoom';
 import type { EarlyoomStatus } from '../../../core/types';
 import { formFromStatus, lastEarlyoomKills, validateEarlyoomForm, type EarlyoomForm } from '../earlyoomForm';
+import { settingsSetupAction } from '../earlyoomPopup';
+import { EARLYOOM_CHANGED, runEarlyoomSetup } from './EarlyoomSetupPopup';
 import { formatInstant } from '../metrics';
 import { linesDirty, numbersDirty, tokenDiff, type FormState } from '../settingsNav';
 import { Card, NumberField, Row, SaveBar } from './settingsUi';
@@ -14,7 +16,7 @@ interface Props {
   onAttention?: (s: EarlyoomAttention) => void;
 }
 
-export type EarlyoomAttention = FormState & { status: { installed: boolean; active: string } | null };
+export type EarlyoomAttention = FormState & { status: { installed: boolean; active: string; enabled: string } | null };
 
 const ACTIVE: Record<EarlyoomStatus['active'], { label: string; tone: string }> = {
   active: { label: 'actif', tone: 'ok' },
@@ -36,6 +38,7 @@ export function EarlyoomPanel({ protectedList, onToast, onAttention }: Props) {
   const [form, setForm] = useState<EarlyoomForm | null>(null);
   const [kills, setKills] = useState<{ ts: number; name: string; signal: string }[]>([]);
   const [applying, setApplying] = useState(false);
+  const [settingUp, setSettingUp] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -52,6 +55,10 @@ export function EarlyoomPanel({ protectedList, onToast, onAttention }: Props) {
   }, []);
   useEffect(() => {
     void load();
+    // Installation / activation depuis le pop-up du lancement : état relu (point rouge compris).
+    const reload = () => void load();
+    window.addEventListener(EARLYOOM_CHANGED, reload);
+    return () => window.removeEventListener(EARLYOOM_CHANGED, reload);
   }, [load]);
 
   // Saisie modifiée / invalide, calculée avant les retours anticipés (règle des hooks).
@@ -64,9 +71,34 @@ export function EarlyoomPanel({ protectedList, onToast, onAttention }: Props) {
   const invalid = !!st?.installed && !!form && Object.keys(validateEarlyoomForm(form, protectedList).errors).length > 0;
   const installed = st ? st.installed : null;
   const active = st?.active ?? null;
+  const enabled = st?.enabled ?? null;
   useEffect(() => {
-    onAttention?.({ status: installed === null ? null : { installed, active: active ?? 'unknown' }, dirty, invalid });
-  }, [installed, active, dirty, invalid, onAttention]);
+    onAttention?.({ status: installed === null ? null : { installed, active: active ?? 'unknown', enabled: enabled ?? 'unknown' }, dirty, invalid });
+  }, [installed, active, enabled, dirty, invalid, onAttention]);
+
+  const setupAction = st ? settingsSetupAction(st) : null;
+  const setup = async () => {
+    if (!setupAction) return;
+    setSettingUp(true);
+    try {
+      await runEarlyoomSetup(setupAction.mode, onToast); // diffuse EARLYOOM_CHANGED en cas de succès : load() relancé
+    } finally {
+      setSettingUp(false);
+    }
+  };
+  const setupButton = setupAction && (
+    <div className="eo-setup-row">
+      <button className="primary" data-testid="earlyoom-setup" disabled={settingUp || applying} onClick={() => void setup()}>
+        {setupAction.mode === 'install' ? <ShieldCheck size={14} strokeWidth={2} /> : <KeyRound size={14} strokeWidth={2} />}
+        {settingUp ? (setupAction.mode === 'install' ? 'Installation…' : 'Activation…') : setupAction.label}
+      </button>
+      <span className="hint">
+        {setupAction.mode === 'install'
+          ? 'Installe le paquet earlyoom, écrit la configuration (exclusions obligatoires) et active le service. proc-watch montre d’abord le détail exact.'
+          : 'Écrit la configuration (exclusions obligatoires) puis systemctl enable --now earlyoom. proc-watch montre d’abord la ligne exacte.'}
+      </span>
+    </div>
+  );
 
   const apply = async (settings: NonNullable<ReturnType<typeof validateEarlyoomForm>['settings']>, expectedLine: string) => {
     setApplying(true);
@@ -97,6 +129,8 @@ export function EarlyoomPanel({ protectedList, onToast, onAttention }: Props) {
       <div className="s-stack" data-testid="earlyoom-panel">
         <Card title="État" icon={<Activity size={14} strokeWidth={2} />}>
           <p className="eo-absent">earlyoom n'est pas installé.</p>
+          {setupButton}
+          <p className="hint eo-manual">Ou à la main :</p>
           <div className="eo-cmd">
             <code data-testid="earlyoom-install">{st.installHint}</code>
             <button
@@ -133,8 +167,9 @@ export function EarlyoomPanel({ protectedList, onToast, onAttention }: Props) {
       <Card title="État" icon={<Activity size={14} strokeWidth={2} />}>
         <div className="rec-status">
           <span className={`dot ${a.tone}`} aria-hidden />
-          <strong data-testid="earlyoom-state">earlyoom{st.version ? ` ${st.version}` : ''} · {a.label}</strong>
+          <strong data-testid="earlyoom-state">earlyoom{st.version ? ` ${st.version}` : ''} · {a.label}{st.enabled === 'disabled' ? ' · ne démarre pas avec le système' : ''}</strong>
         </div>
+        {setupButton}
         <h4 className="eo-title">Derniers kills</h4>
         {kills.length === 0 ? (
           <p className="hint" style={{ margin: 0 }}>Aucun kill enregistré ces 7 derniers jours.</p>

@@ -102,7 +102,7 @@ export interface AttentionInput {
   alerts: FormState;
   /** null : pas encore lu. */
   recorder: FormState & { status: { available: boolean; enabled: boolean; running: boolean } | null };
-  earlyoom: FormState & { status: { installed: boolean; active: string } | null };
+  earlyoom: FormState & { status: { installed: boolean; active: string; enabled?: string } | null };
   /** Réglages › Règles : éditeur ouvert (modifié, invalide) et règles du fichier refusées. */
   rules?: FormState & { issues: number };
 }
@@ -134,7 +134,14 @@ function earlyoomWarning(s: AttentionInput['earlyoom']['status']): string | null
   if (!s) return null;
   if (!s.installed) return 'earlyoom n’est pas installé';
   if (s.active !== 'active') return 'earlyoom n’est pas actif';
+  if (s.enabled === 'disabled') return 'earlyoom ne démarre pas avec le système';
   return null;
+}
+
+/** earlyoom absent, arrêté ou pas lancé au démarrage : point rouge tant que ce n'est pas réglé (B8 bis), quel que soit le formulaire. */
+function earlyoomAttention(i: AttentionInput['earlyoom']): Attention | undefined {
+  const a = attention(i, earlyoomWarning(i.status));
+  return a && earlyoomWarning(i.status) ? { ...a, tone: 'error' } : a;
 }
 
 /** Points de la barre latérale : section → ton (invalide > modifié > avertissement) et raisons (infobulle). */
@@ -145,7 +152,7 @@ export function sectionAttention(i: AttentionInput): Partial<Record<SettingsSect
     others: attention(i.others, null),
     alerts: attention(i.alerts, null),
     recorder: attention(i.recorder, recorderWarning(i.recorder.status)),
-    earlyoom: attention(i.earlyoom, earlyoomWarning(i.earlyoom.status)),
+    earlyoom: earlyoomAttention(i.earlyoom),
     rules: i.rules?.issues
       ? { tone: 'error', reasons: [`${i.rules.issues} règle${i.rules.issues > 1 ? 's' : ''} invalide${i.rules.issues > 1 ? 's' : ''} ignorée${i.rules.issues > 1 ? 's' : ''}`] }
       : attention(i.rules ?? null, null),
