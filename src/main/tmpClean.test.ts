@@ -903,3 +903,52 @@ test('signalement 3 : un montage apparu dans une entrée pendant la confirmation
   expect(out.results[0].reason).toContain('m : contient un point de montage');
   expect(existsSync(join(q, 'm'))).toBe(true);
 });
+
+test('r1 : quarantaine renommée pendant la confirmation : refusée (chemin ≠ inode ouvert), rien supprimé', async () => {
+  const { root } = setup();
+  const q = leftover(root, '.proc-watch-trash-Renom1', { a: 1 });
+  mkdirSync(join(q, 'work'));
+  const moved = join(root, '.proc-watch-trash-Ailleurs');
+  const c = cleaner(root, {
+    confirm: async () => {
+      renameSync(q, moved);
+      const child = spawn('sleep', ['30'], { cwd: join(moved, 'work'), stdio: 'ignore' });
+      children.push(child);
+      await settled(child);
+      return true;
+    },
+  });
+  await c.list();
+  const out = await c.emptyQuarantine();
+  expect(out.results[0]).toMatchObject({ name: '.proc-watch-trash-Renom1', ok: false });
+  expect(out.results[0].reason).toMatch(/a changé depuis l’affichage/);
+  expect(existsSync(join(moved, 'a'))).toBe(true);
+  expect(existsSync(join(moved, 'work'))).toBe(true);
+});
+
+test('r2 : entrées de la liste du main dont la quarantaine n’existe plus : oubliées à la liste', async () => {
+  const { base, root } = setup();
+  const storePath = join(base, 'data', 'tmp-set-aside.json');
+  const store = createSetAsideStore(storePath);
+  const q = leftover(root, '.proc-watch-trash-Vivante', { x: 1 });
+  const live = String(lstatSync(q, { bigint: true }).ino);
+  store.add('999999999999', 'disparue');
+  store.add(live, 'x');
+  const c = cleaner(root, { setAside: store });
+  await c.list();
+  expect(JSON.parse(readFileSync(storePath, 'utf8'))).toEqual([{ quarantine: live, name: 'x' }]);
+});
+
+test('r3 : les lstat de premier niveau de l’inventaire comptent dans le budget partagé', async () => {
+  const { root } = setup();
+  const q = leftover(root, '.proc-watch-trash-Budget1', { a: 1, b: 1, c: 1, d: 1 });
+  const c = cleaner(root, { inventoryMaxStats: 2 });
+  await c.list();
+  const out = await c.emptyQuarantine();
+  const s = c.asked.at(-1)!;
+  expect(s.quarantines![0].entries.map((e) => e.name)).toEqual(['a', 'b']);
+  expect(s.quarantines![0].more).toBe(2);
+  expect(out.partial).toBe(true);
+  expect(out.results[0].reason).toMatch(/2 entrées non inventoriées \(budget de l’inventaire\)/);
+  expect(readdirSync(q).sort()).toEqual(['c', 'd']);
+});

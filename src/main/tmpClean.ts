@@ -385,6 +385,8 @@ export interface SetAsideStore {
   add(quarantineIno: string, name: string): void;
   /** Oublie une entrée, ou toute la quarantaine si `name` est absent. */
   forget(quarantineIno: string, name?: string): void;
+  /** Oublie les quarantaines qui n'existent plus (inodes absents de `alive`). */
+  prune(alive: ReadonlySet<string>): void;
 }
 
 export function createSetAsideStore(path?: string): SetAsideStore {
@@ -414,6 +416,12 @@ export function createSetAsideStore(path?: string): SetAsideStore {
     add: (q, n) => {
       if (items.some((x) => x.quarantine === q && x.name === n)) return;
       items.push({ quarantine: q, name: n });
+      save();
+    },
+    prune: (alive) => {
+      const next = items.filter((x) => alive.has(x.quarantine));
+      if (next.length === items.length) return;
+      items = next;
       save();
     },
     forget: (q, n) => {
@@ -694,7 +702,10 @@ export function createTmpCleaner(root: string, o: CleanerOptions): TmpCleaner {
       if (refusal === null) next.set(s.name, { ino: r.st.ino, dev: r.st.dev, uid: r.st.uid, kind, sizeKB: s.sizeKB, recent, at: now() });
     }
     allowed = next;
-    const quarantines = (await leftoverQuarantines(c)).map(({ name, eligible }) => ({ name, eligible }));
+    const leftovers = await leftoverQuarantines(c);
+    // liste du main : les quarantaines disparues sont oubliées (seulement si les montages sont lisibles : inventaire complet)
+    if (c.mounts !== null) setAside.prune(new Set(leftovers.filter((x) => x.ino !== null).map((x) => String(x.ino))));
+    const quarantines = leftovers.map(({ name, eligible }) => ({ name, eligible }));
     return { root, entries, truncated: usage.truncated, uninspectable: c.users.uninspectable, disabled: off, quarantines };
   }
 
@@ -838,6 +849,8 @@ export function createTmpCleaner(root: string, o: CleanerOptions): TmpCleaner {
       error: string | null;
       entries: { name: string; ino: bigint; kind: TmpEntry['kind']; sizeKB: number; atLeast: boolean; setAside: boolean }[];
       more: number;
+      /** Entrées non inventoriées : budget de l'inventaire épuisé (jamais confirmées, donc jamais supprimées). */
+      unlisted: number;
     };
     const opened: Rec[] = [];
     try {
@@ -850,7 +863,7 @@ export function createTmpCleaner(root: string, o: CleanerOptions): TmpCleaner {
       // 1) ouverture et inventaire (pour la confirmation), dans leur propre budget
       let left = maxEntries;
       for (const x of found) {
-        const rec: Rec = { name: x.name, q: null, error: null, entries: [], more: 0 };
+        const rec: Rec = { name: x.name, q: null, error: null, entries: [], more: 0, unlisted: 0 };
         opened.push(rec);
         const p = join(c0.root, x.name);
         if ([...c0.mounts].some((m) => m === p || m.startsWith(`${p}/`))) {
@@ -871,6 +884,12 @@ export function createTmpCleaner(root: string, o: CleanerOptions): TmpCleaner {
           rec.more = names.length - take.length;
           left -= take.length;
           for (const n of take) {
+            // le lstat de premier niveau compte aussi dans le budget partagé de l'inventaire
+            if (inv.statsLeft <= 0 || Date.now() > inv.deadline) {
+              rec.unlisted++;
+              continue;
+            }
+            inv.statsLeft--;
             const st = await tfs.lstat(rec.q.at(n), { bigint: true }).catch(() => null);
             if (!st) continue;
             const size = await sizeOf(tfs, rec.q.at(n), st, inv).catch(() => ({ kb: 0, atLeast: true }));
@@ -891,7 +910,7 @@ export function createTmpCleaner(root: string, o: CleanerOptions): TmpCleaner {
         items: usable.map((r) => ({ name: r.name, kind: 'dir' as const, sizeKB: kbOf(r), recent: false })),
         totalKB: usable.reduce((t, r) => t + kbOf(r), 0),
         uninspectable: c0.users.uninspectable,
-        quarantines: usable.map((r) => ({ name: r.name, entries: r.entries.map(({ name, kind, sizeKB, atLeast, setAside: sa }) => ({ name, kind, sizeKB, atLeast, setAside: sa })), more: r.more })),
+        quarantines: usable.map((r) => ({ name: r.name, entries: r.entries.map(({ name, kind, sizeKB, atLeast, setAside: sa }) => ({ name, kind, sizeKB, atLeast, setAside: sa })), more: r.more + r.unlisted })),
       });
       if (!ok) return { results: [...results, ...usable.map((r) => ({ name: r.name, ok: false, reason: 'annulé' }))], freedKB: 0, cancelled: true };
       // 3) après la confirmation (la boîte a pu rester ouverte longtemps) : montages et usage relus, budget démarré
@@ -903,7 +922,15 @@ export function createTmpCleaner(root: string, o: CleanerOptions): TmpCleaner {
       for (const r of usable) {
         const q = r.q!;
         const qino = String(q.ino);
-        const users = await scanTmpUsers(q.path, { ...o, fs });
+        // chemin réel de l'inode ouvert ; s'il ne correspond plus à q.path (renommée, remplacée), rien n'est supprimé
+        const realQ = await fs.readlink(`/proc/self/fd/${q.fd}`).catch(() => null);
+        const atPath = await tfs.lstat(q.path, { bigint: true }).catch(() => null);
+        if (!realQ || realQ !== q.path || !atPath || atPath.ino !== q.ino || !atPath.isDirectory()) {
+          partial = true;
+          results.push({ name: r.name, ok: false, reason: 'a changé depuis l’affichage (quarantaine déplacée ou remplacée) : rien supprimé' });
+          continue;
+        }
+        const users = await scanTmpUsers(realQ, { ...o, fs });
         const errors: string[] = [];
         let late = 0;
         for (const e of r.entries) {
@@ -936,6 +963,7 @@ export function createTmpCleaner(root: string, o: CleanerOptions): TmpCleaner {
           } else errors.push(`${e.name} : ${res.reason}`);
         }
         if (late) errors.push(`temps écoulé (${late} entrée${late > 1 ? 's' : ''} non traitée${late > 1 ? 's' : ''})`);
+        if (r.unlisted) errors.push(`${r.unlisted} entrée${r.unlisted > 1 ? 's' : ''} non inventoriée${r.unlisted > 1 ? 's' : ''} (budget de l’inventaire)`);
         if (r.more) errors.push(`${r.more} entrée${r.more > 1 ? 's' : ''} non traitée${r.more > 1 ? 's' : ''} (plafond de ${maxEntries})`);
         if (errors.length) {
           partial = true;
