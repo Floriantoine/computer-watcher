@@ -1135,6 +1135,7 @@ button.primary:hover:not(:disabled) { background: rgba(124, 92, 255, 0.32); bord
 .tmp-tiles .tile-sub { margin-top: 2px; color: var(--label); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tmp-tiles .tile-error b { color: var(--muted); }
 .tmp-tiles .tile-error .tile-sub { color: var(--amber); white-space: normal; }
+.tmp-tiles .tile-extra { color: var(--amber); }
 .tmp-tiles .tile-action { align-self: flex-start; display: inline-flex; align-items: center; gap: 5px; margin-top: 6px; padding: 3px 9px; font-size: 11px; font-weight: 600; }
 .tmp-page-list .chart-panel-head .count { font-size: 11px; color: var(--label); background: var(--surface-3); border: 1px solid var(--border-2); border-radius: 99px; padding: 0 7px; font-variant-numeric: tabular-nums; }
 .tmp-sort button { width: auto; padding: 0 9px; gap: 5px; font-size: 11.5px; display: inline-flex; align-items: center; }

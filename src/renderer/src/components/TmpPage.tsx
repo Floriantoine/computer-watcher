@@ -10,7 +10,7 @@ interface Props {
   onToast?: (message: string, kind: 'info' | 'error') => void;
 }
 
-function Tile({ label, tile, children }: { label: string; tile: TmpTile; children?: ReactNode }) {
+function Tile({ label, tile, extra, children }: { label: string; tile: TmpTile; extra?: string; children?: ReactNode }) {
   return (
     <div className={`tile${tile.error ? ' tile-error' : ''}`} data-testid="tmp-tile">
       <small>{label}</small>
@@ -18,6 +18,11 @@ function Tile({ label, tile, children }: { label: string; tile: TmpTile; childre
       {tile.sub && (
         <span className="tile-sub" data-testid={tile.error ? 'tmp-tile-error' : undefined} role={tile.error ? 'alert' : undefined}>
           {tile.sub}
+        </span>
+      )}
+      {extra && (
+        <span className="tile-sub tile-extra" data-testid="tmp-tile-extra" title="Dossiers .proc-watch-trash-* que proc-watch ne peut pas vider (pas à vous ou droits inattendus)">
+          {extra}
         </span>
       )}
       {children}
@@ -31,7 +36,7 @@ export function TmpTiles({ tiles, busy, onEmptyQuarantine }: { tiles: ReturnType
     <div className="summary tmp-tiles" data-testid="tmp-tiles">
       <Tile label="Occupé" tile={tiles.used} />
       <Tile label="Part de la RAM" tile={tiles.ram} />
-      <Tile label="Quarantaine" tile={tiles.quarantine}>
+      <Tile label="Quarantaine" tile={tiles.quarantine} extra={tiles.quarantine.extra}>
         {tiles.quarantine.canEmpty && (
           <button className="danger sm tile-action" data-testid="tmp-clean-empty-quarantine" disabled={busy} onClick={onEmptyQuarantine}>
             <Trash2 size={12} strokeWidth={2} /> Vider la quarantaine

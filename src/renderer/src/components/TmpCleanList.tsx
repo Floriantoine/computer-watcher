@@ -3,7 +3,7 @@ import { Link2, Trash2, TriangleAlert } from 'lucide-react';
 import { displayName, type TmpListing } from '../../../core/tmpClean';
 import { TMP_SCAN_LIMITS } from '../../../core/tmpScanLimits';
 import { formatKB } from '../format';
-import { quarantineMessage, sortTmpEntries, tmpCleanMessage, tmpSelection, type TmpSort } from '../tmpClean';
+import { createSingleFlight, quarantineMessage, sortTmpEntries, tmpCleanMessage, tmpSelection, type TmpSort } from '../tmpClean';
 import { ipcErrorMessage } from '../viewModel';
 
 /** État et actions de la liste /tmp (page /tmp) : partagés entre la liste et la tuile « Quarantaine ». */
@@ -31,6 +31,8 @@ export function useTmpClean(onToast?: (message: string, kind: 'info' | 'error') 
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  // un seul appel IPC à la fois, même pour un double clic dans la même image (busy n'est vu qu'au rendu suivant)
+  const flight = useRef(createSingleFlight()).current;
   // seule la dernière lecture compte (« Actualiser » pendant une lecture, page quittée)
   const seq = useRef(0);
   useEffect(
@@ -73,40 +75,43 @@ export function useTmpClean(onToast?: (message: string, kind: 'info' | 'error') 
   );
 
   const emptyQuarantine = async () => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      const out = await window.procWatch.tmp.emptyQuarantine();
-      if (out.results.length || out.cancelled) {
-        const m = quarantineMessage(out);
-        onToast?.(m.message, m.kind);
+    await flight(async () => {
+      setBusy(true);
+      try {
+        const out = await window.procWatch.tmp.emptyQuarantine();
+        if (out.results.length || out.cancelled) {
+          const m = quarantineMessage(out);
+          onToast?.(m.message, m.kind);
+        }
+      } catch (e) {
+        onToast?.(ipcErrorMessage(e), 'error');
+      } finally {
+        setBusy(false);
+        load();
+        onChanged?.();
       }
-    } catch (e) {
-      onToast?.(ipcErrorMessage(e), 'error');
-    } finally {
-      setBusy(false);
-      load();
-      onChanged?.();
-    }
+    });
   };
 
   // la seule confirmation est la boîte native du main (chemins exacts, total, « Annuler » par défaut)
   const run = async () => {
     const sel = tmpSelection(listing?.entries ?? [], selected);
-    if (!sel.items.length || busy) return;
-    setBusy(true);
-    try {
-      const out = await window.procWatch.tmp.delete(sel.items);
-      const m = tmpCleanMessage(out);
-      onToast?.(m.message, m.kind);
-      setSelected(new Set());
-    } catch (e) {
-      onToast?.(ipcErrorMessage(e), 'error');
-    } finally {
-      setBusy(false);
-      load();
-      onChanged?.();
-    }
+    if (!sel.items.length) return;
+    await flight(async () => {
+      setBusy(true);
+      try {
+        const out = await window.procWatch.tmp.delete(sel.items);
+        const m = tmpCleanMessage(out);
+        onToast?.(m.message, m.kind);
+        setSelected(new Set());
+      } catch (e) {
+        onToast?.(ipcErrorMessage(e), 'error');
+      } finally {
+        setBusy(false);
+        load();
+        onChanged?.();
+      }
+    });
   };
 
   return { listing, error, selected, busy, load, toggle, run, emptyQuarantine };

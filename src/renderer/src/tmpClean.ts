@@ -66,7 +66,7 @@ const pct = (n: number) => `${(Math.round(n * 10) / 10).toLocaleString('fr-FR')}
 export function tmpTiles(s: { stats: TmpFsStats | null; statsError: string | null; listing: TmpListing | null; listingError: string | null }): {
   used: TmpTile;
   ram: TmpTile;
-  quarantine: TmpTile & { canEmpty: boolean };
+  quarantine: TmpTile & { canEmpty: boolean; extra?: string };
 } {
   const st = s.stats;
   const used: TmpTile = s.statsError
@@ -84,15 +84,36 @@ export function tmpTiles(s: { stats: TmpFsStats | null; statsError: string | nul
         ? { value: pct((st.usedKB / st.memTotalKB) * 100), sub: `de ${formatKB(st.memTotalKB)} de RAM` }
         : { value: DASH, sub: 'RAM totale inconnue' };
   const l = s.listing;
-  const n = l?.quarantines.length ?? 0;
-  const quarantine = s.listingError
+  // quarantaines = suppressions interrompues ; seules les nôtres (éligibles) sont vidables et comptées
+  const n = l ? l.quarantines.filter((q) => q.eligible).length : 0;
+  const m = l ? l.quarantines.length - n : 0;
+  const quarantine: TmpTile & { canEmpty: boolean; extra?: string } = s.listingError
     ? { ...failed(s.listingError), canEmpty: false }
     : !l
       ? { value: LOADING, canEmpty: false }
       : {
           value: String(n),
-          sub: n === 0 ? 'rien n’est mis à l’écart' : n > 1 ? 'éléments mis à l’écart' : 'élément mis à l’écart',
-          canEmpty: !l.disabled && l.quarantines.some((q) => q.eligible),
+          sub: n > 1 ? 'quarantaines restées (suppression interrompue)' : n === 1 ? 'quarantaine restée (suppression interrompue)' : m ? 'aucune quarantaine vidable' : 'aucune suppression interrompue',
+          ...(m ? { extra: `+ ${m} non vidable${m > 1 ? 's' : ''}` } : {}),
+          canEmpty: n > 0 && !l.disabled,
         };
   return { used, ram, quarantine };
+}
+
+/**
+ * Garde contre le double clic : tant qu'un appel est en cours, les suivants sont ignorés (résolus à false). Posée avant
+ * le premier `await` et indépendante de l'état React (figé dans la closure jusqu'au rendu suivant).
+ */
+export function createSingleFlight(): (fn: () => Promise<void>) => Promise<boolean> {
+  let running = false;
+  return async (fn) => {
+    if (running) return false;
+    running = true;
+    try {
+      await fn();
+      return true;
+    } finally {
+      running = false;
+    }
+  };
 }

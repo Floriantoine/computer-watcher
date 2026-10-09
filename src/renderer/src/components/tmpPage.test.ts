@@ -60,6 +60,15 @@ describe('page /tmp', () => {
     expect(html).toContain('12,5 %');
     expect(count(html, 'tmp-clean-empty-quarantine')).toBe(1);
     expect(html).not.toContain('tile-error');
+    expect(html).toContain('quarantaine restée (suppression interrompue)');
+  });
+
+  it('quarantaine non vidable : signalée à part, sans bouton', () => {
+    const tiles = tmpTiles({ stats: null, statsError: null, listing: listing({ quarantines: [{ name: '.proc-watch-trash-x', eligible: false }] }), listingError: null });
+    const html = renderToStaticMarkup(createElement(TmpTiles, { tiles, busy: false, onEmptyQuarantine: noop }));
+    expect(html).toContain('+ 1 non vidable');
+    expect(count(html, 'tmp-tile-extra')).toBe(1);
+    expect(count(html, 'tmp-clean-empty-quarantine')).toBe(0);
   });
 
   it('/tmp illisible : les tuiles affichent l’erreur, pas de NaN ni de bouton', () => {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { DEFAULT_TMP_SORT, quarantineMessage, sortTmpEntries, tmpCleanMessage, tmpSelection, tmpTiles } from './tmpClean';
+import { createSingleFlight, DEFAULT_TMP_SORT, quarantineMessage, sortTmpEntries, tmpCleanMessage, tmpSelection, tmpTiles } from './tmpClean';
 
 test('message du toast : libérés, refusés et raisons regroupées', () => {
   expect(tmpCleanMessage({ freedKB: 2 * 1024 * 1024, results: [{ name: 'a', ok: true }, { name: 'b', ok: true }] })).toEqual({
@@ -68,16 +68,19 @@ describe('page /tmp : tuiles', () => {
     const t = tmpTiles({ stats: { root: '/tmp', sizeKB: 8 * GB, usedKB: 2 * GB, memTotalKB: 16 * GB, inRam: true }, statsError: null, listing: listing(), listingError: null });
     expect(t.used).toEqual({ value: '2,0 Go / 8,0 Go', sub: '25 % occupé' });
     expect(t.ram).toEqual({ value: '12,5 %', sub: 'de 16,0 Go de RAM' });
-    expect(t.quarantine).toEqual({ value: '0', sub: 'rien n’est mis à l’écart', canEmpty: false });
+    expect(t.quarantine).toEqual({ value: '0', sub: 'aucune suppression interrompue', canEmpty: false });
   });
 
-  test('quarantaine : nombre d’éléments, bouton seulement si vidable et suppression disponible', () => {
-    const q = [{ name: '.proc-watch-trash-1', eligible: true }, { name: '.proc-watch-trash-2', eligible: false }];
+  test('quarantaine : ne compte que les quarantaines vidables, signale à part les autres, dit que c’est une suppression interrompue', () => {
+    const mine = (i: number) => ({ name: `.proc-watch-trash-${i}`, eligible: true });
+    const foreign = (i: number) => ({ name: `.proc-watch-trash-x${i}`, eligible: false });
     const base = { stats: null, statsError: null, listingError: null };
-    expect(tmpTiles({ ...base, listing: listing(q) }).quarantine).toEqual({ value: '2', sub: 'éléments mis à l’écart', canEmpty: true });
-    expect(tmpTiles({ ...base, listing: listing(q.slice(0, 1)) }).quarantine).toEqual({ value: '1', sub: 'élément mis à l’écart', canEmpty: true });
-    expect(tmpTiles({ ...base, listing: listing(q.slice(1)) }).quarantine.canEmpty).toBe(false);
-    expect(tmpTiles({ ...base, listing: listing(q, 'GNU rm introuvable') }).quarantine.canEmpty).toBe(false);
+    const q = (qs: { name: string; eligible: boolean }[], disabled: string | null = null) => tmpTiles({ ...base, listing: listing(qs, disabled) }).quarantine;
+    expect(q([mine(1)])).toEqual({ value: '1', sub: 'quarantaine restée (suppression interrompue)', canEmpty: true });
+    expect(q([mine(1), mine(2)])).toEqual({ value: '2', sub: 'quarantaines restées (suppression interrompue)', canEmpty: true });
+    expect(q([mine(1), foreign(1)])).toEqual({ value: '1', sub: 'quarantaine restée (suppression interrompue)', extra: '+ 1 non vidable', canEmpty: true });
+    expect(q([foreign(1), foreign(2)])).toEqual({ value: '0', sub: 'aucune quarantaine vidable', extra: '+ 2 non vidables', canEmpty: false });
+    expect(q([mine(1)], 'GNU rm introuvable').canEmpty).toBe(false);
   });
 
   test('en cours de calcul : « … », sans valeur inventée', () => {
@@ -102,5 +105,32 @@ describe('page /tmp : tuiles', () => {
   test('RAM totale inconnue : part « — »', () => {
     const t = tmpTiles({ stats: { root: '/tmp', sizeKB: 4 * GB, usedKB: GB, memTotalKB: 0, inRam: true }, statsError: null, listing: null, listingError: null });
     expect(t.ram.value).toBe('—');
+  });
+});
+
+describe('garde contre le double clic (Supprimer, Vider la quarantaine)', () => {
+  test('un second appel pendant le premier est ignoré : un seul appel IPC ; libre de nouveau après la fin, même en échec', async () => {
+    const guard = createSingleFlight();
+    let calls = 0;
+    let release!: () => void;
+    const ipc = () => {
+      calls++;
+      return new Promise<void>((r) => (release = r));
+    };
+    const first = guard(ipc);
+    const second = guard(ipc); // même image : l'état React n'a pas encore changé
+    expect(calls).toBe(1);
+    expect(await second).toBe(false);
+    release();
+    expect(await first).toBe(true);
+    await guard(async () => {
+      calls++;
+      throw new Error('échec');
+    }).catch(() => {});
+    expect(calls).toBe(2);
+    await guard(async () => {
+      calls++;
+    });
+    expect(calls).toBe(3);
   });
 });
