@@ -179,3 +179,7 @@ describe('R2 : copie installée inutilisable → l’AppImage lancée', () => {
     expect(recorderAppImage(own, copy)).toBe(copy);
   });
 });
+
+test('M-2 : unité sous ~/.config si XDG_CONFIG_HOME est relatif', () => {
+  expect(unitPath({ XDG_CONFIG_HOME: 'rel' }, '/home/u')).toBe('/home/u/.config/systemd/user/proc-watch-recorder.service');
+});

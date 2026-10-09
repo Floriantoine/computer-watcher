@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
-import { isAppImageHeader, fuseMountPoints, realAppImage, testFeedTrust } from './realAppImage';
+import { isAppImageHeader, fuseMountPoints, fuseMounts, realAppImage, testFeedTrust } from './realAppImage';
 
 const cache = join(homedir(), '.cache');
 mkdirSync(cache, { recursive: true });
@@ -41,6 +41,16 @@ describe('realAppImage : vraie AppImage seulement', () => {
     writeFileSync(doc, 'MY THESIS');
     const dist = join(base, 'electron-dist');
     expect(realAppImage({ APPIMAGE: doc, APPDIR: dist }, { mountinfo: OTHER, realpath: (p) => (p === '/proc/self/exe' ? `${dist}/electron` : p) })).toBeNull();
+  });
+
+  test('R4 : type de montage différent de fuse.<basename(APPIMAGE)> (autre AppImage, fuse nu) : refusé', () => {
+    const { env, deps } = ok();
+    expect(realAppImage(env, { ...deps, mountinfo: fuseLine(MOUNT, 'fuse.Editeur-1.2.3.AppImage') })).toBeNull();
+    expect(realAppImage(env, { ...deps, mountinfo: fuseLine(MOUNT, 'fuse') })).toBeNull();
+    expect(realAppImage(env, { ...deps, mountinfo: fuseLine(MOUNT, 'fuse.proc-watch-1.0.0-x86_64.AppImage') })).toBe(img);
+  });
+  test('fuseMounts : point de montage et type', () => {
+    expect(fuseMounts(fuseLine('/tmp/.mount a', 'fuse.x.AppImage'))).toEqual([{ mountPoint: '/tmp/.mount a', fstype: 'fuse.x.AppImage' }]);
   });
 
   test('APPDIR monté mais pas en FUSE : refusé', () => {
@@ -98,7 +108,7 @@ describe('flux de test des mises à jour (sources seulement, option --update-fee
     mkdirSync(dir, { recursive: true });
     expect(testFeedTrust({ APPDIR: dir }, null, false)).toEqual({});
     expect(testFeedTrust({ APPDIR: dir }, 'http://127.0.0.1:9/', true)).toEqual({});
-    const deps = testFeedTrust({ APPDIR: dir }, 'http://127.0.0.1:9/', false);
+    const deps = testFeedTrust({ APPDIR: dir, APPIMAGE: img }, 'http://127.0.0.1:9/', false);
     expect(fuseMountPoints(deps.mountinfo!)).toContain(dir);
     // binaire hors d'APPDIR (environnement hérité) : toujours refusé
     expect(realAppImage({ APPIMAGE: img, APPDIR: dir }, { ...deps, realpath: (p) => (p === '/proc/self/exe' ? '/usr/bin/x' : p) })).toBeNull();

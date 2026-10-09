@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
@@ -60,6 +60,15 @@ describe('resolveBin', () => {
     expect(resolveBin('notify-send', `relative:${empty}:${dir}:/nope`)).toBe(bin);
     expect(resolveBin('notify-send', `${empty}:/nope`)).toBeNull();
     expect(resolveBin('notify-send', undefined)).toBeNull();
+  });
+  test('I-A : entrées sous un montage /tmp/.mount_* ignorées (nom réutilisable par un autre utilisateur après démontage)', () => {
+    const mount = mkdtempSync('/tmp/.mount_pwtest-');
+    try {
+      writeFileSync(join(mount, 'notify-send'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+      expect(resolveBin('notify-send', mount)).toBeNull();
+    } finally {
+      rmSync(mount, { recursive: true, force: true });
+    }
   });
 });
 

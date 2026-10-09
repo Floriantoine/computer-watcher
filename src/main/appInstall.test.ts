@@ -1,11 +1,12 @@
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import {
   appPaths, autostartState, installAppImage, verifyAndDeleteOriginal, launchTarget, rootsFrom, runUninstall, setAutostart, stopRecorderForUninstall,
-  uninstallPlan, uninstallSummary, type Roots,
+  configSweepPlan, postExitSweepCommand, sweepTools, uninstallPlan, uninstallSummary, type Roots,
 } from './appInstall';
 
 // Racines temporaires sous ~/.cache/pw-onboard-* (jamais les vrais dossiers de l'utilisateur), retirées à la fin.
@@ -46,6 +47,12 @@ describe('chemins', () => {
     expect(p.configDir).toBe('/c/proc-watch');
     expect(p.dataDir).toBe('/d/proc-watch');
     expect(appPaths(rootsFrom({}, '/home/u')).autostart).toBe('/home/u/.config/autostart/proc-watch.desktop');
+    expect(appPaths(rootsFrom({ XDG_CACHE_HOME: '/k' }, '/home/u')).updaterCache).toBe('/k/proc-watch-updater');
+    expect(appPaths(rootsFrom({}, '/home/u')).updaterCache).toBe('/home/u/.cache/proc-watch-updater');
+    // M-2 : XDG relatifs ignorés
+    expect(rootsFrom({ XDG_CONFIG_HOME: 'c', XDG_DATA_HOME: './d', XDG_CACHE_HOME: 'k' }, '/home/u')).toEqual({
+      home: '/home/u', configHome: '/home/u/.config', dataHome: '/home/u/.local/share', cacheHome: '/home/u/.cache',
+    });
   });
 });
 
@@ -178,6 +185,14 @@ describe('supprimer le fichier téléchargé (accord par onboarding.json, vérif
     await expect(verifyAndDeleteOriginal({ path: otherApp, sha256: sha(AI('autre application')), ino: ino(otherApp), copy: r.dest })).rejects.toThrow(/copie en cours/);
     expect(existsSync(otherApp)).toBe(true);
   });
+  test('f1 : même fichier que la copie sous un autre chemin (lien physique, second montage) → refusé (dev+ino), copie intacte', async () => {
+    const r = await installAppImage({ source: fakeAppImage(), roots });
+    const alias = join(dl, 'alias.AppImage');
+    linkSync(r.dest, alias);
+    await expect(verifyAndDeleteOriginal({ path: alias, sha256: r.sha256, ino: ino(alias), copy: r.dest })).rejects.toThrow(/copie installée/);
+    expect(existsSync(alias)).toBe(true);
+    expect(existsSync(r.dest)).toBe(true);
+  });
   test('refuse la copie elle-même', async () => {
     const r = await installAppImage({ source: fakeAppImage(), roots });
     await expect(verifyAndDeleteOriginal({ path: r.dest, sha256: r.sha256, ino: ino(r.dest), copy: r.dest })).rejects.toThrow(/copie installée/);
@@ -300,6 +315,22 @@ describe('désinstaller', () => {
     ]);
     expect(all.at(-1)!.path).toBe(p.appImage);
     expect(all.filter((i) => i.dir).map((i) => i.path)).toEqual([p.dataDir, p.configDir]);
+  });
+
+  test('configuration : fichiers des mises à jour et profil Chromium de l’app (noms connus) retirés, dossier retiré ; inconnus gardés', async () => {
+    const p = await fullInstall();
+    writeFileSync(join(p.configDir, 'updater.json'), '{}');
+    writeFileSync(join(p.configDir, '.updaterId'), 'id');
+    mkdirSync(join(p.configDir, 'GPUCache/sub'), { recursive: true });
+    writeFileSync(join(p.configDir, 'GPUCache/sub/data_0'), 'x');
+    mkdirSync(join(p.configDir, 'Local Storage/leveldb'), { recursive: true });
+    writeFileSync(join(p.configDir, 'Preferences'), '{}');
+    symlinkSync('host-123', join(p.configDir, 'SingletonLock'));
+    const plan = uninstallPlan(roots, { history: false, config: true });
+    for (const n of ['updater.json', '.updaterId', 'GPUCache', 'Local Storage', 'Preferences', 'SingletonLock']) expect(plan.map((i) => i.path)).toContain(join(p.configDir, n));
+    const r = await runUninstall(plan, roots, { service: okService() });
+    expect(r.failed).toEqual([]);
+    expect(existsSync(p.configDir)).toBe(false);
   });
 
   test('fichiers inconnus des dossiers de données et de config : jamais listés, dossier laissé', async () => {
@@ -497,4 +528,111 @@ describe('arrêt du service à la désinstallation (échoue fermé)', () => {
     expect(r.done).toBe(false);
   });
 
+});
+
+describe('cache de l’updater (proc-watch-updater) avec « Supprimer la configuration »', () => {
+  test('listé et retiré seulement avec la configuration ; contenu retiré sans suivre de lien', async () => {
+    const p = await fullInstall();
+    mkdirSync(join(p.updaterCache, 'pending'), { recursive: true });
+    writeFileSync(join(p.updaterCache, 'pending/proc-watch-0.1.1-x86_64.AppImage'), 'x');
+    const victim = join(roots.home, 'victim');
+    mkdirSync(victim);
+    writeFileSync(join(victim, 'precious'), 'x');
+    symlinkSync(victim, join(p.updaterCache, 'lien'));
+    expect(uninstallPlan(roots, { history: false, config: false }).map((i) => i.path)).not.toContain(p.updaterCache);
+    const plan = uninstallPlan(roots, { history: false, config: true });
+    expect(plan.find((i) => i.path === p.updaterCache)).toMatchObject({ kind: 'cache', tree: true });
+    const r = await runUninstall(plan, roots, { service: okService() });
+    expect(r.failed).toEqual([]);
+    expect(existsSync(p.updaterCache)).toBe(false);
+    expect(existsSync(join(victim, 'precious'))).toBe(true);
+  });
+  test('cache remplacé par un lien symbolique : le lien seul est retiré, jamais sa cible', async () => {
+    const p = await fullInstall();
+    const victim = join(roots.home, 'victim-cache');
+    mkdirSync(victim);
+    writeFileSync(join(victim, 'precious'), 'x');
+    mkdirSync(roots.cacheHome, { recursive: true });
+    symlinkSync(victim, p.updaterCache);
+    const r = await runUninstall(uninstallPlan(roots, { history: false, config: true }), roots, { service: okService() });
+    expect(r.failed).toEqual([]);
+    expect(lstatSync(p.updaterCache, { throwIfNoEntry: false })).toBeUndefined();
+    expect(readFileSync(join(victim, 'precious'), 'utf8')).toBe('x');
+  });
+  test('chemin de cache forgé (autre nom sous le cache) : refusé', async () => {
+    await fullInstall();
+    const other = join(roots.cacheHome, 'autre-app');
+    mkdirSync(other, { recursive: true });
+    const r = await runUninstall([{ kind: 'cache', path: other, label: 'x', tree: true }], roots, { service: okService() });
+    expect(existsSync(other)).toBe(true);
+    expect(r.failed[0]!.error).toMatch(/hors de la liste/);
+  });
+});
+
+describe('dernier passage sur la configuration (Chromium réécrit son profil en quittant)', () => {
+  test('ne liste que la configuration (jamais historique, service, menu ni AppImage)', async () => {
+    const p = await fullInstall();
+    mkdirSync(join(p.configDir, 'Session Storage'), { recursive: true });
+    const plan = configSweepPlan(roots);
+    expect(plan.every((i) => i.kind === 'config')).toBe(true);
+    expect(plan.map((i) => i.path)).toContain(join(p.configDir, 'Session Storage'));
+    expect(plan.at(-1)!.path).toBe(p.configDir);
+  });
+});
+
+describe('après la sortie : « Session Storage » recréé par Chromium en quittant (vu avec une vraie AppImage)', () => {
+  const tools = sweepTools(existsSync)!;
+  const runSweep = (dir: string) => {
+    const c = postExitSweepCommand(999_999_999, dir, tools); // PID inexistant : pas d'attente
+    execFileSync(c.cmd, c.args, { env: c.env });
+  };
+  test('retire « Session Storage » puis le dossier de config vide', () => {
+    const d = join(roots.configHome, 'proc-watch');
+    mkdirSync(join(d, 'Session Storage'), { recursive: true });
+    writeFileSync(join(d, 'Session Storage/000003.log'), 'x');
+    runSweep(d);
+    expect(existsSync(d)).toBe(false);
+  });
+  test('autre fichier présent : dossier gardé ; « Session Storage » en lien : jamais suivi ; dossier de config en lien : rien', () => {
+    const d = join(roots.configHome, 'proc-watch');
+    const victim = join(roots.home, 'victim');
+    mkdirSync(victim, { recursive: true });
+    writeFileSync(join(victim, 'precious'), 'x');
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, 'autre'), 'x');
+    symlinkSync(victim, join(d, 'Session Storage'));
+    runSweep(d);
+    expect(existsSync(join(victim, 'precious'))).toBe(true);
+    expect(existsSync(join(d, 'autre'))).toBe(true);
+    const linked = join(roots.configHome, 'lien');
+    mkdirSync(join(victim, 'Session Storage'));
+    symlinkSync(victim, linked);
+    runSweep(linked);
+    expect(existsSync(join(victim, 'Session Storage'))).toBe(true);
+  });
+  test('chemins passés en arguments, jamais dans le script', () => {
+    const c = postExitSweepCommand(42, '/c/proc-watch$(id)', tools);
+    expect(c.args[1]).not.toContain('proc-watch$(id)');
+    expect(c.args.slice(-2)).toEqual(['42', '/c/proc-watch$(id)']);
+  });
+  test('I-A : aucun PATH hérité — env { PATH: /usr/bin:/bin, LC_ALL: C }, sleep/rm/rmdir par chemin absolu', () => {
+    const c = postExitSweepCommand(42, '/c/proc-watch', tools);
+    expect(c.cmd).toBe('/bin/sh');
+    expect(c.env).toEqual({ PATH: '/usr/bin:/bin', LC_ALL: 'C' });
+    const script = c.args[1]!;
+    for (const t of ['sleep', 'rm', 'rmdir']) expect(script).toContain(tools[t as 'sleep']);
+    // aucune commande externe appelée par son nom nu (seules des commandes intégrées au shell : kill, cd, pwd, [, exit)
+    expect(script).not.toMatch(/(^|[\s;(|&])(sleep|rm|rmdir|env|ls|test|cat)\s/m);
+    for (const w of ['kill -0', 'cd -P', 'pwd -P']) expect(script).toContain(w);
+  });
+  test('M-1 : dossier remplacé par un lien après la vérification → cd -P puis pwd -P différent : rien supprimé', () => {
+    const real = join(roots.home, 'ailleurs');
+    mkdirSync(join(real, 'Session Storage'), { recursive: true });
+    writeFileSync(join(real, 'Session Storage/x'), 'x');
+    const expected = join(roots.configHome, 'proc-watch');
+    mkdirSync(roots.configHome, { recursive: true });
+    symlinkSync(real, expected); // le chemin attendu est maintenant un lien vers un autre dossier
+    runSweep(expected);
+    expect(existsSync(join(real, 'Session Storage/x'))).toBe(true);
+  });
 });

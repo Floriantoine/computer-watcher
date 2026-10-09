@@ -1,9 +1,10 @@
+import { spawn } from 'node:child_process';
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from 'electron';
 import appIcon from '../../resources/icon.png?asset';
-import { appendFileSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { access, realpath } from 'node:fs/promises';
+import { appendFileSync, constants as fsConstants, existsSync, lstatSync, realpathSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { access, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { classifyGroups, type InstanceDecision } from '../core/classify/classify';
 import { readPackageHints } from '../core/classify/packageJson';
 import { CpuTracker } from '../core/collector/cpuTracker';
@@ -26,10 +27,10 @@ import { ACTIVE_CPU_PERCENT } from '../core/history/queries';
 import { swapTargets, swapView, SWAP_IDLE_MS, SWAP_LOOKBACK_MS, type SwapView } from '../core/swap';
 import { buildSnapshot, flattenGroup, groupProcs, instanceTargets, isWatch, othersFollowed, type Classification, type FullSnapshot } from '../core/snapshot';
 import type { ConfigState, Group, KillResult, ProcInfo, RecorderState, Watch } from '../core/types';
-import { createFreeOpener, hiddenPlacement, secondInstanceAction, startWindowShown, wantsFree } from './launchArgs';
+import { createFreeOpener, hiddenPlacement, relaunchEnv, secondInstanceAction, startWindowShown, wantsFree } from './launchArgs';
 import {
   appPaths, autostartState, installAppImage, launchTarget, rootsFrom, runUninstall, setAutostart, stopRecorderForUninstall,
-  uninstallPlan, uninstallSummary, verifyAndDeleteOriginal,
+  configSweepPlan, postExitSweepCommand, sweepTools, uninstallPlan, uninstallSummary, verifyAndDeleteOriginal,
 } from './appInstall';
 import { realAppImage, testFeedTrust } from './realAppImage';
 import { hashNoFollow, writeFileSafe } from './safeFs';
@@ -43,7 +44,7 @@ import { createAlertOpener, createFocusWriter, initSeenUpTo, keepSeenUpTo, markS
 import { installDesktopEntry, refreshDesktopEntry } from './desktopEntry';
 import { installedAppImage, installedElsewhere } from './appImageTrust';
 import { acquireLock, blockingSleep } from './singleInstance';
-import { createAppImageBackend } from './appImageUpdate';
+import { createAppImageBackend, restartCommand } from './appImageUpdate';
 import { createPrefsStore, createReleasesApiBackend, createUpdateController, type UpdateBackend } from './updater';
 import { isReleaseUrl, RELEASES_API_URL, testFeedFromEnv, updateMode } from '../core/update';
 import { createEarlyoomApplier, earlyoomStatus, type EarlyoomLock } from './earlyoom';
@@ -827,7 +828,11 @@ ipcMain.handle('onboarding:relaunch', async (_e, del: unknown): Promise<{ relaun
   const steps = onboardingSteps(true);
   writeOnboarding({ version: 1, done: false, resume: steps[steps.indexOf('install') + 1], ...(consent ? { deleteOriginal: consent } : {}) });
   app.releaseSingleInstanceLock(); // la copie relancée prend le verrou
-  app.relaunch({ execPath: paths.appImage, args: [] });
+  // Processus détaché lancé tout de suite, pas app.relaunch : son assistant de relance s'exécute depuis le montage de
+  // l'AppImage en cours, démonté quand elle quitte (vérifié avec une vraie AppImage : la copie ne démarrait jamais).
+  const child = spawn(paths.appImage, [], { detached: true, stdio: 'ignore', env: relaunchEnv(process.env) });
+  child.on('error', (e) => console.error('relance :', e));
+  child.unref();
   quitting = true;
   setTimeout(() => app.quit(), 50);
   return { relaunched: true };
@@ -855,9 +860,10 @@ async function deletePendingOriginal(): Promise<void> {
   }
   const c = taken.consent;
   try {
-    const here = appImage ? await realpath(appImage).catch(() => null) : null;
-    const copy = await realpath(paths.appImage).catch(() => null);
-    if (!here || here !== copy) throw new Error('proc-watch ne tourne pas depuis la copie installée : rien supprimé');
+    // même fichier que la copie installée (dev+ino), pas seulement le même chemin réel
+    const here = appImage ? await stat(appImage).catch(() => null) : null;
+    const copy = await stat(paths.appImage).catch(() => null);
+    if (!here || !copy || here.dev !== copy.dev || here.ino !== copy.ino) throw new Error('proc-watch ne tourne pas depuis la copie installée : rien supprimé');
     await verifyAndDeleteOriginal({ path: c.path, sha256: c.sha256, ino: c.ino, copy: paths.appImage });
     originalDeletion = { path: c.path, ok: true, message: '' };
   } catch (e) {
@@ -914,7 +920,37 @@ ipcMain.handle('uninstall:run', async (_e, o: unknown) => {
   });
   if (result.done) {
     quitting = true;
-    setTimeout(() => app.quit(), 2500); // le renderer affiche le résultat, puis l'app quitte
+    // le renderer affiche le résultat, puis l'app quitte sans arrêt « propre » de Chromium (qui réécrirait son profil) ;
+    // configuration cochée : dernier passage juste avant (vérifié avec une vraie AppImage : Session Storage revenait)
+    // dernier passage sur la configuration, puis sortie immédiate ; Chromium recrée quand même « Session Storage » en
+    // quittant (vérifié avec une vraie AppImage) : un /bin/sh détaché le retire une fois le processus terminé
+    setTimeout(() => {
+      const sweep = o.config ? runUninstall(configSweepPlan(roots), roots, { service: { stop: async () => null, reload: async () => {} } }) : Promise.resolve();
+      void sweep.catch(() => {}).finally(() => {
+        if (o.config) {
+          try {
+            // chemin réel relevé maintenant (jamais un lien) ; outils absolus et environnement fixe (I-A, M-1)
+            // (le dossier vient souvent d'être retiré par le dernier passage : chemin réel du parent + nom fixe)
+            const tools = sweepTools(existsSync);
+            const l = lstatSync(paths.configDir, { throwIfNoEntry: false });
+            const parentReal = (() => {
+              try {
+                return realpathSync(dirname(paths.configDir));
+              } catch {
+                return null;
+              }
+            })();
+            if (tools && parentReal && (!l || l.isDirectory())) {
+              const c = postExitSweepCommand(process.pid, join(parentReal, basename(paths.configDir)), tools);
+              spawn(c.cmd, c.args, { detached: true, stdio: 'ignore', env: c.env }).unref();
+            }
+          } catch (e) {
+            console.error('désinstallation :', e);
+          }
+        }
+        app.exit(0);
+      });
+    }, 2500);
   }
   return { cancelled: false as const, result };
 });
@@ -1040,7 +1076,21 @@ let updateBackend: Promise<UpdateBackend> | null = null;
 const loadUpdateBackend = (): Promise<UpdateBackend> =>
   (updateBackend ??=
     updMode === 'install'
-      ? createAppImageBackend({ testFeed: updateFeed, testConfigPath: join(app.getPath('userData'), 'test-app-update.yml'), appImage: ownImage! })
+      ? createAppImageBackend({
+          testFeed: updateFeed,
+          testConfigPath: join(app.getPath('userData'), 'test-app-update.yml'),
+          appImage: ownImage!,
+          // I-C : relance par nous, détachée, environnement nettoyé (jamais par electron-updater), puis sortie
+          restart: (target) => {
+            app.releaseSingleInstanceLock(); // la nouvelle version prend le verrou
+            const c = restartCommand(target, process.env);
+            const child = spawn(c.cmd, c.args, { detached: true, stdio: 'ignore', env: c.env });
+            child.on('error', (e) => console.error('relance après mise à jour :', e));
+            child.unref();
+            quitting = true;
+            setImmediate(() => app.quit());
+          },
+        })
       : Promise.resolve(createReleasesApiBackend({ url: updateFeed ? `${updateFeed}releases.json` : RELEASES_API_URL, fetch })));
 let installBackend: UpdateBackend | null = null;
 const updater = createUpdateController({

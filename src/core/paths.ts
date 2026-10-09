@@ -2,8 +2,14 @@ import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { isAbsolute, join, resolve } from 'node:path';
 
+/** Dossier de base XDG : la variable seulement si elle est un chemin absolu (spécification XDG), sinon `fallback`. */
+export function xdgHome(env: NodeJS.ProcessEnv, key: 'XDG_CONFIG_HOME' | 'XDG_DATA_HOME' | 'XDG_CACHE_HOME', fallback: string): string {
+  const v = env[key];
+  return v && isAbsolute(v) ? v : fallback;
+}
+
 export function dataDir(env: NodeJS.ProcessEnv = process.env, home: string = homedir()): string {
-  return join(env.XDG_DATA_HOME || join(home, '.local/share'), 'proc-watch');
+  return join(xdgHome(env, 'XDG_DATA_HOME', join(home, '.local/share')), 'proc-watch');
 }
 export const dbPath = (dir: string) => join(dir, 'metrics.db');
 export const statusPath = (dir: string) => join(dir, 'recorder-status.json');

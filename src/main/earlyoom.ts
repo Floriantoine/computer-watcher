@@ -1,5 +1,6 @@
 // État d'earlyoom et application d'une nouvelle configuration via pkexec d'un script fixe.
 import { execFile } from 'node:child_process';
+import { cleanEnv } from '../core/childEnv';
 import { existsSync, readFileSync } from 'node:fs';
 import { buildEarlyoomArgs, checkEarlyoomLine, EARLYOOM_LINE_PATTERN, EARLYOOM_MAX_LINE, isEarlyoomSettings, parseEarlyoomDefault } from '../core/earlyoom';
 import type { ApplyResult, EarlyoomStatus } from '../core/types';
@@ -15,7 +16,7 @@ const APPLY_TIMEOUT_MS = 120_000; // saisie du mot de passe
 /** execFile qui résout avec le code de sortie ; rejette seulement si la commande est introuvable (ENOENT). */
 export const defaultRun: ExecFn = (cmd, args, opts) =>
   new Promise((resolve, reject) => {
-    execFile(cmd, args, { timeout: opts?.timeout ?? 10_000, maxBuffer: 1 << 20, encoding: 'utf8' }, (err, stdout, stderr) => {
+    execFile(cmd, args, { timeout: opts?.timeout ?? 10_000, maxBuffer: 1 << 20, encoding: 'utf8', env: cleanEnv(process.env) }, (err, stdout, stderr) => {
       if (err && (err as NodeJS.ErrnoException).code === 'ENOENT') return reject(err);
       const code = err ? (typeof (err as { code?: unknown }).code === 'number' ? (err as { code: number }).code : -1) : 0;
       const timedOut = !!err && (err as { killed?: boolean }).killed === true;

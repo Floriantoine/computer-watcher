@@ -10,6 +10,7 @@
 // fait qu'une app déjà ouverte reçoit `--alert=<id>` et se montre au lieu de démarrer une seconde fois.
 import { spawn as nodeSpawn } from 'node:child_process';
 import { dirname, isAbsolute, resolve, sep } from 'node:path';
+import { cleanEnv } from '../core/childEnv';
 
 /** `timeoutMs` : seulement pour systemd-run (qui rend la main tout de suite) ; jamais pour l'app lancée directement. */
 export interface Launcher { cmd: string; args: string[]; timeoutMs?: number }
@@ -40,7 +41,9 @@ export function launchApp(c: Launcher, deps: { spawn?: typeof nodeSpawn; env?: N
   const spawn = deps.spawn ?? nodeSpawn;
   const log = deps.log ?? ((m: string) => console.error(m));
   // le service tourne avec ELECTRON_RUN_AS_NODE=1 : l'app lancée directement doit démarrer en Electron
-  const { ELECTRON_RUN_AS_NODE: _drop, ...env } = deps.env ?? process.env;
+  const { ELECTRON_RUN_AS_NODE: _drop, ...rest } = deps.env ?? process.env;
+  // l'app lancée survit au service : rien sous le montage /tmp de son AppImage (I-A)
+  const env = cleanEnv(rest);
   try {
     const child = spawn(c.cmd, c.args, { detached: true, stdio: 'ignore', env });
     child.on('error', (e: Error) => log(`lancement de l'app : ${e.message}`));

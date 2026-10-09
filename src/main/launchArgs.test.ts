@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { createFreeOpener, hiddenPlacement, secondInstanceAction, startWindowShown, wantsFree, wantsHidden } from './launchArgs';
+import { createFreeOpener, relaunchEnv, hiddenPlacement, secondInstanceAction, startWindowShown, wantsFree, wantsHidden } from './launchArgs';
 
 test('wantsFree : --free exact seulement', () => {
   expect(wantsFree(['/x/proc-watch', '--free'])).toBe(true);
@@ -42,5 +42,12 @@ describe('--hidden (démarrage avec la session)', () => {
     expect(secondInstanceAction(['/x', '--hidden'])).toBe('ignore');
     expect(secondInstanceAction(['/x', '--hidden', '--free'])).toBe('free');
     expect(secondInstanceAction(['/x'])).toBe('show');
+  });
+});
+
+describe('relance de la copie installée (processus détaché, pas app.relaunch)', () => {
+  test('environnement du runtime AppImage retiré (la copie pose les siens), le reste gardé', () => {
+    const env = relaunchEnv({ HOME: '/h', APPIMAGE: '/dl/a.AppImage', APPDIR: '/tmp/.mount_x', ARGV0: 'a', OWD: '/dl', PROC_WATCH_NO_RECORDER_SYNC: '1', XDG_CONFIG_HOME: '/c' });
+    expect(env).toEqual({ HOME: '/h', PROC_WATCH_NO_RECORDER_SYNC: '1', XDG_CONFIG_HOME: '/c' });
   });
 });

@@ -2,7 +2,7 @@
 // suppression du fichier téléchargé ; à réutiliser par les mises à jour). Jamais APPIMAGE / APPDIR seuls : un lanceur peut
 // les poser hors AppImage.
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync } from 'node:fs';
-import { isAbsolute, sep } from 'node:path';
+import { basename, isAbsolute, sep } from 'node:path';
 import { hasControlChars } from './appImageTrust';
 
 /** ELF (`\x7fELF`) puis la marque AppImage type 2 (`AI\x02`) à l'octet 8. */
@@ -12,19 +12,21 @@ export function isAppImageHeader(b: Buffer): boolean {
 
 const unescapeMount = (s: string) => s.replace(/\\([0-7]{3})/g, (_, o: string) => String.fromCharCode(parseInt(o, 8)));
 
-/** Points de montage de type FUSE (`fuse`, `fuse.*`) d'un /proc/self/mountinfo. */
-export function fuseMountPoints(mountinfo: string): string[] {
-  const out: string[] = [];
+/** Montages de type FUSE (`fuse`, `fuse.*`) d'un /proc/self/mountinfo : point de montage et type. */
+export function fuseMounts(mountinfo: string): { mountPoint: string; fstype: string }[] {
+  const out: { mountPoint: string; fstype: string }[] = [];
   for (const line of mountinfo.split('\n')) {
     const [left, right] = line.split(' - ');
     if (!left || !right) continue;
     const fstype = right.split(' ')[0] ?? '';
     if (!/^fuse(\.|$)/.test(fstype)) continue;
     const mp = left.split(' ')[4];
-    if (mp) out.push(unescapeMount(mp));
+    if (mp) out.push({ mountPoint: unescapeMount(mp), fstype: unescapeMount(fstype) });
   }
   return out;
 }
+
+export const fuseMountPoints = (mountinfo: string): string[] => fuseMounts(mountinfo).map((m) => m.mountPoint);
 
 export interface RealAppImageDeps {
   /** Contenu de /proc/self/mountinfo. */
@@ -60,7 +62,7 @@ export function isUsableAppImage(path: string): boolean {
 
 /**
  * Chemin de l'AppImage lancée, ou null. Exige tout à la fois :
- * - realpath(APPDIR) est un point de montage FUSE (/proc/self/mountinfo) ;
+ * - realpath(APPDIR) est un point de montage de type `fuse.<basename(APPIMAGE)>` (/proc/self/mountinfo) ;
  * - realpath(/proc/self/exe) est sous ce montage ;
  * - APPIMAGE est un chemin absolu, sans caractère de contrôle, vers un fichier ordinaire (lstat : pas un lien) hors du montage ;
  * - son en-tête est celui d'une AppImage (ELF + `AI\x02` à l'octet 8).
@@ -73,7 +75,9 @@ export function realAppImage(env: NodeJS.ProcessEnv = process.env, deps: RealApp
   try {
     const mount = realpath(dir);
     const mountinfo = deps.mountinfo ?? readFileSync('/proc/self/mountinfo', 'utf8');
-    if (!fuseMountPoints(mountinfo).includes(mount)) return null;
+    // R4 : le runtime AppImage nomme le montage fuse.<nom du fichier> (vérifié avec une vraie AppImage : téléchargée,
+    // copie installée, copie mise à jour) ; un autre type (autre AppImage, fuse nu) n'est pas notre AppImage
+    if (!fuseMounts(mountinfo).some((m) => m.mountPoint === mount && m.fstype === `fuse.${basename(img)}`)) return null;
     const exe = realpath('/proc/self/exe');
     if (!exe.startsWith(mount.endsWith(sep) ? mount : mount + sep)) return null;
     if (!lstatSync(img).isFile()) return null;
@@ -97,7 +101,8 @@ export function testFeedTrust(env: NodeJS.ProcessEnv, testFeed: string | null, i
   try {
     const real = realpathSync(dir);
     const mountinfo = readFileSync('/proc/self/mountinfo', 'utf8');
-    return { mountinfo: `${mountinfo}\n0 0 0:0 / ${real.replace(/ /g, '\\040')} ro - fuse.update-test update-test ro\n` };
+    const name = env.APPIMAGE ? basename(env.APPIMAGE).replace(/ /g, '\\040') : 'update-test';
+    return { mountinfo: `${mountinfo}\n0 0 0:0 / ${real.replace(/ /g, '\\040')} ro - fuse.${name} ${name} ro\n` };
   } catch {
     return {};
   }

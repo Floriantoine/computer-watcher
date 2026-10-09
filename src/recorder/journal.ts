@@ -1,4 +1,8 @@
 import { execFile, spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { cleanEnv, systemBin } from '../core/childEnv';
+
+const abs = (cmd: string) => (cmd.startsWith('/') ? cmd : systemBin(cmd, existsSync) ?? cmd);
 import type { Readable } from 'node:stream';
 import { createInterface } from 'node:readline';
 
@@ -17,8 +21,9 @@ export interface JournalDeps {
 }
 
 const realDeps: JournalDeps = {
-  execFile: (cmd, args, cb) => execFile(cmd, args, { timeout: 5000 }, (err, stdout, stderr) => cb(err, String(stdout), String(stderr))),
-  spawn: (cmd, args) => spawn(cmd, args, { stdio: ['ignore', 'pipe', 'ignore'] }) as unknown as FollowChild,
+  // journalctl par chemin absolu, environnement sans le montage /tmp de l'AppImage (I-A)
+  execFile: (cmd, args, cb) => execFile(abs(cmd), args, { timeout: 5000, env: cleanEnv(process.env) }, (err, stdout, stderr) => cb(err, String(stdout), String(stderr))),
+  spawn: (cmd, args) => spawn(abs(cmd), args, { stdio: ['ignore', 'pipe', 'ignore'], env: cleanEnv(process.env) }) as unknown as FollowChild,
   setTimeout: (fn, ms) => setTimeout(fn, ms),
   clearTimeout: (h) => clearTimeout(h as NodeJS.Timeout),
   now: Date.now,

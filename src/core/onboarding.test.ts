@@ -101,6 +101,14 @@ describe('consentement « supprimer le fichier téléchargé » (R1 : par onboar
     expect(r.error).toMatch(/expiré/);
     expect(r.rest).toEqual({ version: 1, done: false });
   });
+  test('f2 : échéance au-delà de maintenant + DELETE_CONSENT_TTL_MS (accord fabriqué) : refusé, effacé', () => {
+    const now = 1_000_000;
+    const r = takeDeleteConsent({ version: 1, done: false, deleteOriginal: { ...consent, expires: now + DELETE_CONSENT_TTL_MS + 1 } }, now);
+    expect(r.consent).toBeNull();
+    expect(r.error).toMatch(/échéance/);
+    expect(r.rest).toEqual({ version: 1, done: false });
+    expect(takeDeleteConsent({ version: 1, done: false, deleteOriginal: { ...consent, expires: now + DELETE_CONSENT_TTL_MS } }, now).consent).not.toBeNull();
+  });
   test('aucun consentement : rien', () => {
     expect(takeDeleteConsent({ version: 1, done: true }, 0)).toEqual({ consent: null, error: null, rest: { version: 1, done: true } });
     expect(takeDeleteConsent(null, 0)).toEqual({ consent: null, error: null, rest: null });

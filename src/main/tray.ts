@@ -1,4 +1,6 @@
 import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { cleanEnv, systemBin } from '../core/childEnv';
 import { pressureLevel } from '../core/pressure';
 import type { SystemInfo } from '../core/types';
 import { encodePng, iconKey, memPercent, ringPixels, TRAY_SIZE, trayMenuLabels } from './trayIcon';
@@ -154,7 +156,10 @@ export type Run = (cmd: string, args: string[]) => Promise<{ ok: boolean; stdout
 
 export const defaultRun: Run = (cmd, args) =>
   new Promise((resolve) => {
-    execFile(cmd, args, { timeout: 3000 }, (err, stdout) => resolve({ ok: !err, stdout: String(stdout) }));
+    // outil système par chemin absolu, environnement sans le montage /tmp de l'AppImage (I-A)
+    const bin = cmd.startsWith('/') ? cmd : systemBin(cmd, existsSync);
+    if (!bin) return resolve({ ok: false, stdout: '' });
+    execFile(bin, args, { timeout: 3000, env: cleanEnv(process.env) }, (err, stdout) => resolve({ ok: !err, stdout: String(stdout) }));
   });
 
 /**

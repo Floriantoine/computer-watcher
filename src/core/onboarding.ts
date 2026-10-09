@@ -50,6 +50,8 @@ export function takeDeleteConsent(f: OnboardingFile | null, now: number): { cons
   const { deleteOriginal, ...rest } = f;
   if (!deleteOriginal) return { consent: null, error: null, rest };
   if (now > deleteOriginal.expires) return { consent: null, error: 'accord expiré : fichier téléchargé non supprimé', rest };
+  // f2 : échéance plus lointaine que la durée de validité : accord fabriqué, refusé
+  if (deleteOriginal.expires > now + DELETE_CONSENT_TTL_MS) return { consent: null, error: 'échéance de l’accord invalide : fichier téléchargé non supprimé', rest };
   return { consent: deleteOriginal, error: null, rest };
 }
 
@@ -150,8 +152,9 @@ export interface AboutInfo {
 }
 
 export interface UninstallOptions { history: boolean; config: boolean }
-export type UninstallKind = 'autostart' | 'desktop' | 'icon' | 'service' | 'history' | 'config' | 'appimage';
-export interface UninstallItem { kind: UninstallKind; path: string; label: string; dir?: boolean }
+export type UninstallKind = 'autostart' | 'desktop' | 'icon' | 'service' | 'history' | 'config' | 'cache' | 'appimage';
+/** `tree` : arborescence du profil Chromium de l'app (configuration), retirée sans suivre de lien. */
+export interface UninstallItem { kind: UninstallKind; path: string; label: string; dir?: boolean; tree?: boolean }
 
 export interface UninstallResult {
   removed: string[];

@@ -237,3 +237,8 @@ describe('rappel earlyoom (« Ne plus rappeler pendant 7 jours »)', () => {
     expect(c && 'earlyoomReminder' in c).toBe(false);
   });
 });
+
+test('M-2 : XDG_CONFIG_HOME relatif ignoré', async () => {
+  const { configDir } = await import('./config');
+  expect(configDir({ XDG_CONFIG_HOME: 'rel' }, '/home/u')).toBe('/home/u/.config/proc-watch');
+});
