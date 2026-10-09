@@ -4,18 +4,39 @@ on:
     tags: ['v*']
 permissions:
   contents: write
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # actions/checkout ne garde pas le message des étiquettes annotées : on refetch l'étiquette elle-même.
+      - name: Étiquette annotée
+        run: git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+      - name: L'étiquette correspond à package.json
+        run: |
+          version="v$(node -p "require('./package.json').version")"
+          if [ "$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Étiquette $GITHUB_REF_NAME, mais package.json est en $version"
+            exit 1
+          fi
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - run: npm ci
+      # Tout échec ici arrête le job avant la moindre publication.
       - run: npm run typecheck
       - run: npm test
-      - run: npx electron-vite build && npx electron-builder --linux --publish always
+      - run: npx electron-vite build
+      - name: Notes de version (message de l'étiquette)
+        run: |
+          git tag -l --format='%(contents:body)' "$GITHUB_REF_NAME" > release-notes.md
+          if [ ! -s release-notes.md ]; then echo "proc-watch $GITHUB_REF_NAME" > release-notes.md; fi
+          cat release-notes.md
+      # AppImage, .deb, latest-linux.yml (lu par electron-updater) et le blockmap, publiés dans la version GitHub du tag.
+      - run: npx electron-builder --linux --publish always -c.releaseInfo.releaseNotesFile=release-notes.md
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
