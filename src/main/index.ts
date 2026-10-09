@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Tray } from 'electron';
+import appIcon from '../../resources/icon.png?asset';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -308,6 +309,7 @@ function createWindow(): void {
     width: 1200,
     height: 800,
     title: 'proc-watch',
+    icon: appIcon,
     backgroundColor: '#0b0c10',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -696,7 +698,7 @@ ipcMain.handle('earlyoom:setup', async (_e, mode: unknown) => {
 
 ipcMain.handle('desktop:install', () => {
   if (!app.isPackaged) throw new Error('Disponible uniquement dans la version installée (AppImage ou .deb)');
-  return installDesktopEntry(process.env.APPIMAGE || process.execPath);
+  return installDesktopEntry(process.env.APPIMAGE || process.execPath, process.env, undefined, appIcon);
 });
 
 ipcMain.handle('alerts:unseen', () => history.unseenAlerts(config.alerts.seenUpTo, unseenFilter(config)));
