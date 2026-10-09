@@ -52,8 +52,8 @@ test('leakTimes : badge retiré si la mémoire a perdu plus de la moitié de la 
   expect(leakTimes(ev, 1, () => undefined).has('a')).toBe(true); // groupe absent du snapshot : on garde
 });
 
-test('tmpfsAlertMB : dans le formulaire (2048 par défaut), entier entre 100 et 1048576', () => {
-  expect(base.tmpfsAlertMB).toBe('2048');
+test('tmpfsAlertMB : dans le formulaire (4000 par défaut), entier entre 100 et 1048576', () => {
+  expect(base.tmpfsAlertMB).toBe('4000');
   expect(validateRecorderForm({ ...base, tmpfsAlertMB: '99' }, true).errors.tmpfsAlertMB).toBe('Un entier entre 100 et 1048576 est attendu');
   expect(validateRecorderForm({ ...base, tmpfsAlertMB: '2.5' }, true).errors.tmpfsAlertMB).toBeTruthy();
   expect(validateRecorderForm({ ...base, tmpfsAlertMB: '4096' }, true).value?.tmpfsAlertMB).toBe(4096);
