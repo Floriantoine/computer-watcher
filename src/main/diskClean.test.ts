@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, 
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, test } from 'vitest';
-import type { FamilyId, FamilyRoots } from '../core/disk/families';
+import { familyRoots, type FamilyId, type FamilyRoots } from '../core/disk/families';
 import { cleanFamilies, diskCleanEvent, realProcByName, staticRefusal, type CleanDeps } from './diskClean';
 
 // HOME et XDG temporaires sous ~/.cache/pw-disk-* (même disque que le dossier personnel, jamais les vrais caches)
@@ -22,8 +22,10 @@ function fakeHome() {
     writeFileSync(p, Buffer.alloc(kb * 1024, 1));
   };
   fill(join(home, '.npm/_cacache/content-v2/sha512/ab/cd'));
+  fill(join(home, '.npm/_cacache/index-v5/ab/cd')); // signature de npm
   fill(join(home, '.npm/_logs/garde.log')); // voisin : jamais touché
   fill(join(home, '.cache/uv/wheels/x.whl'));
+  fill(join(home, '.cache/uv/CACHEDIR.TAG'), 1); // signature de uv
   fill(join(home, '.cache/voisin/garde'));
   for (const v of ['chromium-1140', 'chromium-1155', 'firefox-1466']) fill(join(home, '.cache/ms-playwright', v, 'bin'));
   fill(join(home, '.cache/ms-playwright/.links/l'));
@@ -254,4 +256,70 @@ test('lien symbolique au milieu du chemin (~/.npm → ailleurs) : refus avant la
   expect(r.refused).toEqual([{ id: 'npm', reason: expect.stringMatching(/lien symbolique dans le chemin/) }]);
   expect(asked).toHaveLength(0);
   expect(readdirSync(join(elsewhere, '_cacache'))).toEqual(['garde']);
+});
+
+describe('revue de sécurité (reproductions)', () => {
+  test('I1 (a) : XDG_CACHE_HOME=$HOME — ~/uv/src/main.py (un projet) n’est jamais supprimé, refus « racine XDG inhabituelle »', async () => {
+    const { home } = fakeHome();
+    mkdirSync(join(home, 'uv/src'), { recursive: true });
+    writeFileSync(join(home, 'uv/src/main.py'), 'mon projet');
+    mkdirSync(join(home, 'pip'), { recursive: true });
+    writeFileSync(join(home, 'pip/notes.txt'), 'n');
+    const roots = familyRoots({ XDG_CACHE_HOME: home, XDG_DATA_HOME: home }, home);
+    const { d, asked } = deps(roots);
+    const r = await cleanFamilies(['uv', 'pip'], d);
+    expect(r.done).toEqual([]);
+    expect(r.refused.map((x) => x.id)).toEqual(['uv', 'pip']);
+    for (const x of r.refused) expect(x.reason).toMatch(/racine XDG inhabituelle/);
+    expect(asked).toHaveLength(0);
+    expect(existsSync(join(home, 'uv/src/main.py'))).toBe(true);
+  });
+
+  test('I1 (b) : dossier sans signature de l’outil (~/.cache/uv qui est un projet) : « ne ressemble pas à un cache de uv »', async () => {
+    const { home, roots } = fakeHome();
+    rmSync(join(home, '.cache/uv'), { recursive: true });
+    mkdirSync(join(home, '.cache/uv/src'), { recursive: true });
+    writeFileSync(join(home, '.cache/uv/src/main.py'), 'x');
+    const { d, asked } = deps(roots);
+    const r = await cleanFamilies(['uv'], d);
+    expect(r.refused).toEqual([{ id: 'uv', reason: 'ne ressemble pas à un cache de uv' }]);
+    expect(asked).toHaveLength(0);
+    expect(existsSync(join(home, '.cache/uv/src/main.py'))).toBe(true);
+  });
+
+  test('I1 (c) : la confirmation liste les chemins exacts qui seront supprimés, avec la taille de chacun', async () => {
+    const { home, roots } = fakeHome();
+    const sizes = new Map([[join(home, '.npm/_cacache'), 2048], [join(home, '.cache/ms-playwright/chromium-1140'), 1024]]);
+    const { d, asked } = deps(roots, { pathSizes: async (ps) => new Map(ps.filter((p) => sizes.has(p)).map((p) => [p, sizes.get(p)!])) });
+    await cleanFamilies(['npm', 'test-browsers', 'trash'], d);
+    const t = asked[0].detail;
+    expect(t).toContain(`${join(home, '.npm/_cacache')} (2 Mo)`);
+    expect(t).toContain(`${join(home, '.cache/ms-playwright/chromium-1140')} (1 Mo)`);
+    expect(t).not.toContain('chromium-1155');
+    expect(t).toContain(`contenu de ${join(home, '.local/share/Trash/files')}`);
+  });
+
+  test('m-1 : process.noAsar jamais actif pendant la confirmation ni pendant pkexec, rétabli ensuite', async () => {
+    const { roots } = fakeHome();
+    const p = process as unknown as { noAsar?: boolean };
+    const seen: (boolean | undefined)[] = [];
+    const { d } = deps(roots, {
+      confirm: async () => (seen.push(p.noAsar), true),
+      runRoot: async () => (seen.push(p.noAsar), { ok: true, cancelled: false }),
+      rootPresent: () => true,
+    });
+    const before = p.noAsar;
+    await cleanFamilies(['npm', 'journal'], d);
+    expect(seen.length).toBe(2);
+    expect(seen.every((v) => !v)).toBe(true);
+    expect(p.noAsar).toBe(before);
+  });
+
+  test('m-2 : nom de version aberrant — la vraie dernière version reste', async () => {
+    const { home, roots } = fakeHome();
+    mkdirSync(join(home, '.cache/ms-playwright/chromium-0999999999999999999999'), { recursive: true });
+    const r = await cleanFamilies(['test-browsers'], deps(roots).d);
+    expect(r.done).toEqual(['test-browsers']);
+    expect(readdirSync(join(home, '.cache/ms-playwright')).sort()).toEqual(['.links', 'chromium-0999999999999999999999', 'chromium-1155', 'firefox-1466']);
+  });
 });

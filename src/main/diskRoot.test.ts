@@ -41,8 +41,14 @@ describe('runDiskRoot (pkexec simulé)', () => {
     expect(await runDiskRoot('journal', run)).toEqual({ ok: true, cancelled: false });
     expect(calls).toEqual([{ cmd: '/usr/bin/pkexec', args: diskRootArgv('journal') }]);
   });
-  test.each([126, 127])('pkexec %i : annulé, pas une erreur', async (code) => {
+  test.each([126, 127])('pkexec %i (authentification annulée ou refusée) : annulé, pas une erreur', async (code) => {
+    expect(await runDiskRoot('pkg-cache', runWith(code, 'Error executing command as another user: Not authorized').run)).toEqual({ ok: false, cancelled: true });
     expect(await runDiskRoot('pkg-cache', runWith(code).run)).toEqual({ ok: false, cancelled: true });
+  });
+  test('revue m-3 : outil introuvable dans le script → 67 « outil introuvable », jamais « annulé »', async () => {
+    expect(await runDiskRoot('journal', runWith(67, '/usr/bin/env').run)).toEqual({ ok: false, cancelled: false, error: expect.stringMatching(/outil introuvable/) });
+    // 127 avec un message « not found » (commande introuvable) : pas un refus d'authentification
+    expect(await runDiskRoot('journal', runWith(127, 'env: not found').run)).toEqual({ ok: false, cancelled: false, error: expect.stringMatching(/introuvable/) });
   });
   test('65 : installer pacman-contrib ; 66 : distribution non prise en charge ; autre : code et dernier message', async () => {
     expect(await runDiskRoot('pkg-cache', runWith(65).run)).toEqual({ ok: false, cancelled: false, error: expect.stringMatching(/installer pacman-contrib/) });
@@ -79,7 +85,7 @@ describe('script exécuté sans root dans un faux système (chemins des outils r
       const r = spawnSync('/usr/bin/bash', ['-c', diskRootScript(bins), 'computer-watcher-disk', action], { encoding: 'utf8', env: {} });
       return { code: r.status, calls: existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : [] };
     };
-    return { run };
+    return { run, bins };
   }
   test('Arch avec paccache : paccache -rk2', () => {
     expect(fakeSystem({ paccache: true, pacman: true, osRelease: 'ID=arch\n' }).run('pkg-cache')).toEqual({ code: 0, calls: ['paccache -rk2'] });
@@ -95,6 +101,12 @@ describe('script exécuté sans root dans un faux système (chemins des outils r
   });
   test('pacman et apt-get présents, os-release qui désigne Debian : apt-get', () => {
     expect(fakeSystem({ paccache: true, pacman: true, aptGet: true, osRelease: 'ID="ubuntu"\nID_LIKE=debian\n' }).run('pkg-cache')).toEqual({ code: 0, calls: ['apt-get clean'] });
+  });
+  test('revue m-3 : journalctl absent → 67, rien lancé (jamais 127)', () => {
+    const s = fakeSystem({});
+    const bins = s.bins;
+    rmSync(bins.journalctl);
+    expect(s.run('journal')).toEqual({ code: 67, calls: [] });
   });
   test('journal : journalctl --vacuum-size=500M', () => {
     expect(fakeSystem({}).run('journal')).toEqual({ code: 0, calls: ['journalctl --vacuum-size=500M'] });

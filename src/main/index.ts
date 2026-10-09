@@ -69,7 +69,7 @@ import { cleanFamilies, diskCleanEvent, realProcByName, staticRefusal, type Clea
 import { familyPaths, familyRoots, isFamilyRequest, type FamiliesFile, type FamilyId } from '../core/disk/families';
 import { partitionOf, watchedPartitions } from '../core/disk/partitions';
 import { openInFileManager } from './diskOpen';
-import { measureFamilies, readFamiliesFile, writeFamiliesFile } from '../core/disk/measure';
+import { defaultDu, measureFamilies, readFamiliesFile, writeFamiliesFile } from '../core/disk/measure';
 import { tmpFsStats } from './tmpFsStats';
 import { closeAction, confirmTray, createTrayController, defaultRun, statusNotifierAvailable, type TrayController } from './tray';
 import {
@@ -876,13 +876,10 @@ ipcMain.handle('disk:clean', async (_e, raw: unknown): Promise<CleanResult> => {
   if (!isFamilyRequest(raw)) throw new Error('requête refusée : familles inconnues ou en double');
   if (diskCleaning) throw new Error('un ménage est déjà en cours');
   diskCleaning = true;
-  // aucune lecture d'archive .asar pendant le ménage : un fichier .asar d'un cache est un fichier comme un autre
-  const noAsar = process.noAsar;
-  process.noAsar = true;
   try {
     const sizes = Object.fromEntries((readFamiliesFile(diskFamiliesPath(data))?.families ?? []).map((m) => [m.id, m.reclaimKB]));
     const r = await cleanFamilies(raw, {
-      roots: diskRoots(), confirm: confirmDiskClean, sizes, mountinfo: diskMountinfo, runRoot: diskRunRoot,
+      roots: diskRoots(), confirm: confirmDiskClean, sizes, mountinfo: diskMountinfo, runRoot: diskRunRoot, pathSizes: defaultDu,
       dirUser: (dir) => realDirUser(dir, { selfExes: ownAppImageExes() }),
       procByName: (names) => realProcByName(names),
       statfs: (p) => {
@@ -907,7 +904,6 @@ ipcMain.handle('disk:clean', async (_e, raw: unknown): Promise<CleanResult> => {
     }
     return r;
   } finally {
-    process.noAsar = noAsar;
     diskCleaning = false;
   }
 });

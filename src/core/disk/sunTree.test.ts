@@ -110,3 +110,21 @@ test('sunArcs : angles des enfants = angle du parent, ordre décroissant, profon
   expect(a.a1 - a.a0).toBeCloseTo((400 / 1050) * 360);
   expect(sunArcs(tree, 1).every((x) => x.depth === 1)).toBe(true);
 });
+
+test('revue (note) : capTree plafonne le nombre de nœuds envoyés au renderer, surplus fusionné en « autres », tailles gardées', async () => {
+  const { capTree } = await import('./sunTree');
+  const count = (n: SunNode): number => 1 + n.children.reduce((s, c) => s + count(c), 0);
+  const sum = (n: SunNode) => n.children.reduce((s, c) => s + c.sizeKB, 0);
+  const kids = (p: string, n: number, depth: number): SunNode[] =>
+    Array.from({ length: n }, (_, i) => ({ name: `d${i}`, path: `${p}/d${i}`, sizeKB: depth ? 100 * 100 : 100, children: depth ? kids(`${p}/d${i}`, 100, depth - 1) : [] }));
+  const big: SunNode = { name: 'h', path: '/h', sizeKB: 300 * 100 * 100, children: kids('/h', 300, 1) };
+  expect(count(big)).toBe(1 + 300 + 30_000);
+  const t = capTree(big, 20_000);
+  expect(count(t)).toBeLessThanOrEqual(20_000);
+  expect(sum(t)).toBe(sum(big));
+  for (const c of t.children) expect(sum(c) === c.sizeKB || c.children.length === 0).toBe(true);
+  expect(t.children.some((c) => c.children.some((g) => g.other))).toBe(true);
+  // petit arbre : inchangé
+  const small: SunNode = { name: 'h', path: '/h', sizeKB: 1, children: [{ name: 'a', path: '/h/a', sizeKB: 1, children: [] }] };
+  expect(capTree(small, 20_000)).toEqual(small);
+});

@@ -29,8 +29,10 @@ const fill = (path, kb) => {
   writeFileSync(path, Buffer.alloc(kb * 1024, 1));
 };
 fill(join(home, '.npm/_cacache/content-v2/sha512/aa/paquet'), 5 * 1024);
+fill(join(home, '.npm/_cacache/index-v5/aa/entree'), 4); // signature de npm
 fill(join(home, '.npm/_logs/garde.log'), 16);
-fill(join(cache, 'uv/wheels/roue.whl'), 3 * 1024);
+fill(join(cache, 'uv/wheels-v5/roue.whl'), 3 * 1024);
+fill(join(cache, 'uv/CACHEDIR.TAG'), 1); // signature de uv
 fill(join(cache, 'ms-playwright/chromium-1140/chrome'), 2 * 1024);
 fill(join(cache, 'ms-playwright/chromium-1155/chrome'), 2 * 1024);
 fill(join(cache, 'vignettes/a.png'), 1024);
@@ -113,6 +115,10 @@ try {
   assert.equal(confirms.length, 1, 'une seule confirmation');
   assert.match(confirms[0].detail, /Cache npm[\s\S]*Navigateurs de test[\s\S]*définitif/);
   assert.match(confirms[0].detail, /Cache uv/);
+  // chemins exacts et taille de chacun (revue I1 c) ; la dernière version du navigateur n'y est pas
+  assert.ok(confirms[0].detail.includes(`${join(home, '.npm/_cacache')} (`), 'chemin npm dans la confirmation');
+  assert.ok(confirms[0].detail.includes(`${join(cache, 'ms-playwright/chromium-1140')} (`), 'version retirée dans la confirmation');
+  assert.ok(!confirms[0].detail.includes('chromium-1155'), 'version gardée absente de la confirmation');
   await shot(win, 'disque-libere');
 
   // 5) sur le disque. Un outil de la famille qui tourne vraiment sur la machine (ex. un serveur lancé par uvx) fait

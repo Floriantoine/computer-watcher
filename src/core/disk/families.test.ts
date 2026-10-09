@@ -93,3 +93,94 @@ test('requête du renderer : ids connus, sans doublon, au moins un', () => {
   expect(isFamilyRequest('npm')).toBe(false);
   expect(isFamilyRequest([1])).toBe(false);
 });
+
+describe('revue I1 (a) : racine XDG égale à HOME ou hors de HOME', () => {
+  const home = '/h';
+  test('XDG_CACHE_HOME=$HOME : familles du cache refusées ; npm et cargo (chemins fixes sous HOME) gardés ; root non concernées', async () => {
+    const { familyRootRefusal } = await import('./families');
+    const roots = familyRoots({ XDG_CACHE_HOME: home, XDG_DATA_HOME: home }, home);
+    for (const id of ['uv', 'pip', 'yarn', 'paru', 'yay', 'test-browsers', 'pnpm', 'trash'] as FamilyId[]) expect(familyRootRefusal(id, roots), id).toMatch(/racine XDG inhabituelle/);
+    for (const id of ['npm', 'cargo', 'pkg-cache', 'journal'] as FamilyId[]) expect(familyRootRefusal(id, roots), id).toBeNull();
+  });
+  test('racine hors de HOME (/var/cache, /h2) ou avec « / » final : refusée / acceptée selon le cas', async () => {
+    const { familyRootRefusal } = await import('./families');
+    expect(familyRootRefusal('uv', familyRoots({ XDG_CACHE_HOME: '/var/cache' }, home))).toMatch(/inhabituelle/);
+    expect(familyRootRefusal('uv', familyRoots({ XDG_CACHE_HOME: '/h2' }, home))).toMatch(/inhabituelle/);
+    expect(familyRootRefusal('uv', familyRoots({ XDG_CACHE_HOME: '/h/' }, home))).toMatch(/inhabituelle/);
+    expect(familyRootRefusal('uv', familyRoots({ XDG_CACHE_HOME: '/h/../h/.c' }, home))).toBeNull();
+    expect(familyRootRefusal('uv', familyRoots({ XDG_CACHE_HOME: '/h/x/../..' }, home))).toMatch(/inhabituelle/);
+    expect(familyRootRefusal('uv', familyRoots({}, home))).toBeNull();
+    expect(familyRootRefusal('trash', familyRoots({}, home))).toBeNull();
+  });
+});
+
+describe('revue I1 (b) : signature de l’outil', () => {
+  const tree: Record<string, string[]> = {
+    '/c/npm': ['CACHEDIR.TAG', 'content-v2', 'index-v5', 'tmp'],
+    '/c/npm-faux': ['content-v2', 'src'],
+    '/c/uv': ['archive-v0', 'CACHEDIR.TAG', '.lock', 'sdists-v9'],
+    '/c/uv2': ['wheels-v5'],
+    '/c/uv-projet': ['src', 'pyproject.toml'],
+    '/c/pip': ['http-v2', 'selfcheck', 'wheels'],
+    '/c/pip-projet': ['notes.txt'],
+    '/c/yarn': ['v6'],
+    '/c/pnpm': ['v10', 'v11', 'v3'],
+    '/c/pnpm-faux': ['store.txt'],
+    '/c/reg': ['cache', 'CACHEDIR.TAG', 'index', 'src'],
+    '/c/git': ['checkouts', 'db'],
+    '/c/paru': ['clone', 'packages.aur'],
+    '/c/yay': ['firefox-nightly', 'notes'],
+    '/c/yay/firefox-nightly': ['PKGBUILD', '.SRCINFO'],
+    '/c/yay/notes': ['a.txt'],
+    '/c/yay-faux': ['notes'],
+    '/c/pw': ['.links', 'chromium-1208', 'ffmpeg-1011'],
+    '/c/pw-faux': ['projet-a', 'notes'],
+    '/c/pp': ['chrome', 'chrome-headless-shell'],
+    '/c/pp/chrome': ['linux-131.0.6778.85'],
+    '/c/pp/chrome-headless-shell': [],
+    '/c/pp-faux': ['docs'],
+    '/c/pp-faux/docs': ['a'],
+  };
+  const ls = (p: string) => tree[p] ?? null;
+  test.each([
+    ['npm', '/c/npm', true], ['npm', '/c/npm-faux', false],
+    ['uv', '/c/uv', true], ['uv', '/c/uv2', true], ['uv', '/c/uv-projet', false],
+    ['pip', '/c/pip', true], ['pip', '/c/pip-projet', false],
+    ['yarn', '/c/yarn', true], ['yarn', '/c/pip-projet', false],
+    ['pnpm', '/c/pnpm', true], ['pnpm', '/c/pnpm-faux', false],
+    ['paru', '/c/paru', true], ['yay', '/c/yay', true], ['yay', '/c/yay-faux', false],
+    ['test-browsers', '/c/pw', true], ['test-browsers', '/c/pw-faux', false],
+    ['test-browsers', '/c/pp', true], ['test-browsers', '/c/pp-faux', false],
+  ] as [FamilyId, string, boolean][])('%s %s → %s', async (id, path, ok) => {
+    const { cacheSignature } = await import('./families');
+    expect(cacheSignature(id, path, ls)).toBe(ok);
+  });
+  test('cargo : registry/* exige index ou cache dans registry ; git/checkouts exige git/db', async () => {
+    const { cacheSignature } = await import('./families');
+    const t: Record<string, string[]> = { '/h/.cargo/registry': ['index', 'cache'], '/h/.cargo/git': ['checkouts', 'db'], '/x/.cargo/registry': ['src'], '/x/.cargo/git': ['checkouts'] };
+    const l = (p: string) => t[p] ?? null;
+    expect(cacheSignature('cargo', '/h/.cargo/registry/cache', l)).toBe(true);
+    expect(cacheSignature('cargo', '/h/.cargo/git/checkouts', l)).toBe(true);
+    expect(cacheSignature('cargo', '/x/.cargo/registry/src', l)).toBe(false);
+    expect(cacheSignature('cargo', '/x/.cargo/git/checkouts', l)).toBe(false);
+  });
+  test('corbeille et root : pas de signature exigée', async () => {
+    const { cacheSignature } = await import('./families');
+    expect(cacheSignature('trash', '/x', () => null)).toBe(true);
+    expect(cacheSignature('journal', '/x', () => null)).toBe(true);
+  });
+});
+
+describe('revue m-2 : versions de navigateurs aberrantes et date de modification', () => {
+  test('zéros en tête ou plus de 9 chiffres : ignorés (jamais supprimés, jamais « plus récents »)', () => {
+    expect(browserVersionsToDrop(['chromium-1140', 'chromium-1150', 'chromium-0999999999999999999999']).sort()).toEqual(['chromium-1140']);
+    expect(browserVersionsToDrop(['chromium-1140', 'chromium-1150', 'chromium-1234567890'])).toEqual(['chromium-1140']);
+    expect(browserVersionsToDrop(['linux-131.0.1', 'linux-131.00.2'])).toEqual([]);
+  });
+  test('la plus récente par date de modification n’est jamais supprimée ; si elle diffère de la plus grande, les deux restent', () => {
+    const mtime = (n: string) => ({ 'chromium-1140': 300, 'chromium-1150': 200, 'chromium-1100': 100 })[n] ?? null;
+    expect(browserVersionsToDrop(['chromium-1100', 'chromium-1140', 'chromium-1150'], mtime)).toEqual(['chromium-1100']);
+    const same = (n: string) => ({ 'chromium-1150': 300, 'chromium-1140': 200 })[n] ?? null;
+    expect(browserVersionsToDrop(['chromium-1140', 'chromium-1150'], same)).toEqual(['chromium-1140']);
+  });
+});

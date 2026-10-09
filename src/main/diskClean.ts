@@ -5,7 +5,7 @@
 // (safeFs : O_NOFOLLOW, jamais de lien suivi ni de montage traversé). Familles root : script figé via pkexec (diskRoot.ts).
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
-import { familyDef, familyPaths, isFamilyRequest, JOURNAL_DIR, PKG_CACHE_DIRS, usedByText, type FamilyId, type FamilyRoots } from '../core/disk/families';
+import { cacheSignature, familyDef, familyPaths, familyRootRefusal, isFamilyRequest, toolName, JOURNAL_DIR, PKG_CACHE_DIRS, usedByText, type FamilyId, type FamilyRoots } from '../core/disk/families';
 import { browserDropPaths } from '../core/disk/measure';
 import type { DiskCleanEvent } from '../core/history/events';
 import { rootUnavailable, type RootAction } from './diskRoot';
@@ -36,6 +36,8 @@ export interface CleanDeps {
   sizes?: Partial<Record<FamilyId, number | null>>;
   /** Famille root présente sur ce système (défaut : son dossier existe). */
   rootPresent?(id: RootAction): boolean;
+  /** Taille de chaque chemin à supprimer, pour la confirmation (absent : « taille inconnue »). */
+  pathSizes?(paths: string[]): Promise<Map<string, number>>;
   /** Famille root indisponible (outil manquant) : raison, ou null (défaut : rootUnavailable de diskRoot.ts). */
   rootUnavailable?(id: RootAction): string | null;
 }
@@ -100,6 +102,23 @@ function checkPath(p: string, homeDev: number, d: CleanDeps): string | null {
   return user ? usedByText(user) : null;
 }
 
+/** Noms d'un dossier réel (jamais à travers un lien) ; null : absent, lien ou illisible. */
+function lsReal(p: string): string[] | null {
+  try {
+    const st = lstatSync(p);
+    return st.isDirectory() && !st.isSymbolicLink() ? readdirSync(p) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Ce qui sera supprimé, chemin par chemin (affiché dans la confirmation). Corbeille : le contenu de ses dossiers. */
+function targetsOf(id: FamilyId, r: FamilyRoots): { path: string; contents?: true }[] {
+  if (id === 'test-browsers') return browserDropPaths(r).map((path) => ({ path }));
+  if (id === 'trash') return familyPaths(id, r).filter(exists).map((path) => ({ path, contents: true as const }));
+  return familyPaths(id, r).filter(exists).map((path) => ({ path }));
+}
+
 /** Revérification complète d'une famille : null si supprimable, 'absent' si aucun de ses chemins n'existe, sinon la raison. */
 function checkFamily(id: FamilyId, homeDev: number, d: CleanDeps): string | null | 'absent' {
   const def = familyDef(id);
@@ -108,11 +127,15 @@ function checkFamily(id: FamilyId, homeDev: number, d: CleanDeps): string | null
     const missing = (d.rootUnavailable ?? ((x: RootAction) => rootUnavailable(x, existsSync)))(id as RootAction);
     if (missing) return missing;
   } else {
+    const xdg = familyRootRefusal(id, d.roots);
+    if (xdg) return xdg;
     const paths = familyPaths(id, d.roots);
     if (!paths.some(exists)) return 'absent';
     for (const p of paths) {
       const why = checkPath(p, homeDev, d);
       if (why) return why;
+      // signature de l'outil (lecture des noms seulement ; checkPath a écarté liens et autres disques)
+      if (exists(p) && !cacheSignature(id, p, lsReal)) return `ne ressemble pas à un cache de ${toolName[id]}`;
     }
   }
   const busy = def.processNames.length ? d.procByName(def.processNames) : null;
@@ -155,7 +178,9 @@ function statfsPoints(ids: readonly FamilyId[], r: FamilyRoots): string[] {
   return [...byDev.values()];
 }
 
-function confirmSummary(ids: readonly FamilyId[], refused: CleanResult['refused'], sizes: CleanDeps['sizes']): { message: string; detail: string } {
+function confirmSummary(
+  ids: readonly FamilyId[], refused: CleanResult['refused'], sizes: CleanDeps['sizes'], targets: Map<FamilyId, { path: string; contents?: true }[]>, pathKB: Map<string, number>,
+): { message: string; detail: string } {
   const known = ids.map((id) => sizes?.[id]).filter((v): v is number => typeof v === 'number');
   const total = known.reduce((s, v) => s + v, 0);
   const n = ids.length;
@@ -163,7 +188,13 @@ function confirmSummary(ids: readonly FamilyId[], refused: CleanResult['refused'
   const lines = ids.map((id) => {
     const def = familyDef(id);
     const s = sizes?.[id];
-    return `• ${def.label} — ${typeof s === 'number' ? `≈ ${fmt(s)}` : 'taille inconnue'}${def.root ? ' (administrateur : mot de passe demandé)' : ''}`;
+    const head = `• ${def.label} — ${typeof s === 'number' ? `≈ ${fmt(s)}` : 'taille inconnue'}${def.root ? ' (administrateur : mot de passe demandé)' : ''}`;
+    // chemins exacts, chacun avec sa taille
+    const paths = (targets.get(id) ?? []).map((t) => {
+      const kb = pathKB.get(t.path);
+      return `    ${t.contents ? 'contenu de ' : ''}${t.path} (${kb === undefined ? 'taille inconnue' : fmt(kb)})`;
+    });
+    return [head, ...paths].join('\n');
   });
   for (const r of refused) lines.push(`Refusé : ${familyDef(r.id).label} — ${r.reason}`);
   lines.push('', 'C’est définitif : la corbeille ne libérerait rien.');
@@ -182,7 +213,14 @@ export async function cleanFamilies(ids: readonly FamilyId[], d: CleanDeps): Pro
     else ok.push(id);
   }
   if (!ok.length) return { freedKB: 0, done: [], refused, cancelled: false };
-  if (!(await d.confirm(confirmSummary(ok, refused, d.sizes)))) return { freedKB: 0, done: [], refused, cancelled: true };
+  const targets = new Map(ok.filter((id) => !familyDef(id).root).map((id) => [id, targetsOf(id, d.roots)] as const));
+  let pathKB = new Map<string, number>();
+  try {
+    if (d.pathSizes) pathKB = await d.pathSizes([...targets.values()].flat().map((t) => t.path));
+  } catch {
+    // tailles inconnues
+  }
+  if (!(await d.confirm(confirmSummary(ok, refused, d.sizes, targets, pathKB)))) return { freedKB: 0, done: [], refused, cancelled: true };
 
   const points = statfsPoints(ok, d.roots);
   const avail = () => points.map((p) => {
@@ -208,11 +246,18 @@ export async function cleanFamilies(ids: readonly FamilyId[], d: CleanDeps): Pro
       else refused.push({ id, reason: r.cancelled ? 'annulé' : r.error ?? 'échec' });
       continue;
     }
+    // revue m-1 : archives .asar désactivées seulement pendant la suppression, synchrone (jamais pendant la
+    // confirmation ni pendant pkexec) ; un fichier .asar d'un cache est alors un fichier comme un autre
+    const proc = process as unknown as { noAsar?: boolean };
+    const noAsar = proc.noAsar;
     try {
+      proc.noAsar = true;
       removeFamily(id, d);
       done.push(id);
     } catch (e) {
       refused.push({ id, reason: `${(e as Error).message} (arrêté ; une partie a pu être supprimée)` });
+    } finally {
+      proc.noAsar = noAsar;
     }
   }
   const after = avail();

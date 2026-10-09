@@ -20,7 +20,8 @@ for (const p of Object.values(REAL_BINS)) if (!/^\/[A-Za-z0-9/_.-]+$/.test(p)) t
  * - pkg-cache : distribution de la famille Arch (ID / ID_LIKE), ou pacman seul présent → `paccache -rk2` (65 si paccache,
  *   du paquet pacman-contrib, manque) ; famille Debian, ou apt-get seul présent → `apt-get clean` ; sinon 66 ;
  * - journal : `journalctl --vacuum-size=500M` ;
- * - 64 : argument refusé.
+ * - 64 : argument refusé ; 67 : outil introuvable (chaque binaire est vérifié avec -x avant l'appel : le script ne
+ *   renvoie jamais 126 ni 127, réservés à pkexec).
  */
 export function diskRootScript(b: RootBins): string {
   for (const p of Object.values(b)) if (!/^\/[A-Za-z0-9/_.-]+$/.test(p)) throw new Error(`diskRoot : chemin non conforme ${p}`);
@@ -34,7 +35,8 @@ pacman=${b.pacman}
 aptget=${b.aptGet}
 journalctl=${b.journalctl}
 osrelease=${b.osRelease}
-run() { /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C "$@" < /dev/null; }
+[[ -x /usr/bin/env ]] || exit 67
+run() { [[ -x "$1" ]] || exit 67; /usr/bin/env -i PATH=/usr/bin:/bin LC_ALL=C "$@" < /dev/null; }
 case "$action" in
   pkg-cache)
     ids=""
@@ -106,10 +108,15 @@ export async function runDiskRoot(action: RootAction, run: RootRun): Promise<{ o
   }
   switch (r.code) {
     case 0: return { ok: true, cancelled: false };
-    case 126:
-    case 127: return { ok: false, cancelled: true };
+    case 126: return { ok: false, cancelled: true };
+    // pkexec : authentification refusée ; une commande introuvable (message « not found ») n'est pas un refus
+    case 127:
+      return /not found|introuvable|no such file/i.test(r.stderr)
+        ? { ok: false, cancelled: false, error: `outil introuvable (code 127)${lastLine(r.stderr) ? ` : ${lastLine(r.stderr)}` : ''}` }
+        : { ok: false, cancelled: true };
     case 64: return { ok: false, cancelled: false, error: 'demande refusée par le script' };
     case 65: return { ok: false, cancelled: false, error: 'indisponible : installer pacman-contrib (paccache)' };
+    case 67: return { ok: false, cancelled: false, error: 'outil introuvable sur ce système (rien n’a été modifié)' };
     case 66: return { ok: false, cancelled: false, error: 'distribution non prise en charge (ni pacman, ni apt-get)' };
     default: {
       const l = lastLine(r.stderr);

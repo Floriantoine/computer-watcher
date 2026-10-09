@@ -79,11 +79,19 @@ const list = (p: string) => {
 export function browserDropPaths(roots: FamilyRoots): string[] {
   const [pw, pp] = familyPaths('test-browsers', roots);
   const out: string[] = [];
-  if (isRealDir(pw)) out.push(...browserVersionsToDrop(list(pw)).map((n) => join(pw, n)));
+  // la version la plus récemment modifiée n'est jamais retirée (revue m-2)
+  const mtimeIn = (dir: string) => (n: string) => {
+    try {
+      return lstatSync(join(dir, n)).mtimeMs;
+    } catch {
+      return null;
+    }
+  };
+  if (isRealDir(pw)) out.push(...browserVersionsToDrop(list(pw), mtimeIn(pw)).map((n) => join(pw, n)));
   if (isRealDir(pp)) {
     for (const b of list(pp)) {
       const dir = join(pp, b);
-      if (isRealDir(dir)) out.push(...browserVersionsToDrop(list(dir)).map((n) => join(dir, n)));
+      if (isRealDir(dir)) out.push(...browserVersionsToDrop(list(dir), mtimeIn(dir)).map((n) => join(dir, n)));
     }
   }
   return out;

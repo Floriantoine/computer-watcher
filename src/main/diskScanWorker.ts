@@ -2,7 +2,7 @@
 // lien suivi ni de montage traversé (buildSunTree). Messages : reçoit `scan`, envoie `progress` puis `done` ou `error`.
 import { lstatSync, readdirSync } from 'node:fs';
 import { getPriority, setPriority } from 'node:os';
-import { buildSunTree, type ScanFs } from '../core/disk/sunTree';
+import { buildSunTree, capTree, type ScanFs } from '../core/disk/sunTree';
 
 export interface ScanRequest {
   type: 'scan'; root: string; nice: number; maxDepth: number; minShare: number; maxEntries: number; budgetMs: number;
@@ -38,7 +38,7 @@ function run(req: ScanRequest): void {
     },
   });
   send({ type: 'progress', kb: tree.sizeKB });
-  process.send?.({ type: 'done', tree, truncated, priority: getPriority(0) }, () => process.disconnect?.());
+  process.send?.({ type: 'done', tree: capTree(tree), truncated, priority: getPriority(0) }, () => process.disconnect?.());
 }
 
 process.on('message', (m: ScanRequest) => {

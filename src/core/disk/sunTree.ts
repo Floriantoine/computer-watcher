@@ -125,3 +125,46 @@ export function findNode(root: SunNode, path: string): SunNode | null {
   }
   return null;
 }
+
+/** Plafond de nœuds envoyés au renderer (revue : un arbre énorme ne doit pas le figer). */
+export const MAX_TREE_NODES = 20_000;
+
+/**
+ * Garde au plus `max` nœuds, en largeur d'abord (les plus gros d'abord à chaque niveau) ; les enfants qui ne tiennent plus
+ * sont fusionnés en un nœud « autres » de leur parent (tailles conservées). Arbre déjà assez petit : rendu tel quel.
+ */
+export function capTree(tree: SunNode, max: number = MAX_TREE_NODES): SunNode {
+  let total = 0;
+  const countAll = (n: SunNode) => {
+    total++;
+    n.children.forEach(countAll);
+  };
+  countAll(tree);
+  if (total <= max) return tree;
+  const root: SunNode = { ...tree, children: [] };
+  let used = 1;
+  const queue: [SunNode, SunNode][] = [[tree, root]];
+  while (queue.length) {
+    const [src, dst] = queue.shift()!;
+    const kids = [...src.children].sort((a, b) => b.sizeKB - a.sizeKB);
+    let i = 0;
+    // une place gardée pour « autres » si tous les enfants ne tiennent pas
+    for (; i < kids.length; i++) {
+      const left = kids.length - i;
+      if (used + 1 > max - (left > 1 ? 1 : 0)) break;
+      const copy: SunNode = { ...kids[i], children: [] };
+      dst.children.push(copy);
+      used++;
+      queue.push([kids[i], copy]);
+    }
+    const rest = kids.slice(i);
+    if (rest.length && used < max) {
+      dst.children.push({ name: OTHER_NAME, path: `${join(src.path, '')}\u0000${OTHER_NAME}`, sizeKB: rest.reduce((s, k) => s + k.sizeKB, 0), children: [], other: true });
+      used++;
+    } else if (rest.length) {
+      // plus aucune place : le parent garde sa taille, sans détail
+      dst.children = [];
+    }
+  }
+  return root;
+}

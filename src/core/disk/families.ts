@@ -76,7 +76,8 @@ export function familyPaths(id: FamilyId, r: FamilyRoots): string[] {
   }
 }
 
-const VERSIONED = /^(.+)-(\d+(?:\.\d+)*)$/;
+/** Composants de version : nombres sans zéro en tête, 9 chiffres au plus (au-delà : nom aberrant, jamais retiré). */
+const VERSIONED = /^(.+)-((?:0|[1-9]\d{0,8})(?:\.(?:0|[1-9]\d{0,8}))*)$/;
 const cmpDotted = (a: string, b: string) => {
   const x = a.split('.').map(Number);
   const y = b.split('.').map(Number);
@@ -86,9 +87,10 @@ const cmpDotted = (a: string, b: string) => {
 
 /**
  * Versions à retirer dans un dossier de navigateurs (`chromium-1140`, `linux-131.0.6778.85`) : par préfixe, toutes sauf
- * le numéro le plus élevé. Un nom sans version numérique n'est jamais retiré.
+ * la plus grande version et, si `mtime` est donné, la plus récemment modifiée (les deux sont gardées si elles diffèrent).
+ * Un nom sans version valide (zéros en tête, plus de 9 chiffres, lettres) n'est jamais retiré.
  */
-export function browserVersionsToDrop(names: readonly string[]): string[] {
+export function browserVersionsToDrop(names: readonly string[], mtime?: (name: string) => number | null): string[] {
   const byPrefix = new Map<string, { name: string; v: string }[]>();
   for (const name of names) {
     const m = VERSIONED.exec(name);
@@ -98,7 +100,16 @@ export function browserVersionsToDrop(names: readonly string[]): string[] {
   const out: string[] = [];
   for (const list of byPrefix.values()) {
     list.sort((a, b) => cmpDotted(b.v, a.v));
-    out.push(...list.slice(1).map((x) => x.name));
+    const keep = new Set([list[0].name]);
+    if (mtime) {
+      let newest: { name: string; t: number } | null = null;
+      for (const x of list) {
+        const t = mtime(x.name);
+        if (t !== null && (!newest || t > newest.t)) newest = { name: x.name, t };
+      }
+      if (newest) keep.add(newest.name);
+    }
+    out.push(...list.filter((x) => !keep.has(x.name)).map((x) => x.name));
   }
   return out;
 }
@@ -162,6 +173,73 @@ export function pacmanReclaimKB(files: readonly { name: string; sizeKB: number }
 
 export interface FamilyMeasure { id: FamilyId; sizeKB: number | null; reclaimKB: number | null; at: number; error?: string }
 export interface FamiliesFile { at: number; families: FamilyMeasure[] }
+
+/** Chemin normalisé (« . », « .. », « / » répétés ou final), sans accès au disque. */
+function normalize(p: string): string {
+  const out: string[] = [];
+  for (const part of p.split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..') out.pop();
+    else out.push(part);
+  }
+  return `/${out.join('/')}`;
+}
+
+/** Racine XDG dont dépendent les chemins d'une famille (null : chemins fixes sous HOME, ou système). */
+function xdgRootOf(id: FamilyId, r: FamilyRoots): { name: string; path: string } | null {
+  if (['uv', 'pip', 'yarn', 'paru', 'yay', 'test-browsers'].includes(id)) return { name: 'XDG_CACHE_HOME', path: r.cacheHome };
+  if (id === 'pnpm' || id === 'trash') return { name: 'XDG_DATA_HOME', path: r.dataHome };
+  return null;
+}
+
+/**
+ * Revue I1 (a) : une racine XDG égale au dossier personnel, ou hors de lui, ferait viser des dossiers de l'utilisateur
+ * (`~/uv`, `~/Trash`…) : famille refusée. Familles root et chemins fixes sous HOME : non concernés.
+ */
+export function familyRootRefusal(id: FamilyId, r: FamilyRoots): string | null {
+  const x = xdgRootOf(id, r);
+  if (!x) return null;
+  const home = normalize(r.home);
+  const root = normalize(x.path);
+  if (root === home || !root.startsWith(`${home}/`)) return `racine XDG inhabituelle (${x.name} = ${x.path}), refusé`;
+  return null;
+}
+
+const anyName = (names: string[] | null, re: RegExp) => !!names && names.some((n) => re.test(n));
+const parentOf = (p: string) => p.replace(/\/+$/, '').slice(0, p.replace(/\/+$/, '').lastIndexOf('/')) || '/';
+
+/**
+ * Revue I1 (b) : le dossier ressemble-t-il au cache de l'outil ? `ls` liste un dossier (null : absent ou illisible).
+ * Corbeille et familles root : pas de signature exigée (chemins propres à la corbeille, ou fixes).
+ */
+export function cacheSignature(id: FamilyId, path: string, ls: (p: string) => string[] | null): boolean {
+  const names = ls(path);
+  switch (id) {
+    case 'npm': return anyName(names, /^index-v\d+$/);
+    case 'uv': return anyName(names, /^(CACHEDIR\.TAG|\.lock|(sdists|wheels|archive)-v\d+)$/);
+    case 'pip': return anyName(names, /^(http-v2|http|wheels|selfcheck)$/);
+    case 'yarn':
+    case 'pnpm': return anyName(names, /^v\d+$/);
+    case 'cargo': {
+      const parent = parentOf(path);
+      return parent.endsWith('/registry') ? anyName(ls(parent), /^(index|cache)$/) : anyName(ls(parent), /^db$/);
+    }
+    case 'paru':
+    case 'yay':
+      if (anyName(names, /^clone$/)) return true;
+      return (names ?? []).slice(0, 200).some((n) => !n.startsWith('.') && anyName(ls(join(path, n)), /^PKGBUILD$/));
+    case 'test-browsers':
+      if (anyName(names, /^[a-z][a-z0-9_]*-\d{1,9}$/)) return true; // ms-playwright
+      return (names ?? []).slice(0, 50).some((n) => anyName(ls(join(path, n)), /^[a-z0-9]+-\d{1,9}(\.\d{1,9})*$/)); // puppeteer
+    default: return true;
+  }
+}
+
+/** Nom de l'outil dans le refus « ne ressemble pas à un cache de … ». */
+export const toolName: Record<FamilyId, string> = {
+  npm: 'npm', pnpm: 'pnpm', yarn: 'Yarn', uv: 'uv', pip: 'pip', cargo: 'Cargo', paru: 'paru', yay: 'yay',
+  'test-browsers': 'Playwright / Puppeteer', trash: 'corbeille', 'pkg-cache': 'paquets', journal: 'journaux',
+};
 
 /** Raison de refus affichée : « utilisé par npm (pid 1234) ». */
 export const usedByText = (h: { pid: number; name: string }) => `utilisé par ${h.name} (pid ${h.pid})`;
