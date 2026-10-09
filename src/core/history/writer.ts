@@ -1,5 +1,6 @@
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import type { Group, ProcInfo, SystemInfo } from '../types';
+import { cmdlineHash } from './db';
 
 export interface TickInput {
   ts: number;
@@ -18,7 +19,9 @@ const SMALL_GROUPS = { id: SMALL_GROUPS_KEY, label: 'Petits groupes', kind: 'oth
 
 export class HistoryWriter {
   private procIds = new Map<string, { id: number; ppid: number }>();
-  private s: Record<'system' | 'group' | 'groupSample' | 'proc' | 'procPpid' | 'procSample', StatementSync>;
+  /** Ligne de commande → id de cmdlines (seulement à la première écriture d'un processus). Vidé par forget(). */
+  private cmdIds = new Map<string, number>();
+  private s: Record<'system' | 'group' | 'groupSample' | 'findCmdline' | 'addCmdline' | 'proc' | 'procPpid' | 'procSample', StatementSync>;
 
   constructor(private db: DatabaseSync) {
     this.s = {
@@ -29,17 +32,30 @@ export class HistoryWriter {
         'INSERT INTO groups(key,label,kind) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET label=excluded.label, kind=excluded.kind RETURNING id',
       ),
       groupSample: db.prepare('INSERT OR REPLACE INTO group_samples VALUES (?,?,?,?,?,?)'),
+      findCmdline: db.prepare('SELECT id FROM cmdlines WHERE hash = ? AND text = ?'),
+      addCmdline: db.prepare('INSERT INTO cmdlines(hash, text) VALUES (?, ?) RETURNING id'),
       proc: db.prepare(
-        'INSERT INTO procs(pid,start_ticks,name,cmdline,group_id,ppid) VALUES (?,?,?,?,?,?) ON CONFLICT(pid,start_ticks) DO UPDATE SET group_id=excluded.group_id, ppid=excluded.ppid RETURNING id',
+        'INSERT INTO procs(pid,start_ticks,name,cmdline_id,group_id,ppid) VALUES (?,?,?,?,?,?) ON CONFLICT(pid,start_ticks) DO UPDATE SET group_id=excluded.group_id, ppid=excluded.ppid RETURNING id',
       ),
       procPpid: db.prepare('UPDATE procs SET ppid = ? WHERE id = ?'),
       procSample: db.prepare('INSERT OR REPLACE INTO proc_samples VALUES (?,?,?,?,?)'),
     };
   }
 
-  /** Vide le cache d'ids de processus (à appeler après une purge). */
+  /** Vide les caches d'ids de processus et de lignes de commande (à appeler après une purge). */
   forget(): void {
     this.procIds.clear();
+    this.cmdIds.clear();
+  }
+
+  private cmdlineId(text: string): number {
+    let id = this.cmdIds.get(text);
+    if (id === undefined) {
+      const h = cmdlineHash(text);
+      id = ((this.s.findCmdline.get(h, text) ?? this.s.addCmdline.get(h, text)) as { id: number }).id;
+      this.cmdIds.set(text, id);
+    }
+    return id;
   }
 
   /** Upsert à chaque tick : garde le libellé à jour et renvoie l'id stable. */
@@ -86,7 +102,7 @@ export class HistoryWriter {
         const key = `${p.pid}:${p.startTicks}`;
         let known = this.procIds.get(key);
         if (known === undefined) {
-          const id = (this.s.proc.get(p.pid, p.startTicks, p.name, p.cmdline, gid, p.ppid) as { id: number }).id;
+          const id = (this.s.proc.get(p.pid, p.startTicks, p.name, this.cmdlineId(p.cmdline), gid, p.ppid) as { id: number }).id;
           known = { id, ppid: p.ppid };
           this.procIds.set(key, known);
         } else if (known.ppid !== p.ppid) {

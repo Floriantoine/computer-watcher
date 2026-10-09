@@ -1,5 +1,6 @@
 // Tests seulement : base au schéma v3 exact (copie figée), pour les tests de migration et de lecture v3.
 import { DatabaseSync } from 'node:sqlite';
+import { openHistoryDb, registerCmdlineHash } from './db';
 
 const V3_SCHEMA = `
 CREATE TABLE system_samples (
@@ -68,3 +69,44 @@ export function createV3Db(path: string): DatabaseSync {
   db.exec('BEGIN;' + V3_SCHEMA + 'PRAGMA user_version = 3; COMMIT;');
   return db;
 }
+
+/** Base au schéma v4 exact (v3 + colonnes shmem ajoutées par ALTER, comme la migration v3 → v4), user_version = 4. */
+export function createV4Db(path: string): DatabaseSync {
+  const db = createV3Db(path);
+  db.exec(`BEGIN;
+    ALTER TABLE system_samples ADD COLUMN shmem_kb INTEGER;
+    ALTER TABLE system_minute ADD COLUMN shmem_kb_avg REAL; ALTER TABLE system_minute ADD COLUMN shmem_kb_max INTEGER;
+    ALTER TABLE system_hour ADD COLUMN shmem_kb_avg REAL; ALTER TABLE system_hour ADD COLUMN shmem_kb_max INTEGER;
+    PRAGMA user_version = 4; COMMIT;`);
+  return db;
+}
+
+/**
+ * Vue temporaire `procs_in(id, pid, start_ticks, name, cmdline, group_id, ppid)` de cette connexion : une insertion y
+ * dépose la ligne de commande dans `cmdlines` (v5) puis la ligne dans `procs` ; en v1–v4, dans `procs.cmdline`.
+ * Les tests écrivent `INSERT INTO procs_in(...)` quel que soit le schéma. Idempotent.
+ */
+export function procsInput(db: DatabaseSync): DatabaseSync {
+  const v5 = (db.prepare('PRAGMA table_info(procs)').all() as { name: string }[]).some((c) => c.name === 'cmdline_id');
+  const ppid = (db.prepare('PRAGMA table_info(procs)').all() as { name: string }[]).some((c) => c.name === 'ppid');
+  const cols = ppid ? 'id, pid, start_ticks, name, %C, group_id, ppid' : 'id, pid, start_ticks, name, %C, group_id';
+  const vals = ppid ? 'NEW.id, NEW.pid, NEW.start_ticks, NEW.name, %V, NEW.group_id, NEW.ppid' : 'NEW.id, NEW.pid, NEW.start_ticks, NEW.name, %V, NEW.group_id';
+  if (v5) registerCmdlineHash(db);
+  db.exec(`DROP VIEW IF EXISTS temp.procs_in;
+    CREATE TEMP VIEW procs_in(id, pid, start_ticks, name, cmdline, group_id, ppid) AS SELECT NULL, NULL, NULL, NULL, NULL, NULL, NULL;
+    CREATE TEMP TRIGGER procs_in_insert INSTEAD OF INSERT ON procs_in BEGIN
+      ${v5 ? `INSERT INTO cmdlines(hash, text) SELECT pw_cmdline_hash(NEW.cmdline), NEW.cmdline
+               WHERE NOT EXISTS (SELECT 1 FROM cmdlines WHERE hash = pw_cmdline_hash(NEW.cmdline) AND text = NEW.cmdline);` : ''}
+      INSERT INTO procs(${cols.replace('%C', v5 ? 'cmdline_id' : 'cmdline')})
+        VALUES (${vals.replace('%V', v5 ? '(SELECT id FROM cmdlines WHERE hash = pw_cmdline_hash(NEW.cmdline) AND text = NEW.cmdline)' : 'NEW.cmdline')});
+    END;`);
+  return db;
+}
+
+
+/** openHistoryDb pour les tests : la connexion d'écriture reçoit la vue `procs_in`. */
+export const openTestDb: typeof openHistoryDb = (p, opts) => {
+  const r = openHistoryDb(p, opts);
+  if (!opts?.readOnly) procsInput(r.db);
+  return r;
+};

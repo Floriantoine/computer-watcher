@@ -311,6 +311,14 @@ export function queryEvents(db: DatabaseSync, range: TimeRange, groupKey?: strin
   return rows.map((r) => ({ ts: r.ts, type: r.type, groupKey: r.gk, groupLabel: r.gl, detail: JSON.parse(r.detail) as Record<string, unknown> }));
 }
 
+/**
+ * Expression SQL de la ligne de commande d'un alias `p` de procs : sous-requête sur cmdlines (v5) ou `p.cmdline` (v1 à v4,
+ * lecture seule avant la migration du service). Sans cache : une connexion ouverte avant la migration voit le changement.
+ */
+export function cmdlineSql(db: DatabaseSync): string {
+  return hasColumn(db, 'procs', 'cmdline_id') ? '(SELECT c.text FROM cmdlines c WHERE c.id = p.cmdline_id)' : 'p.cmdline';
+}
+
 export interface ProcAt {
   pid: number;
   startTicks: number;
@@ -325,16 +333,17 @@ export interface ProcAt {
 /**
  * État des processus enregistrés d'un groupe à l'instant ts : pour chacun, l'échantillon le plus récent dans
  * [ts - 2 x intervalle, ts] (détail), ou la ligne de la minute de ts (agrégats, rss = moyenne mémoire, swap inconnu).
- * Tolère une base v1 en lecture seule (ppid = NULL).
+ * Tolère une base v1 à v4 en lecture seule (ppid = NULL en v1, procs.cmdline avant v5).
  */
 export function queryProcsAt(db: DatabaseSync, groupKey: string, ts: number, o: QueryOpts): ProcAt[] {
   const ppid = hasColumn(db, 'procs', 'ppid') ? 'p.ppid' : 'NULL';
+  const cmdline = cmdlineSql(db);
   const detail = ts >= o.now - o.detailHours * H;
   const rows = (
     detail
       ? db
           .prepare(
-            `SELECT p.pid, p.start_ticks AS st, ${ppid} AS ppid, p.name, p.cmdline, s.rss_kb AS rss, s.swap_kb AS swap, s.cpu_percent AS cpu
+            `SELECT p.pid, p.start_ticks AS st, ${ppid} AS ppid, p.name, ${cmdline} AS cmdline, s.rss_kb AS rss, s.swap_kb AS swap, s.cpu_percent AS cpu
              FROM procs p JOIN proc_samples s ON s.proc_id = p.id
               AND s.ts = (SELECT MAX(ts) FROM proc_samples WHERE proc_id = p.id AND ts >= ? AND ts <= ?)
              WHERE p.group_id = (SELECT id FROM groups WHERE key = ?)`,
@@ -342,7 +351,7 @@ export function queryProcsAt(db: DatabaseSync, groupKey: string, ts: number, o: 
           .all(ts - 2 * o.intervalSec * 1000, ts, groupKey)
       : db
           .prepare(
-            `SELECT p.pid, p.start_ticks AS st, ${ppid} AS ppid, p.name, p.cmdline, s.mem_kb_avg AS rss, NULL AS swap, s.cpu_avg AS cpu
+            `SELECT p.pid, p.start_ticks AS st, ${ppid} AS ppid, p.name, ${cmdline} AS cmdline, s.mem_kb_avg AS rss, NULL AS swap, s.cpu_avg AS cpu
              FROM procs p JOIN proc_minute s ON s.proc_id = p.id AND s.ts = ?
              WHERE p.group_id = (SELECT id FROM groups WHERE key = ?)`,
           )

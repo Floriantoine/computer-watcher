@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'vitest';
-import { openHistoryDb } from './db';
+import { openTestDb } from './testDb';
 import { aggregateMinute } from './maintenance';
 import { historyCoverage, queryInactive, queryLastActive } from './queries';
 
@@ -15,13 +15,13 @@ const M = 60_000;
 
 // Cas le plus coûteux : 200 processus enregistrés et tous inactifs (CPU 0,5 %), aucun court-circuit possible.
 test('performance : queryInactive, 200 processus inactifs sur 24 h à 5 s', () => {
-  const { db } = openHistoryDb(join(mkdtempSync(join(tmpdir(), 'pw-perf-')), 'm.db'));
+  const { db } = openTestDb(join(mkdtempSync(join(tmpdir(), 'pw-perf-')), 'm.db'));
   const now = 100 * H;
   const start = now - 24 * H;
   const N = 200;
   db.exec('BEGIN');
   db.prepare("INSERT INTO groups(id,key,label,kind) VALUES (1,'project:/a','a','project')").run();
-  const ps = db.prepare('INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id,ppid) VALUES (?,?,?,?,?,?,?)');
+  const ps = db.prepare('INSERT INTO procs_in(id,pid,start_ticks,name,cmdline,group_id,ppid) VALUES (?,?,?,?,?,?,?)');
   for (let i = 1; i <= N; i++) ps.run(i, 1000 + i, 7, `p${i}`, `p${i}`, 1, 1);
   const pss = db.prepare('INSERT INTO proc_samples VALUES (?,?,?,?,?)');
   for (let ts = start; ts < now; ts += 5000) for (let i = 1; i <= N; i++) pss.run(ts, i, 1000, 0, 0.5);
@@ -43,13 +43,13 @@ test('performance : queryInactive, 200 processus inactifs sur 24 h à 5 s', () =
 // comme avec le cache.
 // 4,3 M lignes minute (~9 s de préparation, ~150 Mo dans le dossier temporaire) : seulement avec PROC_WATCH_PERF=1 (`npm run test:recorder`).
 test.skipIf(process.env.PROC_WATCH_PERF !== '1')('performance : queryLastActive, 100 processus endormis sur 30 j de minutes', () => {
-  const { db } = openHistoryDb(join(mkdtempSync(join(tmpdir(), 'pw-perf-')), 'm.db'));
+  const { db } = openTestDb(join(mkdtempSync(join(tmpdir(), 'pw-perf-')), 'm.db'));
   const D = 24 * H;
   const now = 40 * D;
   const N = 100;
   db.exec('BEGIN');
   db.prepare("INSERT INTO groups(id,key,label,kind) VALUES (1,'project:/a','a','project')").run();
-  const ps = db.prepare('INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id,ppid) VALUES (?,?,?,?,?,?,?)');
+  const ps = db.prepare('INSERT INTO procs_in(id,pid,start_ticks,name,cmdline,group_id,ppid) VALUES (?,?,?,?,?,?,?)');
   for (let i = 1; i <= N; i++) ps.run(i, 1000 + i, 7, `p${i}`, `p${i}`, 1, 1);
   const pm = db.prepare('INSERT INTO proc_minute VALUES (?,?,?,?,?)');
   for (let i = 1; i <= N; i++) for (let ts = now - 30 * D; ts < now; ts += M) pm.run(ts, i, 1000, 1000, 0.5);
