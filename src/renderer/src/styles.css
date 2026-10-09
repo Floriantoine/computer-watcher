@@ -1108,3 +1108,5 @@ button.primary:hover:not(:disabled) { background: rgba(124, 92, 255, 0.32); bord
 .swap-threshold input:focus { outline: none; border-color: var(--accent); }
 .swap-threshold.invalid input { border-color: var(--danger-border); color: var(--danger); }
 .swap-threshold .field-error { position: absolute; top: 100%; right: 0; margin-top: 3px; white-space: nowrap; font-size: 11px; color: var(--danger); }
+
+.eo-add-tests { margin-top: 8px; align-self: flex-start; }
