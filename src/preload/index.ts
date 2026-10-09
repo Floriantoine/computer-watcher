@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import type { AlertEvent } from '../core/alerts';
 import type { EarlyoomSettings } from '../core/earlyoom';
 import type { EarlyoomSetupMode } from '../core/earlyoomSetup';
+import type { AboutInfo, AutostartInfo, InstallOutcome, OnboardingInfo, UninstallItem, UninstallOptions, UninstallResult } from '../core/onboarding';
 import type { RuleStats } from '../core/rules/types';
 import type { SwapView } from '../core/swap';
 import type { TmpDeleteItem, TmpDeleteOutcome, TmpListing } from '../core/tmpClean';
@@ -130,6 +131,30 @@ const api = {
     delete: (items: TmpDeleteItem[]): Promise<TmpDeleteOutcome> => ipcRenderer.invoke('tmp:delete', items),
     /** Vide les quarantaines restées (suppressions interrompues), après confirmation native du main. */
     emptyQuarantine: (): Promise<TmpDeleteOutcome> => ipcRenderer.invoke('tmp:emptyQuarantine'),
+  },
+  /** Assistant d'accueil (premier lancement, rouvrable depuis Réglages › À propos). */
+  onboarding: {
+    get: (): Promise<OnboardingInfo> => ipcRenderer.invoke('onboarding:get'),
+    /** Terminé ou « Passer » : ne revient plus au lancement. */
+    finish: (): Promise<void> => ipcRenderer.invoke('onboarding:finish'),
+    /** AppImage seulement : copie dans ~/Applications/proc-watch.AppImage et entrée de menu vers la copie. */
+    install: (): Promise<InstallOutcome> => ipcRenderer.invoke('onboarding:install'),
+    /** Relance depuis la copie ; `deleteOriginal` : supprime d'abord le fichier téléchargé (confirmation native du main). */
+    relaunch: (deleteOriginal: boolean): Promise<{ relaunched: boolean }> => ipcRenderer.invoke('onboarding:relaunch', deleteOriginal),
+  },
+  /** Démarrer avec la session (~/.config/autostart/proc-watch.desktop, `--hidden`). */
+  autostart: {
+    get: (): Promise<AutostartInfo> => ipcRenderer.invoke('autostart:get'),
+    set: (on: boolean): Promise<AutostartInfo> => ipcRenderer.invoke('autostart:set', on),
+  },
+  about: {
+    info: (): Promise<AboutInfo> => ipcRenderer.invoke('about:info'),
+  },
+  uninstall: {
+    /** Aperçu : exactement ce qui sera retiré, et le texte de la confirmation native. */
+    plan: (o: UninstallOptions): Promise<{ items: UninstallItem[]; message: string; detail: string }> => ipcRenderer.invoke('uninstall:plan', o),
+    /** Confirmation native puis désinstallation ; tout retiré → l'app quitte. */
+    run: (o: UninstallOptions): Promise<{ cancelled: true } | { cancelled: false; result: UninstallResult }> => ipcRenderer.invoke('uninstall:run', o),
   },
   recorder: {
     status: (): Promise<RecorderState> => ipcRenderer.invoke('recorder:status'),

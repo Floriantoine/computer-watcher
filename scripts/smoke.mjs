@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { _electron as electron } from 'playwright';
@@ -7,6 +7,11 @@ import { _electron as electron } from 'playwright';
 // d'instance unique d'une app proc-watch déjà ouverte. PROC_WATCH_NO_RECORDER_SYNC : le service systemd réel n'est pas touché.
 mkdirSync(join(homedir(), '.cache'), { recursive: true });
 const cfg = mkdtempSync(join(homedir(), '.cache', 'pw-smoke-'));
+// Accueil déjà fait (sauf SMOKE_ONBOARDING=1) : l'assistant du premier lancement ne recouvre pas la page vérifiée.
+if (!process.env.SMOKE_ONBOARDING) {
+  mkdirSync(join(cfg, 'proc-watch'), { recursive: true });
+  writeFileSync(join(cfg, 'proc-watch', 'onboarding.json'), '{"version":1,"done":true}\n');
+}
 const env = { ...process.env, XDG_CONFIG_HOME: cfg, PROC_WATCH_NO_RECORDER_SYNC: '1' };
 const app = await electron.launch(
   process.env.SMOKE_EXECUTABLE ? { executablePath: process.env.SMOKE_EXECUTABLE, args: [], env } : { args: ['.'], env },

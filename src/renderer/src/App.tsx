@@ -9,6 +9,8 @@ import { BulkKillDialog } from './components/BulkKillDialog';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { DetailView } from './components/DetailView';
 import { SettingsView } from './components/SettingsView';
+import { OnboardingWizard } from './components/OnboardingWizard';
+import type { OnboardingInfo } from '../../core/onboarding';
 import { Toasts, type Toast } from './components/Toasts';
 import { MainView } from './components/MainView';
 import { MetricsView } from './components/MetricsView';
@@ -56,6 +58,20 @@ export function App() {
   const bulkRef = useRef(bulk);
   bulkRef.current = bulk;
   const bulkInFlight = useRef(false);
+
+  // Assistant d'accueil : ouvert au premier lancement (ou à la reprise après relance), rouvrable depuis Réglages › À propos.
+  const [onboarding, setOnboarding] = useState<OnboardingInfo | null>(null);
+  const [onboardingAtLaunch, setOnboardingAtLaunch] = useState(false);
+  useEffect(() => {
+    window.procWatch.onboarding.get().then((i) => {
+      if (!i.open) return;
+      setOnboardingAtLaunch(true);
+      setOnboarding(i);
+    }, () => {});
+  }, []);
+  const reopenOnboarding = useCallback(() => {
+    window.procWatch.onboarding.get().then((i) => setOnboarding({ ...i, start: 0 }), () => {});
+  }, []);
 
   const live = useRef(new LiveBuffer());
   const alertPopups = useAlertPopups({
@@ -178,11 +194,12 @@ export function App() {
 
   // B8 bis : earlyoom absent ou arrêté → pop-up au lancement (élément mémoïsé : AlertPopups reste mémoïsé entre deux snapshots).
   const eoReminder = useEarlyoomReminder({ onState: setConfigState, onToast: (m, kind) => pushToast(m, kind) });
+  // Accueil ouvert au lancement : il a sa propre étape earlyoom, pas de pop-up en plus pendant ce lancement.
   const eoLead = useMemo(
-    () => eoReminder.mode && (
+    () => !onboardingAtLaunch && eoReminder.mode && (
       <EarlyoomSetupPopup key="earlyoom-setup" mode={eoReminder.mode} busy={eoReminder.busy} onSetup={eoReminder.setup} onLater={eoReminder.remindLater} />
     ),
-    [eoReminder.mode, eoReminder.busy, eoReminder.setup, eoReminder.remindLater],
+    [onboardingAtLaunch, eoReminder.mode, eoReminder.busy, eoReminder.setup, eoReminder.remindLater],
   );
 
   /** Mémorise les SIGTERM envoyés (boutons qui pulsent, puis « Forcer » avec le même startTicks). */
@@ -510,6 +527,7 @@ export function App() {
                 onBack={() => setRoute({ view: 'main' })}
                 onToast={pushToast}
                 onConfigChanged={() => void window.procWatch.getConfig().then(setConfigState, () => {})}
+                onReopenOnboarding={reopenOnboarding}
                 onInstallDesktop={() =>
                   window.procWatch.installDesktopEntry().then(
                     (file) => pushToast(`Raccourci créé : ${file}`, 'info'),
@@ -545,6 +563,19 @@ export function App() {
               nameOf={nameOf}
               onConfirm={(req) => void confirmBulk(req)}
               onCancel={() => setBulk(null)}
+            />
+          )}
+        </AnimatePresence>
+        <AnimatePresence>
+          {onboarding && (
+            <OnboardingWizard
+              key="onboarding"
+              info={onboarding}
+              onClose={() => {
+                setOnboarding(null);
+                void window.procWatch.getConfig().then(setConfigState, () => {}); // historique activé ou non pendant l'accueil
+              }}
+              onToast={pushToast}
             />
           )}
         </AnimatePresence>
