@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { expect, test } from 'vitest';
@@ -107,4 +107,23 @@ test('PROC_WATCH_NO_RECORDER_SYNC=1 : l\'app ne touche jamais au service (mesure
   expect(recorderSyncDisabled({ PROC_WATCH_NO_RECORDER_SYNC: '1' })).toBe(true);
   expect(recorderSyncDisabled({})).toBe(false);
   expect(recorderSyncDisabled({ PROC_WATCH_NO_RECORDER_SYNC: '0' })).toBe(false);
+});
+
+test('restart : unité inchangée mais nouvelle version de l’app → le service est relancé (nouveau code)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'procwatch-unit-restart-'));
+  const path = join(dir, 'proc-watch-recorder.service');
+  const calls: string[][] = [];
+  const run = async (a: string[]) => {
+    calls.push(a);
+    return { ok: true, stdout: '' };
+  };
+  await ensureRecorderService({ enabled: true, args: ['/a'], path, run });
+  calls.length = 0;
+  expect(await ensureRecorderService({ enabled: true, args: ['/a'], path, run, restart: true })).toBe('restarted');
+  expect(calls).toEqual([['enable', '--now', 'proc-watch-recorder.service'], ['restart', 'proc-watch-recorder.service']]);
+  // unité absente en mode dev : restart ne crée rien
+  rmSync(path);
+  calls.length = 0;
+  expect(await ensureRecorderService({ enabled: true, args: ['/a'], path, run, restart: true, allowCreate: false })).toBe('absent');
+  expect(calls).toEqual([]);
 });

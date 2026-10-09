@@ -71,7 +71,9 @@ export async function ensureRecorderService(o: {
   run: Systemctl;
   /** Faux : ne crée jamais l'unité (mode dev) ; une unité existante est mise à jour ou retirée. */
   allowCreate?: boolean;
-}): Promise<'installed' | 'updated' | 'unchanged' | 'removed' | 'absent'> {
+  /** Unité inchangée mais l'app a changé de version (mise à jour sur place) : relance le service sur le nouveau code. */
+  restart?: boolean;
+}): Promise<'installed' | 'updated' | 'unchanged' | 'restarted' | 'removed' | 'absent'> {
   const exists = existsSync(o.path);
   if (!o.enabled) {
     if (!exists) return 'absent';
@@ -84,7 +86,9 @@ export async function ensureRecorderService(o: {
   const content = recorderUnit(o.args);
   if (exists && readFileSync(o.path, 'utf8') === content) {
     await o.run(['enable', '--now', UNIT_NAME]);
-    return 'unchanged';
+    if (!o.restart) return 'unchanged';
+    await o.run(['restart', UNIT_NAME]);
+    return 'restarted';
   }
   mkdirSync(dirname(o.path), { recursive: true });
   writeFileSync(o.path, content);

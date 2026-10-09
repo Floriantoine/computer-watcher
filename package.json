@@ -44,5 +44,8 @@
     "electron": true,
     "esbuild": true,
     "electron-winstaller": false
+  },
+  "dependencies": {
+    "electron-updater": "6.8.9"
   }
 }

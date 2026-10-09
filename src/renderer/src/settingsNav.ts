@@ -1,6 +1,6 @@
 // Réglages (logique pure) : sections de la barre latérale, section mémorisée, points d'attention, saisie modifiée.
 
-export type SettingsSection = 'protected' | 'others' | 'display' | 'classify' | 'alerts' | 'rules' | 'recorder' | 'earlyoom' | 'desktop';
+export type SettingsSection = 'protected' | 'others' | 'display' | 'classify' | 'alerts' | 'rules' | 'recorder' | 'earlyoom' | 'desktop' | 'about';
 
 export const SETTINGS_SECTIONS: { id: SettingsSection; label: string; description: string }[] = [
   { id: 'protected', label: 'Protégés', description: 'Programmes dont le kill demande toujours une confirmation.' },
@@ -12,6 +12,7 @@ export const SETTINGS_SECTIONS: { id: SettingsSection; label: string; descriptio
   { id: 'recorder', label: 'Enregistrement', description: 'Service d’arrière-plan qui alimente l’onglet Métriques.' },
   { id: 'earlyoom', label: 'earlyoom', description: 'Tue le processus le plus gourmand avant que le système ne gèle.' },
   { id: 'desktop', label: 'Menu des applications', description: 'Raccourci proc-watch dans le menu du bureau.' },
+  { id: 'about', label: 'À propos', description: 'Version installée et mises à jour.' },
 ];
 
 const IDS = SETTINGS_SECTIONS.map((s) => s.id);

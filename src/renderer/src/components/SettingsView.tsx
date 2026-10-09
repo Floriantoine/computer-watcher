@@ -7,6 +7,7 @@ import {
   Bot,
   Clock,
   HardDrive,
+  Info,
   Layers,
   ShieldCheck,
   Sparkles,
@@ -27,6 +28,7 @@ import { pollWhileLive } from '../history';
 import { EarlyoomPanel, type EarlyoomAttention } from './EarlyoomPanel';
 import { RulesPanel } from './RulesPanel';
 import { SettingsConfirm } from './SettingsConfirm';
+import { AboutPanel } from './UpdatePopup';
 import { Card, NumberField, Row, SaveBar, Switch } from './settingsUi';
 import { recorderToForm, validateRecorderForm, type RecorderErrors, type RecorderForm } from '../recorderForm';
 import {
@@ -66,6 +68,7 @@ const ICONS: Record<SettingsSection, LucideIcon> = {
   recorder: HardDrive,
   earlyoom: Wrench,
   desktop: AppWindow,
+  about: Info,
 };
 
 type RecField = { f: RecorderNumField; label: string; short: string; unit: string; step?: string; help?: string };
@@ -611,6 +614,8 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
               </div>
             </Card>,
           )}
+
+          {panel('about', 'about-panel', <AboutPanel onToast={onToast} />)}
         </div>
       </div>
     </>

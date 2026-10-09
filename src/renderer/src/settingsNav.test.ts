@@ -24,8 +24,8 @@ const calm: AttentionInput = {
 };
 
 describe('SETTINGS_SECTIONS', () => {
-  test('neuf sections, dans l’ordre de la barre latérale, chacune avec un libellé et une description', () => {
-    expect(SETTINGS_SECTIONS.map((s) => s.id)).toEqual(['protected', 'others', 'display', 'classify', 'alerts', 'rules', 'recorder', 'earlyoom', 'desktop']);
+  test('dix sections, dans l’ordre de la barre latérale, chacune avec un libellé et une description', () => {
+    expect(SETTINGS_SECTIONS.map((s) => s.id)).toEqual(['protected', 'others', 'display', 'classify', 'alerts', 'rules', 'recorder', 'earlyoom', 'desktop', 'about']);
     for (const s of SETTINGS_SECTIONS) {
       expect(s.label.length).toBeGreaterThan(0);
       expect(s.description.length).toBeGreaterThan(0);
@@ -71,15 +71,15 @@ describe('sectionByKey', () => {
   test('flèches bas / droite : suivante, avec retour au début', () => {
     expect(sectionByKey('protected', 'ArrowDown')).toBe('others');
     expect(sectionByKey('protected', 'ArrowRight')).toBe('others');
-    expect(sectionByKey('desktop', 'ArrowDown')).toBe('protected');
+    expect(sectionByKey('about', 'ArrowDown')).toBe('protected');
   });
   test('flèches haut / gauche : précédente, avec retour à la fin', () => {
     expect(sectionByKey('others', 'ArrowUp')).toBe('protected');
-    expect(sectionByKey('protected', 'ArrowLeft')).toBe('desktop');
+    expect(sectionByKey('protected', 'ArrowLeft')).toBe('about');
   });
   test('Début / Fin ; autre touche → null', () => {
     expect(sectionByKey('alerts', 'Home')).toBe('protected');
-    expect(sectionByKey('alerts', 'End')).toBe('desktop');
+    expect(sectionByKey('alerts', 'End')).toBe('about');
     expect(sectionByKey('alerts', 'Enter')).toBeNull();
     expect(sectionByKey('alerts', 'a')).toBeNull();
   });
