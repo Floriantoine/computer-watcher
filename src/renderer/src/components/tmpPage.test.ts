@@ -68,6 +68,8 @@ describe('page /tmp', () => {
     const html = renderToStaticMarkup(createElement(TmpTiles, { tiles, busy: false, onEmptyQuarantine: noop }));
     expect(html).toContain('+ 1 non vidable');
     expect(count(html, 'tmp-tile-extra')).toBe(1);
+    expect(html).toContain('Dossiers .computer-watcher-trash-* ou .proc-watch-trash-* que Computer Watcher ne peut pas vider');
+    expect(html).not.toMatch(/que proc-watch/);
     expect(count(html, 'tmp-clean-empty-quarantine')).toBe(0);
   });
 
@@ -102,6 +104,7 @@ describe('liste de la page /tmp (TmpCleanList)', () => {
     const html = renderToStaticMarkup(createElement(TmpCleanList, { clean: clean(listing({ quarantines: [{ name: '.proc-watch-trash-1', eligible: true }] })), sort: 'size' }));
     expect(count(html, 'tmp-clean-quarantine')).toBe(1);
     expect(count(html, 'tmp-clean-empty-quarantine')).toBe(0);
+    expect(html).toContain('Une quarantaine de Computer Watcher');
   });
 
   it('erreur de lecture et calcul en cours', () => {

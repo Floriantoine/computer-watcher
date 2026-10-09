@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ArrowDownWideNarrow, ArrowDownAZ, FolderOpen, RefreshCw, Trash2 } from 'lucide-react';
+import { APP_DISPLAY_NAME } from '../../../core/appName';
 import type { TmpFsStats } from '../../../core/types';
 import { DEFAULT_TMP_SORT, tmpTiles, type TmpSort, type TmpTile } from '../tmpClean';
 import { ipcErrorMessage } from '../viewModel';
@@ -21,7 +22,7 @@ function Tile({ label, tile, extra, children }: { label: string; tile: TmpTile; 
         </span>
       )}
       {extra && (
-        <span className="tile-sub tile-extra" data-testid="tmp-tile-extra" title="Dossiers .proc-watch-trash-* que proc-watch ne peut pas vider (pas à vous ou droits inattendus)">
+        <span className="tile-sub tile-extra" data-testid="tmp-tile-extra" title={`Dossiers .computer-watcher-trash-* ou .proc-watch-trash-* que ${APP_DISPLAY_NAME} ne peut pas vider (pas à vous ou droits inattendus)`}>
           {extra}
         </span>
       )}

@@ -76,7 +76,7 @@ async function settled(c: ChildProcess) {
   }
   throw new Error('enfant pas prêt');
 }
-const noTrashLeft = (root: string) => expect(readdirSync(root).filter((n) => n.startsWith('.proc-watch-trash-'))).toEqual([]);
+const noTrashLeft = (root: string) => expect(readdirSync(root).filter((n) => n.startsWith('.computer-watcher-trash-') || n.startsWith('.proc-watch-trash-'))).toEqual([]);
 
 test('GNU rm présent (sinon suppression désactivée)', async () => {
   expect(await checkGnuRm()).toBeNull();
@@ -212,7 +212,7 @@ test('jamais en root', async () => {
   const { root } = setup();
   writeFileSync(join(root, 'f'), 'x');
   const l = await cleaner(root, { uid: 0 }).list();
-  expect(l.entries[0].refusal).toBe('refusé : proc-watch tourne en root');
+  expect(l.entries[0].refusal).toBe('refusé : Computer Watcher tourne en root');
 });
 
 test('seuls les éléments supprimables de la dernière liste sont acceptés (liste autorisée du main)', async () => {
@@ -375,7 +375,7 @@ test('quarantaine restée d’une suppression interrompue : signalée, jamais pr
   const { root } = setup();
   mkdirSync(join(root, '.proc-watch-trash-abc123'));
   const l = await cleaner(root).list();
-  expect(l.entries[0].refusal).toBe('quarantaine de proc-watch (suppression interrompue), à vérifier');
+  expect(l.entries[0].refusal).toBe('quarantaine de Computer Watcher (suppression interrompue), à vérifier');
 });
 
 test('nom d’un programme non vérifiable (warp, kwin…) : « peut-être utilisé par … »', async () => {
@@ -411,7 +411,7 @@ test('délai de rm dépassé : SIGKILL, l’élément reste en quarantaine, la s
   const r = await c.delete([item(root, 'd')]);
   expect(Date.now() - t0).toBeLessThan(5000);
   expect(r.partial).toBe(true);
-  expect(r.results[0].reason).toMatch(/^échec : délai dépassé \(montage figé \?\) ; le reste est dans .*\.proc-watch-trash-/);
+  expect(r.results[0].reason).toMatch(/^échec : délai dépassé \(montage figé \?\) ; le reste est dans .*\.computer-watcher-trash-/);
   await c.list();
   writeFileSync(join(root, 'g'), 'x');
   await c.list();
@@ -464,7 +464,7 @@ async function race(mode: 'once' | 'flip') {
   const py = `
 import os,sys,time,glob
 b,mode=sys.argv[1],sys.argv[2]; root=os.path.join(b,'root'); h=os.path.join(b,'hold'); L=os.path.join(b,'L')
-def cands(): return [os.path.join(root,'item','d')]+glob.glob(os.path.join(root,'.proc-watch-trash-*','item','d'))
+def cands(): return [os.path.join(root,'item','d')]+glob.glob(os.path.join(root,'.computer-watcher-trash-*','item','d'))
 m0=os.stat(os.path.join(root,'item','d')).st_mtime_ns
 print('ready',flush=True)
 end=time.time()+15
@@ -511,6 +511,12 @@ test('C1 : attaquant qui alterne dossier/lien en continu : aucun fichier extéri
   expect(r.left).toBe(r.N);
 }, 30_000);
 
+test('renommage : le fichier témoin au nouveau nom valide aussi une racine de test', () => {
+  const { base } = setup();
+  writeFileSync(join(base, '.computer-watcher-test-root'), '');
+  expect(tmpRootFromEnv({ PROC_WATCH_TMP_ROOT: base }, homedir())).toEqual({ root: base, warning: null });
+});
+
 test('racine de test : seulement sous ~/.cache/pw-… avec le fichier témoin ; sinon /tmp', () => {
   const { base } = setup();
   const home = homedir();
@@ -556,7 +562,7 @@ test('N1 q3 : quarantaine remplacée par un lien juste avant rm : aucun fichier 
   for (let i = 0; i < 20; i++) writeFileSync(join(root, 'item', `x${i}`), 'x');
   mkdirSync(join(base, 'vparent', 'item'), { recursive: true });
   for (let i = 0; i < 10; i++) writeFileSync(join(base, 'vparent', 'item', `p${i}`), 'precieux');
-  const rmPath = attackingRm(base, `q=$(ls -d "${root}"/.proc-watch-trash-* | head -n 1)\nmv "$q" "${base}/hold" && ln -s "${base}/vparent" "$q"`);
+  const rmPath = attackingRm(base, `q=$(ls -d "${root}"/.computer-watcher-trash-* | head -n 1)\nmv "$q" "${base}/hold" && ln -s "${base}/vparent" "$q"`);
   const c = cleaner(root, { rmPath });
   await c.list();
   const out = await c.delete([item(root, 'item')]);
@@ -572,7 +578,7 @@ test('N1 q2 : élément en quarantaine remplacé juste avant rm : jamais « supp
   writeFileSync(join(root, 'item', 'x'), 'x');
   mkdirSync(join(base, 'victim'));
   writeFileSync(join(base, 'victim', 'p'), 'precieux');
-  const rmPath = attackingRm(base, `q=$(ls -d "${root}"/.proc-watch-trash-* | head -n 1)\nmv "$q/item" "${base}/hold-item" && mv "${base}/victim" "$q/item"`);
+  const rmPath = attackingRm(base, `q=$(ls -d "${root}"/.computer-watcher-trash-* | head -n 1)\nmv "$q/item" "${base}/hold-item" && mv "${base}/victim" "$q/item"`);
   const c = cleaner(root, { rmPath });
   await c.list();
   const out = await c.delete([item(root, 'item')]);
@@ -601,7 +607,7 @@ test('n2 : un autre élément a pris sa place pendant le déplacement : mis à l
   await c.list();
   const out = await c.delete([item(root, 'item')]);
   expect(out.results[0].ok).toBe(false);
-  expect(out.results[0].reason).toMatch(/^un autre élément a pris sa place ; il a été mis à l’écart dans .*\.proc-watch-trash-[^ ]+ \(non supprimé\)$/);
+  expect(out.results[0].reason).toMatch(/^un autre élément a pris sa place ; il a été mis à l’écart dans .*\.computer-watcher-trash-[^ ]+ \(non supprimé\)$/);
 });
 
 test('n3 : seule une détection réussie de GNU rm est gardée', async () => {
@@ -645,7 +651,7 @@ test('n1 : quarantaines restées signalées quelle que soit leur taille, « Vide
 
 test('texte de la confirmation « Vider la quarantaine »', () => {
   const t = confirmText({ purpose: 'quarantine', root: '/tmp', items: [{ name: '.proc-watch-trash-a', kind: 'dir', sizeKB: 0, recent: false }], totalKB: 0, uninspectable: [] }, String);
-  expect(t.message).toBe('Vider la quarantaine de proc-watch ?');
+  expect(t.message).toBe('Vider la quarantaine de Computer Watcher ?');
   expect(t.detail).toContain('/tmp/.proc-watch-trash-a/');
   expect(t.detail).toContain('la corbeille ne libérerait pas la RAM');
 });
@@ -657,6 +663,46 @@ function leftover(root: string, name = '.proc-watch-trash-Reste1', entries: Reco
   for (const [n, kb] of Object.entries(entries)) writeFileSync(join(q, n), Buffer.alloc(kb * 1024, 1));
   return q;
 }
+
+test('renommage : une quarantaine à l’ancien nom et une au nouveau sont toutes deux reconnues, refusées à la sélection et vidables', async () => {
+  const { root } = setup();
+  leftover(root, '.proc-watch-trash-Ancien', { a: 1 });
+  leftover(root, '.computer-watcher-trash-Nouveau', { b: 1 });
+  const c = cleaner(root);
+  const l = await c.list();
+  const byName = Object.fromEntries(l.entries.map((e) => [e.name, e.refusal]));
+  expect(byName['.proc-watch-trash-Ancien']).toBe('quarantaine de Computer Watcher (suppression interrompue), à vérifier');
+  expect(byName['.computer-watcher-trash-Nouveau']).toBe('quarantaine de Computer Watcher (suppression interrompue), à vérifier');
+  expect(l.quarantines.map((q) => q.name).sort()).toEqual(['.computer-watcher-trash-Nouveau', '.proc-watch-trash-Ancien']);
+  const out = await c.emptyQuarantine();
+  expect(out.results.sort((a, b) => a.name.localeCompare(b.name))).toEqual([
+    { name: '.computer-watcher-trash-Nouveau', ok: true },
+    { name: '.proc-watch-trash-Ancien', ok: true },
+  ]);
+  expect(readdirSync(root)).toEqual([]);
+});
+
+test('renommage : une nouvelle quarantaine est créée au nouveau préfixe', async () => {
+  const { base, root } = setup();
+  mkdirSync(join(root, 'item'));
+  const fsp = await import('node:fs/promises');
+  const c = cleaner(root, {
+    fs: {
+      ...fsp,
+      rename: async (from: string, to: string) => {
+        await fsp.rename(from, join(base, 'vrai-item'));
+        await fsp.mkdir(join(base, 'intrus'));
+        await fsp.rename(join(base, 'intrus'), to);
+      },
+    } as never,
+  });
+  await c.list();
+  const out = await c.delete([item(root, 'item')]);
+  expect(out.results[0].reason).toMatch(/mis à l’écart dans .*\/\.computer-watcher-trash-[^ ]+ \(non supprimé\)$/);
+  const trash = readdirSync(root).filter((n) => n.includes('-trash-'));
+  expect(trash).toHaveLength(1);
+  expect(trash[0].startsWith('.computer-watcher-trash-')).toBe(true);
+});
 
 test('p1 : quarantaine sur un autre système de fichiers (dev ≠ racine) : refusée, rien supprimé', async () => {
   const { root } = setup();
@@ -740,7 +786,7 @@ test('p2 : confirmation « Vider » : entrées de chaque quarantaine avec taille
   });
   await swapping.list();
   expect((await swapping.delete([item(root, 'item')])).results[0].reason).toMatch(/^un autre élément a pris sa place/);
-  const qname = readdirSync(root).find((n) => n.startsWith('.proc-watch-trash-'))!;
+  const qname = readdirSync(root).find((n) => n.startsWith('.computer-watcher-trash-'))!;
   writeFileSync(join(root, qname, 'reste'), Buffer.alloc(4096, 1));
   // nouvelle instance (redémarrage de l'app) : la liste est relue depuis le dossier de données
   const c = cleaner(root, { setAside: createSetAsideStore(storePath) });
@@ -790,7 +836,7 @@ test('signalement 1 : marque plantée en lien vers un fichier extérieur : jamai
   const out = await c.delete([item(root, 'item')]);
   expect(out.results[0].reason).toMatch(/^un autre élément a pris sa place/);
   expect(readFileSync(outside, 'utf8')).toBe('original\n');
-  const qname = readdirSync(root).find((n) => n.startsWith('.proc-watch-trash-'))!;
+  const qname = readdirSync(root).find((n) => n.startsWith('.computer-watcher-trash-'))!;
   const qino = String(lstatSync(join(root, qname), { bigint: true }).ino);
   const saved = JSON.parse(readFileSync(storePath, 'utf8')) as { quarantine: string; path: string; name: string }[];
   expect(saved).toEqual([{ quarantine: qino, path: join(root, qname), name: 'item' }]);

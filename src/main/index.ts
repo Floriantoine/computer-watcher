@@ -605,7 +605,7 @@ ipcMain.handle('history:top', (_e, r: unknown, o: unknown) => (isRange(r) && isT
 ipcMain.handle('history:events', (_e, r: unknown, groupKey: unknown) => (isRange(r) && isOptionalGroupKey(groupKey) ? history.events(r, groupKey) : []));
 /**
  * /tmp, sauf racine de test : PROC_WATCH_TMP_ROOT n'est retenu que si son chemin réel est sous ~/.cache/pw-… et contient
- * le fichier témoin .proc-watch-test-root (voir tmpRootFromEnv) ; ni NODE_ENV ni l'empaquetage n'entrent en compte.
+ * le fichier témoin .computer-watcher-test-root (ou .proc-watch-test-root) (voir tmpRootFromEnv) ; ni NODE_ENV ni l'empaquetage n'entrent en compte.
  */
 const tmpRootChoice = tmpRootFromEnv(process.env);
 const tmpRoot = tmpRootChoice.root;
