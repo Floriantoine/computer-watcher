@@ -3,7 +3,7 @@ import { Link2, Trash2, TriangleAlert } from 'lucide-react';
 import { displayName, type TmpListing } from '../../../core/tmpClean';
 import { TMP_SCAN_LIMITS } from '../../../core/tmpScanLimits';
 import { formatKB } from '../format';
-import { tmpCleanMessage, tmpSelection } from '../tmpClean';
+import { quarantineMessage, tmpCleanMessage, tmpSelection } from '../tmpClean';
 import { ipcErrorMessage } from '../viewModel';
 
 interface Props {
@@ -52,6 +52,23 @@ export function TmpCleanList({ onToast }: Props) {
       else n.add(name);
       return n;
     });
+
+  const emptyQuarantine = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const out = await window.procWatch.tmp.emptyQuarantine();
+      if (out.results.length || out.cancelled) {
+        const m = quarantineMessage(out);
+        onToast?.(m.message, m.kind);
+      }
+    } catch (e) {
+      onToast?.(ipcErrorMessage(e), 'error');
+    } finally {
+      setBusy(false);
+      load();
+    }
+  };
 
   // la seule confirmation est la boîte native du main (chemins exacts, total, « Annuler » par défaut)
   const run = async () => {
@@ -124,6 +141,19 @@ export function TmpCleanList({ onToast }: Props) {
         </div>
       )}
       {listing?.disabled && <div className="sub partial" data-testid="tmp-clean-disabled">{listing.disabled}</div>}
+      {listing && listing.quarantines.length > 0 && (
+        <div className="tmp-clean-quarantine" data-testid="tmp-clean-quarantine">
+          <span className="sub partial">
+            <TriangleAlert size={11} strokeWidth={2.2} aria-hidden /> {listing.quarantines.length > 1 ? `${listing.quarantines.length} quarantaines` : 'Une quarantaine'} de proc-watch
+            {listing.quarantines.length > 1 ? ' restées' : ' restée'} (suppression interrompue) : {listing.quarantines.map((q) => displayName(q.name).text).join(', ')}
+          </span>
+          {listing.quarantines.some((q) => q.eligible) && !listing.disabled && (
+            <button className="danger sm" data-testid="tmp-clean-empty-quarantine" disabled={busy} onClick={() => void emptyQuarantine()}>
+              <Trash2 size={13} strokeWidth={2} /> Vider la quarantaine
+            </button>
+          )}
+        </div>
+      )}
       {listing && !listing.disabled && sel.entries.length > 0 && (
         <div className="tmp-clean-summary" data-testid="tmp-clean-summary" aria-live="polite">
           <div className="sub">Sélection, supprimée définitivement (la corbeille ne libérerait pas la RAM) :</div>

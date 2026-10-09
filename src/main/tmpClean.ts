@@ -2,13 +2,18 @@
 // proposer des noms de la dernière liste ; le main fait confirmer, puis revérifie chaque élément juste avant de le supprimer.
 //
 // Suppression sûre face à un échange de dossier par un lien pendant la récursion :
-//  1. l'élément est déplacé (rename, atomique) dans une quarantaine 0700 de la racine, puis on vérifie que c'est bien
-//     l'inode vérifié qui a été déplacé (ino, dev, uid, type) ; sinon rien n'est supprimé et il reste en quarantaine ;
-//  2. la récursion est faite par GNU rm (`rm -r --one-file-system`), qui travaille par descripteurs (openat/unlinkat,
-//     vérification dev/ino à chaque descente) : un sous-dossier remplacé par un lien n'est jamais suivi, et il ne
-//     franchit aucun point de montage. Aucune récursion en JavaScript : fs.rm / rimraf suit un lien substitué.
-import { execFile } from 'node:child_process';
-import { lstatSync, realpathSync, type BigIntStats } from 'node:fs';
+//  1. une quarantaine 0700 est créée dans la racine et aussitôt ouverte (O_DIRECTORY|O_NOFOLLOW, fstat : à nous, 0700) ;
+//     toute la suite passe par ce descripteur (/proc/self/fd/<fd>/<nom>) et jamais par son chemin : la remplacer par un
+//     lien n'a aucun effet ;
+//  2. l'élément y est déplacé (rename, atomique), puis tenu par un descripteur O_PATH|O_NOFOLLOW dont le fstat doit
+//     donner l'inode vérifié (ino, dev, uid, type) ; sinon rien n'est supprimé et l'objet reste à l'écart ;
+//  3. la récursion est faite par GNU rm (`rm -r --one-file-system -- /proc/self/fd/3/<nom>`, la quarantaine passée en
+//     fd 3), qui travaille par descripteurs (openat/unlinkat, dev/ino vérifiés à chaque descente) : un sous-dossier
+//     remplacé par un lien n'est jamais suivi, aucun point de montage n'est franchi. Aucune récursion en JavaScript ;
+//  4. succès seulement si l'inode tenu n'a plus de lien (nlink) : si un autre objet a été glissé à sa place dans la
+//     quarantaine, l'élément choisi a survécu et rien n'est annoncé supprimé.
+import { execFile, spawn } from 'node:child_process';
+import { constants as FS, lstatSync, realpathSync, type BigIntStats } from 'node:fs';
 import * as nodeFsp from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -27,6 +32,7 @@ export interface CleanFs {
   rename(from: string, to: string): Promise<void>;
   mkdtemp(prefix: string): Promise<string>;
   rmdir(p: string): Promise<void>;
+  open(p: string, flags: number): Promise<{ fd: number; stat(o: { bigint: true }): Promise<BigIntStats>; close(): Promise<void> }>;
 }
 const defaultFs: CleanFs = nodeFsp as unknown as CleanFs;
 
@@ -296,25 +302,127 @@ export function checkGnuRm(rmPath = '/usr/bin/rm'): Promise<string | null> {
   });
 }
 
-/** `rm -r --one-file-system -- path`, sans shell ; délai puis SIGKILL. Se règle toujours (même si rm reste bloqué). */
-function runRm(rmPath: string, path: string, timeoutMs: number): Promise<{ ok: true } | { ok: false; error: string }> {
+/**
+ * `rm -r --one-file-system -- /proc/self/fd/3/<nom>`, sans shell, la quarantaine passée en fd 3 ; délai puis SIGKILL.
+ * Se règle toujours : après le délai, la promesse rend la main au plus tard 1 s plus tard (le verrou de suppression est
+ * alors relâché) même si rm reste en sommeil ininterruptible (FUSE figé). Ce rm continue alors seul, sans danger : il
+ * travaille par descripteurs, dans la quarantaine ouverte.
+ */
+function runRm(rmPath: string, quarantineFd: number, name: string, timeoutMs: number): Promise<{ ok: true } | { ok: false; error: string }> {
   return new Promise((resolve) => {
     let done = false;
+    let stderr = '';
     const finish = (r: { ok: true } | { ok: false; error: string }) => {
       if (done) return;
       done = true;
+      clearTimeout(kill);
       clearTimeout(guard);
       resolve(r);
     };
-    // un rm en sommeil ininterruptible (FUSE figé) ne meurt pas tout de suite : on n'attend pas sa sortie
-    const guard = setTimeout(() => finish({ ok: false, error: 'délai dépassé (montage figé ?)' }), timeoutMs + 1_000);
-    execFile(rmPath, ['-r', '--one-file-system', '--', path], { timeout: timeoutMs, killSignal: 'SIGKILL', env: { LC_ALL: 'C', PATH: '/usr/bin:/bin' } }, (err, _o, stderr) => {
-      if (!err) return finish({ ok: true });
-      if ((err as { killed?: boolean }).killed) return finish({ ok: false, error: 'délai dépassé (montage figé ?)' });
-      const line = String(stderr).trim().split('\n')[0] || String((err as Error).message);
+    const timeoutError = { ok: false as const, error: 'délai dépassé (montage figé ?)' };
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(rmPath, ['-r', '--one-file-system', '--', `/proc/self/fd/3/${name}`], {
+        stdio: ['ignore', 'ignore', 'pipe', quarantineFd],
+        env: { LC_ALL: 'C', PATH: '/usr/bin:/bin' },
+      });
+    } catch (e) {
+      resolve({ ok: false, error: String((e as Error).message) });
+      return;
+    }
+    const kill = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
+    const guard = setTimeout(() => finish(timeoutError), timeoutMs + 1_000);
+    child.stderr!.on('data', (b) => {
+      if (stderr.length < 4096) stderr += String(b);
+    });
+    child.on('error', (e) => finish({ ok: false, error: String(e.message) }));
+    child.on('close', (codeN, signal) => {
+      if (codeN === 0) return finish({ ok: true });
+      if (signal === 'SIGKILL') return finish(timeoutError);
+      const line = stderr.trim().split('\n')[0] || `code ${codeN}`;
       finish({ ok: false, error: line.replace(/^\S*rm: /, '').slice(0, 200) });
     });
   });
+}
+
+const O_PATH = 0o10000000; // Linux : désigne l'inode sans l'ouvrir (fstat seulement), même un lien ou un fichier 000
+
+interface Quarantine {
+  path: string;
+  fd: number;
+  ino: bigint;
+  /** Chemin d'un nom dans la quarantaine, par son descripteur (indépendant de son chemin). */
+  at(name: string): string;
+  close(): Promise<void>;
+}
+
+/** Ouvre un dossier de quarantaine (O_DIRECTORY|O_NOFOLLOW) et vérifie qu'il est à nous, en 0700. */
+async function openQuarantine(fs: CleanFs, path: string, uid: number): Promise<Quarantine> {
+  const h = await fs.open(path, FS.O_RDONLY | FS.O_DIRECTORY | FS.O_NOFOLLOW);
+  try {
+    const st = await h.stat({ bigint: true });
+    if (!st.isDirectory() || st.uid !== B(uid) || (Number(st.mode) & 0o7777) !== 0o700) throw new Error('quarantaine inattendue (propriétaire ou droits)');
+    return {
+      path,
+      fd: h.fd,
+      ino: st.ino,
+      at: (name) => `/proc/self/fd/${h.fd}/${name}`,
+      close: async () => {
+        // retirée seulement si c'est toujours elle (même inode) et vide ; sinon laissée, signalée dans la liste
+        const now = await fs.lstat(path, { bigint: true }).catch(() => null);
+        if (now && now.isDirectory() && now.ino === st.ino) await fs.rmdir(path).catch(() => {});
+        await h.close().catch(() => {});
+      },
+    };
+  } catch (e) {
+    await h.close().catch(() => {});
+    throw e;
+  }
+}
+
+/**
+ * Supprime `name` dans la quarantaine `q`, avec GNU rm par le descripteur de la quarantaine. `expect` : identité exigée
+ * (sinon rien n'est supprimé). Succès seulement si l'inode tenu a bien perdu son nom (nlink).
+ */
+async function removeQuarantined(
+  fs: CleanFs,
+  rmPath: string,
+  timeoutMs: number,
+  q: Quarantine,
+  name: string,
+  expect: ((st: BigIntStats) => boolean) | null,
+): Promise<{ ok: true } | { ok: false; reason: string; partial?: boolean }> {
+  const held = await fs.open(q.at(name), O_PATH | FS.O_NOFOLLOW).catch(() => null);
+  if (!held) return { ok: false, reason: `disparu de la quarantaine ${q.path}` };
+  try {
+    const before = await held.stat({ bigint: true });
+    if (expect && !expect(before)) return { ok: false, reason: `un autre élément a pris sa place ; il a été mis à l’écart dans ${q.path} (non supprimé)` };
+    const rm = await runRm(rmPath, q.fd, name, timeoutMs);
+    const after = await held.stat({ bigint: true }).catch(() => null);
+    const gone = after !== null && (before.isDirectory() ? after.nlink === 0n : after.nlink < before.nlink);
+    if (rm.ok && gone) return { ok: true };
+    if (rm.ok) return { ok: false, reason: `non supprimé : remplacé dans la quarantaine pendant la suppression (un autre objet a pu être supprimé à sa place) ; il est hors de ${q.path}`, partial: true };
+    return { ok: false, reason: `échec : ${rm.error} ; le reste est dans ${q.path}`, partial: true };
+  } finally {
+    await held.close().catch(() => {});
+  }
+}
+
+/** Quarantaines restées (suppression interrompue) au premier niveau ; éligibles au vidage : dossier à nous, 0700. */
+async function leftoverQuarantines(c: Ctx): Promise<{ name: string; eligible: boolean; ino: bigint | null }[]> {
+  const names = (await c.fs.readdir(c.root).catch(() => [] as string[])).filter((n) => n.startsWith(TRASH_PREFIX)).sort();
+  const out: { name: string; eligible: boolean; ino: bigint | null }[] = [];
+  for (const name of names) {
+    const p = join(c.root, name);
+    if (c.mounts === null || c.mounts.has(p)) {
+      out.push({ name, eligible: false, ino: null });
+      continue;
+    }
+    const st = await c.fs.lstat(p, { bigint: true }).catch(() => null);
+    const ok = !!st && st.isDirectory() && st.uid === B(c.uid) && (Number(st.mode) & 0o7777) === 0o700 && st.dev === c.rootDev && c.uid !== 0;
+    out.push({ name, eligible: ok, ino: st ? st.ino : null });
+  }
+  return out;
 }
 
 interface Allowed {
@@ -337,6 +445,8 @@ export interface CleanerOptions extends CleanOptions {
 export interface TmpCleaner {
   list(): Promise<TmpListing>;
   delete(items: unknown): Promise<TmpDeleteOutcome>;
+  /** Vide les quarantaines restées (suppressions interrompues), après confirmation native. */
+  emptyQuarantine(): Promise<TmpDeleteOutcome>;
 }
 
 /**
@@ -348,8 +458,14 @@ export function createTmpCleaner(root: string, o: CleanerOptions): TmpCleaner {
   const rmPath = o.rmPath ?? '/usr/bin/rm';
   const now = o.now ?? Date.now;
   const ttl = o.allowTtlMs ?? ALLOW_TTL_MS;
-  let rmCheck: Promise<string | null> | null = null;
-  const disabled = () => (rmCheck ??= checkGnuRm(rmPath));
+  // seule une détection réussie est gardée : un --version lent (pression mémoire) ne désactive pas tout jusqu'au redémarrage
+  let rmOk = false;
+  const disabled = async (): Promise<string | null> => {
+    if (rmOk) return null;
+    const r = await checkGnuRm(rmPath);
+    if (r === null) rmOk = true;
+    return r;
+  };
   let allowed = new Map<string, Allowed>();
   let busy = false;
 
@@ -376,7 +492,8 @@ export function createTmpCleaner(root: string, o: CleanerOptions): TmpCleaner {
       if (refusal === null) next.set(s.name, { ino: r.st.ino, dev: r.st.dev, uid: r.st.uid, kind, sizeKB: s.sizeKB, recent, at: now() });
     }
     allowed = next;
-    return { root, entries, truncated: usage.truncated, uninspectable: c.users.uninspectable, disabled: off };
+    const quarantines = (await leftoverQuarantines(c)).map(({ name, eligible }) => ({ name, eligible }));
+    return { root, entries, truncated: usage.truncated, uninspectable: c.users.uninspectable, disabled: off, quarantines };
   }
 
   async function del(raw: unknown): Promise<TmpDeleteOutcome> {
@@ -439,69 +556,150 @@ export function createTmpCleaner(root: string, o: CleanerOptions): TmpCleaner {
     const start = now();
     let freedKB = 0;
     let partial = false;
-    let trash: string | null = null;
-    for (const { item, a } of candidates) {
-      if (now() - start > budget) {
-        refuse(item.name, 'temps écoulé');
-        continue;
-      }
-      const r = await inspect(item.name, c);
-      if (r.refusal === 'disparu') {
-        refuse(item.name, 'disparu');
-        continue;
-      }
-      if (r.st && (r.st.ino !== a.ino || r.st.dev !== a.dev || r.st.uid !== a.uid || kindOf(r.st) !== a.kind)) {
-        refuse(item.name, 'a changé depuis l’affichage');
-        continue;
-      }
-      if (r.refusal !== null) {
-        refuse(item.name, r.refusal);
-        continue;
-      }
-      const p = join(c.root, item.name);
-      if (a.kind !== 'link') {
-        const real = await fs.realpath(p).catch(() => null);
-        if (real !== p) {
-          refuse(item.name, 'hors de la racine');
+    let q: Quarantine | null = null;
+    const rmTimeout = o.rmTimeoutMs ?? RM_TIMEOUT_MS;
+    try {
+      for (const { item, a } of candidates) {
+        if (now() - start > budget) {
+          refuse(item.name, 'temps écoulé');
           continue;
         }
+        const r = await inspect(item.name, c);
+        if (r.refusal === 'disparu') {
+          refuse(item.name, 'disparu');
+          continue;
+        }
+        if (r.st && (r.st.ino !== a.ino || r.st.dev !== a.dev || r.st.uid !== a.uid || kindOf(r.st) !== a.kind)) {
+          refuse(item.name, 'a changé depuis l’affichage');
+          continue;
+        }
+        if (r.refusal !== null) {
+          refuse(item.name, r.refusal);
+          continue;
+        }
+        const p = join(c.root, item.name);
+        if (a.kind !== 'link') {
+          const real = await fs.realpath(p).catch(() => null);
+          if (real !== p) {
+            refuse(item.name, 'hors de la racine');
+            continue;
+          }
+        }
+        try {
+          // 0700, même système de fichiers ; ouverte aussitôt : la suite ne passe plus par son chemin
+          q ??= await openQuarantine(fs, await fs.mkdtemp(join(c.root, TRASH_PREFIX)), c.uid);
+        } catch (e) {
+          refuse(item.name, `échec de la quarantaine : ${code(e) ?? (e as Error).message}`);
+          continue;
+        }
+        try {
+          await fs.rename(p, q.at(item.name));
+        } catch (e) {
+          refuse(item.name, `échec du déplacement : ${code(e) ?? 'erreur'}`);
+          continue;
+        }
+        const same = (m: BigIntStats) => m.ino === a.ino && m.dev === a.dev && m.uid === a.uid && kindOf(m) === a.kind;
+        const res = await removeQuarantined(fs, rmPath, rmTimeout, q, item.name, same);
+        if (res.ok) {
+          results.set(item.name, { name: item.name, ok: true });
+          freedKB += a.sizeKB;
+        } else {
+          if (res.partial) partial = true;
+          refuse(item.name, res.reason);
+        }
       }
-      try {
-        trash ??= await fs.mkdtemp(join(c.root, TRASH_PREFIX)); // 0700, même système de fichiers
-      } catch (e) {
-        refuse(item.name, `échec de la quarantaine : ${code(e) ?? 'erreur'}`);
-        continue;
-      }
-      const moved = join(trash, item.name);
-      try {
-        await fs.rename(p, moved);
-      } catch (e) {
-        refuse(item.name, `échec du déplacement : ${code(e) ?? 'erreur'}`);
-        continue;
-      }
-      const m = await fs.lstat(moved, { bigint: true }).catch(() => null);
-      if (!m || m.ino !== a.ino || m.dev !== a.dev || m.uid !== a.uid || kindOf(m) !== a.kind) {
-        refuse(item.name, `élément remplacé pendant la suppression, laissé dans ${trash}`);
-        continue;
-      }
-      const rm = await runRm(rmPath, moved, o.rmTimeoutMs ?? RM_TIMEOUT_MS);
-      if (rm.ok) {
-        results.set(item.name, { name: item.name, ok: true });
-        freedKB += a.sizeKB;
-      } else {
-        partial = true;
-        refuse(item.name, `échec : ${rm.error} ; le reste est dans ${trash}`);
-      }
+    } finally {
+      await q?.close(); // retirée si vide et toujours elle ; sinon laissée et signalée (« Vider la quarantaine »)
     }
-    if (trash) await fs.rmdir(trash).catch(() => {}); // non vide : laissée (éléments remplacés ou échecs), signalée
     return { results: ordered(), freedKB, ...(partial ? { partial } : {}) };
   }
 
-  return { list, delete: del };
+  /** « Vider la quarantaine » : quarantaines restées éligibles, après confirmation native, par descripteur et GNU rm. */
+  async function emptyQuarantine(): Promise<TmpDeleteOutcome> {
+    if (busy) throw new Error('Une suppression est déjà en cours');
+    busy = true;
+    try {
+      const off = await disabled();
+      if (off) throw new Error(off);
+      const c0 = await context(root, o);
+      if (c0.mounts === null) throw new Error('impossible de vérifier (points de montage illisibles)');
+      const found = (await leftoverQuarantines(c0)).filter((x) => x.eligible);
+      if (!found.length) return { results: [], freedKB: 0 };
+      const ok = await o.confirm({
+        purpose: 'quarantine',
+        root: c0.root,
+        items: found.map((x) => ({ name: x.name, kind: 'dir' as const, sizeKB: 0, recent: false })),
+        totalKB: 0,
+        uninspectable: c0.users.uninspectable,
+      });
+      if (!ok) return { results: found.map((x) => ({ name: x.name, ok: false, reason: 'annulé' })), freedKB: 0, cancelled: true };
+      const c = await context(root, o);
+      const results: TmpDeleteResult[] = [];
+      let partial = false;
+      for (const x of found) {
+        const p = join(c.root, x.name);
+        const fail = (reason: string) => results.push({ name: x.name, ok: false, reason });
+        if (c.mounts === null) {
+          fail('impossible de vérifier (points de montage illisibles)');
+          continue;
+        }
+        if ([...c.mounts].some((m) => m === p || m.startsWith(`${p}/`))) {
+          fail('contient un point de montage');
+          continue;
+        }
+        if (!c.users.complete) {
+          fail('impossible de vérifier');
+          continue;
+        }
+        const u = c.users.users.get(x.name);
+        if (u) {
+          fail(usedBy(u));
+          continue;
+        }
+        let qq: Quarantine;
+        try {
+          qq = await openQuarantine(fs, p, c.uid);
+        } catch (e) {
+          fail(`refusée : ${code(e) ?? (e as Error).message}`);
+          continue;
+        }
+        try {
+          if (qq.ino !== x.ino) {
+            fail('a changé depuis l’affichage');
+            continue;
+          }
+          const names = await fs.readdir(`/proc/self/fd/${qq.fd}`);
+          const errors: string[] = [];
+          for (const n of names) {
+            const r = await removeQuarantined(fs, rmPath, o.rmTimeoutMs ?? RM_TIMEOUT_MS, qq, n, null);
+            if (!r.ok) errors.push(`${n} : ${r.reason}`);
+          }
+          if (errors.length) {
+            partial = true;
+            fail(errors.join(' ; '));
+          } else results.push({ name: x.name, ok: true });
+        } finally {
+          await qq.close();
+        }
+      }
+      return { results, freedKB: 0, ...(partial ? { partial } : {}) };
+    } finally {
+      busy = false;
+    }
+  }
+
+  return { list, delete: del, emptyQuarantine };
 }
 
 /** Texte de la confirmation native (titre et détail), noms échappés. */
 export function confirmText(s: TmpConfirmSummary, formatKB: (kb: number) => string): { message: string; detail: string } {
+  if (s.purpose === 'quarantine') {
+    const lines = s.items.map((i) => `${s.root}/${displayName(i.name).text}/`);
+    return {
+      message: `Vider ${s.items.length > 1 ? `les ${s.items.length} quarantaines` : 'la quarantaine'} de proc-watch ?`,
+      detail: [lines.join('\n'), 'Restes de suppressions interrompues : tout leur contenu sera supprimé.', "C'est définitif, la corbeille ne libérerait pas la RAM (elle est sur disque)."].join('\n\n'),
+    };
+  }
   const n = s.items.length;
   const lines = s.items.map((i) => {
     const d = displayName(i.name);

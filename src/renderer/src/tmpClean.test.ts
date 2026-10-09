@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { tmpCleanMessage, tmpSelection } from './tmpClean';
+import { quarantineMessage, tmpCleanMessage, tmpSelection } from './tmpClean';
 
 test('message du toast : libérés, refusés et raisons regroupées', () => {
   expect(tmpCleanMessage({ freedKB: 2 * 1024 * 1024, results: [{ name: 'a', ok: true }, { name: 'b', ok: true }] })).toEqual({
@@ -33,4 +33,10 @@ test('toast : annulé à la confirmation du main, ou échec partiel signalé', (
   const m = tmpCleanMessage({ freedKB: 0, partial: true, results: [{ name: 'a', ok: false, reason: 'échec : x ; le reste est dans /tmp/.proc-watch-trash-1' }] });
   expect(m.kind).toBe('error');
   expect(m.message).toMatch(/^Suppression partielle — 0 élément supprimé/);
+});
+
+test('toast « Vider la quarantaine »', () => {
+  expect(quarantineMessage({ freedKB: 0, results: [{ name: 'q', ok: true }] })).toEqual({ kind: 'info', message: 'Quarantaine vidée' });
+  expect(quarantineMessage({ freedKB: 0, cancelled: true, results: [] })).toEqual({ kind: 'info', message: 'Suppression annulée : rien n’a été touché' });
+  expect(quarantineMessage({ freedKB: 0, partial: true, results: [{ name: 'q', ok: false, reason: 'x : échec' }] })).toEqual({ kind: 'error', message: 'Quarantaine vidée en partie : q (x : échec)' });
 });

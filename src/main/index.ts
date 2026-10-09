@@ -35,7 +35,7 @@ import { pollDelay, type WindowActivity } from './pollPolicy';
 import { portModes } from './portModes';
 import { PortSweep } from './portSweep';
 import { promises as originalFsp } from 'original-fs';
-import type { TmpConfirmSummary } from '../core/tmpClean';
+import type { TmpConfirmSummary, TmpDeleteOutcome } from '../core/tmpClean';
 import { confirmText, createTmpCleaner, tmpCleanEvent, tmpRootFromEnv, type CleanFs } from './tmpClean';
 import { sharedScan, topTmpDirs } from './tmpUsage';
 import { closeAction, confirmTray, createTrayController, defaultRun, statusNotifierAvailable, type TrayController } from './tray';
@@ -579,19 +579,30 @@ const confirmTmpClean = async (s: TmpConfirmSummary): Promise<boolean> => {
 const tmpCleaner = createTmpCleaner(tmpRoot, { fs: originalFsp as unknown as CleanFs, confirm: confirmTmpClean });
 ipcMain.handle('tmp:entries', () => tmpCleaner.list());
 /** Suppression : liste autorisée du main, confirmation native, revérification et suppression élément par élément. */
+/** Journal : une suppression (même partielle) ajoute un événement tmp_clean. */
+const logTmpClean = (outcome: TmpDeleteOutcome) => {
+  const ev = tmpCleanEvent(outcome, Date.now());
+  if (!ev) return;
+  try {
+    mkdirSync(data, { recursive: true });
+    appendFileSync(appEventsPath(data), formatAppEvent(ev));
+  } catch (e) {
+    console.error('app event:', e);
+  }
+};
 ipcMain.handle('tmp:delete', async (_e, raw: unknown) => {
   tmpTopDirs.reset(); // un parcours en cours décrirait l'état d'avant
   const outcome = await tmpCleaner.delete(raw);
   tmpTopDirs.reset();
-  const ev = tmpCleanEvent(outcome, Date.now());
-  if (ev) {
-    try {
-      mkdirSync(data, { recursive: true });
-      appendFileSync(appEventsPath(data), formatAppEvent(ev));
-    } catch (e) {
-      console.error('app event:', e);
-    }
-  }
+  logTmpClean(outcome);
+  return outcome;
+});
+/** « Vider la quarantaine » : restes de suppressions interrompues, confirmation native, même suppression par descripteur. */
+ipcMain.handle('tmp:emptyQuarantine', async () => {
+  tmpTopDirs.reset();
+  const outcome = await tmpCleaner.emptyQuarantine();
+  tmpTopDirs.reset();
+  logTmpClean(outcome);
   return outcome;
 });
 ipcMain.handle('recorder:status', () => recorderState());

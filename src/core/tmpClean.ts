@@ -34,6 +34,8 @@ export interface TmpListing {
   uninspectable: { pid: number; name: string }[];
   /** Suppression indisponible (ex. pas de GNU rm) : raison ; null sinon. */
   disabled: string | null;
+  /** Quarantaines restées (suppressions interrompues), quelle que soit leur taille ; `eligible` : à nous, 0700 (vidables). */
+  quarantines: { name: string; eligible: boolean }[];
 }
 
 export interface TmpDeleteItem {
@@ -60,6 +62,8 @@ export interface TmpDeleteOutcome {
 
 /** Ce que la confirmation du main affiche. */
 export interface TmpConfirmSummary {
+  /** Suppression d'éléments (défaut) ou vidage des quarantaines restées. */
+  purpose?: 'delete' | 'quarantine';
   root: string;
   items: { name: string; kind: TmpEntry['kind']; sizeKB: number; recent: boolean }[];
   totalKB: number;

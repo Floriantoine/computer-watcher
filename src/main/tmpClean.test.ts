@@ -542,3 +542,110 @@ test('événement tmp_clean : si quelque chose a été supprimé, ou en partie',
     ts: 5, type: 'tmp_clean', groupKey: null, detail: { freedKB: 0, deleted: [], refused: [{ name: 'a', reason: 'échec : x' }], partial: true },
   });
 });
+
+/** Faux rm : répond comme GNU à --version ; sinon exécute `attack` (sh) puis délègue au vrai rm avec les mêmes arguments. */
+function attackingRm(base: string, attack: string): string {
+  const p = join(base, 'rm-attaquant');
+  writeFileSync(p, `#!/bin/sh\nif [ "$1" = "--version" ]; then exec /usr/bin/rm --version; fi\n${attack}\nexec /usr/bin/rm "$@"\n`, { mode: 0o755 });
+  return p;
+}
+
+test('N1 q3 : quarantaine remplacée par un lien juste avant rm : aucun fichier extérieur perdu, l’élément choisi est supprimé', async () => {
+  const { base, root } = setup();
+  mkdirSync(join(root, 'item'));
+  for (let i = 0; i < 20; i++) writeFileSync(join(root, 'item', `x${i}`), 'x');
+  mkdirSync(join(base, 'vparent', 'item'), { recursive: true });
+  for (let i = 0; i < 10; i++) writeFileSync(join(base, 'vparent', 'item', `p${i}`), 'precieux');
+  const rmPath = attackingRm(base, `q=$(ls -d "${root}"/.proc-watch-trash-* | head -n 1)\nmv "$q" "${base}/hold" && ln -s "${base}/vparent" "$q"`);
+  const c = cleaner(root, { rmPath });
+  await c.list();
+  const out = await c.delete([item(root, 'item')]);
+  expect(readdirSync(join(base, 'vparent', 'item'))).toHaveLength(10); // victime intacte
+  expect(existsSync(join(base, 'hold'))).toBe(true); // l'attaque a bien eu lieu
+  expect(existsSync(join(base, 'hold', 'item'))).toBe(false); // l'élément choisi est supprimé
+  expect(out.results).toEqual([{ name: 'item', ok: true }]);
+});
+
+test('N1 q2 : élément en quarantaine remplacé juste avant rm : jamais « supprimé » si l’élément choisi survit', async () => {
+  const { base, root } = setup();
+  mkdirSync(join(root, 'item'));
+  writeFileSync(join(root, 'item', 'x'), 'x');
+  mkdirSync(join(base, 'victim'));
+  writeFileSync(join(base, 'victim', 'p'), 'precieux');
+  const rmPath = attackingRm(base, `q=$(ls -d "${root}"/.proc-watch-trash-* | head -n 1)\nmv "$q/item" "${base}/hold-item" && mv "${base}/victim" "$q/item"`);
+  const c = cleaner(root, { rmPath });
+  await c.list();
+  const out = await c.delete([item(root, 'item')]);
+  expect(existsSync(join(base, 'hold-item', 'x'))).toBe(true); // l'élément choisi a survécu…
+  expect(out.results[0].ok).toBe(false); // …donc jamais annoncé supprimé
+  expect(out.results[0].reason).toMatch(/^non supprimé : remplacé dans la quarantaine/);
+  expect(out.partial).toBe(true);
+});
+
+test('n2 : un autre élément a pris sa place pendant le déplacement : mis à l’écart, non supprimé, message clair', async () => {
+  const { base, root } = setup();
+  mkdirSync(join(root, 'item'));
+  const c = cleaner(root, {
+    // l'échange a lieu pendant la confirmation : la revérification le voit (« a changé ») ; on simule donc un échange
+    // après la revérification par un faux fs.rename qui déplace un autre objet
+    fs: {
+      ...(await import('node:fs/promises')),
+      rename: async (from: string, to: string) => {
+        const fsp = await import('node:fs/promises');
+        await fsp.rename(from, join(base, 'vrai-item'));
+        await fsp.mkdir(join(base, 'intrus'));
+        await fsp.rename(join(base, 'intrus'), to);
+      },
+    } as never,
+  });
+  await c.list();
+  const out = await c.delete([item(root, 'item')]);
+  expect(out.results[0].ok).toBe(false);
+  expect(out.results[0].reason).toMatch(/^un autre élément a pris sa place ; il a été mis à l’écart dans .*\.proc-watch-trash-[^ ]+ \(non supprimé\)$/);
+});
+
+test('n3 : seule une détection réussie de GNU rm est gardée', async () => {
+  const { base, root } = setup();
+  writeFileSync(join(root, 'f'), 'x');
+  const flag = join(base, 'deuxieme');
+  const flaky = join(base, 'rm-instable');
+  writeFileSync(flaky, `#!/bin/sh\nif [ ! -e "${flag}" ]; then touch "${flag}"; exit 1; fi\nexec /usr/bin/rm "$@"\n`, { mode: 0o755 });
+  const c = cleaner(root, { rmPath: flaky });
+  expect((await c.list()).disabled).toMatch(/pas GNU rm/);
+  expect((await c.list()).disabled).toBeNull();
+});
+
+test('n1 : quarantaines restées signalées quelle que soit leur taille, « Vider la quarantaine » (confirmée) les supprime', async () => {
+  const { base, root, outside } = setup();
+  const q = join(root, '.proc-watch-trash-AbC123');
+  mkdirSync(q, { mode: 0o700 });
+  mkdirSync(join(q, 'reste', 'sous'), { recursive: true });
+  writeFileSync(join(q, 'reste', 'sous', 'f'), 'x');
+  symlinkSync(outside, join(q, 'reste', 'vers-dehors'));
+  writeFileSync(join(q, 'fichier'), 'x');
+  const other = join(root, '.proc-watch-trash-Ouvert');
+  mkdirSync(other, { mode: 0o755 }); // pas 0700 : non éligible
+  const c = cleaner(root);
+  const l = await c.list();
+  expect(l.quarantines).toEqual([
+    { name: '.proc-watch-trash-AbC123', eligible: true },
+    { name: '.proc-watch-trash-Ouvert', eligible: false },
+  ]);
+  const refused = cleaner(root, { confirm: async () => false });
+  expect((await refused.emptyQuarantine()).cancelled).toBe(true);
+  expect(existsSync(join(q, 'fichier'))).toBe(true);
+  const out = await c.emptyQuarantine();
+  expect(c.asked.at(-1)).toMatchObject({ purpose: 'quarantine', items: [{ name: '.proc-watch-trash-AbC123', kind: 'dir' }] });
+  expect(out.results).toEqual([{ name: '.proc-watch-trash-AbC123', ok: true }]);
+  expect(existsSync(q)).toBe(false);
+  expect(existsSync(other)).toBe(true);
+  outsideIntact(outside);
+  void base;
+});
+
+test('texte de la confirmation « Vider la quarantaine »', () => {
+  const t = confirmText({ purpose: 'quarantine', root: '/tmp', items: [{ name: '.proc-watch-trash-a', kind: 'dir', sizeKB: 0, recent: false }], totalKB: 0, uninspectable: [] }, String);
+  expect(t.message).toBe('Vider la quarantaine de proc-watch ?');
+  expect(t.detail).toContain('/tmp/.proc-watch-trash-a/');
+  expect(t.detail).toContain('la corbeille ne libérerait pas la RAM');
+});

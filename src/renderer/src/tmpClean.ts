@@ -26,3 +26,11 @@ export function tmpSelection(entries: TmpEntry[], selected: ReadonlySet<string>)
     label: picked.length ? `Supprimer la sélection (${picked.length} · ${formatKB(sizeKB)})` : 'Supprimer la sélection',
   };
 }
+
+/** Toast après « Vider la quarantaine ». */
+export function quarantineMessage(o: TmpDeleteOutcome): { message: string; kind: 'info' | 'error' } {
+  if (o.cancelled) return { message: 'Suppression annulée : rien n’a été touché', kind: 'info' };
+  const bad = o.results.filter((r) => !r.ok);
+  if (!bad.length) return { message: 'Quarantaine vidée', kind: 'info' };
+  return { message: `Quarantaine vidée en partie : ${bad.map((r) => `${r.name} (${r.reason ?? 'refusé'})`).join(', ')}`, kind: 'error' };
+}

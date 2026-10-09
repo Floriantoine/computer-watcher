@@ -118,6 +118,8 @@ const api = {
     entries: (): Promise<TmpListing> => ipcRenderer.invoke('tmp:entries'),
     /** Suppression définitive (au plus 50 éléments), revérifiée par le main élément par élément. */
     delete: (items: TmpDeleteItem[]): Promise<TmpDeleteOutcome> => ipcRenderer.invoke('tmp:delete', items),
+    /** Vide les quarantaines restées (suppressions interrompues), après confirmation native du main. */
+    emptyQuarantine: (): Promise<TmpDeleteOutcome> => ipcRenderer.invoke('tmp:emptyQuarantine'),
   },
   recorder: {
     status: (): Promise<RecorderState> => ipcRenderer.invoke('recorder:status'),
