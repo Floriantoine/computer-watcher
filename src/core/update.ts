@@ -159,6 +159,11 @@ export interface UpdateState {
   lastResult: 'none' | 'available' | 'error' | null;
   /** « Plus tard » : pop-up caché jusqu'à cette heure (ms). */
   snoozedUntil: number | null;
+  /**
+   * Installation échouée après le téléchargement (l'ancienne AppImage a pu être supprimée avant l'échec du déplacement) :
+   * fichier vérifié dans le cache d'electron-updater et AppImage à remplacer, pour le message et la commande de secours.
+   */
+  failedInstall: { file: string | null; target: string | null } | null;
 }
 
 /** Ce que le renderer reçoit : état, réglages et visibilité du pop-up (calculée par le main). */
@@ -173,11 +178,12 @@ export type UpdateEvent =
   | { type: 'progress'; percent: number }
   | { type: 'downloaded' }
   | { type: 'later'; at: number }
+  | { type: 'installFailed'; message: string; file: string | null; target: string | null; at: number }
   /** Proposition retirée (préversions désactivées) ; sans effet pendant un téléchargement ou une fois prête. */
   | { type: 'withdraw' };
 
 export function initialUpdateState(mode: UpdateMode, current: string): UpdateState {
-  return { mode, current, phase: 'idle', available: null, progress: null, error: null, lastCheck: null, lastResult: null, snoozedUntil: null };
+  return { mode, current, phase: 'idle', available: null, progress: null, error: null, lastCheck: null, lastResult: null, snoozedUntil: null, failedInstall: null };
 }
 
 const busy = (s: UpdateState) => s.phase === 'downloading' || s.phase === 'ready';
@@ -206,11 +212,14 @@ export function reduceUpdate(s: UpdateState, e: UpdateEvent): UpdateState {
       return { ...s, phase: s.available ? 'available' : 'idle', error: e.message, lastCheck: e.at, lastResult: 'error' };
     case 'download':
       if (s.mode !== 'install' || !s.available || (s.phase !== 'available' && s.phase !== 'error')) return s;
-      return { ...s, phase: 'downloading', progress: 0, error: null, snoozedUntil: null };
+      return { ...s, phase: 'downloading', progress: 0, error: null, snoozedUntil: null, failedInstall: null };
     case 'progress':
       return s.phase === 'downloading' ? { ...s, progress: Math.max(0, Math.min(100, e.percent)) } : s;
     case 'downloaded':
       return s.phase === 'downloading' ? { ...s, phase: 'ready', progress: 100 } : s;
+    case 'installFailed':
+      if (s.phase !== 'ready' && !(s.phase === 'error' && s.failedInstall)) return s;
+      return { ...s, phase: 'error', progress: null, error: e.message, snoozedUntil: null, failedInstall: { file: e.file, target: e.target } };
     case 'withdraw':
       return s.phase === 'available' || s.phase === 'error' ? { ...s, phase: 'idle', available: null, progress: null, error: null } : s;
     case 'later':

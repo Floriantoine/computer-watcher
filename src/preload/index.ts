@@ -141,6 +141,8 @@ const api = {
     download: (): Promise<UpdateView> => ipcRenderer.invoke('update:download'),
     /** Version téléchargée et vérifiée : remplace l'AppImage et redémarre l'app. */
     install: (): Promise<void> => ipcRenderer.invoke('update:install'),
+    /** « Réessayer » : réinstalle depuis le fichier vérifié en cache (installation échouée), sinon retélécharge. */
+    retry: (): Promise<UpdateView> => ipcRenderer.invoke('update:retry'),
     later: (): Promise<UpdateView> => ipcRenderer.invoke('update:later'),
     ignore: (): Promise<UpdateView> => ipcRenderer.invoke('update:ignore'),
     setPrefs: (p: { enabled?: boolean; prerelease?: boolean }): Promise<UpdateView> => ipcRenderer.invoke('update:setPrefs', p),

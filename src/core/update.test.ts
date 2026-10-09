@@ -223,6 +223,17 @@ describe('reduceUpdate (machine à états)', () => {
     expect(s.error).toBe('EACCES');
     expect(reduceUpdate(s, { type: 'download' }).phase).toBe('downloading');
   });
+  test('installation échouée après le téléchargement : fichier vérifié et cible gardés, nouvel essai sans retélécharger', () => {
+    let s = reduceUpdate(reduceUpdate(reduceUpdate(start(), found('0.1.1')), { type: 'download' }), { type: 'downloaded' });
+    s = reduceUpdate(s, { type: 'installFailed', message: 'mv: Permission denied', file: '/home/u/.cache/proc-watch-updater/pending/p.AppImage', target: '/home/u/Apps/p.AppImage', at: 2 });
+    expect(s.phase).toBe('error');
+    expect(s.error).toBe('mv: Permission denied');
+    expect(s.failedInstall).toEqual({ file: '/home/u/.cache/proc-watch-updater/pending/p.AppImage', target: '/home/u/Apps/p.AppImage' });
+    // un nouveau téléchargement efface l'échec d'installation
+    expect(reduceUpdate(s, { type: 'download' }).failedInstall).toBeNull();
+    // seulement depuis « prête » ou un échec d'installation précédent
+    expect(reduceUpdate(start(), { type: 'installFailed', message: 'x', file: null, target: null, at: 0 }).phase).toBe('idle');
+  });
   test('retrait : une proposition (préversion désactivée) disparaît, sauf pendant le téléchargement', () => {
     const s = reduceUpdate(start(), found('0.2.0-beta.1'));
     const w = reduceUpdate(s, { type: 'withdraw' });

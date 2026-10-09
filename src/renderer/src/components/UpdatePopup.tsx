@@ -35,6 +35,7 @@ export function useUpdateActions(setView: (v: UpdateView) => void, onToast: Toas
       const u = window.procWatch.update;
       if (a === 'download') u.download().then(setView, fail);
       else if (a === 'install') u.install().catch(fail);
+      else if (a === 'retry') u.retry().then(setView, fail);
       else if (a === 'later') u.later().then(setView, fail);
       else if (a === 'ignore') u.ignore().then(setView, fail);
       else if (a === 'open' && url) u.openRelease(url).catch(fail);
@@ -43,7 +44,7 @@ export function useUpdateActions(setView: (v: UpdateView) => void, onToast: Toas
   );
 }
 
-const ICON: Partial<Record<UpdateAction['kind'], typeof Download>> = { download: Download, install: RotateCw, open: ExternalLink };
+const ICON: Partial<Record<UpdateAction['kind'], typeof Download>> = { download: Download, install: RotateCw, retry: RotateCw, open: ExternalLink };
 
 export function UpdatePopup({ view, onAction }: { view: UpdateView; onAction: (a: UpdateAction['kind'], url?: string) => void }) {
   const t = updatePopupText(view);
@@ -68,6 +69,11 @@ export function UpdatePopup({ view, onAction }: { view: UpdateView; onAction: (a
           <strong title={t.title}>{t.title}</strong>
         </div>
         <p data-testid="update-popup-body">{t.body}</p>
+        {t.command && (
+          <code className="upd-command" data-testid="update-popup-command">
+            {t.command}
+          </code>
+        )}
         {t.progress !== null && (
           <div className="upd-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(t.progress)}>
             <span style={{ width: `${t.progress}%` }} />

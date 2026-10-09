@@ -19,6 +19,13 @@ import {
 } from '../core/update';
 
 /** `notes` : texte, HTML (GitHub) ou liste de notes (electron-updater), réduit par shortNotes. */
+/** Installation échouée : fichier vérifié (cache d'electron-updater) et AppImage à remplacer, s'ils sont connus. */
+export class InstallError extends Error {
+  constructor(message: string, readonly file: string | null, readonly target: string | null) {
+    super(message);
+  }
+}
+
 export interface FoundRelease { version: string; notes: unknown; url: string }
 
 /** Source des versions : electron-updater (AppImage) ou API GitHub (notification seulement). */
@@ -28,6 +35,8 @@ export interface UpdateBackend {
   download?(onProgress: (percent: number) => void): Promise<void>;
   /** AppImage seulement : remplace le fichier et relance l'app (electron-updater) ; lève une erreur si l'installation échoue. */
   install?(): void;
+  /** Fichier téléchargé et vérifié, s'il est encore dans le cache (réinstallation sans nouveau téléchargement). */
+  pendingFile?(): string | null;
 }
 
 export type { UpdateView };
@@ -109,12 +118,25 @@ export function createUpdateController(d: UpdaterDeps) {
       }
     },
     install(): void {
-      if (d.mode !== 'install' || state.phase !== 'ready' || !d.backend?.install) return;
+      const b = d.backend;
+      if (d.mode !== 'install' || !b?.install) return;
+      const retryInstall = state.phase === 'error' && state.failedInstall !== null && !!b.pendingFile?.();
+      if (state.phase !== 'ready' && !retryInstall) return;
       try {
-        d.backend.install();
+        b.install();
       } catch (e) {
-        dispatch({ type: 'error', message: message(e), at: d.now() });
+        if (e instanceof InstallError) dispatch({ type: 'installFailed', message: message(e), file: e.file, target: e.target, at: d.now() });
+        else dispatch({ type: 'error', message: message(e), at: d.now() });
       }
+    },
+    /** « Réessayer » : réinstalle depuis le fichier vérifié encore en cache après une installation échouée, sinon retélécharge. */
+    retry(): Promise<void> {
+      if (state.phase !== 'error') return Promise.resolve();
+      if (state.failedInstall && d.backend?.pendingFile?.()) {
+        this.install();
+        return Promise.resolve();
+      }
+      return this.download();
     },
     later(): void {
       dispatch({ type: 'later', at: d.now() });

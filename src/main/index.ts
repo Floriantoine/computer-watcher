@@ -840,7 +840,7 @@ let updateBackend: Promise<UpdateBackend> | null = null;
 const loadUpdateBackend = (): Promise<UpdateBackend> =>
   (updateBackend ??=
     updMode === 'install'
-      ? createAppImageBackend({ testFeed: updateFeed, testConfigPath: join(app.getPath('userData'), 'test-app-update.yml') })
+      ? createAppImageBackend({ testFeed: updateFeed, testConfigPath: join(app.getPath('userData'), 'test-app-update.yml'), appImage: ownImage! })
       : Promise.resolve(createReleasesApiBackend({ url: updateFeed ? `${updateFeed}releases.json` : RELEASES_API_URL, fetch })));
 let installBackend: UpdateBackend | null = null;
 const updater = createUpdateController({
@@ -857,6 +857,7 @@ const updater = createUpdateController({
             installBackend = b;
             await b.download(onProgress);
           },
+          pendingFile: () => installBackend?.pendingFile?.() ?? null,
           install: () => {
             if (!installBackend?.install) throw new Error('Installation indisponible');
             quitting = true;
@@ -887,6 +888,10 @@ ipcMain.handle('update:download', () => {
   return updater.view();
 });
 ipcMain.handle('update:install', () => updater.install());
+ipcMain.handle('update:retry', () => {
+  void updater.retry();
+  return updater.view();
+});
 ipcMain.handle('update:later', () => {
   updater.later();
   return updater.view();

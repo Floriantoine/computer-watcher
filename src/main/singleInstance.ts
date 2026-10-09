@@ -5,12 +5,17 @@
 const ATTEMPTS = 20;
 const DELAY_MS = 250;
 
+/** Verrou obtenu : APPIMAGE_SILENT_INSTALL est retiré de l'environnement (jamais transmis aux processus lancés ensuite). */
 export function acquireLock(o: { tryLock: () => boolean; env: NodeJS.ProcessEnv; sleep: (ms: number) => void }): boolean {
-  if (o.tryLock()) return true;
+  const got = () => {
+    delete o.env.APPIMAGE_SILENT_INSTALL;
+    return true;
+  };
+  if (o.tryLock()) return got();
   if (o.env.APPIMAGE_SILENT_INSTALL !== 'true') return false;
   for (let i = 0; i < ATTEMPTS; i++) {
     o.sleep(DELAY_MS);
-    if (o.tryLock()) return true;
+    if (o.tryLock()) return got();
   }
   return false;
 }

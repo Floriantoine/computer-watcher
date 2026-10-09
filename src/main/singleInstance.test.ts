@@ -33,3 +33,13 @@ test('relance après une mise à jour : abandon après ~5 s', () => {
   expect(acquireLock({ tryLock: t.tryLock, env: { APPIMAGE_SILENT_INSTALL: 'true' }, sleep: (ms) => slept.push(ms) })).toBe(false);
   expect(slept.reduce((a, b) => a + b, 0)).toBe(5000);
 });
+
+test('verrou obtenu : APPIMAGE_SILENT_INSTALL retiré de l’environnement (pas transmis aux processus lancés ensuite)', () => {
+  const env: NodeJS.ProcessEnv = { APPIMAGE_SILENT_INSTALL: 'true', HOME: '/home/u' };
+  const t = tries([false, true]);
+  expect(acquireLock({ tryLock: t.tryLock, env, sleep: () => {} })).toBe(true);
+  expect(env).toEqual({ HOME: '/home/u' });
+  const env2: NodeJS.ProcessEnv = { APPIMAGE_SILENT_INSTALL: 'true' };
+  expect(acquireLock({ tryLock: () => true, env: env2, sleep: () => {} })).toBe(true);
+  expect('APPIMAGE_SILENT_INSTALL' in env2).toBe(false);
+});

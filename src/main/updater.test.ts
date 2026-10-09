@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from 'vitest';
 import { DEFAULT_UPDATE_PREFS, type UpdateMode, type UpdatePrefs } from '../core/update';
-import { createPrefsStore, createReleasesApiBackend, createUpdateController, pickRelease, type UpdateBackend, type UpdateView } from './updater';
+import { InstallError, createPrefsStore, createReleasesApiBackend, createUpdateController, pickRelease, type UpdateBackend, type UpdateView } from './updater';
 
 function setup(o: { mode?: UpdateMode; backend?: Partial<UpdateBackend> | null; prefs?: Partial<UpdatePrefs> } = {}) {
   let prefs: UpdatePrefs = { ...DEFAULT_UPDATE_PREFS, ...o.prefs };
@@ -133,6 +133,64 @@ describe('createUpdateController', () => {
     expect(c.view().state.phase).toBe('error');
     expect(c.view().state.error).toContain('EACCES');
     expect(c.view().popup).toBe(true);
+  });
+  test('installation échouée après la suppression de l’ancienne AppImage : chemin du fichier vérifié et cible dans l’état', async () => {
+    const { c } = setup({
+      backend: {
+        download: async () => {},
+        install: () => {
+          throw new InstallError('mv: Permission denied', '/c/pending/p.AppImage', '/home/u/Apps/p.AppImage');
+        },
+        pendingFile: () => '/c/pending/p.AppImage',
+      },
+    });
+    await c.check(false);
+    await c.download();
+    c.install();
+    expect(c.view().state.phase).toBe('error');
+    expect(c.view().state.failedInstall).toEqual({ file: '/c/pending/p.AppImage', target: '/home/u/Apps/p.AppImage' });
+  });
+  test('« Réessayer » après une installation échouée : réinstalle depuis le fichier vérifié en cache, sans retélécharger', async () => {
+    let tries = 0;
+    const download = vi.fn(async () => {});
+    const install = vi.fn(() => {
+      tries++;
+      if (tries === 1) throw new InstallError('EACCES', '/c/pending/p.AppImage', '/a/p.AppImage');
+    });
+    const { c } = setup({ backend: { download, install, pendingFile: () => '/c/pending/p.AppImage' } });
+    await c.check(false);
+    await c.download();
+    c.install();
+    await c.retry();
+    expect(install).toHaveBeenCalledTimes(2);
+    expect(download).toHaveBeenCalledTimes(1);
+  });
+  test('« Réessayer » : fichier vérifié disparu du cache → nouveau téléchargement', async () => {
+    const download = vi.fn(async () => {});
+    const install = vi.fn(() => {
+      throw new InstallError('EACCES', '/c/pending/p.AppImage', '/a/p.AppImage');
+    });
+    const { c } = setup({ backend: { download, install, pendingFile: () => null } });
+    await c.check(false);
+    await c.download();
+    c.install();
+    await c.retry();
+    expect(install).toHaveBeenCalledTimes(1);
+    expect(download).toHaveBeenCalledTimes(2);
+    expect(c.view().state.phase).toBe('ready');
+  });
+  test('« Réessayer » après un échec de téléchargement : nouveau téléchargement', async () => {
+    let fail = true;
+    const download = vi.fn(async () => {
+      if (fail) throw new Error('réseau');
+    });
+    const { c } = setup({ backend: { download } });
+    await c.check(false);
+    await c.download();
+    fail = false;
+    await c.retry();
+    expect(download).toHaveBeenCalledTimes(2);
+    expect(c.view().state.phase).toBe('ready');
   });
   test('mode relaunch (copie installée ailleurs) : ni téléchargement ni installation', async () => {
     const download = vi.fn(async () => {});

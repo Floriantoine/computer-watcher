@@ -79,16 +79,21 @@ jobs:
           name: release-files
           path: dist-publish
       - name: Publier la version GitHub
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd dist-publish
-          files=$(ls | grep -v '^release-notes\.md$')
+          files=()
+          for f in *; do
+            [ "$f" = release-notes.md ] || files+=("$f")
+          done
           # vX.Y.Z-beta.1… : préversion (electron-updater ne la propose que si le réglage « préversions » est activé)
-          pre=""
-          case "$GITHUB_REF_NAME" in *-*) pre="--prerelease" ;; esac
-          gh release create "$GITHUB_REF_NAME" $files $pre \
+          pre=()
+          case "$GITHUB_REF_NAME" in *-*) pre=(--prerelease) ;; esac
+          gh release create "${pre[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --title "proc-watch $GITHUB_REF_NAME" \
-            --notes-file release-notes.md
+            --notes-file release-notes.md \
+            -- "$GITHUB_REF_NAME" "${files[@]}"

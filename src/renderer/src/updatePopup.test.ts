@@ -57,8 +57,26 @@ describe('updatePopupText', () => {
   test('échec du téléchargement : message et « Réessayer »', () => {
     const t = updatePopupText(view({ phase: 'error', error: 'sha512 checksum mismatch' }));
     expect(t.body).toContain('sha512 checksum mismatch');
-    expect(t.actions.map((a) => a.kind)).toEqual(['download', 'later']);
+    expect(t.actions.map((a) => a.kind)).toEqual(['retry', 'later']);
     expect(t.actions[0].label).toBe('Réessayer');
+  });
+});
+
+describe('updatePopupText : installation échouée', () => {
+  test('dit précisément ce qui s’est passé, où est le fichier vérifié et comment le remettre en place', () => {
+    const t = updatePopupText(view({ phase: 'error', error: 'mv: Permission denied', failedInstall: { file: "/home/u/.cache/proc-watch-updater/pending/proc-watch-0.1.1-x86_64.AppImage", target: "/home/u/Mes Apps/l'app.AppImage" } }));
+    expect(t.body).toContain('L’installation a échoué : mv: Permission denied');
+    expect(t.body).toContain('/home/u/.cache/proc-watch-updater/pending/proc-watch-0.1.1-x86_64.AppImage');
+    expect(t.command).toBe("install -m 755 '/home/u/.cache/proc-watch-updater/pending/proc-watch-0.1.1-x86_64.AppImage' '/home/u/Mes Apps/l'\\''app.AppImage'");
+    expect(t.actions.map((a) => [a.kind, a.label])).toEqual([
+      ['retry', 'Réessayer'],
+      ['later', 'Plus tard'],
+    ]);
+  });
+  test('échec de téléchargement : « Réessayer » et pas de commande', () => {
+    const t = updatePopupText(view({ phase: 'error', error: 'réseau' }));
+    expect(t.command).toBeNull();
+    expect(t.actions[0]).toEqual({ kind: 'retry', label: 'Réessayer' });
   });
 });
 

@@ -1,9 +1,12 @@
 // Pop-up « Mise à jour disponible » et section « À propos » (logique pure) : textes et actions selon l'état du main.
 import type { UpdateState, UpdateView } from '../../core/update';
 
-export type UpdateAction = { kind: 'download' | 'install' | 'later' | 'ignore' | 'open'; label: string };
+export type UpdateAction = { kind: 'download' | 'install' | 'retry' | 'later' | 'ignore' | 'open'; label: string };
 
-export interface UpdatePopupText { title: string; body: string; progress: number | null; actions: UpdateAction[] }
+/** `command` : commande de secours à copier (installation échouée après la suppression de l'ancienne AppImage). */
+export interface UpdatePopupText { title: string; body: string; progress: number | null; actions: UpdateAction[]; command: string | null }
+
+const shq = (p: string) => `'${p.replace(/'/g, `'\\''`)}'`;
 
 const LATER: UpdateAction = { kind: 'later', label: 'Plus tard' };
 const IGNORE: UpdateAction = { kind: 'ignore', label: 'Ignorer cette version' };
@@ -15,7 +18,7 @@ export function updatePopupText(v: UpdateView): UpdatePopupText {
   const title = `Mise à jour ${version} disponible`;
   switch (s.phase) {
     case 'downloading':
-      return { title, body: `Téléchargement… ${Math.round(s.progress ?? 0)} %`, progress: s.progress ?? 0, actions: [] };
+      return { title, body: `Téléchargement… ${Math.round(s.progress ?? 0)} %`, progress: s.progress ?? 0, actions: [], command: null };
     case 'ready':
       return {
         title,
@@ -24,9 +27,23 @@ export function updatePopupText(v: UpdateView): UpdatePopupText {
           "d'enregistrement sera relancé avec la nouvelle version.",
         progress: null,
         actions: [{ kind: 'install', label: 'Redémarrer et installer' }, LATER],
+        command: null,
       };
-    case 'error':
-      return { title, body: `Échec du téléchargement : ${s.error ?? 'erreur inconnue'}`, progress: null, actions: [{ kind: 'download', label: 'Réessayer' }, LATER] };
+    case 'error': {
+      const retry: UpdateAction[] = [{ kind: 'retry', label: 'Réessayer' }, LATER];
+      const f = s.failedInstall;
+      if (!f) return { title, body: `Échec du téléchargement : ${s.error ?? 'erreur inconnue'}`, progress: null, actions: retry, command: null };
+      const where = f.file
+        ? ` La version téléchargée et vérifiée est gardée ici : ${f.file}.${f.target ? ' Si l’AppImage a disparu, la remettre en place avec la commande ci-dessous.' : ''}`
+        : '';
+      return {
+        title,
+        body: `L’installation a échoué : ${s.error ?? 'erreur inconnue'}. L’ancienne AppImage a pu être supprimée avant l’échec.${where}`,
+        progress: null,
+        actions: retry,
+        command: f.file && f.target ? `install -m 755 ${shq(f.file)} ${shq(f.target)}` : null,
+      };
+    }
     default:
       if (s.mode === 'relaunch')
         return {
@@ -34,6 +51,7 @@ export function updatePopupText(v: UpdateView): UpdatePopupText {
           body: `${notes} Cette AppImage n’est pas la copie installée : lancez proc-watch depuis le menu pour mettre à jour.`,
           progress: null,
           actions: [LATER, IGNORE],
+          command: null,
         };
       if (s.mode === 'notify')
         return {
@@ -41,8 +59,9 @@ export function updatePopupText(v: UpdateView): UpdatePopupText {
           body: `${notes} Ce format d’installation ne se met pas à jour tout seul : une mise à jour est disponible sur la page des versions.`,
           progress: null,
           actions: [{ kind: 'open', label: 'Voir la version' }, LATER, IGNORE],
+          command: null,
         };
-      return { title, body: notes, progress: null, actions: [{ kind: 'download', label: 'Mettre à jour' }, LATER, IGNORE] };
+      return { title, body: notes, progress: null, actions: [{ kind: 'download', label: 'Mettre à jour' }, LATER, IGNORE], command: null };
   }
 }
 

@@ -142,7 +142,7 @@ try {
       await press(win.locator('[data-testid="about-check-now"]'));
       await win.locator('[data-testid="update-popup"]').waitFor({ timeout: 15000 });
       await press(win.locator('[data-testid="update-popup-download"]'));
-      await win.locator('[data-testid="update-popup-download"]', { hasText: 'Réessayer' }).waitFor({ timeout: 20000 });
+      await win.locator('[data-testid="update-popup-retry"]', { hasText: 'Réessayer' }).waitFor({ timeout: 20000 });
       const body = await win.locator('[data-testid="update-popup-body"]').innerText();
       ok(/Échec du téléchargement/.test(body) && /sha512/i.test(body), `B. sha512 refusé : « ${body.slice(0, 120)} »`);
     } finally {
