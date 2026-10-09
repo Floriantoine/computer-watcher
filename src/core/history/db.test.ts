@@ -3,9 +3,9 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { expect, test } from 'vitest';
-import { SCHEMA_VERSION, hasColumn, historyBackups, openHistoryDb } from './db';
-import { queryEvents, queryGroups, queryProcs, queryProcsAt, querySystem } from './queries';
-import { createV3Db } from './testDb';
+import { SCHEMA_VERSION, cmdlineHash, hasColumn, historyBackups, openHistoryDb } from './db';
+import { queryCulprits, queryEvents, queryGroups, queryProcTree, queryProcs, queryProcsAt, querySystem } from './queries';
+import { createV3Db, createV4Db } from './testDb';
 
 const SYSTEM_MINUTE_COLS =
   'ts, mem_used_kb_avg, mem_used_kb_max, mem_total_kb, swap_used_kb_avg, swap_used_kb_max, swap_total_kb, psi_avg, psi_max, load1_avg, cpu_avg';
@@ -19,8 +19,8 @@ test('création : tables, version, WAL, auto_vacuum incrémental, journal_size_l
   const { db, recreated } = openHistoryDb(p);
   expect(recreated).toBeNull();
   expect(tables(db)).toEqual([
-    'events', 'group_hour', 'group_minute', 'group_samples', 'groups', 'proc_minute', 'proc_samples', 'procs', 'system_hour', 'system_minute',
-    'system_samples',
+    'cmdlines', 'events', 'group_hour', 'group_minute', 'group_samples', 'groups', 'proc_minute', 'proc_samples', 'procs', 'system_hour',
+    'system_minute', 'system_samples',
   ]);
   expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(SCHEMA_VERSION);
   expect((db.prepare('PRAGMA journal_mode').get() as { journal_mode: string }).journal_mode).toBe('wal');
@@ -137,18 +137,28 @@ test('permissions : dossier 0700, fichiers 0600', () => {
   rmSync(join(p, '..'), { recursive: true });
 });
 
-test('migration v1 → v4 en place : lignes conservées, colonne ppid ajoutée (NULL), colonnes shmem', () => {
+/** Base v1 : schéma v3 figé sans tables horaires ni ppid. */
+function createV1Db(p: string): DatabaseSync {
+  const db = createV3Db(p);
+  db.exec('DROP TABLE group_hour; DROP TABLE system_hour; ALTER TABLE procs DROP COLUMN ppid; PRAGMA user_version = 1');
+  return db;
+}
+
+test('migration v1 → v5 directe : lignes conservées, ppid NULL, cmdlines remplies, tables horaires, colonnes shmem', () => {
   const p = tmp();
-  const { db: v2 } = openHistoryDb(p);
-  v2.exec("INSERT INTO groups(id,key,label,kind) VALUES (1,'g','g','app')");
-  v2.exec('ALTER TABLE procs DROP COLUMN ppid'); // reconstitue le schéma v1
-  v2.exec("INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id) VALUES (1,10,100,'a','a',1),(2,11,100,'b','b',1)");
-  v2.exec('INSERT INTO proc_samples VALUES (5,1,10,0,1)');
-  v2.exec('PRAGMA user_version = 1');
-  v2.close();
+  const v1 = createV1Db(p);
+  v1.exec("INSERT INTO groups(id,key,label,kind) VALUES (1,'g','g','app')");
+  v1.exec("INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id) VALUES (1,10,100,'a','a',1),(2,11,100,'b','b',1)");
+  v1.exec('INSERT INTO proc_samples VALUES (5,1,10,0,1)');
+  v1.close();
   const { db, recreated } = openHistoryDb(p);
   expect(recreated).toBeNull();
-  expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(4);
+  expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(5);
+  expect(tables(db)).toEqual(expect.arrayContaining(['cmdlines', 'group_hour', 'system_hour']));
+  expect(hasColumn(db, 'procs', 'cmdline')).toBe(false);
+  expect(db.prepare('SELECT p.id, c.text FROM procs p JOIN cmdlines c ON c.id = p.cmdline_id ORDER BY p.id').all()).toEqual([
+    { id: 1, text: 'a' }, { id: 2, text: 'b' },
+  ]);
   expect(hasColumn(db, 'system_samples', 'shmem_kb')).toBe(true);
   expect(hasColumn(db, 'system_hour', 'shmem_kb_max')).toBe(true);
   expect(db.prepare('SELECT id, pid, ppid FROM procs ORDER BY id').all()).toEqual([
@@ -162,9 +172,7 @@ test('migration v1 → v4 en place : lignes conservées, colonne ppid ajoutée (
 
 test('lecture seule sur une base v1 : ne migre pas, lit normalement', () => {
   const p = tmp();
-  const { db: v2 } = openHistoryDb(p);
-  v2.exec('ALTER TABLE procs DROP COLUMN ppid; PRAGMA user_version = 1');
-  v2.close();
+  createV1Db(p).close();
   const { db } = openHistoryDb(p, { readOnly: true });
   expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(1);
   expect(db.prepare('SELECT * FROM procs').all()).toEqual([]);
@@ -174,11 +182,11 @@ test('lecture seule sur une base v1 : ne migre pas, lit normalement', () => {
 test('version plus récente : erreur typée, fichier intact, pas de .bak, lecture seule possible', () => {
   const p = tmp();
   const raw = new DatabaseSync(p);
-  raw.exec('PRAGMA user_version = 5; CREATE TABLE x(a); INSERT INTO x VALUES(1);');
+  raw.exec('PRAGMA user_version = 6; CREATE TABLE x(a); INSERT INTO x VALUES(1);');
   raw.close();
   const before = readFileSync(p);
   expect(() => openHistoryDb(p)).toThrow('HISTORY_DB_NEWER');
-  try { openHistoryDb(p); } catch (e) { expect(e).toMatchObject({ code: 'HISTORY_DB_NEWER', version: 5 }); }
+  try { openHistoryDb(p); } catch (e) { expect(e).toMatchObject({ code: 'HISTORY_DB_NEWER', version: 6 }); }
   expect(readFileSync(p).equals(before)).toBe(true);
   expect(readdirSync(join(p, '..')).filter((f) => f.includes('.bak'))).toEqual([]);
   const { db } = openHistoryDb(p, { readOnly: true });
@@ -186,37 +194,37 @@ test('version plus récente : erreur typée, fichier intact, pas de .bak, lectur
   db.close();
 });
 
-test('migration : copie pre-v4 valide (v1, 0600), seule la plus récente conservée', () => {
+test('migration : copie pre-v5 valide (v1, 0600), seule la plus récente conservée', () => {
   const mkV1 = (p: string) => {
-    const { db } = openHistoryDb(p);
+    const db = createV1Db(p);
     db.exec("INSERT INTO groups(id,key,label,kind) VALUES (1,'g','g','app')");
-    db.exec('ALTER TABLE procs DROP COLUMN ppid');
     db.exec("INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id) VALUES (1,10,100,'a','a',1)");
-    db.exec('PRAGMA user_version = 1');
     db.close();
   };
   const p = tmp();
   mkV1(p);
+  // copie d'une migration précédente (v4) : remplacée par la nouvelle
+  writeFileSync(`${p}.pre-v4-20261001T000000`, '');
   openHistoryDb(p, { now: () => Date.UTC(2026, 9, 7, 9, 40) }).db.close();
-  const first = `${p}.pre-v4-20261007T094000`;
+  expect(readdirSync(join(p, '..')).filter((f) => f.includes('.pre-v'))).toEqual([`${basename(p)}.pre-v5-20261007T094000`]);
+  const first = `${p}.pre-v5-20261007T094000`;
   expect(existsSync(first)).toBe(true);
   expect(statSync(first).mode & 0o777).toBe(0o600);
   const c = new DatabaseSync(first, { readOnly: true });
   expect((c.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(1);
   expect(c.prepare('SELECT pid FROM procs').all()).toEqual([{ pid: 10 }]);
   c.close();
-  // seconde migration (base ramenée en v1) : l'ancienne copie est remplacée
-  const d = new DatabaseSync(p);
-  d.exec('ALTER TABLE procs DROP COLUMN ppid; PRAGMA user_version = 1');
-  d.close();
+  // seconde migration (nouvelle base v1 au même chemin) : l'ancienne copie est remplacée
+  for (const f of [p, `${p}-wal`, `${p}-shm`]) rmSync(f, { force: true });
+  mkV1(p);
   openHistoryDb(p, { now: () => Date.UTC(2026, 9, 8, 9, 40) }).db.close();
-  expect(readdirSync(join(p, '..')).filter((f) => f.includes('.pre-v'))).toEqual([`${basename(p)}.pre-v4-20261008T094000`]);
+  expect(readdirSync(join(p, '..')).filter((f) => f.includes('.pre-v'))).toEqual([`${basename(p)}.pre-v5-20261008T094000`]);
 });
 
 const H = 3600_000;
-/** Base v2 : schéma actuel sans les tables horaires. */
+/** Base v2 : schéma v3 figé sans les tables horaires. */
 function makeV2(p: string, fill?: (db: DatabaseSync) => void) {
-  const { db } = openHistoryDb(p);
+  const db = createV3Db(p);
   db.exec('DROP TABLE group_hour; DROP TABLE system_hour;');
   fill?.(db);
   db.exec('PRAGMA user_version = 2');
@@ -224,7 +232,7 @@ function makeV2(p: string, fill?: (db: DatabaseSync) => void) {
 }
 const n = (db: DatabaseSync, t: string) => (db.prepare(`SELECT COUNT(*) n FROM ${t}`).get() as { n: number }).n;
 
-test('migration v2 → v4 : tables horaires créées et remplies depuis les minutes, minutes conservées', () => {
+test('migration v2 → v5 : tables horaires créées et remplies depuis les minutes, minutes conservées', () => {
   const p = tmp();
   makeV2(p, (db) => {
     db.exec("INSERT INTO groups(id,key,label,kind) VALUES (1,'a','a','app'),(2,'b','b','app')");
@@ -240,7 +248,7 @@ test('migration v2 → v4 : tables horaires créées et remplies depuis les minu
   const { db, recreated, warning } = openHistoryDb(p, { now: () => Date.UTC(2026, 9, 7, 9, 40) });
   expect(recreated).toBeNull();
   expect(warning).toBeNull();
-  expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(4);
+  expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(5);
   expect(n(db, 'group_minute')).toBe(180);
   expect(db.prepare('SELECT * FROM group_hour ORDER BY group_id, ts').all()).toEqual([
     { ts: 10 * H, group_id: 1, rss_kb_avg: 129.5, swap_kb_avg: 10, mem_kb_max: 259, cpu_avg: 1 },
@@ -251,7 +259,7 @@ test('migration v2 → v4 : tables horaires créées et remplies depuis les minu
     { ts: 10 * H, mem_used_kb_avg: 1029.5, mem_used_kb_max: 2059, psi_avg: null, psi_max: null },
     { ts: 11 * H, mem_used_kb_avg: 1089.5, mem_used_kb_max: 2119, psi_avg: 5, psi_max: 9 },
   ]);
-  const copy = `${p}.pre-v4-20261007T094000`;
+  const copy = `${p}.pre-v5-20261007T094000`;
   const c = new DatabaseSync(copy, { readOnly: true });
   expect((c.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(2);
   expect(n(c, 'group_minute')).toBe(180);
@@ -263,7 +271,7 @@ test('migration v2 → v4 : tables horaires créées et remplies depuis les minu
   again.db.close();
 });
 
-test('migration v2 → v4 : copie de sécurité impossible → avertissement, copie partielle supprimée, migration faite', () => {
+test('migration v2 → v5 : copie de sécurité impossible → avertissement, copie partielle supprimée, migration faite', () => {
   const p = tmp();
   makeV2(p);
   const { db, warning } = openHistoryDb(p, {
@@ -275,7 +283,7 @@ test('migration v2 → v4 : copie de sécurité impossible → avertissement, co
   });
   expect(warning).toMatch(/copie de sécurité.*disque plein/i);
   expect(readdirSync(join(p, '..')).filter((f) => f.includes('.pre-v'))).toEqual([]);
-  expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(4);
+  expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(5);
   expect(tables(db)).toContain('group_hour');
   db.close();
 });
@@ -298,14 +306,16 @@ const SHMEM_COLS: [string, string][] = [
 ];
 const NOW = 100 * H;
 const o = { now: NOW, detailHours: 24, intervalSec: 5 };
+const SYS_COLS = 'ts, mem_used_kb, mem_total_kb, swap_used_kb, swap_total_kb, psi_some10, load1, cpu_percent';
+const HOUR_COLS = SYSTEM_MINUTE_COLS;
 
-/** Base v3 (schéma figé) remplie : 3 procs, échantillons détaillés, minutes, heures, événements. */
-function makeV3(p: string): void {
-  const db = createV3Db(p);
+/** Base v3 ou v4 (schémas figés) remplie : 3 procs (1 et 3 partagent `node vite`), échantillons, minutes, heures, événements. */
+function makeOld(p: string, v: 3 | 4): void {
+  const db = v === 3 ? createV3Db(p) : createV4Db(p);
   db.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'g','G','app'),(2,'h','H','project');
            INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id,ppid) VALUES
              (1,10,100,'node','node vite',1,1),(2,11,100,'bash','bash -l',1,10),(3,12,200,'node','node vite',2,NULL);`);
-  const ss = db.prepare('INSERT INTO system_samples VALUES (?,?,?,?,?,?,?,?)');
+  const ss = db.prepare(`INSERT INTO system_samples(${SYS_COLS}) VALUES (?,?,?,?,?,?,?,?)`);
   const gs = db.prepare('INSERT INTO group_samples VALUES (?,?,?,?,?,?)');
   const ps = db.prepare('INSERT INTO proc_samples VALUES (?,?,?,?,?)');
   for (let ts = NOW - 30 * 60_000; ts < NOW; ts += 5000) {
@@ -316,25 +326,28 @@ function makeV3(p: string): void {
     ps.run(ts, 2, 300, 0, 1);
     ps.run(ts, 3, 500, 0, 1);
   }
-  const sm = db.prepare('INSERT INTO system_minute VALUES (?,?,?,?,?,?,?,?,?,?,?)');
+  const sm = db.prepare(`INSERT INTO system_minute(${SYSTEM_MINUTE_COLS}) VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
   const gm = db.prepare('INSERT INTO group_minute VALUES (?,?,?,?,?,?)');
   const pm = db.prepare('INSERT INTO proc_minute VALUES (?,?,?,?,?)');
   for (let ts = NOW - 30 * H; ts < NOW; ts += 60_000) {
     sm.run(ts, 4000, 4100, 8000, 10, 12, 100, 1, 2, 0.5, 12);
     gm.run(ts, 1, 1000, 5, 1010, 3);
     pm.run(ts, 1, 700, 710, 2);
+    pm.run(ts, 3, 400, 410, 1);
   }
-  const sh = db.prepare('INSERT INTO system_hour VALUES (?,?,?,?,?,?,?,?,?,?,?)');
+  const sh = db.prepare(`INSERT INTO system_hour(${HOUR_COLS}) VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
   const gh = db.prepare('INSERT INTO group_hour VALUES (?,?,?,?,?,?)');
   for (let h = 0; h < 100; h++) {
     sh.run(h * H, 4000, 4100 + h, 8000, 10, 12, 100, 1, 2, 0.5, 12);
     gh.run(h * H, 1, 1000, 5, 1010 + h, 3);
   }
-  db.exec(`INSERT INTO events(ts,type,group_id,detail) VALUES (${NOW - H},'pressure',NULL,'{"psi":30}'),(${NOW - 2 * H},'leak',1,'{}')`);
+  db.exec(`INSERT INTO events(ts,type,group_id,detail) VALUES (${NOW - H},'pressure',NULL,'{"psi":30}'),(${NOW - 2 * H},'leak',1,'{}'),
+             (${NOW - 3 * H},'earlyoom_kill',NULL,'{"pid":10,"name":"node"}'),
+             (${NOW - 4 * H},'app_kill',NULL,'{"targets":[{"pid":12,"startTicks":200}]}')`);
   db.close();
 }
 
-/** Résultats des requêtes de l'app sur une connexion donnée (détail, minute, heure, procs, événements). */
+/** Résultats des requêtes de l'app sur une connexion donnée (détail, minute, heure, procs, événements, rejeu, coupables). */
 function snapshotQueries(db: DatabaseSync) {
   const detail = { from: NOW - 20 * 60_000, to: NOW };
   return {
@@ -344,91 +357,141 @@ function snapshotQueries(db: DatabaseSync) {
     groups: queryGroups(db, { from: 0, to: NOW }, o),
     procs: queryProcs(db, 'g', detail, o),
     procsAt: queryProcsAt(db, 'g', NOW - 60_000, o),
+    procsAtMinute: queryProcsAt(db, 'h', NOW - 26 * H, o),
+    tree: queryProcTree(db, 'g', NOW - 60_000, o),
+    treeMinute: queryProcTree(db, 'h', NOW - 26 * H, o),
     events: queryEvents(db, { from: 0, to: NOW }),
+    eventsG: queryEvents(db, { from: 0, to: NOW }, 'g'),
+    eventsH: queryEvents(db, { from: 0, to: NOW }, 'h'),
+    culprits: queryCulprits(db, NOW - 10 * 60_000, o),
   };
 }
+const procRows = (db: DatabaseSync) =>
+  db.prepare(`SELECT p.id, p.pid, p.start_ticks, p.name, ${hasColumn(db, 'procs', 'cmdline') ? 'p.cmdline' : 'c.text'} AS cmdline, p.group_id, p.ppid
+              FROM procs p ${hasColumn(db, 'procs', 'cmdline') ? '' : 'JOIN cmdlines c ON c.id = p.cmdline_id'} ORDER BY p.id`).all();
+const indexes = (db: DatabaseSync, table: string) =>
+  (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ? AND sql IS NOT NULL ORDER BY name").all(table) as { name: string }[]).map((r) => r.name);
 
-test('création v4 : colonnes shmem_kb (échantillons) et shmem_kb_avg|max (minute, heure)', () => {
+test('création v5 : table cmdlines, procs.cmdline_id, index procs_cmdline et procs_pid, colonnes shmem', () => {
   const { db } = openHistoryDb(tmp());
-  expect(SCHEMA_VERSION).toBe(4);
-  expect(version(db)).toBe(4);
+  expect(SCHEMA_VERSION).toBe(5);
+  expect(version(db)).toBe(5);
   for (const [t, c] of SHMEM_COLS) expect(hasColumn(db, t, c), `${t}.${c}`).toBe(true);
+  expect(hasColumn(db, 'procs', 'cmdline_id')).toBe(true);
+  expect(hasColumn(db, 'procs', 'cmdline')).toBe(false);
+  expect(indexes(db, 'procs')).toEqual(['procs_cmdline', 'procs_group', 'procs_pid']);
+  // pas d'index UNIQUE sur text (il recopierait chaque ligne de commande) : condensé indexé
+  expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'cmdlines'").all()).toEqual([{ name: 'cmdlines_hash' }]);
   db.close();
 });
 
-test('lecture seule d’une base v3 (app avant migration du service) : ne migre pas, requêtes normales', () => {
+test.each([3, 4] as const)('lecture seule d’une base v%i (app avant migration du service) : ne migre pas, requêtes normales', (v) => {
   const p = tmp();
-  makeV3(p);
+  makeOld(p, v);
   const { db } = openHistoryDb(p, { readOnly: true });
   const r = snapshotQueries(db);
   expect(r.systemDetail.ts.length).toBeGreaterThan(0);
   expect(r.procsAt.map((x) => x.cmdline).sort()).toEqual(['bash -l', 'node vite']);
-  expect(version(db)).toBe(3);
+  expect(version(db)).toBe(v);
   db.close();
 });
 
-test('migration v3 → v4 : lignes et résultats des requêtes identiques, colonnes shmem ajoutées (NULL)', () => {
+test.each([3, 4] as const)('migration v%i → v5 : lignes identiques, cmdlines dédupliquées, ids conservés, requêtes identiques', (v) => {
   const p = tmp();
-  makeV3(p);
+  makeOld(p, v);
   const counts = (db: DatabaseSync) =>
     Object.fromEntries(['procs', 'proc_samples', 'proc_minute', 'group_samples', 'group_minute', 'group_hour', 'system_samples', 'system_minute', 'system_hour', 'events', 'groups']
       .map((t) => [t, n(db, t)]));
   const ro = openHistoryDb(p, { readOnly: true }).db;
   const before = snapshotQueries(ro);
   const countsBefore = counts(ro);
-  const procsBefore = ro.prepare('SELECT * FROM procs ORDER BY id').all();
+  const procsBefore = procRows(ro);
   ro.close();
+  expect(before.eventsG.map((e) => e.type)).toEqual(['earlyoom_kill', 'leak', 'pressure']);
+  expect(before.eventsH.map((e) => e.type)).toEqual(['app_kill', 'pressure']);
   const { db, recreated, warning } = openHistoryDb(p, { now: () => Date.UTC(2026, 9, 8, 12) });
   expect(recreated).toBeNull();
   expect(warning).toBeNull();
-  expect(version(db)).toBe(4);
+  expect(version(db)).toBe(5);
   for (const [t, c] of SHMEM_COLS) expect(hasColumn(db, t, c), `${t}.${c}`).toBe(true);
-  expect(db.prepare('SELECT COUNT(*) n FROM system_samples WHERE shmem_kb IS NOT NULL').get()).toEqual({ n: 0 });
+  expect(hasColumn(db, 'procs', 'cmdline')).toBe(false);
+  expect(db.prepare('SELECT hash, text FROM cmdlines ORDER BY text').all()).toEqual([
+    { hash: cmdlineHash('bash -l'), text: 'bash -l' }, { hash: cmdlineHash('node vite'), text: 'node vite' },
+  ]);
+  expect(indexes(db, 'procs')).toEqual(['procs_cmdline', 'procs_group', 'procs_pid']);
   expect(counts(db)).toEqual(countsBefore);
-  expect(db.prepare('SELECT * FROM procs ORDER BY id').all()).toEqual(procsBefore);
+  expect(procRows(db)).toEqual(procsBefore);
   expect(snapshotQueries(db)).toEqual(before);
+  expect(db.prepare('PRAGMA integrity_check').get()).toEqual({ integrity_check: 'ok' });
+  expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
   db.close();
   const again = openHistoryDb(p); // réouverture : idempotent
-  expect(version(again.db)).toBe(4);
+  expect(version(again.db)).toBe(5);
   expect(counts(again.db)).toEqual(countsBefore);
+  expect(n(again.db, 'cmdlines')).toBe(2);
   again.db.close();
   expect(readdirSync(join(p, '..')).filter((f) => f.includes('.bak'))).toEqual([]);
 });
 
-test('migration v3 → v4 : copie .pre-v4-<date> lisible en v3, 0600', () => {
+test('migration v4 → v5 : copie .pre-v5-<date> lisible en v4, 0600', () => {
   const p = tmp();
-  makeV3(p);
+  makeOld(p, 4);
   openHistoryDb(p, { now: () => Date.UTC(2026, 9, 8, 12) }).db.close();
-  const copy = `${p}.pre-v4-20261008T120000`;
+  const copy = `${p}.pre-v5-20261008T120000`;
   expect(statSync(copy).mode & 0o777).toBe(0o600);
   const c = new DatabaseSync(copy, { readOnly: true });
-  expect(version(c)).toBe(3);
-  expect(hasColumn(c, 'system_samples', 'shmem_kb')).toBe(false);
+  expect(version(c)).toBe(4);
+  expect(hasColumn(c, 'procs', 'cmdline')).toBe(true);
   expect(queryProcsAt(c, 'g', NOW - 60_000, o).map((x) => x.cmdline).sort()).toEqual(['bash -l', 'node vite']);
   c.close();
 });
 
-test('migration avec un lecteur ouvert (app, WAL) : aboutit sans SQLITE_BUSY, le lecteur voit ensuite la v4', () => {
+test('migration avec un lecteur ouvert (app, WAL) : aboutit sans SQLITE_BUSY, le lecteur voit ensuite la v5', () => {
   const p = tmp();
-  makeV3(p);
+  makeOld(p, 4);
   const reader = openHistoryDb(p, { readOnly: true }).db;
-  const it = reader.prepare('SELECT id FROM procs ORDER BY id').iterate();
-  expect(it.next().value).toEqual({ id: 1 }); // transaction de lecture en cours
+  const it = reader.prepare('SELECT id, cmdline FROM procs ORDER BY id').iterate();
+  expect(it.next().value).toEqual({ id: 1, cmdline: 'node vite' }); // transaction de lecture en cours (instantané v4)
   const t0 = Date.now();
   const { db } = openHistoryDb(p);
   expect(Date.now() - t0).toBeLessThan(1500); // jamais l'attente du busy_timeout
-  expect(version(db)).toBe(4);
-  expect([...it].map((r) => (r as { id: number }).id)).toEqual([2, 3]); // le lecteur termine son instantané v3
-  expect(hasColumn(reader, 'system_samples', 'shmem_kb')).toBe(true);
+  expect(version(db)).toBe(5);
+  expect([...it]).toEqual([{ id: 2, cmdline: 'bash -l' }, { id: 3, cmdline: 'node vite' }]); // le lecteur termine son instantané v4
+  expect(hasColumn(reader, 'procs', 'cmdline_id')).toBe(true);
   expect(queryProcsAt(reader, 'g', NOW - 60_000, o).map((x) => x.cmdline).sort()).toEqual(['bash -l', 'node vite']);
   expect(querySystem(reader, { from: NOW - 20 * 60_000, to: NOW }, o).ts.length).toBeGreaterThan(0);
   reader.close();
   db.close();
 });
 
-test('migration qui échoue → base v3 intacte (rien d’ajouté), lisible, jamais écartée', () => {
+test('migration v4 → v5 qui échoue → base v4 intacte (procs.cmdline, pas de cmdlines), lisible, jamais écartée', () => {
   const p = tmp();
-  makeV3(p);
+  makeOld(p, 4);
+  const raw = new DatabaseSync(p);
+  // une vue nommée cmdlines : CREATE TABLE cmdlines échoue au milieu de la migration
+  raw.exec('CREATE VIEW cmdlines AS SELECT 1 AS id, 2 AS text');
+  raw.close();
+  const ro0 = openHistoryDb(p, { readOnly: true }).db;
+  const before = snapshotQueries(ro0);
+  const procsBefore = procRows(ro0);
+  ro0.close();
+  expect(() => openHistoryDb(p)).toThrow(/cmdlines/);
+  const ro = openHistoryDb(p, { readOnly: true }).db;
+  expect(version(ro)).toBe(4);
+  expect(hasColumn(ro, 'procs', 'cmdline')).toBe(true);
+  expect(hasColumn(ro, 'procs', 'cmdline_id')).toBe(false);
+  expect(indexes(ro, 'procs')).toEqual(['procs_group']);
+  expect(tables(ro)).not.toContain('procs_v5');
+  expect(procRows(ro)).toEqual(procsBefore);
+  expect(snapshotQueries(ro)).toEqual(before);
+  ro.close();
+  expect(existsSync(p)).toBe(true);
+  expect(readdirSync(join(p, '..')).filter((f) => f.includes('.bak'))).toEqual([]);
+});
+
+test('migration v3 qui échoue → base v3 intacte (rien d’ajouté), lisible, jamais écartée', () => {
+  const p = tmp();
+  makeOld(p, 3);
   const raw = new DatabaseSync(p);
   // system_hour en vue : ALTER TABLE échoue après l'ajout de la colonne de system_samples (retour arrière à vérifier)
   raw.exec(`DROP TABLE system_hour; CREATE VIEW system_hour AS SELECT ts, mem_used_kb_avg, mem_used_kb_max, mem_total_kb, swap_used_kb_avg,
@@ -438,6 +501,7 @@ test('migration qui échoue → base v3 intacte (rien d’ajouté), lisible, jam
   const ro = openHistoryDb(p, { readOnly: true }).db;
   expect(version(ro)).toBe(3);
   for (const [t, c] of SHMEM_COLS.slice(0, 3)) expect(hasColumn(ro, t, c), `${t}.${c}`).toBe(false);
+  expect(hasColumn(ro, 'procs', 'cmdline')).toBe(true);
   expect(queryProcsAt(ro, 'g', NOW - 60_000, o).map((x) => x.cmdline).sort()).toEqual(['bash -l', 'node vite']);
   expect(querySystem(ro, { from: NOW - 20 * 60_000, to: NOW }, o).ts.length).toBeGreaterThan(0);
   ro.close();

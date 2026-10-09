@@ -1,9 +1,10 @@
 import { chmodSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { rollupHours } from './maintenance';
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 /** Tables horaires (v3) : sources des plages > 48 h, alimentées depuis les tables minute. Colonnes shmem : v4. */
 const HOUR_SCHEMA = `
@@ -22,6 +23,45 @@ CREATE TABLE IF NOT EXISTS group_hour (
 CREATE INDEX IF NOT EXISTS group_hour_ts ON group_hour(ts);
 `;
 
+/**
+ * Lignes de commande (v5), une fois chacune. Pas de contrainte UNIQUE sur text : son index recopierait chaque texte (mesuré :
+ * cmdlines deux fois plus grosse, base plus grosse qu'en v4). L'unicité passe par un condensé indexé (hash, 6 octets) :
+ * recherche `hash = ? AND text = ?`, collisions tolérées.
+ */
+const CMDLINES_SCHEMA = `
+CREATE TABLE cmdlines (id INTEGER PRIMARY KEY, hash INTEGER NOT NULL, text TEXT NOT NULL);
+CREATE INDEX cmdlines_hash ON cmdlines(hash);
+`;
+
+/** Condensé d'une ligne de commande (48 bits de SHA-256 : entier JS exact), colonne cmdlines.hash. */
+export function cmdlineHash(text: string): number {
+  return createHash('sha256').update(text).digest().readUIntBE(0, 6);
+}
+
+/** Déclare cmdlineHash en SQL (`pw_cmdline_hash`) sur cette connexion (migration, tests). */
+export function registerCmdlineHash(db: DatabaseSync): void {
+  db.function('pw_cmdline_hash', { deterministic: true }, (t) => cmdlineHash(String(t)));
+}
+
+/** procs v5 : la ligne de commande est une référence vers cmdlines (dédupliquée). */
+function procsTable(name: string): string {
+  return `CREATE TABLE ${name} (
+  id INTEGER PRIMARY KEY, pid INTEGER NOT NULL, start_ticks INTEGER NOT NULL,
+  name TEXT NOT NULL, cmdline_id INTEGER NOT NULL, group_id INTEGER NOT NULL, ppid INTEGER,
+  UNIQUE (pid, start_ticks)
+);`;
+}
+
+/**
+ * Index de procs (v5). procs_cmdline : purge des cmdlines orphelines sans parcours quadratique. procs_pid : couvrant pour
+ * le filtre par groupe de queryEvents (pid ciblé → group_id, name, id sans lire la table).
+ */
+const PROCS_INDEXES = `
+CREATE INDEX IF NOT EXISTS procs_group ON procs(group_id);
+CREATE INDEX IF NOT EXISTS procs_cmdline ON procs(cmdline_id);
+CREATE INDEX IF NOT EXISTS procs_pid ON procs(pid, group_id, name);
+`;
+
 const SCHEMA = `
 CREATE TABLE system_samples (
   ts INTEGER PRIMARY KEY,
@@ -37,12 +77,9 @@ CREATE TABLE group_samples (
   PRIMARY KEY (group_id, ts)
 ) WITHOUT ROWID;
 CREATE INDEX group_samples_ts ON group_samples(ts);
-CREATE TABLE procs (
-  id INTEGER PRIMARY KEY, pid INTEGER NOT NULL, start_ticks INTEGER NOT NULL,
-  name TEXT NOT NULL, cmdline TEXT NOT NULL, group_id INTEGER NOT NULL, ppid INTEGER,
-  UNIQUE (pid, start_ticks)
-);
-CREATE INDEX procs_group ON procs(group_id);
+${CMDLINES_SCHEMA}
+${procsTable('procs')}
+${PROCS_INDEXES}
 CREATE TABLE proc_samples (
   ts INTEGER NOT NULL, proc_id INTEGER NOT NULL,
   rss_kb INTEGER NOT NULL, swap_kb INTEGER NOT NULL, cpu_percent REAL NOT NULL,
@@ -157,8 +194,29 @@ const SHMEM_COLUMNS: [table: string, column: string, type: string][] = [
 ];
 
 /**
+ * v4 -> v5 : lignes de commande dédupliquées. cmdlines remplie depuis les valeurs distinctes, procs réécrite avec
+ * cmdline_id (ids conservés : proc_samples et proc_minute restent valides), puis index. Dans la transaction de migrate.
+ */
+function dedupCmdlines(db: DatabaseSync): void {
+  registerCmdlineHash(db);
+  // une table seulement : un autre objet nommé cmdlines (vue...) fait échouer la migration, annulée en bloc
+  if (!tableExists(db, 'cmdlines')) db.exec(CMDLINES_SCHEMA);
+  db.exec(`INSERT INTO cmdlines(hash, text)
+             SELECT pw_cmdline_hash(t), t FROM (SELECT DISTINCT cmdline AS t FROM procs)
+             WHERE NOT EXISTS (SELECT 1 FROM cmdlines c WHERE c.hash = pw_cmdline_hash(t) AND c.text = t);
+           DROP TABLE IF EXISTS procs_v5;
+           ${procsTable('procs_v5')}
+           INSERT INTO procs_v5(id, pid, start_ticks, name, cmdline_id, group_id, ppid)
+             SELECT p.id, p.pid, p.start_ticks, p.name, c.id, p.group_id, p.ppid
+             FROM procs p JOIN cmdlines c ON c.hash = pw_cmdline_hash(p.cmdline) AND c.text = p.cmdline;
+           DROP TABLE procs;
+           ALTER TABLE procs_v5 RENAME TO procs;`);
+}
+
+/**
  * v1 -> v2 : procs.ppid (NULL pour l'historique existant) ; v2 -> v3 : tables horaires remplies depuis les minutes ;
- * v3 -> v4 : colonnes shmem (ALTER TABLE ADD COLUMN, sans réécriture des tables). Idempotent, atomique.
+ * v3 -> v4 : colonnes shmem (ALTER TABLE ADD COLUMN, sans réécriture des tables) ; v4 -> v5 : table cmdlines, procs.cmdline_id
+ * et index procs_cmdline, procs_pid. Idempotent, atomique : en cas d'échec, la base reste à sa version d'origine.
  */
 function migrate(db: DatabaseSync): void {
   db.exec('BEGIN IMMEDIATE');
@@ -169,12 +227,26 @@ function migrate(db: DatabaseSync): void {
     for (const [t, c, type] of SHMEM_COLUMNS) {
       if (!hasColumn(db, t, c)) db.exec(`ALTER TABLE ${t} ADD COLUMN ${c} ${type}`);
     }
+    if (hasColumn(db, 'procs', 'cmdline')) dedupCmdlines(db);
+    db.exec(PROCS_INDEXES);
     if (!hadHours) rollupHours(db); // v1/v2 seulement : une base v3 a déjà ses heures
     db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     db.exec('COMMIT');
   } catch (e) {
     db.exec('ROLLBACK');
     throw e;
+  }
+  // rend la place de l'ancienne table procs, puis vide le journal WAL (un lecteur ouvert peut empêcher la troncature :
+  // ce n'est pas une erreur, le journal sera recyclé plus tard)
+  // Après la validation, la base est déjà une v5 valide : un échec ici ne doit pas faire planter le démarrage.
+  try {
+    db.exec('PRAGMA incremental_vacuum;');
+    db.exec('PRAGMA busy_timeout = 0;'); // sans attendre le lecteur : busy = 1 dans le résultat, pas une erreur
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
+  } catch {
+    // place et journal récupérés plus tard (purge périodique, checkpoint automatique)
+  } finally {
+    db.exec('PRAGMA busy_timeout = 2000;');
   }
 }
 
@@ -214,8 +286,8 @@ export function openHistoryDb(
       // base créée par une version plus récente : jamais écartée ni modifiée (retour arrière possible)
       throw Object.assign(new Error('HISTORY_DB_NEWER'), { code: 'HISTORY_DB_NEWER', version: v });
     }
-    // v1/v2/v3 reconnues (table procs présente) : migration en place ; sinon traitée comme inconnue (.bak)
-    const migratable = (v === 1 || v === 2 || v === 3) && hasColumn(db, 'procs', 'id');
+    // v1 à v4 reconnues (table procs présente) : migration en place ; sinon traitée comme inconnue (.bak)
+    const migratable = v >= 1 && v < SCHEMA_VERSION && hasColumn(db, 'procs', 'id');
     let warning: string | null = null;
     if (migratable) {
       db.exec(WRITER_PRAGMAS);

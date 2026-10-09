@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'vitest';
-import { openHistoryDb } from './db';
+import { openTestDb } from './testDb';
 import { aggregateMinute } from './maintenance';
 import { queryGroups, queryProcsAt, queryProcTree, querySystem, queryTop, rangeFromPreset } from './queries';
 
@@ -16,7 +16,7 @@ const H = 3600_000;
 const M = 60_000;
 
 test('performance : 24 h x 100 groupes à 5 s', () => {
-  const { db } = openHistoryDb(join(mkdtempSync(join(tmpdir(), 'pw-perf-')), 'm.db'));
+  const { db } = openTestDb(join(mkdtempSync(join(tmpdir(), 'pw-perf-')), 'm.db'));
   const now = 100 * H;
   const start = now - 24 * H;
   db.exec('BEGIN');
@@ -30,7 +30,7 @@ test('performance : 24 h x 100 groupes à 5 s', () => {
   }
   db.exec('COMMIT');
   db.exec('BEGIN');
-  const ps = db.prepare('INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id,ppid) VALUES (?,?,?,?,?,?,?)');
+  const ps = db.prepare('INSERT INTO procs_in(id,pid,start_ticks,name,cmdline,group_id,ppid) VALUES (?,?,?,?,?,?,?)');
   const pss = db.prepare('INSERT INTO proc_samples VALUES (?,?,?,?,?)');
   for (let i = 1; i <= 100; i++) ps.run(i, 1000 + i, 1, `p${i}`, `p${i}`, 1, 1);
   for (let ts = start; ts < now; ts += 5000) for (let i = 1; i <= 100; i++) pss.run(ts, i, 1000 + i, 0, 1);
