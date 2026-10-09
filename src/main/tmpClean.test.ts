@@ -1,6 +1,6 @@
 // Toutes les racines sont sous ~/.cache/pw-tmpclean-* (jamais /tmp) et supprimées à la fin.
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, statSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, statSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:net';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -792,8 +792,8 @@ test('signalement 1 : marque plantée en lien vers un fichier extérieur : jamai
   expect(readFileSync(outside, 'utf8')).toBe('original\n');
   const qname = readdirSync(root).find((n) => n.startsWith('.proc-watch-trash-'))!;
   const qino = String(lstatSync(join(root, qname), { bigint: true }).ino);
-  const saved = JSON.parse(readFileSync(storePath, 'utf8')) as { quarantine: string; name: string }[];
-  expect(saved).toEqual([{ quarantine: qino, name: 'item' }]);
+  const saved = JSON.parse(readFileSync(storePath, 'utf8')) as { quarantine: string; path: string; name: string }[];
+  expect(saved).toEqual([{ quarantine: qino, path: join(root, qname), name: 'item' }]);
   expect(statSync(storePath).mode & 0o777).toBe(0o600);
   // relecture : la marque plantée n'est jamais lue (elle n'étiquette rien), le lien est une entrée comme une autre
   const c2 = cleaner(root, { setAside: createSetAsideStore(storePath) });
@@ -803,18 +803,6 @@ test('signalement 1 : marque plantée en lien vers un fichier extérieur : jamai
   expect(existsSync(outside)).toBe(true);
   // vidée : l'entrée de la liste du main est oubliée
   expect(JSON.parse(readFileSync(storePath, 'utf8'))).toEqual([]);
-});
-
-test('signalement 1 : liste du main illisible ou corrompue : ignorée sans erreur, réécrite atomiquement', () => {
-  const { base } = setup();
-  const p = join(base, 'data', 'tmp-set-aside.json');
-  mkdirSync(join(base, 'data'));
-  writeFileSync(p, '{pas du json');
-  const st = createSetAsideStore(p);
-  expect(st.has('1', 'a')).toBe(false);
-  st.add('7', 'a');
-  expect(createSetAsideStore(p).has('7', 'a')).toBe(true);
-  expect(readdirSync(join(base, 'data'))).toEqual(['tmp-set-aside.json']); // pas de fichier temporaire restant
 });
 
 test('signalement 2 : le budget de « Vider » démarre après la confirmation (lecture lente de la boîte)', async () => {
@@ -932,11 +920,11 @@ test('r2 : entrées de la liste du main dont la quarantaine n’existe plus : ou
   const store = createSetAsideStore(storePath);
   const q = leftover(root, '.proc-watch-trash-Vivante', { x: 1 });
   const live = String(lstatSync(q, { bigint: true }).ino);
-  store.add('999999999999', 'disparue');
-  store.add(live, 'x');
+  store.add('999999999999', join(root, '.proc-watch-trash-Disparue'), 'disparue'); // ENOENT : preuve de disparition
+  store.add(live, q, 'x');
   const c = cleaner(root, { setAside: store });
   await c.list();
-  expect(JSON.parse(readFileSync(storePath, 'utf8'))).toEqual([{ quarantine: live, name: 'x' }]);
+  expect(JSON.parse(readFileSync(storePath, 'utf8'))).toEqual([{ quarantine: live, path: q, name: 'x' }]);
 });
 
 test('r3 : les lstat de premier niveau de l’inventaire comptent dans le budget partagé', async () => {
@@ -951,4 +939,133 @@ test('r3 : les lstat de premier niveau de l’inventaire comptent dans le budget
   expect(out.partial).toBe(true);
   expect(out.results[0].reason).toMatch(/2 entrées non inventoriées \(budget de l’inventaire\)/);
   expect(readdirSync(q).sort()).toEqual(['c', 'd']);
+});
+
+
+/** Magasin avec une entrée « mis à l'écart » pour la quarantaine `q`. */
+function storeWith(base: string, q: string, name = 'pas-choisi') {
+  const storePath = join(base, 'data', 'tmp-set-aside.json');
+  const store = createSetAsideStore(storePath);
+  store.add(String(lstatSync(q, { bigint: true }).ino), q, name);
+  return { storePath, store };
+}
+/** Ce que la confirmation de « Vider » montre pour chaque entrée, avec un magasin relu (redémarrage). */
+async function shownAfterRestart(root: string, storePath: string) {
+  let seen: TmpConfirmSummary | null = null;
+  const c = cleaner(root, { setAside: createSetAsideStore(storePath), confirm: async (x) => ((seen = x), false) });
+  await c.list();
+  await c.emptyQuarantine();
+  return Object.fromEntries(seen!.quarantines![0].entries.map((e) => [e.name, e]));
+}
+
+test('dérive P : readdir(racine) en échec pendant une liste : aucun élagage, l’avertissement reste après redémarrage', async () => {
+  const { base, root } = setup();
+  const q = leftover(root, '.proc-watch-trash-Derive1', {});
+  mkdirSync(join(q, 'pas-choisi'));
+  const { storePath, store } = storeWith(base, q);
+  const before = readFileSync(storePath, 'utf8');
+  const fsp = await import('node:fs/promises');
+  const failing = cleaner(root, {
+    setAside: store,
+    fs: { ...fsp, readdir: async (p: string) => (p === root ? Promise.reject(Object.assign(new Error('EMFILE'), { code: 'EMFILE' })) : fsp.readdir(p)) } as never,
+  });
+  await failing.list().catch(() => null);
+  expect(readFileSync(storePath, 'utf8')).toBe(before);
+  expect((await shownAfterRestart(root, storePath))['pas-choisi']).toMatchObject({ setAside: true });
+});
+
+test('dérive P : lstat d’une quarantaine en échec (autre qu’ENOENT) : aucun élagage', async () => {
+  const { base, root } = setup();
+  const q = leftover(root, '.proc-watch-trash-Derive2', {});
+  const other = leftover(root, '.proc-watch-trash-Autre', {});
+  const { storePath, store } = storeWith(base, q);
+  store.add('999999999999', join(root, '.proc-watch-trash-Partie'), 'x'); // disparue, mais la preuve sera incomplète
+  const before = readFileSync(storePath, 'utf8');
+  const fsp = await import('node:fs/promises');
+  const c = cleaner(root, {
+    setAside: store,
+    fs: {
+      ...fsp,
+      lstat: (p: string, o: object) => (p === other ? Promise.reject(Object.assign(new Error('EIO'), { code: 'EIO' })) : fsp.lstat(p, o as never)),
+    } as never,
+  });
+  await c.list().catch(() => null);
+  expect(readFileSync(storePath, 'utf8')).toBe(before);
+});
+
+test('dérive P : élagage sur preuve : même chemin, autre inode → oublié', async () => {
+  const { base, root } = setup();
+  const q = leftover(root, '.proc-watch-trash-Recree', {});
+  const { storePath, store } = storeWith(base, q);
+  rmSync(q, { recursive: true });
+  leftover(root, '.proc-watch-trash-Recree', {}); // recréée : autre inode
+  await cleaner(root, { setAside: store }).list();
+  expect(JSON.parse(readFileSync(storePath, 'utf8'))).toEqual([]);
+});
+
+test('dérive Q : magasin corrompu : mis de côté (.corrupt-<ts>), mode dégradé, « statut inconnu » sur toutes les entrées', async () => {
+  const { base, root } = setup();
+  const q = leftover(root, '.proc-watch-trash-Corrompu', { a: 1 });
+  const storePath = join(base, 'data', 'tmp-set-aside.json');
+  mkdirSync(join(base, 'data'));
+  const broken = JSON.stringify([{ quarantine: '1', path: q, name: 'a' }]).slice(0, -3);
+  writeFileSync(storePath, broken);
+  const store = createSetAsideStore(storePath);
+  expect(store.degraded()).toBe(true);
+  const kept = readdirSync(join(base, 'data')).filter((n) => /^tmp-set-aside\.json\.corrupt-\d+$/.test(n));
+  expect(kept).toHaveLength(1);
+  expect(readFileSync(join(base, 'data', kept[0]), 'utf8')).toBe(broken); // jamais écrasé
+  store.add('999', join(root, '.proc-watch-trash-X'), 'other');
+  expect(store.degraded()).toBe(true); // un ajout ne fait pas sortir du mode dégradé
+  let seen: TmpConfirmSummary | null = null;
+  const c = cleaner(root, { setAside: store, confirm: async (x) => ((seen = x), false) });
+  await c.list();
+  await c.emptyQuarantine();
+  const s = seen!;
+  expect(s.quarantines![0].entries[0]).toMatchObject({ name: 'a', unknown: true });
+  expect(confirmText(s, (kb) => `${kb} Ko`).detail).toMatch(/ a — \d+ Ko — ⚠ statut inconnu : peut-être jamais choisi/);
+});
+
+test('dérive : enregistrement en échec → mode dégradé ; un « Vider » complet en sort', async () => {
+  const { base, root } = setup();
+  const q = leftover(root, '.proc-watch-trash-Disque', { a: 1 });
+  const { storePath, store } = storeWith(base, q, 'a');
+  expect(store.degraded()).toBe(false);
+  chmodSync(join(base, 'data'), 0o500); // dossier de données non inscriptible (disque plein, droits…)
+  try {
+    store.add('42', join(root, '.proc-watch-trash-Y'), 'b');
+    expect(store.degraded()).toBe(true);
+  } finally {
+    chmodSync(join(base, 'data'), 0o700);
+  }
+  const c = cleaner(root, { setAside: store });
+  await c.list();
+  expect((await c.emptyQuarantine()).results).toEqual([{ name: '.proc-watch-trash-Disque', ok: true }]);
+  expect(store.degraded()).toBe(false); // toutes les quarantaines vidées
+  expect(JSON.parse(readFileSync(storePath, 'utf8'))).toEqual([]);
+});
+
+test('dérive : un « Vider » incomplet ne fait pas sortir du mode dégradé', async () => {
+  const { base, root } = setup();
+  leftover(root, '.proc-watch-trash-Reste', { a: 1 });
+  const ouvert = join(root, '.proc-watch-trash-Ouvert');
+  mkdirSync(ouvert, { mode: 0o755 }); // non éligible : reste
+  const storePath = join(base, 'data', 'tmp-set-aside.json');
+  mkdirSync(join(base, 'data'));
+  writeFileSync(storePath, 'x');
+  const store = createSetAsideStore(storePath);
+  const c = cleaner(root, { setAside: store });
+  await c.list();
+  await c.emptyQuarantine();
+  expect(store.degraded()).toBe(true);
+});
+
+test('dérive : ancien format {quarantine, name} relu sans dégradation', () => {
+  const { base } = setup();
+  const storePath = join(base, 'data', 'tmp-set-aside.json');
+  mkdirSync(join(base, 'data'));
+  writeFileSync(storePath, JSON.stringify([{ quarantine: '7', name: 'a' }]));
+  const store = createSetAsideStore(storePath);
+  expect(store.degraded()).toBe(false);
+  expect(store.has('7', 'a')).toBe(true);
 });
