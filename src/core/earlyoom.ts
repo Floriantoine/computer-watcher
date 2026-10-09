@@ -20,14 +20,19 @@ const COMM_MAX_BYTES = 15;
 /**
  * Grammaire UNIQUE des motifs de --ignore et --prefer, partagée par le TS et le script root (bash) :
  * une alternance de jetons `[A-Za-z0-9_.-]+` contenant au moins un caractère de `[A-Za-z0-9_-]` (un jeton fait
- * seulement de points, comme `.*` ou `...*`, correspondrait à tout), chacun éventuellement suivi de `.*`. Aucune parenthèse,
+ * seulement de points, comme `.*` ou `...*`, correspondrait à tout). Dans --prefer, chacun peut être suivi de `.*` ;
+ * dans --ignore, non (noms exacts) : seule l'entrée de base `systemd.*` en a un, en littéral à sa place fixe. Aucune parenthèse,
  * aucun autre métacaractère : les ancres `^(` … `)$` ne peuvent pas être quittées, et chaque motif compile.
  * Lettres et chiffres sont énumérés (en bash, le sens d'une plage [A-Z] dépend de la locale) ; « - » en dernier.
  */
 export const EARLYOOM_TOKEN_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-';
 /** Caractères « réels » : au moins un par jeton. */
 export const EARLYOOM_WORD_CHARS = EARLYOOM_TOKEN_CHARS.replace('.', '');
-const TOKEN = `[${EARLYOOM_TOKEN_CHARS}]*[${EARLYOOM_WORD_CHARS}][${EARLYOOM_TOKEN_CHARS}]*(\\.\\*)?`;
+/** Jeton de --ignore : nom exact (pas de `.*` ; seul le littéral de base `systemd.*` en a un, à sa place fixe). */
+const IGNORE_TOKEN = `[${EARLYOOM_TOKEN_CHARS}]*[${EARLYOOM_WORD_CHARS}][${EARLYOOM_TOKEN_CHARS}]*`;
+/** Jeton de --prefer : jeton de --ignore éventuellement suivi de `.*`. */
+const TOKEN = `${IGNORE_TOKEN}(\\.\\*)?`;
+const MORE_IGNORE_TOKENS = `(\\|${IGNORE_TOKEN})*`;
 const MORE_TOKENS = `(\\|${TOKEN})*`;
 /** Base en littéral (« . », « * », « | » échappés), dans l'ordre fixe. */
 const BASE_LITERAL = EARLYOOM_BASE_IGNORE.map((b) => b.replace(/[.*|()^$]/g, (c) => `\\${c}`)).join('\\|');
@@ -39,7 +44,7 @@ const SWAP = '([123456789]|[123456789][0123456789]|100)';
  * Groupes 1 à 4 : SIGTERM et SIGKILL mémoire, puis swap (comparés ensuite : SIGKILL ≤ SIGTERM).
  */
 export const EARLYOOM_LINE_PATTERN =
-  `^EARLYOOM_ARGS="-m ${MEM},${MEM} -s ${SWAP},${SWAP} -r 0 --ignore \\^\\(${BASE_LITERAL}${MORE_TOKENS}\\)\\$( --prefer \\^\\(${TOKEN}${MORE_TOKENS}\\)\\$)?"$`;
+  `^EARLYOOM_ARGS="-m ${MEM},${MEM} -s ${SWAP},${SWAP} -r 0 --ignore \\^\\(${BASE_LITERAL}${MORE_IGNORE_TOKENS}\\)\\$( --prefer \\^\\(${TOKEN}${MORE_TOKENS}\\)\\$)?"$`;
 
 export const EARLYOOM_LINE_RE = new RegExp(EARLYOOM_LINE_PATTERN);
 const TOKEN_RE = new RegExp(`^${TOKEN}$`);

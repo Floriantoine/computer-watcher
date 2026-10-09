@@ -104,9 +104,15 @@ describe('checkEarlyoomLine (politique, identique au script root)', () => {
   const ko = (l: string) => expect(checkEarlyoomLine(l)).not.toBeNull();
   test('ligne valide', () => {
     ok(`EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(${BASE})$"`);
-    ok(`EARLYOOM_ARGS="-m 50,50 -s 100,100 -r 0 --ignore ^(${BASE}|kitty|node.*)$ --prefer ^(chrome|node..vitest.)$"`);
+    ok(`EARLYOOM_ARGS="-m 50,50 -s 100,100 -r 0 --ignore ^(${BASE}|kitty|node)$ --prefer ^(chrome|node..vitest.)$"`);
     ok(`EARLYOOM_ARGS="-m 1,1 -s 1,1 -r 0 --ignore ^(${BASE})$"`);
-    ok(`EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(${BASE}|.a|-|_.*)$ --prefer ^(a..|..a.*)$"`);
+    ok(`EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(${BASE}|.a|-|_)$ --prefer ^(a..|..a.*)$"`);
+  });
+  test('--ignore : pas de « .* » après la base (sauf systemd.* à sa place)', () => {
+    ko(`EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(${BASE}|a.*)$"`);
+    ko(`EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(${BASE}|node.*)$"`);
+    ko(`EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(${BASE}|systemd.*)$"`);
+    ok(`EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(${BASE}|systemd)$ --prefer ^(node.*)$"`);
   });
   test('ligne d’attaque de la revue refusée', () => ko('EARLYOOM_ARGS="-m 99,99 -s 100,100 -r 0 --ignore ^(x)$ --prefer ^(.*)$"'));
   test.each([

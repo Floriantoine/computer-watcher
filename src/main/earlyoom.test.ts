@@ -6,7 +6,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import { DEFAULT_CONFIG } from '../core/defaults';
-import { buildEarlyoomArgs, checkEarlyoomLine, EARLYOOM_LINE_PATTERN, EARLYOOM_LINE_RE } from '../core/earlyoom';
+import { buildEarlyoomArgs, checkEarlyoomLine, EARLYOOM_LINE_PATTERN, EARLYOOM_LINE_RE, parseEarlyoomDefault } from '../core/earlyoom';
 import { applyEarlyoom, applyExitMessage, createEarlyoomApplier, EARLYOOM_APPLY_SCRIPT, earlyoomStatus, PKEXEC, type ExecFn } from './earlyoom';
 
 const cacheRoot = join(homedir(), '.cache');
@@ -18,6 +18,8 @@ const BASE = 'claude|claude-desktop|warp|zsh|bash|kwin_wayland|kwin_wayland_wr|p
 const OLD = 'EARLYOOM_ARGS="-m 6 -s 30 -r 0"\n';
 const VALID = `EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(${BASE})$ --prefer ^(chrome|vitest|node..vitest.|node-MainThread|node|npm)$"`;
 const USER_LINE = 'EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(claude|claude-desktop|warp|zsh|bash|kwin_wayland|plasmashell|Xwayland|sddm|systemd.*)$ --prefer ^(chrome|vitest|node.\\(vitest\\)|node-MainThread|node|npm)$"';
+// Forme de la ligne réellement installée (avril 2026) : liste protégée par défaut, préférences converties.
+const CURRENT = `EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(${BASE}|fish|sh|konsole|gnome-terminal-|kitty|alacritty|wezterm-gui|ghostty|tmux..server|kwin_x11|gnome-shell|Xorg|gdm)$ --prefer ^(chrome|vitest|node..vitest.|node-MainThread|node|npm)$"`;
 const ATTACK = 'EARLYOOM_ARGS="-m 99,99 -s 100,100 -r 0 --ignore ^(x)$ --prefer ^(.*)$"';
 const withBase = (rest: string) => `EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(${BASE})$${rest}"`;
 
@@ -237,7 +239,7 @@ describe('même politique en TS et en bash (vrai bash)', () => {
   const corpus: string[] = [
     VALID,
     withBase(''),
-    withBase('').replace(')$"', '|kitty|node.*)$"'),
+    withBase('').replace(')$"', '|kitty|node)$"'),
     VALID.replace('-m 8,5', '-m 50,50').replace('-s 35,25', '-s 100,100'),
     VALID.replace('-m 8,5', '-m 1,1').replace('-s 35,25', '-s 1,1'),
     USER_LINE,
@@ -277,8 +279,13 @@ describe('même politique en TS et en bash (vrai bash)', () => {
     withBase('').replace(')$"', '|..)$"'),
     withBase(' --prefer ^(a|.)$'),
     withBase(' --prefer ^(..*)$'),
-    withBase('').replace(')$"', '|.a|-|_.*)$"'),
+    withBase('').replace(')$"', '|.a|-|_)$"'),
     withBase(' --prefer ^(a..|..a.*)$'),
+    withBase('').replace(')$"', '|a.*)$"'),
+    withBase('').replace(')$"', '|node.*)$"'),
+    withBase('').replace(')$"', '|kitty|node.*)$"'),
+    withBase('').replace('|systemd.*', '|systemd.*|systemd.*'),
+    CURRENT,
   ];
   test('[[ =~ ]] et EARLYOOM_LINE_RE : mêmes verdicts, sous 4 locales', () => {
     for (const line of corpus) {
@@ -297,9 +304,14 @@ describe('même politique en TS et en bash (vrai bash)', () => {
       expect({ line, script: r.code !== 11 }).toEqual({ line, script: ts });
       if (ts) accepted.push(line);
     }
-    expect(accepted).toEqual([corpus[0], corpus[1], corpus[2], corpus[3], corpus[4], corpus[35], corpus[42], corpus[43]]);
+    expect(accepted).toEqual([corpus[0], corpus[1], corpus[2], corpus[3], corpus[4], corpus[35], corpus[42], corpus[43], corpus[48]]);
   });
   test('lignes générées acceptées par le script', () => {
+    const cur = parseEarlyoomDefault(`${CURRENT}\n`);
+    if (!cur) throw new Error('ligne actuelle non lue');
+    const regen = buildEarlyoomArgs(cur.settings, DEFAULT_CONFIG.protected);
+    expect(regen).toEqual({ ok: true, line: CURRENT });
+    expect(runScript({ arg: CURRENT, existing: OLD }).code).toBe(0);
     const gen = buildEarlyoomArgs({ memTerm: 10, memKill: 4, swapTerm: 100, swapKill: 1, prefer: ['node.*'] }, DEFAULT_CONFIG.protected);
     if (!gen.ok) throw new Error(gen.errors.join());
     expect(runScript({ arg: gen.line, existing: OLD }).code).toBe(0);
