@@ -1,6 +1,8 @@
 // Performance et volume à la cardinalité réelle (mesurée sur la base de l'utilisateur le 2026-10-07) :
 // ~400 groupes par tick dont ~38 au-dessus de 20 Mo (repliés par le service : ~40 groupes enregistrés + « Petits groupes »),
 // ~130 processus enregistrés par tick, ~1 300 processus distincts par heure (cmdline ~600 octets).
+// Lignes de commande (v5, table cmdlines dédupliquée) : ratio mesuré sur la vraie base le 2026-10-08, 6 312 lignes distinctes pour
+// 10 385 processus (0,61) ; les processus tirent leur ligne dans un réservoir de taille 0,61 × nombre total de processus.
 // Lourd (≈ 1 Go de base) : lancé par `npm run test:recorder` (PROC_WATCH_PERF=1), base sur disque dans ~/.cache.
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -8,7 +10,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterAll, expect, test } from 'vitest';
 import type { Group, ProcInfo, RangePreset, SystemInfo } from '../types';
-import { openHistoryDb } from './db';
+import { cmdlineHash, openHistoryDb } from './db';
 import { aggregateHour, aggregateMinute, rollupHours } from './maintenance';
 import { queryCulprits, queryEvents, queryGroups, queryProcTree, querySystem, queryTop, rangeFromPreset } from './queries';
 import { HistoryWriter, SMALL_GROUPS_KEY } from './writer';
@@ -35,7 +37,13 @@ afterAll(() => {
 const groupBaseKB = (i: number) => (i < BIG ? (25 + ((i * i * 37) % 3000)) * 1024 : (100 + ((i * 7919) % 15_000)));
 /** Un « petit » groupe sur deux ticks passe au-dessus du seuil CPU : enregistré à part ce tick-là. */
 const busySmall = (tick: number) => (tick % 2 === 0 ? BIG + ((tick * 7) % (GROUPS - BIG)) : -1);
-const cmdline = (n: number) => `/usr/lib/app/bin --type=renderer --instance=${n} `.padEnd(CMDLINE, 'x');
+/** Processus enregistrés sur 30 j : stables, renouvelés (29 j de résumés + 24 h de détail), groupe à fort renouvellement. */
+const TOTAL_PROCS = STABLE_PROCS + (DAYS - 1) * 1440 * CHURN_PER_MIN + 1440 * CHURN_PER_MIN + CHURN_GROUP_PROCS;
+/** Réservoir de lignes de commande : avec la ligne `claude` du groupe à fort renouvellement, 0,61 ligne distincte par processus. */
+const POOL = Math.round(0.61 * TOTAL_PROCS) - 1;
+const poolIndex = (n: number) => (n * 7919) % POOL;
+const poolText = (k: number) => `/usr/lib/app/bin --type=renderer --instance=${k} `.padEnd(CMDLINE, 'x');
+const cmdline = (n: number) => poolText(poolIndex(n));
 
 test.skipIf(process.env.PROC_WATCH_PERF !== '1')('requêtes Métriques et taille de la base à la cardinalité réelle', () => {
   const root = join(homedir(), '.cache');
@@ -54,15 +62,24 @@ test.skipIf(process.env.PROC_WATCH_PERF !== '1')('requêtes Métriques et taille
   db.exec('BEGIN');
   const ins = {
     group: db.prepare('INSERT INTO groups(id,key,label,kind) VALUES (?,?,?,?)'),
-    proc: db.prepare('INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id,ppid) VALUES (?,?,?,?,?,?,?)'),
+    cmd: db.prepare('INSERT INTO cmdlines(hash, text) VALUES (?, ?) RETURNING id'),
+    proc: db.prepare('INSERT INTO procs(id,pid,start_ticks,name,cmdline_id,group_id,ppid) VALUES (?,?,?,?,?,?,?)'),
     sm: db.prepare('INSERT INTO system_minute(ts, mem_used_kb_avg, mem_used_kb_max, mem_total_kb, swap_used_kb_avg, swap_used_kb_max, swap_total_kb, psi_avg, psi_max, load1_avg, cpu_avg) VALUES (?,?,?,?,?,?,?,?,?,?,?)'),
     gm: db.prepare('INSERT INTO group_minute VALUES (?,?,?,?,?,?)'),
     pm: db.prepare('INSERT INTO proc_minute VALUES (?,?,?,?,?)'),
     ev: db.prepare('INSERT INTO events(ts,type,group_id,detail) VALUES (?,?,?,?)'),
   };
+  const cmdIds = new Map<number, number>(); // indice du réservoir → id (pas de cache des textes : ~600 000 × 600 octets)
+  const cmdId = (n: number) => {
+    const k = poolIndex(n);
+    let id = cmdIds.get(k);
+    if (id === undefined) cmdIds.set(k, (id = (ins.cmd.get(cmdlineHash(poolText(k)), poolText(k)) as { id: number }).id));
+    return id;
+  };
+  const claudeCmd = (ins.cmd.get(cmdlineHash('claude'), 'claude') as { id: number }).id;
   for (let i = 0; i < GROUPS; i++) ins.group.run(i + 1, `command:g${i}`, `g${i}`, 'command');
   ins.group.run(GROUPS + 1, SMALL_GROUPS_KEY, 'Petits groupes', 'others');
-  for (let p = 1; p <= STABLE_PROCS; p++) ins.proc.run(p, 1000 + p, p, `p${p}`, cmdline(p), (p % BIG) + 1, 1);
+  for (let p = 1; p <= STABLE_PROCS; p++) ins.proc.run(p, 1000 + p, p, `p${p}`, cmdId(p), (p % BIG) + 1, 1);
   let nextProc = STABLE_PROCS + 1;
   let prevChurn: number[] = [];
   for (let ts = start, m = 0; ts < detailFrom; ts += M, m++) {
@@ -77,7 +94,7 @@ test.skipIf(process.env.PROC_WATCH_PERF !== '1')('requêtes Métriques et taille
     const churn: number[] = [];
     for (let k = 0; k < CHURN_PER_MIN; k++) {
       const id = nextProc++;
-      ins.proc.run(id, 100_000 + (id % 4_000_000), id, 'chrome', cmdline(id), (id % BIG) + 1, 1);
+      ins.proc.run(id, 100_000 + (id % 4_000_000), id, 'chrome', cmdId(id), (id % BIG) + 1, 1);
       churn.push(id);
     }
     for (const id of [...prevChurn, ...churn]) ins.pm.run(ts, id, 60_000, 70_000, 2);
@@ -94,7 +111,7 @@ test.skipIf(process.env.PROC_WATCH_PERF !== '1')('requêtes Métriques et taille
   for (let i = 0; i < CHURN_GROUP_PROCS; i++) {
     const id = 50_000_000 + i;
     const ts = start + i * churnEvery;
-    ins.proc.run(id, 4_200_000 + (i % 100_000), id, 'claude', 'claude', churnGid, 1);
+    ins.proc.run(id, 4_200_000 + (i % 100_000), id, 'claude', claudeCmd, churnGid, 1);
     if (ts < detailFrom) ins.pm.run(Math.floor(ts / M) * M, id, 70_000, 80_000, 3);
     else {
       cps.run(ts, id, 70_000, 0, 3);
@@ -150,20 +167,31 @@ test.skipIf(process.env.PROC_WATCH_PERF !== '1')('requêtes Métriques et taille
   // --- taille : octets par table (dbstat), ramenés à un jour ---
   const bytes = new Map<string, number>();
   const owner = (name: string) =>
-    name.replace(/_ts$/, '').replace(/^sqlite_autoindex_(\w+)_\d+$/, '$1').replace(/^procs_group$/, 'procs');
+    name.replace(/_ts$/, '').replace(/^sqlite_autoindex_(\w+)_\d+$/, '$1').replace(/^procs_(group|cmdline|pid)$/, 'procs').replace(/^cmdlines_hash$/, 'cmdlines');
   for (const r of db.prepare('SELECT name, SUM(pgsize) AS s FROM dbstat GROUP BY name').all() as { name: string; s: number }[]) {
     bytes.set(owner(r.name), (bytes.get(owner(r.name)) ?? 0) + r.s);
   }
   const sum = (ts: string[]) => ts.reduce((s, t) => s + (bytes.get(t) ?? 0), 0);
   const detail = sum(['system_samples', 'group_samples', 'proc_samples']);
   const summaryDays = DAYS; // minutes/heures/procs/événements couvrent les 30 jours
-  const summary = sum(['system_minute', 'group_minute', 'proc_minute', 'system_hour', 'group_hour', 'procs', 'groups', 'events']);
+  const summary = sum(['system_minute', 'group_minute', 'proc_minute', 'system_hour', 'group_hour', 'procs', 'cmdlines', 'groups', 'events']);
   const perDay = summary / summaryDays;
   const MB = 1024 * 1024;
   const file = (db.prepare('PRAGMA page_count').get() as { page_count: number }).page_count * 4096;
   console.info(`taille par table (Mo) : ${JSON.stringify(Object.fromEntries([...bytes].map(([k, v]) => [k, +(v / MB).toFixed(1)])))}`);
   console.info(`détail 24 h : ${(detail / MB).toFixed(0)} Mo ; résumés : ${(perDay / MB).toFixed(1)} Mo/jour ; fichier à 30 j : ${(file / MB).toFixed(0)} Mo`);
   console.info(`  dont groupes (group_minute+group_hour) : ${(sum(['group_minute', 'group_hour']) / summaryDays / MB).toFixed(2)} Mo/jour ; processus (procs+proc_minute) : ${(sum(['procs', 'proc_minute']) / summaryDays / MB).toFixed(1)} Mo/jour`);
+  // lignes de commande (B2, v5) : procs + cmdlines contre l'équivalent v4 estimé (procs v5 + texte répété à chaque référence)
+  const procsV5 = sum(['procs', 'cmdlines']);
+  const refs = db.prepare('SELECT COUNT(*) AS n, SUM(length(CAST(c.text AS BLOB))) AS b FROM procs p JOIN cmdlines c ON c.id = p.cmdline_id').get() as { n: number; b: number };
+  const distinct = (db.prepare('SELECT COUNT(*) AS n FROM cmdlines').get() as { n: number }).n;
+  const procsV4 = (bytes.get('procs') ?? 0) + refs.b;
+  console.info(
+    `lignes de commande : ${refs.n} processus, ${distinct} lignes distinctes (${(distinct / refs.n).toFixed(2)}) ; procs + cmdlines (v5) ${(procsV5 / MB).toFixed(0)} Mo ` +
+      `contre ~${(procsV4 / MB).toFixed(0)} Mo en v4 (estimé), ÷${(procsV4 / procsV5).toFixed(2)} ; fichier ${(file / MB).toFixed(0)} Mo ` +
+      `contre ~${((file - procsV5 + procsV4) / MB).toFixed(0)} Mo en v4 (estimé), ÷${((file - procsV5 + procsV4) / file).toFixed(2)}`,
+  );
+  expect(procsV5).toBeLessThan(procsV4);
   // projection en régime établi = détail (24 h) + 30 jours de résumés ; budget large pour ne pas casser sur le bruit
   expect(sum(['group_minute', 'group_hour', 'system_minute', 'system_hour']) / summaryDays).toBeLessThan(6 * MB);
   expect(detail + 30 * perDay).toBeLessThan(1600 * MB);
@@ -185,10 +213,9 @@ test.skipIf(process.env.PROC_WATCH_PERF !== '1')('requêtes Métriques et taille
     const top = time('top', () => queryTop(ro, r, o, { peakLimit: 8 }));
     time('groups', () => queryGroups(ro, r, o, top.byMax.map((t) => t.key)));
     time('events', () => queryEvents(ro, r));
-    // détail d'un groupe (B7) : pressions + fuites et kills du groupe
-    // Premier appel à froid : chaque kill lit au hasard procs et proc_minute (~1 Go, cache de pages repris sous MemoryMax=3G) :
-    // 97 à 194 ms à 7 j selon le passage ; second appel 2 ms. Borne stricte de 150 ms sur l'appel chaud (le cas de l'app,
-    // dont la connexion reste ouverte), et 3 fois plus large sur l'appel à froid. Ce test ne tourne qu'avec PROC_WATCH_PERF=1.
+    // détail d'un groupe (B7) : pressions + fuites et kills du groupe. Premier appel à froid : en v4, chaque kill lisait au
+    // hasard la table procs (lignes de ~600 octets, cmdline comprise) : 97 à 194 ms à 7 j. En v5, l'index couvrant procs_pid
+    // (pid, group_id, name) répond sans lire la table : même borne de 150 ms à froid et à chaud.
     time('events g1 (froid)', () => queryEvents(ro, r, 'command:g1'));
     time('events g1', () => queryEvents(ro, r, 'command:g1'));
     time('culprits', () => queryCulprits(ro, r.from + (r.to - r.from) / 2, o));
@@ -196,7 +223,7 @@ test.skipIf(process.env.PROC_WATCH_PERF !== '1')('requêtes Métriques et taille
     console.info(`${preset} : ${Object.entries(times).map(([k, v]) => `${k} ${v.toFixed(1)} ms`).join(', ')} — total ${total.toFixed(1)} ms`);
     expect(sysSeries.ts.length).toBeGreaterThan(0);
     expect(top.byAvg.length).toBe(10);
-    for (const [k, v] of Object.entries(times)) expect(v, `${preset} ${k}`).toBeLessThan(k.endsWith('(froid)') ? 450 : 150);
+    for (const [k, v] of Object.entries(times)) expect(v, `${preset} ${k}`).toBeLessThan(150);
   }
   // --- rejeu (B5) : arbre d'un groupe à un instant, borne 50 ms, groupes à fort renouvellement ---
   const tree: Record<string, number> = {};

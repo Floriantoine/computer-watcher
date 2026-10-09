@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { expect, test } from 'vitest';
 import { addProc, makeProcRoot } from '../core/collector/fakeProc';
+import { SCHEMA_VERSION } from '../core/history/db';
+import { procsInput } from '../core/history/testDb';
 import { createRecorder } from './recorder';
 
 // minuteJob après un saut de 31 jours rattrape et purge un mois de minutes : ≈ 2,5 s sur une machine
@@ -191,8 +193,8 @@ test('nettoyage des processus orphelins : une fois toutes les 10 minutes', () =>
   rec.tick();
   advance(60_000);
   rec.minuteJob(); // 1er passage : nettoyage
-  const w = new DatabaseSync(join(base, 'data', 'metrics.db'));
-  w.exec("INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id) VALUES (999,9,9,'o','o',1)");
+  const w = procsInput(new DatabaseSync(join(base, 'data', 'metrics.db')));
+  w.exec("INSERT INTO procs_in(id,pid,start_ticks,name,cmdline,group_id) VALUES (999,9,9,'o','o',1)");
   const orphan = () => (w.prepare('SELECT COUNT(*) n FROM procs WHERE id = 999').get() as { n: number }).n;
   for (let i = 0; i < 9; i++) {
     advance(60_000);
@@ -229,13 +231,13 @@ test('migration sans copie de sécurité possible : avertissement dans le statut
   const w = new DatabaseSync(join(data, 'metrics.db'));
   w.exec('DROP TABLE group_hour; DROP TABLE system_hour; PRAGMA user_version = 2;');
   w.close();
-  mkdirSync(join(data, 'metrics.db.pre-v4-19700101T001640')); // la copie ne peut pas être écrite à cet endroit
+  mkdirSync(join(data, `metrics.db.pre-v${SCHEMA_VERSION}-19700101T001640`)); // la copie ne peut pas être écrite à cet endroit
   rec.start();
   rec.tick();
   const status = JSON.parse(readFileSync(join(data, 'recorder-status.json'), 'utf8'));
   expect(status.warning).toMatch(/copie de sécurité/i);
   expect(status.lastError).toBeNull();
-  expect(db().prepare('PRAGMA user_version').get()).toEqual({ user_version: 4 });
+  expect(db().prepare('PRAGMA user_version').get()).toEqual({ user_version: SCHEMA_VERSION });
   rec.stop();
 });
 

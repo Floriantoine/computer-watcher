@@ -4,14 +4,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'vitest';
 import { openHistoryDb } from './db';
+import { procsInput } from './testDb';
 import { aggregateHour, aggregateMinute, clearAll, leakCandidates, purge } from './maintenance';
 
-const open = () => openHistoryDb(join(mkdtempSync(join(tmpdir(), 'pw-m-')), 'm.db')).db;
+const open = () => procsInput(openHistoryDb(join(mkdtempSync(join(tmpdir(), 'pw-m-')), 'm.db')).db);
 const M = 60_000;
 
 function seed(db: ReturnType<typeof open>) {
   db.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'app:chrome','Chrome','app');
-           INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id) VALUES (1,10,100,'chrome','chrome',1);`);
+           INSERT INTO procs_in(id,pid,start_ticks,name,cmdline,group_id) VALUES (1,10,100,'chrome','chrome',1);`);
   for (const [ts, mem] of [[0, 100], [5000, 300], [61_000, 1000]]) {
     db.prepare('INSERT INTO system_samples(ts, mem_used_kb, mem_total_kb, swap_used_kb, swap_total_kb, psi_some10, load1, cpu_percent) VALUES (?,?,?,?,?,?,?,?)').run(ts, mem, 4000, mem * 2, 8000, 1, 0.5, 10);
     db.prepare('INSERT INTO group_samples VALUES (?,?,?,?,?,?)').run(ts, 1, mem, 10, 5, 2);
@@ -85,7 +86,7 @@ test('leakCandidates : now non aligné sur la minute', () => {
 test('purge : conserve les lignes encore référencées', () => {
   const db = open();
   db.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'a','a','app'),(2,'b','b','app'),(3,'c','c','app');
-           INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id) VALUES (1,1,1,'p','p',2),(2,2,2,'q','q',3);
+           INSERT INTO procs_in(id,pid,start_ticks,name,cmdline,group_id) VALUES (1,1,1,'p','p',2),(2,2,2,'q','q',3);
            INSERT INTO events(ts,type,group_id) VALUES (1000000,'leak',1);
            INSERT INTO proc_samples VALUES (0,1,1,0,0);
            INSERT INTO proc_minute VALUES (0,2,1,1,0);`);
@@ -137,11 +138,32 @@ test('purge : tables horaires suivent summaryDays, groupe référencé par group
 test('purge : nettoyage des processus orphelins seulement si demandé', () => {
   const db = open();
   db.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'a','a','app');
-           INSERT INTO procs(id,pid,start_ticks,name,cmdline,group_id) VALUES (1,1,1,'p','p',1);
+           INSERT INTO procs_in(id,pid,start_ticks,name,cmdline,group_id) VALUES (1,1,1,'p','p',1);
            INSERT INTO group_minute VALUES (${2 * H},1,1,0,1,0);`);
   purge(db, 2 * H, 1, 30, { orphans: false });
   expect(db.prepare('SELECT COUNT(*) n FROM procs').get()).toEqual({ n: 1 });
   purge(db, 2 * H, 1, 30);
+  expect(db.prepare('SELECT COUNT(*) n FROM procs').get()).toEqual({ n: 0 });
+});
+
+test('purge : lignes de commande orphelines supprimées avec les processus orphelins, partagées conservées', () => {
+  const db = open();
+  db.exec(`INSERT INTO groups(id,key,label,kind) VALUES (1,'a','a','app');
+           INSERT INTO procs_in(id,pid,start_ticks,name,cmdline,group_id) VALUES (1,1,1,'p','seule',1),(2,2,2,'q','partagée',1),(3,3,3,'r','partagée',1);
+           INSERT INTO proc_minute VALUES (${2 * H},3,1,1,0);
+           INSERT INTO group_minute VALUES (${2 * H},1,1,0,1,0);`);
+  purge(db, 2 * H, 1, 30, { orphans: false });
+  expect(db.prepare('SELECT text FROM cmdlines ORDER BY text').all()).toEqual([{ text: 'partagée' }, { text: 'seule' }]);
+  purge(db, 2 * H, 1, 30);
+  expect(db.prepare('SELECT id FROM procs').all()).toEqual([{ id: 3 }]);
+  expect(db.prepare('SELECT text FROM cmdlines').all()).toEqual([{ text: 'partagée' }]);
+});
+
+test('clearAll vide aussi cmdlines', () => {
+  const db = open();
+  seed(db);
+  clearAll(db);
+  expect(db.prepare('SELECT COUNT(*) n FROM cmdlines').get()).toEqual({ n: 0 });
   expect(db.prepare('SELECT COUNT(*) n FROM procs').get()).toEqual({ n: 0 });
 });
 

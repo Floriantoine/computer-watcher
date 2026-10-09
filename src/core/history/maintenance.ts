@@ -86,6 +86,7 @@ export function purge(db: DatabaseSync, now: number, detailHours: number, summar
     if (orphans) {
       db.exec(`DELETE FROM procs WHERE NOT EXISTS (SELECT 1 FROM proc_samples s WHERE s.proc_id = procs.id)
                AND NOT EXISTS (SELECT 1 FROM proc_minute m WHERE m.proc_id = procs.id)`);
+      db.exec('DELETE FROM cmdlines WHERE NOT EXISTS (SELECT 1 FROM procs p WHERE p.cmdline_id = cmdlines.id)');
       db.exec(`DELETE FROM groups WHERE NOT EXISTS (SELECT 1 FROM group_samples s WHERE s.group_id = groups.id)
                AND NOT EXISTS (SELECT 1 FROM group_minute m WHERE m.group_id = groups.id)
                AND NOT EXISTS (SELECT 1 FROM group_hour h WHERE h.group_id = groups.id)
@@ -101,7 +102,7 @@ export function purge(db: DatabaseSync, now: number, detailHours: number, summar
 }
 
 const ALL_TABLES = [
-  'system_samples', 'group_samples', 'proc_samples', 'system_minute', 'group_minute', 'proc_minute', 'system_hour', 'group_hour', 'events', 'procs', 'groups',
+  'system_samples', 'group_samples', 'proc_samples', 'system_minute', 'group_minute', 'proc_minute', 'system_hour', 'group_hour', 'events', 'procs', 'cmdlines', 'groups',
 ];
 
 export function clearAll(db: DatabaseSync): void {
