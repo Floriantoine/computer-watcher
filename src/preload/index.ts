@@ -9,7 +9,7 @@ import type { TmpDeleteItem, TmpDeleteOutcome, TmpListing } from '../core/tmpCle
 import type { UpdateView } from '../core/update';
 import type {
   ApplyResult, Category, EarlyoomStatus, Config, ConfigState, Culprit, InstanceTargets, ProcInfo, Watch, GroupHistory, GroupsHistory, HistoryEvent, KillResult, KillTarget, KillSignal, ProcsHistory, ProcTreeAt, RangePreset,
-  RecorderState, Snapshot, SystemSeries, TimeRange, TmpUsage, TopOptions, TopResult,
+  RecorderState, Snapshot, SystemSeries, TimeRange, TmpFsStats, TmpUsage, TopOptions, TopResult,
 } from '../core/types';
 
 const api = {
@@ -126,6 +126,8 @@ const api = {
   tmp: {
     /** Plus gros dossiers de /tmp à cet instant (lecture seule, au plus 100 000 entrées ou 2 s). */
     topDirs: (): Promise<TmpUsage> => ipcRenderer.invoke('tmp:topDirs'),
+    /** Taille et occupation de /tmp (statfs) et RAM totale, en lecture seule (tuiles de la page /tmp). */
+    stats: (): Promise<TmpFsStats> => ipcRenderer.invoke('tmp:stats'),
     /** Plus gros éléments de premier niveau, chacun avec sa raison de refus éventuelle. */
     entries: (): Promise<TmpListing> => ipcRenderer.invoke('tmp:entries'),
     /** Suppression définitive (au plus 50 éléments), revérifiée par le main élément par élément. */

@@ -4,8 +4,11 @@ import { TMP_SCAN_LIMITS } from '../../../core/tmpScanLimits';
 import { formatKB } from '../format';
 import { ipcErrorMessage } from '../viewModel';
 
-/** Plus gros dossiers de /tmp à cet instant (calculés par le main à l'ouverture, en lecture seule). */
-export function TmpDirsList() {
+/**
+ * Plus gros dossiers de /tmp à cet instant (calculés par le main à l'ouverture, en lecture seule). La suppression se fait
+ * sur la page /tmp (`onOpenTmp`).
+ */
+export function TmpDirsList({ onOpenTmp }: { onOpenTmp?: () => void }) {
   const [usage, setUsage] = useState<TmpUsage | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -50,7 +53,17 @@ export function TmpDirsList() {
           )}
         </>
       )}
-      <div className="sub note">État actuel de /tmp, en lecture seule ici (suppression : Métriques › Alertes › Voir /tmp)</div>
+      <div className="sub note">
+        État actuel de /tmp, en lecture seule ici
+        {onOpenTmp && (
+          <>
+            {' '}·{' '}
+            <button type="button" className="link tmp-dirs-open" data-testid="tmp-dirs-open-page" title="Ouvrir la page /tmp (suppression)" onClick={onOpenTmp}>
+              Gérer sur la page /tmp
+            </button>
+          </>
+        )}
+      </div>
     </div>
   );
 }

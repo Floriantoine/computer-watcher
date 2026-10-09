@@ -19,6 +19,7 @@
     "test:recorder": "electron-vite build && PROC_WATCH_PERF=1 vitest run src/recorder/perf.test.ts src/core/history/queries.perf.test.ts src/core/history/queryInactive.perf.test.ts src/core/history/queries.realistic.perf.test.ts src/core/history/migration.rehearsal.test.ts --disableConsoleIntercept && node scripts/recorder-e2e.mjs",
     "smoke": "electron-vite build && node scripts/smoke.mjs",
     "test:update": "electron-vite build && node scripts/update-e2e.mjs",
+    "test:tmp-page": "electron-vite build && node scripts/tmp-page-e2e.mjs",
     "dist": "electron-vite build && electron-builder --linux",
     "release": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/release.mjs"
   },
