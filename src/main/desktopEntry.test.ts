@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'vitest';
@@ -44,4 +44,19 @@ test('refreshDesktopEntry : raccourci modifié à la main ou d’un paquet (pas 
   writeFileSync(file, '[Desktop Entry]\nName=Mon proc-watch\nExec="/home/u/old.AppImage" --free\n');
   expect(refreshDesktopEntry('/home/u/proc-watch-0.1.1-x86_64.AppImage', env)).toBe('foreign');
   expect(readFileSync(file, 'utf8')).toContain('--free');
+});
+
+test('icône de l\'app : Icon=proc-watch, PNG copiée dans le thème hicolor', () => {
+  expect(desktopEntryContent('/x/app')).toContain('Icon=proc-watch\n');
+  const home = mkdtempSync(join(tmpdir(), 'procwatch-home-'));
+  const src = mkdtempSync(join(tmpdir(), 'procwatch-icons-'));
+  writeFileSync(join(src, 'icon.png'), 'png');
+  installDesktopEntry('/x/app', {}, home, join(src, 'icon.png'));
+  expect(existsSync(join(home, '.local/share/icons/hicolor/512x512/apps/proc-watch.png'))).toBe(true);
+});
+
+test('icône absente : l\'entrée est quand même écrite', () => {
+  const home = mkdtempSync(join(tmpdir(), 'procwatch-home-'));
+  const file = installDesktopEntry('/x/app', {}, home, '/nope/icon.png');
+  expect(readFileSync(file, 'utf8')).toContain('Exec="/x/app"');
 });

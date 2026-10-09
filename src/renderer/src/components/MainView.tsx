@@ -124,6 +124,7 @@ export function MainView(props: Props) {
         <label className="chip-select">
           <select aria-label="Tri" value={filter.sort} onChange={(e) => onFilter({ ...filter, sort: e.target.value as SortKey })}>
             <option value="mem">Tri : mémoire</option>
+            <option value="swap">Tri : swap</option>
             <option value="cpu">Tri : CPU</option>
             <option value="age">Tri : ancienneté</option>
             <option value="name">Tri : nom</option>

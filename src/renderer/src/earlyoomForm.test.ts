@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'vitest';
 import type { EarlyoomStatus, HistoryEvent } from '../../core/types';
-import { formFromStatus, lastEarlyoomKills, validateEarlyoomForm, type EarlyoomForm } from './earlyoomForm';
+import { formFromStatus, lastEarlyoomKills, validateEarlyoomForm, withTestPrefer, type EarlyoomForm } from './earlyoomForm';
+import { EARLYOOM_DEFAULT_SETTINGS, EARLYOOM_TEST_PREFER } from '../../core/earlyoomSetup';
+import { checkRegexPart } from '../../core/earlyoom';
 
 const LINE = 'EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(claude|claude-desktop|warp|zsh|bash|kwin_wayland|kwin_wayland_wr|plasmashell|Xwayland|sddm|systemd.*)$ --prefer ^(chrome|vitest|node..vitest.|node-MainThread|node|npm)$"';
 
@@ -17,8 +19,8 @@ describe('formFromStatus', () => {
       converted: [], line: 'x',
     }))).toEqual({ memTerm: '6', memKill: '3', swapTerm: '30', swapKill: '15', prefer: 'chrome\nnode..vitest.' });
   });
-  test('sans fichier → défauts 8,5 / 35,25, prefer vide', () => {
-    expect(formFromStatus(status(null))).toEqual({ memTerm: '8', memKill: '5', swapTerm: '35', swapKill: '25', prefer: '' });
+  test('sans fichier → défauts 8,5 / 35,25, processus de test préférés', () => {
+    expect(formFromStatus(status(null))).toEqual({ memTerm: '8', memKill: '5', swapTerm: '35', swapKill: '25', prefer: EARLYOOM_TEST_PREFER.join('\n') });
   });
 });
 
@@ -77,4 +79,24 @@ describe('lastEarlyoomKills', () => {
     ]);
   });
   test('aucun kill → vide', () => expect(lastEarlyoomKills([ev(1, 'pressure')])).toEqual([]));
+});
+
+describe('processus de test dans les préférences', () => {
+  test('les motifs de test respectent la grammaire', () => {
+    for (const p of EARLYOOM_TEST_PREFER) expect(checkRegexPart(p)).toBeNull();
+  });
+  test('une nouvelle installation préfère les processus de test par défaut', () => {
+    expect(EARLYOOM_DEFAULT_SETTINGS.prefer).toEqual([...EARLYOOM_TEST_PREFER]);
+  });
+  test('ajout sans rien retirer ni dupliquer, ordre de la liste conservé', () => {
+    const out = withTestPrefer('chrome\nvitest\nnode\nnpm');
+    const lines = out.split('\n');
+    expect(lines.slice(0, 4)).toEqual(['chrome', 'vitest', 'node', 'npm']);
+    for (const p of EARLYOOM_TEST_PREFER) expect(lines.filter((l) => l === p)).toHaveLength(1);
+  });
+  test('liste vide → les motifs de test ; déjà complète → inchangée', () => {
+    expect(withTestPrefer('').split('\n')).toEqual([...EARLYOOM_TEST_PREFER]);
+    const full = EARLYOOM_TEST_PREFER.join('\n');
+    expect(withTestPrefer(full)).toBe(full);
+  });
 });

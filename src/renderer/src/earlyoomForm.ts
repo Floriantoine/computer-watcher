@@ -1,5 +1,5 @@
 import { buildEarlyoomArgs, checkRegexPart, EARLYOOM_MAX_PREFER, type EarlyoomSettings } from '../../core/earlyoom';
-import { EARLYOOM_DEFAULT_SETTINGS } from '../../core/earlyoomSetup';
+import { EARLYOOM_DEFAULT_SETTINGS, EARLYOOM_TEST_PREFER } from '../../core/earlyoomSetup';
 import type { EarlyoomStatus, HistoryEvent } from '../../core/types';
 
 /** Champs du formulaire (texte brut) ; `prefer` : un motif par ligne. */
@@ -7,9 +7,9 @@ export interface EarlyoomForm { memTerm: string; memKill: string; swapTerm: stri
 export type EarlyoomFormErrors = Partial<Record<keyof EarlyoomForm, string>>;
 
 const D = EARLYOOM_DEFAULT_SETTINGS;
-const DEFAULT_FORM: EarlyoomForm = { memTerm: String(D.memTerm), memKill: String(D.memKill), swapTerm: String(D.swapTerm), swapKill: String(D.swapKill), prefer: '' };
+const DEFAULT_FORM: EarlyoomForm = { memTerm: String(D.memTerm), memKill: String(D.memKill), swapTerm: String(D.swapTerm), swapKill: String(D.swapKill), prefer: D.prefer.join('\n') };
 
-/** Fichier lu, sinon 8,5 / 35,25 / prefer vide. */
+/** Fichier lu, sinon 8,5 / 35,25 / processus de test préférés. */
 export function formFromStatus(st: EarlyoomStatus): EarlyoomForm {
   const s = st.file?.settings;
   if (!s) return { ...DEFAULT_FORM };
@@ -17,6 +17,19 @@ export function formFromStatus(st: EarlyoomStatus): EarlyoomForm {
 }
 
 const preferLines = (text: string): string[] => text.split('\n').map((l) => l.trim()).filter(Boolean);
+
+/** Processus de test absents de la liste. */
+export const missingTestPrefer = (text: string): string[] => {
+  const lines = preferLines(text);
+  return EARLYOOM_TEST_PREFER.filter((p) => !lines.includes(p));
+};
+
+/** Ajoute à la liste les processus de test qui y manquent, sans rien retirer ni réordonner. */
+export function withTestPrefer(text: string): string {
+  const lines = preferLines(text);
+  const missing = missingTestPrefer(text);
+  return missing.length ? [...lines, ...missing].join('\n') : lines.join('\n');
+}
 
 function intField(raw: string, min: number, max: number): { n?: number; error?: string } {
   const t = raw.trim();

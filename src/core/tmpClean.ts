@@ -69,7 +69,7 @@ export interface TmpConfirmSummary {
   totalKB: number;
   uninspectable: { pid: number; name: string }[];
   /** « Vider la quarantaine » : entrées de premier niveau de chaque quarantaine (`setAside` : mis à l'écart après un échange). */
-  quarantines?: { name: string; entries: { name: string; kind: TmpEntry['kind']; sizeKB: number; atLeast?: boolean; setAside: boolean }[]; more: number }[];
+  quarantines?: { name: string; entries: { name: string; kind: TmpEntry['kind']; sizeKB: number; atLeast?: boolean; setAside: boolean; unknown?: boolean }[]; more: number }[];
 }
 
 /** Un seul composant de chemin : ni « / », ni NUL, ni « . » / « .. », ni vide, au plus 255 octets. */

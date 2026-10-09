@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Activity, Copy, KeyRound, ShieldCheck, TriangleAlert } from 'lucide-react';
 import { ignoreConversions, ignoreList } from '../../../core/earlyoom';
 import type { EarlyoomStatus } from '../../../core/types';
-import { formFromStatus, lastEarlyoomKills, validateEarlyoomForm, type EarlyoomForm } from '../earlyoomForm';
+import { formFromStatus, lastEarlyoomKills, missingTestPrefer, validateEarlyoomForm, withTestPrefer, type EarlyoomForm } from '../earlyoomForm';
 import { settingsSetupAction } from '../earlyoomPopup';
 import { EARLYOOM_CHANGED, runEarlyoomSetup } from './EarlyoomSetupPopup';
 import { formatInstant } from '../metrics';
@@ -235,6 +235,11 @@ export function EarlyoomPanel({ protectedList, onToast, onAttention }: Props) {
           onChange={(e) => setField('prefer', e.target.value)}
         />
         {v.errors.prefer && <span className="field-error">{v.errors.prefer}</span>}
+        {missingTestPrefer(form.prefer).length > 0 && (
+          <button className="eo-add-tests" data-testid="earlyoom-add-tests" onClick={() => setField('prefer', withTestPrefer(form.prefer))}>
+            Ajouter les processus de test (vitest, jest, playwright…)
+          </button>
+        )}
       </Card>
 
       {st.file && st.file.converted.length > 0 && (

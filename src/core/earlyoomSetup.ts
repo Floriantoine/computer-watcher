@@ -15,7 +15,14 @@ export interface EarlyoomServiceState {
 }
 
 /** Valeurs par défaut de la ligne (formulaire de Réglages › earlyoom et installation) : 8,5 / 35,25, aucune préférence. */
-export const EARLYOOM_DEFAULT_SETTINGS: Readonly<EarlyoomSettings> = Object.freeze({ memTerm: 8, memKill: 5, swapTerm: 35, swapKill: 25, prefer: [] as string[] });
+/**
+ * Processus de test préférés par earlyoom (tués en premier : les relancer ne coûte rien). Noms tels que /proc les
+ * donne (15 caractères au plus, caractères spéciaux en « . »).
+ */
+export const EARLYOOM_TEST_PREFER: readonly string[] = Object.freeze([
+  'vitest', 'node..vitest.', 'jest', 'pytest', 'playwright', 'cypress', 'mocha', 'karma', 'headless_shell', 'chrome-headless',
+]);
+export const EARLYOOM_DEFAULT_SETTINGS: Readonly<EarlyoomSettings> = Object.freeze({ memTerm: 8, memKill: 5, swapTerm: 35, swapKill: 25, prefer: [...EARLYOOM_TEST_PREFER] });
 
 /**
  * Ce qu'il reste à faire : installer (binaire absent), activer (installé mais arrêté, ou pas lancé au démarrage) ou rien.
@@ -55,7 +62,7 @@ export function reminderMode(o: { status: EarlyoomServiceState; snoozedAt: numbe
 /** Réglages de la ligne écrite : ceux du fichier existant s'ils respectent la politique, sinon les valeurs par défaut. */
 export function setupSettings(file: { settings: EarlyoomSettings } | null): EarlyoomSettings {
   if (file && buildEarlyoomArgs(file.settings, []).ok) return { ...file.settings, prefer: [...file.settings.prefer] };
-  return { ...EARLYOOM_DEFAULT_SETTINGS, prefer: [] };
+  return { ...EARLYOOM_DEFAULT_SETTINGS, prefer: [...EARLYOOM_DEFAULT_SETTINGS.prefer] };
 }
 
 /**

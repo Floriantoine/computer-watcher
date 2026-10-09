@@ -376,44 +376,91 @@ interface Quarantine {
 }
 
 /**
- * Objets mis à l'écart après un échange (jamais choisis par l'utilisateur), par inode de quarantaine et nom d'entrée.
- * Gardés par le main, jamais dans la quarantaine (un processus du même uid pourrait y planter un lien) : en mémoire, et
- * dans le dossier de données de l'app (0600, écriture atomique) pour survivre à un redémarrage.
+ * Objets mis à l'écart après un échange (jamais choisis par l'utilisateur), par inode et chemin de quarantaine et nom
+ * d'entrée. Gardés par le main, jamais dans la quarantaine (un processus du même uid pourrait y planter un lien) : en
+ * mémoire, et dans le dossier de données de l'app (0600, écriture atomique) pour survivre à un redémarrage.
+ *
+ * Jamais vidé par défaut : un fichier illisible est mis de côté (`.corrupt-<horodatage>`) et un enregistrement en échec
+ * fait passer en mode dégradé, où le statut de toute entrée est inconnu (« peut-être jamais choisi ») ; on n'en sort
+ * qu'après un « Vider la quarantaine » complet. Une entrée n'est oubliée que sur preuve de disparition (voir `prune`).
  */
 export interface SetAsideStore {
   has(quarantineIno: string, name: string): boolean;
-  add(quarantineIno: string, name: string): void;
+  add(quarantineIno: string, quarantinePath: string, name: string): void;
   /** Oublie une entrée, ou toute la quarantaine si `name` est absent. */
   forget(quarantineIno: string, name?: string): void;
+  /** Oublie les entrées dont `gone` prouve que la quarantaine a disparu. */
+  prune(gone: (e: { quarantine: string; path: string | null }) => boolean): void;
+  /** Mode dégradé : statut des entrées inconnu. */
+  degraded(): boolean;
+  /** Après un « Vider la quarantaine » complet (plus aucune quarantaine) : liste vide, sortie du mode dégradé si l'enregistrement réussit. */
+  recover(): void;
+  /** Chemins de quarantaine connus (pour la preuve de disparition). */
+  entries(): readonly { quarantine: string; path: string | null; name: string }[];
 }
 
+type SetAsideItem = { quarantine: string; path: string | null; name: string };
+
 export function createSetAsideStore(path?: string): SetAsideStore {
-  let items: { quarantine: string; name: string }[] = [];
+  let items: SetAsideItem[] = [];
+  let degraded = false;
+  /** Faux si le fichier existant n'a pas pu être mis de côté : il n'est alors jamais écrasé. */
+  let writable = true;
+  const valid = (x: unknown): x is { quarantine: string; path?: unknown; name: string } =>
+    typeof x === 'object' && x !== null && typeof (x as { quarantine: unknown }).quarantine === 'string' && /^\d{1,20}$/.test((x as { quarantine: string }).quarantine) &&
+    typeof (x as { name: unknown }).name === 'string' && ((x as { path?: unknown }).path === undefined || typeof (x as { path?: unknown }).path === 'string');
   if (path) {
+    let text: string | null = null;
     try {
-      const v = JSON.parse(readFileSync(path, 'utf8')) as unknown;
-      if (Array.isArray(v))
-        items = v.filter((x): x is { quarantine: string; name: string } => typeof x?.quarantine === 'string' && /^\d{1,20}$/.test(x.quarantine) && typeof x?.name === 'string').map((x) => ({ quarantine: x.quarantine, name: x.name }));
-    } catch {
-      // absent ou illisible : liste vide
+      text = readFileSync(path, 'utf8');
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
+        degraded = true; // existe mais illisible : jamais écrasé
+        writable = false;
+      }
+    }
+    if (text !== null) {
+      let parsed: unknown = null;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        parsed = null;
+      }
+      if (Array.isArray(parsed) && parsed.every(valid)) {
+        items = parsed.map((x) => ({ quarantine: x.quarantine, path: typeof x.path === 'string' ? x.path : null, name: x.name }));
+      } else {
+        degraded = true;
+        try {
+          renameSync(path, `${path}.corrupt-${Date.now()}`);
+        } catch {
+          writable = false;
+        }
+      }
     }
   }
   const save = () => {
     if (!path) return;
+    if (!writable) {
+      degraded = true;
+      return;
+    }
     try {
       mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
       const tmp = `${path}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
-      writeFileSync(tmp, JSON.stringify(items), { mode: 0o600, flag: 'wx' });
+      writeFileSync(tmp, JSON.stringify(items.map((x) => (x.path === null ? { quarantine: x.quarantine, name: x.name } : x))), { mode: 0o600, flag: 'wx' });
       renameSync(tmp, path);
+      return true;
     } catch (e) {
-      console.error('proc-watch : liste des objets mis à l’écart non enregistrée :', e);
+      degraded = true; // en mémoire l'entrée existe, sur disque non : statut inconnu jusqu'au prochain « Vider » complet
+      console.error('proc-watch : liste des objets mis à l’écart non enregistrée (mode dégradé) :', e);
+      return false;
     }
   };
   return {
     has: (q, n) => items.some((x) => x.quarantine === q && x.name === n),
-    add: (q, n) => {
+    add: (q, qp, n) => {
       if (items.some((x) => x.quarantine === q && x.name === n)) return;
-      items.push({ quarantine: q, name: n });
+      items.push({ quarantine: q, path: qp, name: n });
       save();
     },
     forget: (q, n) => {
@@ -422,6 +469,32 @@ export function createSetAsideStore(path?: string): SetAsideStore {
       items = next;
       save();
     },
+    prune: (gone) => {
+      const next = items.filter((x) => !gone({ quarantine: x.quarantine, path: x.path }));
+      if (next.length === items.length) return;
+      items = next;
+      save();
+    },
+    degraded: () => degraded,
+    recover: () => {
+      items = [];
+      if (!path) {
+        degraded = false;
+        return;
+      }
+      if (!writable) {
+        // l'ancien fichier illisible est enfin mis de côté pour pouvoir écrire
+        try {
+          renameSync(path, `${path}.corrupt-${Date.now()}`);
+          writable = true;
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code === 'ENOENT') writable = true;
+          else return;
+        }
+      }
+      if (save()) degraded = false;
+    },
+    entries: () => items,
   };
 }
 
@@ -671,6 +744,37 @@ export function createTmpCleaner(root: string, o: CleanerOptions): TmpCleaner {
   const setAside = o.setAside ?? createSetAsideStore();
   const fsSlots = createFsSlots(2); // partagé par toutes les passes de « Vider la quarantaine »
 
+  /**
+   * Élague la liste du main seulement sur preuve : readdir(racine) réussi, lstat réussi de chaque `.proc-watch-trash-*`,
+   * montages lisibles ; une entrée est oubliée si son chemin donne ENOENT ou un autre inode. Toute erreur : rien n'est oublié.
+   */
+  async function pruneOnProof(c: Ctx): Promise<void> {
+    if (!setAside.entries().length || c.mounts === null) return;
+    let names: string[];
+    try {
+      names = await c.fs.readdir(c.root);
+    } catch {
+      return;
+    }
+    const inoAt = new Map<string, string>();
+    for (const n of names.filter((x) => x.startsWith(TRASH_PREFIX))) {
+      const p = join(c.root, n);
+      if (c.mounts.has(p)) return; // jamais de lstat sur un montage : preuve incomplète
+      try {
+        inoAt.set(p, String((await c.fs.lstat(p, { bigint: true })).ino));
+      } catch {
+        return;
+      }
+    }
+    const known = new Set(inoAt.values());
+    setAside.prune((e) => {
+      if (e.path === null) return !known.has(e.quarantine); // ancien format : plus aucune quarantaine de cet inode
+      if (dirname(e.path) !== c.root) return false; // autre racine : aucune preuve
+      const now = inoAt.get(e.path);
+      return now === undefined ? !names.includes(e.path.slice(c.root.length + 1)) : now !== e.quarantine;
+    });
+  }
+
   async function list(): Promise<TmpListing> {
     const [c0, off] = await Promise.all([context(root, o), disabled()]);
     const c = { ...c0, listing: true };
@@ -694,7 +798,9 @@ export function createTmpCleaner(root: string, o: CleanerOptions): TmpCleaner {
       if (refusal === null) next.set(s.name, { ino: r.st.ino, dev: r.st.dev, uid: r.st.uid, kind, sizeKB: s.sizeKB, recent, at: now() });
     }
     allowed = next;
-    const quarantines = (await leftoverQuarantines(c)).map(({ name, eligible }) => ({ name, eligible }));
+    const leftovers = await leftoverQuarantines(c);
+    await pruneOnProof(c);
+    const quarantines = leftovers.map(({ name, eligible }) => ({ name, eligible }));
     return { root, entries, truncated: usage.truncated, uninspectable: c.users.uninspectable, disabled: off, quarantines };
   }
 
@@ -802,7 +908,7 @@ export function createTmpCleaner(root: string, o: CleanerOptions): TmpCleaner {
         }
         const same = (m: BigIntStats) => m.ino === a.ino && m.dev === a.dev && m.uid === a.uid && kindOf(m) === a.kind;
         const qq = q;
-        const res = await removeQuarantined(fs, rmPath, rmTimeout, q, item.name, same, (n) => setAside.add(String(qq.ino), n));
+        const res = await removeQuarantined(fs, rmPath, rmTimeout, q, item.name, same, (n) => setAside.add(String(qq.ino), qq.path, n));
         if (res.ok) {
           results.set(item.name, { name: item.name, ok: true });
           freedKB += a.sizeKB;
@@ -836,8 +942,10 @@ export function createTmpCleaner(root: string, o: CleanerOptions): TmpCleaner {
       name: string;
       q: Quarantine | null;
       error: string | null;
-      entries: { name: string; ino: bigint; kind: TmpEntry['kind']; sizeKB: number; atLeast: boolean; setAside: boolean }[];
+      entries: { name: string; ino: bigint; kind: TmpEntry['kind']; sizeKB: number; atLeast: boolean; setAside: boolean; unknown?: boolean }[];
       more: number;
+      /** Entrées non inventoriées : budget de l'inventaire épuisé (jamais confirmées, donc jamais supprimées). */
+      unlisted: number;
     };
     const opened: Rec[] = [];
     try {
@@ -845,12 +953,16 @@ export function createTmpCleaner(root: string, o: CleanerOptions): TmpCleaner {
       if (off) throw new Error(off);
       const c0 = await context(root, ot);
       if (c0.mounts === null) throw new Error('impossible de vérifier (points de montage illisibles)');
-      const found = (await leftoverQuarantines(c0)).filter((x) => x.eligible);
-      if (!found.length) return { results: [], freedKB: 0 };
+      const all = await leftoverQuarantines(c0);
+      const found = all.filter((x) => x.eligible);
+      if (!found.length) {
+        if (!all.length) setAside.recover(); // plus aucune quarantaine : plus rien d'inconnu
+        return { results: [], freedKB: 0 };
+      }
       // 1) ouverture et inventaire (pour la confirmation), dans leur propre budget
       let left = maxEntries;
       for (const x of found) {
-        const rec: Rec = { name: x.name, q: null, error: null, entries: [], more: 0 };
+        const rec: Rec = { name: x.name, q: null, error: null, entries: [], more: 0, unlisted: 0 };
         opened.push(rec);
         const p = join(c0.root, x.name);
         if ([...c0.mounts].some((m) => m === p || m.startsWith(`${p}/`))) {
@@ -871,10 +983,16 @@ export function createTmpCleaner(root: string, o: CleanerOptions): TmpCleaner {
           rec.more = names.length - take.length;
           left -= take.length;
           for (const n of take) {
+            // le lstat de premier niveau compte aussi dans le budget partagé de l'inventaire
+            if (inv.statsLeft <= 0 || Date.now() > inv.deadline) {
+              rec.unlisted++;
+              continue;
+            }
+            inv.statsLeft--;
             const st = await tfs.lstat(rec.q.at(n), { bigint: true }).catch(() => null);
             if (!st) continue;
             const size = await sizeOf(tfs, rec.q.at(n), st, inv).catch(() => ({ kb: 0, atLeast: true }));
-            rec.entries.push({ name: n, ino: st.ino, kind: kindOf(st), sizeKB: size.kb, atLeast: size.atLeast, setAside: setAside.has(qino, n) });
+            rec.entries.push({ name: n, ino: st.ino, kind: kindOf(st), sizeKB: size.kb, atLeast: size.atLeast, setAside: !setAside.degraded() && setAside.has(qino, n), ...(setAside.degraded() ? { unknown: true } : {}) });
           }
         } catch (e) {
           rec.error = `refusée : ${code(e) ?? (e as Error).message}`;
@@ -891,7 +1009,7 @@ export function createTmpCleaner(root: string, o: CleanerOptions): TmpCleaner {
         items: usable.map((r) => ({ name: r.name, kind: 'dir' as const, sizeKB: kbOf(r), recent: false })),
         totalKB: usable.reduce((t, r) => t + kbOf(r), 0),
         uninspectable: c0.users.uninspectable,
-        quarantines: usable.map((r) => ({ name: r.name, entries: r.entries.map(({ name, kind, sizeKB, atLeast, setAside: sa }) => ({ name, kind, sizeKB, atLeast, setAside: sa })), more: r.more })),
+        quarantines: usable.map((r) => ({ name: r.name, entries: r.entries.map(({ name, kind, sizeKB, atLeast, setAside: sa, unknown }) => ({ name, kind, sizeKB, atLeast, setAside: sa, ...(unknown ? { unknown } : {}) })), more: r.more + r.unlisted })),
       });
       if (!ok) return { results: [...results, ...usable.map((r) => ({ name: r.name, ok: false, reason: 'annulé' }))], freedKB: 0, cancelled: true };
       // 3) après la confirmation (la boîte a pu rester ouverte longtemps) : montages et usage relus, budget démarré
@@ -903,7 +1021,15 @@ export function createTmpCleaner(root: string, o: CleanerOptions): TmpCleaner {
       for (const r of usable) {
         const q = r.q!;
         const qino = String(q.ino);
-        const users = await scanTmpUsers(q.path, { ...o, fs });
+        // chemin réel de l'inode ouvert ; s'il ne correspond plus à q.path (renommée, remplacée), rien n'est supprimé
+        const realQ = await fs.readlink(`/proc/self/fd/${q.fd}`).catch(() => null);
+        const atPath = await tfs.lstat(q.path, { bigint: true }).catch(() => null);
+        if (!realQ || realQ !== q.path || !atPath || atPath.ino !== q.ino || !atPath.isDirectory()) {
+          partial = true;
+          results.push({ name: r.name, ok: false, reason: 'a changé depuis l’affichage (quarantaine déplacée ou remplacée) : rien supprimé' });
+          continue;
+        }
+        const users = await scanTmpUsers(realQ, { ...o, fs });
         const errors: string[] = [];
         let late = 0;
         for (const e of r.entries) {
@@ -936,6 +1062,7 @@ export function createTmpCleaner(root: string, o: CleanerOptions): TmpCleaner {
           } else errors.push(`${e.name} : ${res.reason}`);
         }
         if (late) errors.push(`temps écoulé (${late} entrée${late > 1 ? 's' : ''} non traitée${late > 1 ? 's' : ''})`);
+        if (r.unlisted) errors.push(`${r.unlisted} entrée${r.unlisted > 1 ? 's' : ''} non inventoriée${r.unlisted > 1 ? 's' : ''} (budget de l’inventaire)`);
         if (r.more) errors.push(`${r.more} entrée${r.more > 1 ? 's' : ''} non traitée${r.more > 1 ? 's' : ''} (plafond de ${maxEntries})`);
         if (errors.length) {
           partial = true;
@@ -944,6 +1071,15 @@ export function createTmpCleaner(root: string, o: CleanerOptions): TmpCleaner {
           results.push({ name: r.name, ok: true });
           setAside.forget(qino);
         }
+      }
+      for (const r of opened) {
+        await r.q?.close().catch(() => {}); // retire les quarantaines vidées
+        r.q = null;
+      }
+      // mode dégradé : on n'en sort qu'après un « Vider » complet, quand plus aucune quarantaine ne reste
+      if (setAside.degraded() && !partial && results.every((x) => x.ok)) {
+        const names = await tfs.readdir(c0.root).catch(() => null);
+        if (names && !names.some((n) => n.startsWith(TRASH_PREFIX))) setAside.recover();
       }
       return { results, freedKB, ...(partial ? { partial } : {}) };
     } finally {
@@ -963,12 +1099,14 @@ export function confirmText(s: TmpConfirmSummary, formatKB: (kb: number) => stri
       const lines = q.entries.map((e) => {
         const d = displayName(e.name);
         const suffix = e.kind === 'link' ? ' (le lien seul)' : e.kind === 'dir' ? '/' : '';
-        return `   ${d.escaped ? '⚠ ' : ''}${d.text}${suffix} — ${e.atLeast ? 'au moins ' : ''}${formatKB(e.sizeKB)}${e.setAside ? ' — ⚠ mis à l’écart après un échange (jamais choisi)' : ''}`;
+        return `   ${d.escaped ? '⚠ ' : ''}${d.text}${suffix} — ${e.atLeast ? 'au moins ' : ''}${formatKB(e.sizeKB)}${e.setAside ? ' — ⚠ mis à l’écart après un échange (jamais choisi)' : ''}${e.unknown ? ' — ⚠ statut inconnu : peut-être jamais choisi' : ''}`;
       });
       if (q.more) lines.push(`   … et ${q.more} autre${q.more > 1 ? 's' : ''} (non traitée${q.more > 1 ? 's' : ''} cette fois : plafond)`);
       return [head, ...lines].join('\n');
     });
     const parts = [blocks.join('\n\n'), `Total : ${formatKB(s.totalKB)}`, 'Restes de suppressions interrompues : ces entrées seront supprimées.'];
+    if (s.quarantines?.some((q) => q.entries.some((e) => e.unknown)))
+      parts.push('⚠ La liste des objets mis à l’écart est illisible ou n’a pas pu être enregistrée : chaque entrée peut avoir pris la place d’un élément pendant une suppression, sans avoir été choisie.');
     if (s.quarantines?.some((q) => q.entries.some((e) => e.setAside)))
       parts.push('⚠ Les objets « mis à l’écart » ont pris la place d’un élément pendant une suppression : ils n’ont jamais été choisis. Ils seront supprimés aussi.');
     parts.push("C'est définitif, la corbeille ne libérerait pas la RAM (elle est sur disque).");

@@ -1108,3 +1108,12 @@ button.primary:hover:not(:disabled) { background: rgba(124, 92, 255, 0.32); bord
 .swap-threshold input:focus { outline: none; border-color: var(--accent); }
 .swap-threshold.invalid input { border-color: var(--danger-border); color: var(--danger); }
 .swap-threshold .field-error { position: absolute; top: 100%; right: 0; margin-top: 3px; white-space: nowrap; font-size: 11px; color: var(--danger); }
+
+.eo-add-tests { margin-top: 8px; align-self: flex-start; }
+
+/* Tuiles du haut cliquables : trient les groupes (page Processus) */
+.stat.stat-sort { display: block; white-space: normal; font: inherit; color: inherit; text-align: left; width: 100%; height: auto; padding: 10px 12px 11px; background: rgba(255, 255, 255, 0.04); border-radius: var(--r-lg); gap: 0; cursor: pointer; transition: border-color 0.15s, background-color 0.15s; }
+.stat.stat-sort:hover:not(:disabled) { background: rgba(255, 255, 255, 0.06); color: inherit; }
+.stat.stat-sort:hover { border-color: rgba(255, 255, 255, 0.16); }
+.stat.stat-sort:focus-visible { outline: 2px solid var(--accent, #7c5cff); outline-offset: 2px; }
+.stat.stat-sort.is-sorted { border-color: rgba(124, 92, 255, 0.55); box-shadow: 0 0 0 1px rgba(124, 92, 255, 0.18) inset; }
