@@ -206,18 +206,28 @@ export function sharedScan(
 ): (() => Promise<TmpUsage>) & { reset(): void } {
   let running: Promise<TmpUsage> | null = null;
   let last: { at: number; usage: TmpUsage } | null = null;
+  /** Incrémentée par reset : un parcours lancé avant ne remplit plus le cache et n'est plus partagé. */
+  let gen = 0;
   const get = () => {
     if (last && now() - last.at < ttlMs) return Promise.resolve(last.usage);
-    running ??= scan()
+    if (running) return running;
+    const mine = gen;
+    const p: Promise<TmpUsage> = scan()
       .then((usage) => {
-        last = { at: now(), usage };
+        if (mine === gen) last = { at: now(), usage };
         return usage;
       })
       .finally(() => {
-        running = null;
+        if (running === p) running = null;
       });
-    return running;
+    running = p;
+    return p;
   };
-  /** Oublie le résultat gardé (après une suppression) ; un parcours en cours reste partagé. */
-  return Object.assign(get, { reset: () => void (last = null) });
+  /** Oublie le résultat gardé et le parcours en cours (après une suppression : leur état est périmé). */
+  const reset = () => {
+    gen++;
+    last = null;
+    running = null;
+  };
+  return Object.assign(get, { reset });
 }

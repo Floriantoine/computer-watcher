@@ -3,12 +3,15 @@ import { formatKB } from './format';
 
 const plural = (n: number, one: string, many: string) => `${n} ${n > 1 ? many : one}`;
 
+
 /** Toast après une suppression : « n éléments supprimés, X libérés, k refusés : nom (raison), … ». */
 export function tmpCleanMessage(o: TmpDeleteOutcome): { message: string; kind: 'info' | 'error' } {
+  if (o.cancelled) return { message: 'Suppression annulée : rien n’a été touché', kind: 'info' };
   const ok = o.results.filter((r) => r.ok).length;
   const refused = o.results.filter((r) => !r.ok);
   let message = `${plural(ok, 'élément supprimé', 'éléments supprimés')}, ${formatKB(Math.round(o.freedKB))} libérés`;
   if (refused.length) message += `, ${plural(refused.length, 'refusé', 'refusés')} : ${refused.map((r) => `${r.name} (${r.reason ?? 'refusé'})`).join(', ')}`;
+  if (o.partial) message = `Suppression partielle — ${message}`;
   return { message, kind: refused.length ? 'error' : 'info' };
 }
 

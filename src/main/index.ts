@@ -35,8 +35,8 @@ import { pollDelay, type WindowActivity } from './pollPolicy';
 import { portModes } from './portModes';
 import { PortSweep } from './portSweep';
 import { promises as originalFsp } from 'original-fs';
-import { isTmpDeleteRequest, MAX_TMP_DELETE } from '../core/tmpClean';
-import { deleteTmpEntries, listTmpEntries, tmpCleanEvent, tmpRootFromEnv, type CleanFs } from './tmpClean';
+import type { TmpConfirmSummary } from '../core/tmpClean';
+import { confirmText, createTmpCleaner, tmpCleanEvent, tmpRootFromEnv, type CleanFs } from './tmpClean';
 import { sharedScan, topTmpDirs } from './tmpUsage';
 import { closeAction, confirmTray, createTrayController, defaultRun, statusNotifierAvailable, type TrayController } from './tray';
 import {
@@ -546,37 +546,53 @@ ipcMain.handle('history:procTree', (_e, key: unknown, ts: unknown) => (isProcTre
 ipcMain.handle('history:culprits', (_e, ts: unknown) => (Number.isFinite(ts) ? history.culprits(ts as number) : []));
 ipcMain.handle('history:top', (_e, r: unknown, o: unknown) => (isRange(r) && isTopOptions(o) ? history.top(r, o) : { byAvg: [], byMax: [] }));
 ipcMain.handle('history:events', (_e, r: unknown, groupKey: unknown) => (isRange(r) && isOptionalGroupKey(groupKey) ? history.events(r, groupKey) : []));
-/** /tmp, sauf racine de test (PROC_WATCH_TMP_ROOT, hors production et hors app empaquetée : voir tmpRootFromEnv). */
-const tmpRoot = tmpRootFromEnv(process.env, app.isPackaged);
+/**
+ * /tmp, sauf racine de test : PROC_WATCH_TMP_ROOT n'est retenu que si son chemin réel est sous ~/.cache/pw-… et contient
+ * le fichier témoin .proc-watch-test-root (voir tmpRootFromEnv) ; ni NODE_ENV ni l'empaquetage n'entrent en compte.
+ */
+const tmpRootChoice = tmpRootFromEnv(process.env);
+const tmpRoot = tmpRootChoice.root;
+if (tmpRootChoice.warning) console.error(`proc-watch : ${tmpRootChoice.warning}`);
 if (tmpRoot !== '/tmp') console.error(`proc-watch : racine /tmp de test : ${tmpRoot}`);
 const tmpTopDirs = sharedScan(() => topTmpDirs(tmpRoot));
 ipcMain.handle('tmp:topDirs', () => tmpTopDirs());
-// original-fs : aucune réécriture des archives .asar par Electron (un dossier qui en contient doit se supprimer comme un autre)
-const cleanFs = originalFsp as unknown as CleanFs;
-ipcMain.handle('tmp:entries', () => listTmpEntries(tmpRoot, { fs: cleanFs }));
-let tmpDeleting = false;
-/** Suppression d'éléments de premier niveau : tout est revérifié ici, élément par élément (voir deleteTmpEntries). */
+const sizeText = (kb: number) =>
+  kb >= 1024 * 1024 ? `${(kb / (1024 * 1024)).toFixed(1).replace('.', ',')} Go` : kb >= 1024 ? `${Math.round(kb / 1024)} Mo` : `${Math.round(kb)} Ko`;
+/** Confirmation native dans le main : chemins exacts (échappés), taille totale, « Annuler » par défaut. */
+const confirmTmpClean = async (s: TmpConfirmSummary): Promise<boolean> => {
+  const t = confirmText(s, sizeText);
+  const opts: Electron.MessageBoxOptions = {
+    type: 'warning',
+    title: 'Supprimer de /tmp',
+    message: t.message,
+    detail: t.detail,
+    buttons: ['Annuler', 'Supprimer définitivement'],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  };
+  const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+  const r = parent ? await dialog.showMessageBox(parent, opts) : await dialog.showMessageBox(opts);
+  return r.response === 1;
+};
+// original-fs : aucune réécriture des archives .asar par Electron ; la récursion est faite par GNU rm (voir tmpClean.ts)
+const tmpCleaner = createTmpCleaner(tmpRoot, { fs: originalFsp as unknown as CleanFs, confirm: confirmTmpClean });
+ipcMain.handle('tmp:entries', () => tmpCleaner.list());
+/** Suppression : liste autorisée du main, confirmation native, revérification et suppression élément par élément. */
 ipcMain.handle('tmp:delete', async (_e, raw: unknown) => {
-  if (!isTmpDeleteRequest(raw)) throw new Error(`Requête invalide (1 à ${MAX_TMP_DELETE} éléments)`);
-  if (tmpDeleting) throw new Error('Une suppression est déjà en cours');
-  tmpDeleting = true;
-  try {
-    const items = raw.map((i) => ({ name: i.name, ino: i.ino, dev: i.dev }));
-    const outcome = await deleteTmpEntries(tmpRoot, items, { fs: cleanFs });
-    tmpTopDirs.reset();
-    const ev = tmpCleanEvent(outcome, Date.now());
-    if (ev) {
-      try {
-        mkdirSync(data, { recursive: true });
-        appendFileSync(appEventsPath(data), formatAppEvent(ev));
-      } catch (e) {
-        console.error('app event:', e);
-      }
+  tmpTopDirs.reset(); // un parcours en cours décrirait l'état d'avant
+  const outcome = await tmpCleaner.delete(raw);
+  tmpTopDirs.reset();
+  const ev = tmpCleanEvent(outcome, Date.now());
+  if (ev) {
+    try {
+      mkdirSync(data, { recursive: true });
+      appendFileSync(appEventsPath(data), formatAppEvent(ev));
+    } catch (e) {
+      console.error('app event:', e);
     }
-    return outcome;
-  } finally {
-    tmpDeleting = false;
   }
+  return outcome;
 });
 ipcMain.handle('recorder:status', () => recorderState());
 ipcMain.handle('recorder:setEnabled', async (_e, enabled: unknown) => {

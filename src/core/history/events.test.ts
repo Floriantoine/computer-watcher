@@ -71,6 +71,10 @@ test('app events : nettoyage de /tmp (tmp_clean), validé', () => {
   expect(parseAppEvents(JSON.stringify({ ...e, detail: { ...e.detail, deleted: [1] } }))).toEqual([]);
   expect(parseAppEvents(JSON.stringify({ ...e, detail: { ...e.detail, refused: [{ name: 'x' }] } }))).toEqual([]);
   expect(parseAppEvents(JSON.stringify({ ...e, groupKey: 'app:x' }))).toEqual([]);
+  // échec partiel : drapeau gardé s'il est booléen vrai
+  const p = { ...e, detail: { ...e.detail, deleted: [], partial: true as const } };
+  expect(parseAppEvents(formatAppEvent(p))).toEqual([p]);
+  expect(parseAppEvents(JSON.stringify({ ...e, detail: { ...e.detail, partial: 'oui' } }))).toEqual([e]);
 });
 
 test('takeAppEvents : flux normal, fichier vide après ack', () => {

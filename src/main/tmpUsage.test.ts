@@ -240,3 +240,25 @@ test('sharedScan.reset : le résultat en cache est oublié (après une suppressi
   get.reset();
   expect((await get()).rootFilesKB).toBe(2);
 });
+
+test('sharedScan.reset pendant un parcours : son résultat (périmé) n’est pas gardé, l’appel suivant relance un parcours', async () => {
+  let calls = 0;
+  const releases: (() => void)[] = [];
+  const get = sharedScan(
+    () => {
+      const n = ++calls;
+      return new Promise<TmpUsage>((res) => releases.push(() => res({ dirs: [], rootFilesKB: n, skipped: 0, truncated: false })));
+    },
+    { now: () => 0 },
+  );
+  const stale = get();
+  get.reset();
+  const fresh = get(); // ne réutilise pas le parcours d'avant la suppression
+  expect(calls).toBe(2);
+  releases[0]();
+  expect((await stale).rootFilesKB).toBe(1);
+  releases[1]();
+  expect((await fresh).rootFilesKB).toBe(2);
+  expect((await get()).rootFilesKB).toBe(2); // le résultat gardé est le récent
+  expect(calls).toBe(2);
+});

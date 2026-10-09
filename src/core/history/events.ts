@@ -76,7 +76,8 @@ export interface TmpCleanEvent {
   ts: number;
   type: 'tmp_clean';
   groupKey: null;
-  detail: { freedKB: number; deleted: string[]; refused: { name: string; reason: string }[] };
+  /** `partial` : un élément a pu être supprimé en partie (échec en cours de route, reste en quarantaine). */
+  detail: { freedKB: number; deleted: string[]; refused: { name: string; reason: string }[]; partial?: true };
 }
 
 export type AppEvent = AppKillEvent | TmpCleanEvent;
@@ -97,6 +98,7 @@ function parseTmpClean(obj: Record<string, unknown>): TmpCleanEvent | null {
       freedKB: d.freedKB as number,
       deleted: [...(d.deleted as string[])],
       refused: (d.refused as { name: string; reason: string }[]).map((r) => ({ name: r.name, reason: r.reason })),
+      ...(d.partial === true ? { partial: true as const } : {}),
     },
   };
 }

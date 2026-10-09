@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence } from 'motion/react';
-import { Link2, Trash2 } from 'lucide-react';
-import type { TmpListing } from '../../../core/tmpClean';
+import { Link2, Trash2, TriangleAlert } from 'lucide-react';
+import { displayName, type TmpListing } from '../../../core/tmpClean';
 import { TMP_SCAN_LIMITS } from '../../../core/tmpScanLimits';
 import { formatKB } from '../format';
 import { tmpCleanMessage, tmpSelection } from '../tmpClean';
@@ -43,6 +43,7 @@ export function TmpCleanList({ onToast }: Props) {
   useEffect(() => load(), [load]);
 
   const sel = tmpSelection(listing?.entries ?? [], selected);
+  const uninspectableNames = [...new Set((listing?.uninspectable ?? []).map((p) => p.name))];
   const root = listing?.root ?? '/tmp';
   const atLeast = listing?.truncated ? 'au moins ' : '';
 
@@ -92,7 +93,8 @@ export function TmpCleanList({ onToast }: Props) {
       ) : (
         <ul aria-label={`Éléments de ${root}`}>
           {listing.entries.map((e) => {
-            const id = `tmp-clean-${e.name}`;
+            const id = `tmp-clean-${e.ino}`;
+            const shown = displayName(e.name);
             const disabled = e.refusal !== null || busy;
             return (
               <li key={e.name} className={e.refusal ? 'refused' : undefined} data-testid="tmp-clean-row">
@@ -104,11 +106,17 @@ export function TmpCleanList({ onToast }: Props) {
                   onChange={() => toggle(e.name)}
                   aria-describedby={e.refusal ? `${id}-why` : undefined}
                 />
-                <label htmlFor={id} className="mono path" title={`${root}/${e.name}`}>
+                <label htmlFor={id} className="mono path" title={`${root}/${shown.text}`}>
                   {e.kind === 'link' && <Link2 size={11} strokeWidth={2.2} aria-label="lien symbolique (seul le lien est supprimé)" />}
-                  {e.name}
+                  {shown.escaped && <TriangleAlert size={11} strokeWidth={2.2} className="warn" aria-label="nom avec caractères invisibles ou de contrôle (affichés échappés)" />}
+                  {shown.text}
                 </label>
                 {e.cache && <span className="tmp-badge" title="Cache connu : se reconstruit tout seul">cache, se reconstruit tout seul</span>}
+                {e.recent && e.refusal === null && (
+                  <span className="tmp-recent" title="Modifié il y a moins de 5 min : peut-être en cours d'utilisation">
+                    <TriangleAlert size={10} strokeWidth={2.4} aria-hidden /> modifié il y a moins de 5 min
+                  </span>
+                )}
                 {e.refusal && <span className="tmp-why" id={`${id}-why`}>{e.refusal}</span>}
                 <span className="mono size">{e.kind === 'dir' ? atLeast : ''}{formatKB(e.sizeKB)}</span>
               </li>
@@ -123,10 +131,11 @@ export function TmpCleanList({ onToast }: Props) {
       )}
       {listing && listing.uninspectable.length > 0 && (
         <div className="sub note" title={listing.uninspectable.map((p) => `${p.name} (pid ${p.pid})`).join(', ')}>
-          {listing.uninspectable.length} processus à droits élevés non vérifiables ({[...new Set(listing.uninspectable.map((p) => p.name))].slice(0, 4).join(', ')})
+          {listing.uninspectable.length} processus à droits élevés non vérifiables ({uninspectableNames.slice(0, 4).join(', ')}) ; sockets des applications isolées (flatpak…) non vus
         </div>
       )}
-      {listing && listing.entries.some((e) => e.refusal === null) && (
+      {listing?.disabled && <div className="sub partial" data-testid="tmp-clean-disabled">{listing.disabled}</div>}
+      {listing && !listing.disabled && listing.entries.some((e) => e.refusal === null) && (
         <div className="tmp-clean-actions">
           <button className="danger sm" data-testid="tmp-clean-delete" disabled={!sel.items.length || busy} onClick={() => setConfirming(true)}>
             <Trash2 size={13} strokeWidth={2} /> {busy ? 'Suppression…' : sel.label}
@@ -139,20 +148,33 @@ export function TmpCleanList({ onToast }: Props) {
             <SettingsConfirm
               id="tmp-clean-confirm-title"
               title={`Supprimer définitivement ${sel.entries.length > 1 ? `ces ${sel.entries.length} éléments` : 'cet élément'} de ${root} ?`}
-              text="C'est définitif, la corbeille ne libérerait pas la RAM (elle est sur disque). Chaque élément est revérifié juste avant d'être supprimé."
+              text="C'est définitif, la corbeille ne libérerait pas la RAM (elle est sur disque). proc-watch redemande confirmation, puis revérifie chaque élément juste avant de le supprimer."
               confirmLabel={`Supprimer (${formatKB(sel.sizeKB)})`}
               focusCancel
               onCancel={() => setConfirming(false)}
               onConfirm={() => void run()}
             >
               <div className="prot-list tmp-clean-recap" data-testid="tmp-clean-recap">
-                {sel.entries.map((e) => (
-                  <div key={e.name} className="tmp-clean-recap-row">
-                    <span className="mono">{root}/{e.name}{e.kind === 'link' ? ' (le lien seul)' : e.kind === 'dir' ? '/' : ''}</span>
-                    <span className="mono size">{e.kind === 'dir' ? atLeast : ''}{formatKB(e.sizeKB)}</span>
-                  </div>
-                ))}
+                {sel.entries.map((e) => {
+                  const shown = displayName(e.name);
+                  return (
+                    <div key={e.name} className="tmp-clean-recap-row">
+                      <span className="mono">
+                        {shown.escaped && '⚠ '}
+                        {root}/{shown.text}{e.kind === 'link' ? ' (le lien seul)' : e.kind === 'dir' ? '/' : ''}
+                        {e.recent && <span className="tmp-recent recap-recent">⚠ modifié il y a moins de 5 min</span>}
+                      </span>
+                      <span className="mono size">{e.kind === 'dir' ? atLeast : ''}{formatKB(e.sizeKB)}</span>
+                    </div>
+                  );
+                })}
               </div>
+              {uninspectableNames.length > 0 && (
+                <p className="warn-line tmp-clean-uninspectable" data-testid="tmp-clean-uninspectable">
+                  <TriangleAlert size={15} strokeWidth={2.2} /> Non vérifiable : un fichier ouvert par {uninspectableNames.join(', ')} (droits élevés) ne serait pas détecté.
+                </p>
+              )}
+              <p className="hint" style={{ margin: 0 }}>Les sockets des applications isolées (flatpak, bac à sable de Chromium) ne sont pas vus.</p>
             </SettingsConfirm>
           )}
         </AnimatePresence>,
