@@ -15,7 +15,7 @@ import {
   type UpdateState,
 } from './update';
 
-const found = (version: string, at = 1000) => ({ type: 'found' as const, version, notes: 'Corrections', url: `https://github.com/Floriantoine/proc-watcher/releases/tag/v${version}`, at });
+const found = (version: string, at = 1000) => ({ type: 'found' as const, version, notes: 'Corrections', url: `https://github.com/Floriantoine/computer-watcher/releases/tag/v${version}`, at });
 const start = (mode: UpdateState['mode'] = 'install') => initialUpdateState(mode, '0.1.0');
 
 describe('compareVersions / isNewer', () => {
@@ -88,21 +88,21 @@ describe('testFeedFromEnv', () => {
 
 describe('isReleaseUrl', () => {
   test('pages des versions du dépôt en https seulement', () => {
-    expect(isReleaseUrl('https://github.com/Floriantoine/proc-watcher/releases/tag/v0.1.1')).toBe(true);
-    expect(isReleaseUrl('https://github.com/Floriantoine/proc-watcher/releases')).toBe(true);
-    expect(isReleaseUrl('http://github.com/Floriantoine/proc-watcher/releases')).toBe(false);
-    expect(isReleaseUrl('https://github.com/Floriantoine/proc-watcher-evil/releases')).toBe(false);
-    expect(isReleaseUrl('https://evil.example/Floriantoine/proc-watcher/releases')).toBe(false);
+    expect(isReleaseUrl('https://github.com/Floriantoine/computer-watcher/releases/tag/v0.1.1')).toBe(true);
+    expect(isReleaseUrl('https://github.com/Floriantoine/computer-watcher/releases')).toBe(true);
+    expect(isReleaseUrl('http://github.com/Floriantoine/computer-watcher/releases')).toBe(false);
+    expect(isReleaseUrl('https://github.com/Floriantoine/computer-watcher-evil/releases')).toBe(false);
+    expect(isReleaseUrl('https://evil.example/Floriantoine/computer-watcher/releases')).toBe(false);
     expect(isReleaseUrl(42)).toBe(false);
   });
   test('analyse de l’URL : hôte exact, pas de « .. », pas d’identifiants ni de port', () => {
-    expect(isReleaseUrl('https://github.com/Floriantoine/proc-watcher/releases/../../../autre/depot')).toBe(false);
-    expect(isReleaseUrl('https://github.com/Floriantoine/proc-watcher/releases/%2e%2e/%2E%2E/x')).toBe(false);
-    expect(isReleaseUrl('https://github.com.evil.example/Floriantoine/proc-watcher/releases/')).toBe(false);
-    expect(isReleaseUrl('https://github.com@evil.example/Floriantoine/proc-watcher/releases/')).toBe(false);
-    expect(isReleaseUrl('https://u:p@github.com/Floriantoine/proc-watcher/releases/')).toBe(false);
-    expect(isReleaseUrl('https://github.com:8443/Floriantoine/proc-watcher/releases/')).toBe(false);
-    expect(isReleaseUrl('https://github.com/Floriantoine/proc-watcher/releasesX')).toBe(false);
+    expect(isReleaseUrl('https://github.com/Floriantoine/computer-watcher/releases/../../../autre/depot')).toBe(false);
+    expect(isReleaseUrl('https://github.com/Floriantoine/computer-watcher/releases/%2e%2e/%2E%2E/x')).toBe(false);
+    expect(isReleaseUrl('https://github.com.evil.example/Floriantoine/computer-watcher/releases/')).toBe(false);
+    expect(isReleaseUrl('https://github.com@evil.example/Floriantoine/computer-watcher/releases/')).toBe(false);
+    expect(isReleaseUrl('https://u:p@github.com/Floriantoine/computer-watcher/releases/')).toBe(false);
+    expect(isReleaseUrl('https://github.com:8443/Floriantoine/computer-watcher/releases/')).toBe(false);
+    expect(isReleaseUrl('https://github.com/Floriantoine/computer-watcher/releasesX')).toBe(false);
   });
 });
 

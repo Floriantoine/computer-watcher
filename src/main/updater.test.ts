@@ -8,7 +8,7 @@ function setup(o: { mode?: UpdateMode; backend?: Partial<UpdateBackend> | null; 
   const timers: { fn: () => void; ms: number; every: boolean }[] = [];
   let now = 1_000_000;
   const backend: UpdateBackend | null =
-    o.backend === null ? null : { check: vi.fn(async () => ({ version: '0.1.1', notes: '<p>Corrections</p>', url: 'https://github.com/Floriantoine/proc-watcher/releases/tag/v0.1.1' })), ...o.backend };
+    o.backend === null ? null : { check: vi.fn(async () => ({ version: '0.1.1', notes: '<p>Corrections</p>', url: 'https://github.com/Floriantoine/computer-watcher/releases/tag/v0.1.1' })), ...o.backend };
   const c = createUpdateController({
     mode: o.mode ?? 'install',
     current: '0.1.0',
@@ -57,7 +57,7 @@ describe('createUpdateController', () => {
     expect(backend!.check).toHaveBeenCalledTimes(1);
   });
   test('préversion trouvée sans le réglage : ignorée ; le réglage est passé au backend', async () => {
-    const check = vi.fn(async () => ({ version: '0.2.0-beta.1', notes: '', url: 'https://github.com/Floriantoine/proc-watcher/releases/tag/v0.2.0-beta.1' }));
+    const check = vi.fn(async () => ({ version: '0.2.0-beta.1', notes: '', url: 'https://github.com/Floriantoine/computer-watcher/releases/tag/v0.2.0-beta.1' }));
     const a = setup({ backend: { check } });
     await a.c.check(true);
     expect(check).toHaveBeenLastCalledWith(false);
@@ -68,7 +68,7 @@ describe('createUpdateController', () => {
     expect(b.c.view().state.available?.version).toBe('0.2.0-beta.1');
   });
   test('version plus ancienne renvoyée par le backend : jamais proposée', async () => {
-    const { c } = setup({ backend: { check: async () => ({ version: '0.0.9', notes: '', url: 'https://github.com/Floriantoine/proc-watcher/releases' }) } });
+    const { c } = setup({ backend: { check: async () => ({ version: '0.0.9', notes: '', url: 'https://github.com/Floriantoine/computer-watcher/releases' }) } });
     await c.check(true);
     expect(c.view().state.available).toBeNull();
     expect(c.view().state.lastResult).toBe('none');
@@ -76,7 +76,7 @@ describe('createUpdateController', () => {
   test('URL de page de version inattendue : remplacée par la page des versions du dépôt', async () => {
     const { c } = setup({ backend: { check: async () => ({ version: '0.1.1', notes: '', url: 'https://evil.example/x' }) } });
     await c.check(true);
-    expect(c.view().state.available?.url).toBe('https://github.com/Floriantoine/proc-watcher/releases');
+    expect(c.view().state.available?.url).toBe('https://github.com/Floriantoine/computer-watcher/releases');
   });
   test('erreur de vérification : état gardé, pas de pop-up', async () => {
     const { c } = setup({ backend: { check: async () => Promise.reject(new Error('ENOTFOUND')) } });
@@ -201,7 +201,7 @@ describe('createUpdateController', () => {
     expect(download).not.toHaveBeenCalled();
   });
   test('préversions désactivées : une préversion déjà proposée est retirée', async () => {
-    const check = vi.fn(async () => ({ version: '0.2.0-beta.1', notes: '', url: 'https://github.com/Floriantoine/proc-watcher/releases/tag/v0.2.0-beta.1' }));
+    const check = vi.fn(async () => ({ version: '0.2.0-beta.1', notes: '', url: 'https://github.com/Floriantoine/computer-watcher/releases/tag/v0.2.0-beta.1' }));
     const { c } = setup({ backend: { check }, prefs: { prerelease: true } });
     await c.check(true);
     expect(c.view().state.available?.version).toBe('0.2.0-beta.1');
@@ -271,11 +271,11 @@ describe('createUpdateController', () => {
 
 describe('pickRelease (API GitHub, mode notification)', () => {
   const rel = (tag: string, extra: Record<string, unknown> = {}) => ({
-    tag_name: tag, html_url: `https://github.com/Floriantoine/proc-watcher/releases/tag/${tag}`, body: `Notes ${tag}`, draft: false, prerelease: false, ...extra,
+    tag_name: tag, html_url: `https://github.com/Floriantoine/computer-watcher/releases/tag/${tag}`, body: `Notes ${tag}`, draft: false, prerelease: false, ...extra,
   });
   test('la plus récente publiée, préversions exclues par défaut, brouillons toujours exclus', () => {
     const list = [rel('v0.1.1'), rel('v0.3.0', { draft: true }), rel('v0.2.0-beta.1', { prerelease: true }), rel('v0.1.2'), { junk: true }];
-    expect(pickRelease(list, false)).toEqual({ version: '0.1.2', notes: 'Notes v0.1.2', url: 'https://github.com/Floriantoine/proc-watcher/releases/tag/v0.1.2' });
+    expect(pickRelease(list, false)).toEqual({ version: '0.1.2', notes: 'Notes v0.1.2', url: 'https://github.com/Floriantoine/computer-watcher/releases/tag/v0.1.2' });
     expect(pickRelease(list, true)?.version).toBe('0.2.0-beta.1');
   });
   test('réponse inattendue : rien', () => {
@@ -285,7 +285,7 @@ describe('pickRelease (API GitHub, mode notification)', () => {
 });
 
 describe('createReleasesApiBackend', () => {
-  const list = JSON.stringify([{ tag_name: 'v0.1.1', html_url: 'https://github.com/Floriantoine/proc-watcher/releases/tag/v0.1.1', body: 'x', draft: false, prerelease: false }]);
+  const list = JSON.stringify([{ tag_name: 'v0.1.1', html_url: 'https://github.com/Floriantoine/computer-watcher/releases/tag/v0.1.1', body: 'x', draft: false, prerelease: false }]);
   const respond = (body: string, headers: Record<string, string> = {}) => (async () => new Response(body, { status: 200, headers })) as unknown as typeof fetch;
   test('réponse normale', async () => {
     expect((await createReleasesApiBackend({ url: 'https://x', fetch: respond(list) }).check(false))?.version).toBe('0.1.1');

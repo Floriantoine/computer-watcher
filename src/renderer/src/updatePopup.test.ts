@@ -6,7 +6,7 @@ const view = (s: Partial<UpdateState>, mode: UpdateState['mode'] = 'install'): U
   state: {
     ...initialUpdateState(mode, '0.1.0'),
     phase: 'available',
-    available: { version: '0.1.1', notes: 'Corrections diverses', url: 'https://github.com/Floriantoine/proc-watcher/releases/tag/v0.1.1' },
+    available: { version: '0.1.1', notes: 'Corrections diverses', url: 'https://github.com/Floriantoine/computer-watcher/releases/tag/v0.1.1' },
     ...s,
   },
   prefs: DEFAULT_UPDATE_PREFS,

@@ -3,7 +3,7 @@
 Voir ce qui tourne sur ta machine Linux, depuis combien de temps, ce que ça consomme — et le tuer en un clic.
 
 > [!IMPORTANT]
-> **Installe proc-watch avec l'AppImage** pour recevoir les mises à jour automatiques : télécharge `proc-watch-<version>-x86_64.AppImage` dans les [Releases](https://github.com/Floriantoine/proc-watcher/releases), rends-la exécutable (`chmod +x`), lance-la et choisis **Installer comme une app**. Le paquet `.deb` ne se met pas à jour tout seul : il signale seulement les nouvelles versions. Détails dans [Installation](#installation).
+> **Installe proc-watch avec l'AppImage** pour recevoir les mises à jour automatiques : télécharge `proc-watch-<version>-x86_64.AppImage` dans les [Releases](https://github.com/Floriantoine/computer-watcher/releases), rends-la exécutable (`chmod +x`), lance-la et choisis **Installer comme une app**. Le paquet `.deb` ne se met pas à jour tout seul : il signale seulement les nouvelles versions. Détails dans [Installation](#installation).
 
 Né d'un PC gelé dix minutes par 19 Go de swap : vieilles sessions de terminal, serveurs de dev oubliés dans des worktrees supprimés, navigateur gourmand. proc-watch regroupe tout ça pour qu'on le voie et qu'on le nettoie avant d'en arriver là.
 
@@ -54,7 +54,7 @@ Dans un projet, proc-watch découpe les processus en **instances** : un serveur 
 
 ## Installation
 
-Les fichiers sont publiés dans les [Releases](https://github.com/Floriantoine/proc-watcher/releases), avec un fichier `latest-linux.yml` qui donne l'empreinte SHA-512 de l'AppImage.
+Les fichiers sont publiés dans les [Releases](https://github.com/Floriantoine/computer-watcher/releases), avec un fichier `latest-linux.yml` qui donne l'empreinte SHA-512 de l'AppImage.
 
 ### Debian / Ubuntu (.deb)
 
@@ -74,7 +74,7 @@ Sur Ubuntu 22.04+, les AppImage demandent `libfuse2` : `sudo apt install libfuse
 
 ### Arch / Manjaro (AUR)
 
-Un paquet `proc-watcher-bin` est prévu ; en attendant, utiliser l'AppImage.
+Un paquet `computer-watcher-bin` est prévu ; en attendant, utiliser l'AppImage.
 
 ### Vérifier l'empreinte SHA-512
 
@@ -116,8 +116,8 @@ Réglages › À propos : version, vérification automatique (activée par défa
 ### Depuis les sources
 
 ```bash
-git clone https://github.com/Floriantoine/proc-watcher
-cd proc-watcher
+git clone https://github.com/Floriantoine/computer-watcher
+cd computer-watcher
 npm install
 npm run dev
 ```

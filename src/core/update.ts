@@ -10,9 +10,9 @@
  */
 export type UpdateMode = 'off' | 'install' | 'relaunch' | 'notify';
 
-export const REPO_RELEASES_URL = 'https://github.com/Floriantoine/proc-watcher/releases';
+export const REPO_RELEASES_URL = 'https://github.com/Floriantoine/computer-watcher/releases';
 /** API publique : versions publiées (brouillons exclus par GitHub pour un accès anonyme). */
-export const RELEASES_API_URL = 'https://api.github.com/repos/Floriantoine/proc-watcher/releases?per_page=20';
+export const RELEASES_API_URL = 'https://api.github.com/repos/Floriantoine/computer-watcher/releases?per_page=20';
 export const FIRST_CHECK_DELAY_MS = 30_000;
 export const CHECK_EVERY_MS = 6 * 3600_000;
 /** « Plus tard » : pop-up caché pendant 24 h (en mémoire : revient au prochain lancement). */
@@ -50,11 +50,11 @@ export function testFeedFromEnv(env: NodeJS.ProcessEnv, isPackaged: boolean, arg
   return u.toString();
 }
 
-const RELEASES_PATH = '/Floriantoine/proc-watcher/releases';
+const RELEASES_PATH = '/Floriantoine/computer-watcher/releases';
 
 /**
  * Seules les pages des versions du dépôt sont ouvertes dans le navigateur : URL analysée, https://github.com exactement
- * (ni identifiants ni port), chemin sous /Floriantoine/proc-watcher/releases, aucun segment « .. » (même encodé).
+ * (ni identifiants ni port), chemin sous /Floriantoine/computer-watcher/releases, aucun segment « .. » (même encodé).
  */
 export function isReleaseUrl(url: unknown): url is string {
   if (typeof url !== 'string' || /\.\.|%2e/i.test(url)) return false;

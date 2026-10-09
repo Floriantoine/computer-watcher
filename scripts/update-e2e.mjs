@@ -38,7 +38,7 @@ const yml = () =>
     '',
   ].join('\n');
 const releases = JSON.stringify([
-  { tag_name: 'v9.9.9', html_url: 'https://github.com/Floriantoine/proc-watcher/releases/tag/v9.9.9', body: 'Notes de test (API).', draft: false, prerelease: false },
+  { tag_name: 'v9.9.9', html_url: 'https://github.com/Floriantoine/computer-watcher/releases/tag/v9.9.9', body: 'Notes de test (API).', draft: false, prerelease: false },
 ]);
 /** Jeton aléatoire exigé en tête du chemin du flux de test (testFeedFromEnv). */
 const TOKEN = randomBytes(24).toString('hex');
