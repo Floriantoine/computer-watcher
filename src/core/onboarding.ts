@@ -146,7 +146,7 @@ export interface AutostartInfo {
 export interface AboutInfo {
   version: string;
   appImage: string | null;
-  /** ~/Applications/proc-watch.AppImage si elle existe. */
+  /** ~/Applications/computer-watcher.AppImage si elle existe. */
   installedCopy: string | null;
   packaged: boolean;
 }

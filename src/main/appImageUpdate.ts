@@ -3,6 +3,7 @@
 import { existsSync, writeFileSync } from 'node:fs';
 import { REPO_RELEASES_URL } from '../core/update';
 import { InstallError, type UpdateBackend } from './updater';
+import { APP_NAME } from '../core/appName';
 
 export interface AppImageBackendOptions {
   /** Flux de test local (generic) ; null : flux GitHub de app-update.yml (écrit par electron-builder, https). */
@@ -45,9 +46,12 @@ export function installAndRestart(
 
 /**
  * Fichier qu'electron-updater va remplacer : il lit process.env.APPIMAGE (posé par le runtime AppImage : la copie installée
- * quand l'app tourne depuis elle) et, le nom « proc-watch.AppImage » n'ayant pas de version, l'écrase sur place. On exige
+ * quand l'app tourne depuis elle) et, le nom « computer-watcher.AppImage » n'ayant pas de version, l'écrase sur place. On exige
  * que ce soit exactement l'AppImage vérifiée par realAppImage() ; sinon (variable modifiée depuis) : refusé.
  */
+/** app-update.yml du flux de test (PROC_WATCH_TEST_UPDATE_FEED) : cache séparé de celui des vraies mises à jour. */
+export const TEST_UPDATE_CONFIG = `updaterCacheDirName: ${APP_NAME}-updater-test\n`;
+
 export function installTarget(env: NodeJS.ProcessEnv, verified: string): string {
   if (env.APPIMAGE !== verified) throw new Error(`Installation refusée : APPIMAGE (${env.APPIMAGE ?? 'absent'}) n’est pas l’AppImage vérifiée (${verified})`);
   return verified;
@@ -67,7 +71,7 @@ export async function createAppImageBackend(o: AppImageBackendOptions): Promise<
   });
   u.logger = { info: () => {}, debug: () => {}, warn: (m: unknown) => console.warn('updater:', m), error: (m: unknown) => console.error('updater:', m) };
   if (o.testFeed) {
-    writeFileSync(o.testConfigPath, 'updaterCacheDirName: proc-watch-updater-test\n');
+    writeFileSync(o.testConfigPath, TEST_UPDATE_CONFIG);
     u.updateConfigPath = o.testConfigPath;
     u.forceDevUpdateConfig = true;
     u.setFeedURL({ provider: 'generic', url: o.testFeed });

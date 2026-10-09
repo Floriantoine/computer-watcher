@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import * as trust from './appImageTrust';
-import { hasControlChars, installedAppImage, installedElsewhere } from './appImageTrust';
+import { hasControlChars, installedAppImage, installedElsewhere, legacyInstalledAppImage } from './appImageTrust';
 import { realAppImage } from './realAppImage';
 import { updateMode } from '../core/update';
 
@@ -41,9 +41,10 @@ describe('mises à jour : une seule source de vérité, realAppImage()', () => {
   });
 });
 
-describe('copie installée (~/Applications/proc-watch.AppImage)', () => {
-  test('chemin sans version, dans ~/Applications', () => {
-    expect(installedAppImage('/home/u')).toBe('/home/u/Applications/proc-watch.AppImage');
+describe('copie installée (~/Applications/computer-watcher.AppImage)', () => {
+  test('chemin sans version, dans ~/Applications ; l’ancienne copie garde son nom', () => {
+    expect(installedAppImage('/home/u')).toBe('/home/u/Applications/computer-watcher.AppImage');
+    expect(legacyInstalledAppImage('/home/u')).toBe('/home/u/Applications/proc-watch.AppImage');
   });
   test('lancée depuis un autre fichier alors que la copie existe : « ailleurs »', () => {
     const l = layout();

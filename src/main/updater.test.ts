@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from 'vitest';
 import { DEFAULT_UPDATE_PREFS, type UpdateMode, type UpdatePrefs } from '../core/update';
-import { InstallError, createPrefsStore, createReleasesApiBackend, createUpdateController, pickRelease, type UpdateBackend, type UpdateView } from './updater';
+import { InstallError, UPDATE_CHECK_USER_AGENT, createPrefsStore, createReleasesApiBackend, createUpdateController, pickRelease, type UpdateBackend, type UpdateView } from './updater';
 
 function setup(o: { mode?: UpdateMode; backend?: Partial<UpdateBackend> | null; prefs?: Partial<UpdatePrefs> } = {}) {
   let prefs: UpdatePrefs = { ...DEFAULT_UPDATE_PREFS, ...o.prefs };
@@ -323,4 +323,8 @@ describe('createPrefsStore', () => {
     writeFileSync(join(dir, 'bad.json'), '{oops');
     expect(createPrefsStore(join(dir, 'bad.json')).load()).toEqual(DEFAULT_UPDATE_PREFS);
   });
+});
+
+test('renommage : User-Agent de la vérification des versions au nouveau nom', () => {
+  expect(UPDATE_CHECK_USER_AGENT).toBe('computer-watcher-update-check');
 });

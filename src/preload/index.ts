@@ -140,12 +140,12 @@ const api = {
     get: (): Promise<OnboardingInfo> => ipcRenderer.invoke('onboarding:get'),
     /** Terminé ou « Passer » : ne revient plus au lancement. */
     finish: (): Promise<void> => ipcRenderer.invoke('onboarding:finish'),
-    /** AppImage seulement : copie dans ~/Applications/proc-watch.AppImage et entrée de menu vers la copie. */
+    /** AppImage seulement : copie dans ~/Applications/computer-watcher.AppImage et entrée de menu vers la copie. */
     install: (): Promise<InstallOutcome> => ipcRenderer.invoke('onboarding:install'),
     /** Relance depuis la copie ; `deleteOriginal` : supprime d'abord le fichier téléchargé (confirmation native du main). */
     relaunch: (deleteOriginal: boolean): Promise<{ relaunched: boolean }> => ipcRenderer.invoke('onboarding:relaunch', deleteOriginal),
   },
-  /** Démarrer avec la session (~/.config/autostart/proc-watch.desktop, `--hidden`). */
+  /** Démarrer avec la session (~/.config/autostart/computer-watcher.desktop, `--hidden`). */
   autostart: {
     get: (): Promise<AutostartInfo> => ipcRenderer.invoke('autostart:get'),
     set: (on: boolean): Promise<AutostartInfo> => ipcRenderer.invoke('autostart:set', on),

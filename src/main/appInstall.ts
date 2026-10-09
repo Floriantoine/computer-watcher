@@ -9,7 +9,8 @@ import {
   chmodSafe, copyFileSafe, fdPath, hashNoFollow, listDirSafe, openParent, readFileSafe, removeDirIfEmptySafe, removeFileSafe, removeTreeSafe, writeFileSafe,
 } from './safeFs';
 import type { InstallOutcome, UninstallItem, UninstallKind, UninstallOptions, UninstallResult } from '../core/onboarding';
-import { UNIT_NAME, type Systemctl } from './recorderService';
+import { LEGACY_UNIT_NAME, UNIT_NAME, type Systemctl } from './recorderService';
+import { APP_DISPLAY_NAME, APP_NAME, LEGACY_APP_NAME } from '../core/appName';
 import { xdgHome } from '../core/paths';
 import { systemBin } from '../core/childEnv';
 
@@ -27,28 +28,36 @@ export function rootsFrom(env: NodeJS.ProcessEnv, home: string): Roots {
   };
 }
 
-export function appPaths(r: Roots) {
+/** Chemins de l'app pour un nom technique donné (nouveau ou ancien) et une unité. */
+function namedPaths(r: Roots, name: string, unit: string) {
   return {
-    appImage: join(r.home, 'Applications', 'proc-watch.AppImage'),
-    autostart: join(r.configHome, 'autostart', 'proc-watch.desktop'),
-    desktop: join(r.dataHome, 'applications', 'proc-watch.desktop'),
-    icon: join(r.dataHome, 'icons/hicolor/512x512/apps', 'proc-watch.png'),
-    unit: join(r.configHome, 'systemd/user', UNIT_NAME),
-    configDir: join(r.configHome, 'proc-watch'),
-    dataDir: join(r.dataHome, 'proc-watch'),
+    appImage: join(r.home, 'Applications', `${name}.AppImage`),
+    autostart: join(r.configHome, 'autostart', `${name}.desktop`),
+    desktop: join(r.dataHome, 'applications', `${name}.desktop`),
+    icon: join(r.dataHome, 'icons/hicolor/512x512/apps', `${name}.png`),
+    unit: join(r.configHome, 'systemd/user', unit),
+    configDir: join(r.configHome, name),
+    dataDir: join(r.dataHome, name),
     /** Cache d'electron-updater (updaterCacheDirName d'app-update.yml : `${nom}-updater`). */
-    updaterCache: join(r.cacheHome, 'proc-watch-updater'),
+    updaterCache: join(r.cacheHome, `${name}-updater`),
   };
 }
 
-/** Racines sous lesquelles proc-watch écrit (chaque dossier en dessous est ouvert sans suivre de lien). */
+export type AppPathSet = ReturnType<typeof namedPaths>;
+
+/** Chemins au nouveau nom, et `legacy` : les mêmes à l'ancien nom (restes d'avant le renommage, migration, désinstallation). */
+export function appPaths(r: Roots): AppPathSet & { legacy: AppPathSet } {
+  return { ...namedPaths(r, APP_NAME, UNIT_NAME), legacy: namedPaths(r, LEGACY_APP_NAME, LEGACY_UNIT_NAME) };
+}
+
+/** Racines sous lesquelles l'app écrit (chaque dossier en dessous est ouvert sans suivre de lien). */
 export const rootList = (r: Roots) => [r.home, r.configHome, r.dataHome, r.cacheHome];
 
 const code = (e: unknown) => (e as NodeJS.ErrnoException)?.code;
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const realOrNull = async (p: string) => realpath(p).catch(() => null);
 
-/** Entrée .desktop écrite par proc-watch (X-ProcWatch-Managed=1), lue sans suivre de lien. */
+/** Entrée .desktop écrite par l'app (X-ProcWatch-Managed=1, sous l'un ou l'autre nom), lue sans suivre de lien. */
 function managedEntry(r: Roots, path: string): boolean {
   const t = readFileSafe(rootList(r), path);
   return t !== null && isManagedEntry(t);
@@ -64,7 +73,7 @@ function present(p: string): boolean {
   }
 }
 
-const foreign = (path: string) => `${path} n’a pas été créé par proc-watch (sans X-ProcWatch-Managed=1) : laissé en place`;
+const foreign = (path: string) => `${path} n’a pas été créé par ${APP_DISPLAY_NAME} (sans X-ProcWatch-Managed=1) : laissé en place`;
 
 // ---------------------------------------------------------------- installation
 
@@ -87,10 +96,10 @@ async function destInfo(r: Roots): Promise<{ sha256: string } | null> {
 }
 
 /**
- * Copie `source` (l'AppImage lancée, déjà vérifiée par realAppImage) dans ~/Applications/proc-watch.AppImage (0755) :
+ * Copie `source` (l'AppImage lancée, déjà vérifiée par realAppImage) dans ~/Applications/computer-watcher.AppImage (0755) :
  * dossiers ouverts sans suivre de lien, temporaire exclusif, fchmod, fsync, rename ; la copie relue a le même SHA-256.
  * Idempotent (lancée depuis la copie, ou copie identique). Entrée de menu vers la copie, et démarrage automatique repointé,
- * seulement s'ils sont absents ou écrits par proc-watch ; sinon laissés et signalés (`warnings`). L'original n'est jamais touché ici.
+ * seulement s'ils sont absents ou écrits par l'app ; sinon laissés et signalés (`warnings`). L'original n'est jamais touché ici.
  */
 export async function installAppImage(o: { source: string; roots: Roots; iconPng?: string }): Promise<InstallOutcome> {
   const roots = rootList(o.roots);
@@ -187,7 +196,7 @@ export function autostartState(r: Roots): { enabled: boolean; path: string } {
 }
 
 /**
- * ~/.config/autostart/proc-watch.desktop avec `--hidden`, ou retiré. Un fichier présent sans X-ProcWatch-Managed=1 n'est
+ * ~/.config/autostart/computer-watcher.desktop avec `--hidden`, ou retiré. Un fichier présent sans X-ProcWatch-Managed=1 n'est
  * jamais écrasé ni retiré ; dossiers ouverts sans suivre de lien.
  */
 export function setAutostart(on: boolean, target: string | null, r: Roots): void {
@@ -212,7 +221,7 @@ export function setAutostart(on: boolean, target: string | null, r: Roots): void
 // ---------------------------------------------------------------- désinstallation
 
 
-/** Fichiers du dossier de données que proc-watch (app et service) crée ; tout autre fichier y reste. */
+/** Fichiers du dossier de données que l'app (et son service) crée ; tout autre fichier y reste. */
 const DATA_FILES = [
   'metrics.db', 'metrics.db-wal', 'metrics.db-shm', 'recorder-status.json', 'app-events.jsonl', 'app-events.jsonl.ingest', 'clear-request',
   'forecast-snooze.json', 'rules-simulation.json', 'app-focus.json', 'tmp-set-aside.json',
@@ -250,7 +259,7 @@ const LABELS: Record<UninstallKind, string> = {
 
 const allowedName = (name: string, files: string[], patterns: RegExp[]) => files.includes(name) || patterns.some((p) => p.test(name));
 
-/** Fichiers connus d'un dossier de proc-watch ; dossier remplacé par un lien → son contenu n'est jamais lu. */
+/** Fichiers connus d'un dossier de l'app ; dossier remplacé par un lien → son contenu n'est jamais lu. */
 function ownFiles(r: Roots, dir: string, files: string[], patterns: RegExp[]): string[] {
   try {
     return listDirSafe(rootList(r), dir).filter((n) => allowedName(n, files, patterns)).sort().map((n) => join(dir, n));
@@ -261,37 +270,55 @@ function ownFiles(r: Roots, dir: string, files: string[], patterns: RegExp[]): s
 
 /**
  * Ce qui sera retiré, dans l'ordre : démarrage automatique, entrée de menu, icône, service, (historique), (configuration),
- * puis la copie ~/Applications/proc-watch.AppImage en dernier. Seulement des chemins de la liste autorisée qui existent.
+ * puis la copie ~/Applications/computer-watcher.AppImage en dernier. Seulement des chemins de la liste autorisée qui existent.
+ * Les restes à l'ancien nom (proc-watch : entrées, icône, unité, dossiers, cache, copie) sont listés sous les mêmes
+ * contrôles, juste après leur équivalent au nouveau nom (l'ancienne copie juste avant la nouvelle).
  * earlyoom n'en fait jamais partie.
  */
 export function uninstallPlan(r: Roots, o: UninstallOptions): UninstallItem[] {
   const p = appPaths(r);
   const item = (kind: UninstallKind, path: string, dir = false): UninstallItem => ({ kind, path, label: LABELS[kind], ...(dir ? { dir } : {}) });
   const out: UninstallItem[] = [];
-  for (const [kind, path] of [['autostart', p.autostart], ['desktop', p.desktop], ['icon', p.icon], ['service', p.unit]] as const) {
-    if (!present(path)) continue;
-    // .desktop : seulement ceux que proc-watch a écrits (un lien symbolique est listé pour être signalé, jamais suivi)
-    if ((kind === 'autostart' || kind === 'desktop') && !lstatSync(path).isSymbolicLink() && !managedEntry(r, path)) continue;
-    out.push(item(kind, path));
+  const both = [p, p.legacy];
+  for (const kind of ['autostart', 'desktop', 'icon', 'service'] as const) {
+    for (const set of both) {
+      const path = kind === 'service' ? set.unit : set[kind];
+      if (!present(path)) continue;
+      // .desktop : seulement ceux que l'app a écrits (un lien symbolique est listé pour être signalé, jamais suivi)
+      if ((kind === 'autostart' || kind === 'desktop') && !lstatSync(path).isSymbolicLink() && !managedEntry(r, path)) continue;
+      out.push(item(kind, path));
+    }
   }
   if (o.history) {
-    for (const f of ownFiles(r, p.dataDir, DATA_FILES, DATA_PATTERNS)) out.push(item('history', f));
-    if (present(p.dataDir)) out.push(item('history', p.dataDir, true));
+    for (const set of both) {
+      for (const f of ownFiles(r, set.dataDir, DATA_FILES, DATA_PATTERNS)) out.push(item('history', f));
+      if (present(set.dataDir)) out.push(item('history', set.dataDir, true));
+    }
   }
   if (o.config) {
-    for (const f of ownFiles(r, p.configDir, CONFIG_FILES, CONFIG_PATTERNS)) out.push(item('config', f));
-    for (const f of ownFiles(r, p.configDir, [...CHROMIUM_TREES, ...CHROMIUM_LINKS], [])) out.push({ ...item('config', f), tree: true });
-    if (present(p.configDir)) out.push(item('config', p.configDir, true));
+    for (const set of both) {
+      for (const f of ownFiles(r, set.configDir, CONFIG_FILES, CONFIG_PATTERNS)) out.push(item('config', f));
+      for (const f of ownFiles(r, set.configDir, [...CHROMIUM_TREES, ...CHROMIUM_LINKS], [])) out.push({ ...item('config', f), tree: true });
+      if (present(set.configDir)) out.push(item('config', set.configDir, true));
+    }
     // cache d'electron-updater : arborescence retirée sans suivre de lien ; s'il est un lien, le lien seul
-    if (present(p.updaterCache)) out.push({ ...item('cache', p.updaterCache), tree: true });
+    for (const set of both) if (present(set.updaterCache)) out.push({ ...item('cache', set.updaterCache), tree: true });
   }
-  if (present(p.appImage)) out.push(item('appimage', p.appImage));
+  // la copie en cours d'exécution (nouveau nom) en tout dernier
+  for (const set of [p.legacy, p]) if (present(set.appImage)) out.push(item('appimage', set.appImage));
   return out;
 }
 
-/** L'élément fait-il partie de la liste autorisée (chemin exact, ou nom connu directement dans le dossier de proc-watch) ? */
+/**
+ * L'élément fait-il partie de la liste autorisée (chemin exact, ou nom connu directement dans le dossier de l'app), au
+ * nouveau ou à l'ancien nom ?
+ */
 function allowed(r: Roots, i: UninstallItem): boolean {
   const p = appPaths(r);
+  return allowedIn(p, i) || allowedIn(p.legacy, i);
+}
+
+function allowedIn(p: AppPathSet, i: UninstallItem): boolean {
   switch (i.kind) {
     case 'autostart': return i.path === p.autostart && !i.dir;
     case 'desktop': return i.path === p.desktop && !i.dir;
@@ -338,7 +365,7 @@ export async function runUninstall(plan: readonly UninstallItem[], r: Roots, dep
   const ordered = [...plan.filter((i) => i.kind !== 'appimage'), ...plan.filter((i) => i.kind === 'appimage')];
   for (const i of ordered) {
     if (!allowed(r, i)) {
-      fail(i.path, 'hors de la liste des fichiers de proc-watch : refusé');
+      fail(i.path, `hors de la liste des fichiers de ${APP_DISPLAY_NAME} : refusé`);
       continue;
     }
     if (i.kind === 'appimage' && (res.failed.length || blocker)) {
@@ -383,7 +410,7 @@ export async function runUninstall(plan: readonly UninstallItem[], r: Roots, dep
         continue;
       }
       if ((i.kind === 'autostart' || i.kind === 'desktop') && present(i.path) && !lstatSync(i.path).isSymbolicLink() && !managedEntry(r, i.path)) {
-        res.kept.push({ path: i.path, reason: 'pas créé par proc-watch (sans X-ProcWatch-Managed=1) : laissé' });
+        res.kept.push({ path: i.path, reason: `pas créé par ${APP_DISPLAY_NAME} (sans X-ProcWatch-Managed=1) : laissé` });
         continue;
       }
       if (i.tree) {
@@ -396,13 +423,14 @@ export async function runUninstall(plan: readonly UninstallItem[], r: Roots, dep
       fail(i.path, e instanceof Error && !code(e) ? e.message : `${code(e) ?? msg(e)}`);
     }
   }
-  res.done = res.failed.length === 0 && !res.kept.some((k) => k.path === appPaths(r).appImage);
+  const copies = [appPaths(r).appImage, appPaths(r).legacy.appImage];
+  res.done = res.failed.length === 0 && !res.kept.some((k) => copies.includes(k.path));
   return res;
 }
 
 /** Texte de la confirmation native : exactement ce qui sera retiré. */
 export function uninstallSummary(plan: readonly UninstallItem[], o: { deb: boolean }): { message: string; detail: string } {
-  const lines = plan.length ? plan.map((i) => `• ${i.label}${i.dir ? ' (dossier, s’il est vide)' : i.tree ? ' (profil de l’app, avec son contenu)' : ''} : ${i.path}`) : ['• (aucun fichier de proc-watch trouvé)'];
+  const lines = plan.length ? plan.map((i) => `• ${i.label}${i.dir ? ' (dossier, s’il est vide)' : i.tree ? ' (profil de l’app, avec son contenu)' : ''} : ${i.path}`) : [`• (aucun fichier de ${APP_DISPLAY_NAME} trouvé)`];
   const kept: string[] = [];
   const hasHistory = plan.some((i) => i.kind === 'history');
   const hasConfig = plan.some((i) => i.kind === 'config');
@@ -410,15 +438,15 @@ export function uninstallSummary(plan: readonly UninstallItem[], o: { deb: boole
   else if (!hasHistory) kept.push('Historique : gardé.');
   else if (!hasConfig) kept.push('Configuration : gardée.');
   return {
-    message: 'Désinstaller proc-watch ?',
+    message: `Désinstaller ${APP_DISPLAY_NAME} ?`,
     detail: [
       'Seront supprimés :',
       ...lines,
       '',
       ...kept,
       'earlyoom n’est pas modifié.',
-      ...(o.deb ? ['Le paquet .deb reste installé : le retirer avec « sudo apt remove proc-watch ».'] : []),
-      'proc-watch se fermera ensuite.',
+      ...(o.deb ? [`Le paquet .deb reste installé : le retirer avec « sudo apt remove ${APP_NAME} ».`] : []),
+      `${APP_DISPLAY_NAME} se fermera ensuite.`,
     ].join('\n'),
   };
 }
@@ -430,14 +458,16 @@ export function uninstallSummary(plan: readonly UninstallItem[], o: { deb: boole
  * - unité chargée depuis un autre fichier : erreur, jamais arrêtée ;
  * - unité non chargée : retirée seulement sans lien default.target.wants restant ;
  * - notre unité : `disable --now`.
+ * L'unité visée est l'ancienne (proc-watch-recorder.service) si `unitPath` porte son nom, sinon la nouvelle.
  */
 export async function stopRecorderForUninstall(o: { unitPath: string; run: Systemctl; disabled: boolean }): Promise<{ stopped: boolean; error: string | null; keep?: string }> {
   if (o.disabled) return { stopped: false, error: null, keep: 'laissée : synchronisation du service désactivée (PROC_WATCH_NO_RECORDER_SYNC=1), systemctl jamais appelé' };
-  const show = await o.run(['show', '-p', 'FragmentPath', '--value', UNIT_NAME]);
+  const unitName = basename(o.unitPath) === LEGACY_UNIT_NAME ? LEGACY_UNIT_NAME : UNIT_NAME;
+  const show = await o.run(['show', '-p', 'FragmentPath', '--value', unitName]);
   if (!show.ok) return { stopped: false, error: 'systemctl --user show a échoué : service et unité laissés (réessayer)' };
   const frag = show.stdout.trim();
   if (!frag) {
-    const wants = join(dirname(o.unitPath), 'default.target.wants', UNIT_NAME);
+    const wants = join(dirname(o.unitPath), 'default.target.wants', unitName);
     if (present(wants)) return { stopped: false, error: `unité non chargée mais ${wants} existe : laissée (systemctl --user daemon-reload, puis réessayer)` };
     return { stopped: false, error: null };
   }
@@ -449,7 +479,7 @@ export async function stopRecorderForUninstall(o: { unitPath: string; run: Syste
     }
   };
   if (!same(frag, o.unitPath)) return { stopped: false, error: `service chargé depuis ${frag}, pas ${o.unitPath} : laissé` };
-  const d = await o.run(['disable', '--now', UNIT_NAME]);
+  const d = await o.run(['disable', '--now', unitName]);
   return d.ok ? { stopped: true, error: null } : { stopped: false, error: 'systemctl --user disable --now a échoué : service laissé en place' };
 }
 
