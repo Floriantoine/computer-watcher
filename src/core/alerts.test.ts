@@ -157,3 +157,20 @@ describe('textes des règles (⑥)', () => {
     expect(ev('rule_dry_run', { rule: 'x', result: 'quota' }).title).toBe('Simulation « x » : quota atteint');
   });
 });
+
+describe('disk_low (disque presque plein)', () => {
+  const GB = 1024 * 1024;
+  const e: AlertEvent = { id: 9, ts: 0, type: 'disk_low', groupKey: null, groupLabel: null, detail: { mount: '/', availKB: 18 * GB, sizeKB: 450 * GB, thresholdKB: 45 * GB } };
+  test('alerte connue, notification du bureau par défaut', () => {
+    expect(DEFAULT_ALERTS.channels.disk_low).toBe('both');
+    expect(DESKTOP_TITLES.disk_low).toBe('Disque presque plein');
+  });
+  test('texte : « Disque presque plein : / n’a plus que 18 Go libres (4 %) »', () => {
+    const m = alertMessage(e);
+    expect(`${m.title} : ${m.body}`).toBe('Disque presque plein : / n’a plus que 18 Go libres (4 %)');
+    expect(desktopMessage(e).title).toBe('Computer Watcher — Disque presque plein');
+  });
+  test('détail illisible : texte générique, sans planter', () => {
+    expect(alertMessage({ ...e, detail: {} }).title).toBe('Disque presque plein');
+  });
+});

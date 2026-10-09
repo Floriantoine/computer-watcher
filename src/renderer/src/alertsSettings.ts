@@ -11,6 +11,7 @@ export const SETTINGS_ALERT_TYPES: { type: AlertType; label: string }[] = [
   { type: 'forecast', label: 'Mémoire bientôt épuisée (prévision)' },
   { type: 'rule_action', label: 'Règle automatique exécutée' },
   { type: 'rule_dry_run', label: 'Règle en simulation' },
+  { type: 'disk_low', label: 'Disque presque plein' },
 ];
 
 /** État de la prévision ② affiché à côté de sa ligne ; null quand elle fonctionne (ou état inconnu). */

@@ -1,6 +1,8 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import type { AlertEvent } from '../core/alerts';
 import type { EarlyoomSettings } from '../core/earlyoom';
+import type { SunNode } from '../core/disk/sunTree';
+import type { FamiliesFile, FamilyId } from '../core/disk/families';
 import type { EarlyoomSetupMode } from '../core/earlyoomSetup';
 import type { AboutInfo, AutostartInfo, InstallOutcome, OnboardingInfo, UninstallItem, UninstallOptions, UninstallResult } from '../core/onboarding';
 import type { MigrationReport } from '../core/nameMigration';
@@ -9,7 +11,7 @@ import type { SwapView } from '../core/swap';
 import type { TmpDeleteItem, TmpDeleteOutcome, TmpListing } from '../core/tmpClean';
 import type { UpdateView } from '../core/update';
 import type {
-  ApplyResult, Category, EarlyoomStatus, Config, ConfigState, Culprit, InstanceTargets, ProcInfo, Watch, GroupHistory, GroupsHistory, HistoryEvent, KillResult, KillTarget, KillSignal, ProcsHistory, ProcTreeAt, RangePreset,
+  ApplyResult, Category, DiskHistory, EarlyoomStatus, Config, ConfigState, Culprit, InstanceTargets, ProcInfo, Watch, GroupHistory, GroupsHistory, HistoryEvent, KillResult, KillTarget, KillSignal, ProcsHistory, ProcTreeAt, RangePreset,
   RecorderState, Snapshot, SystemSeries, TimeRange, TmpFsStats, TmpUsage, TopOptions, TopResult,
 } from '../core/types';
 
@@ -54,6 +56,8 @@ const api = {
   },
   history: {
     system: (r: RangePreset | TimeRange): Promise<SystemSeries | null> => ipcRenderer.invoke('history:system', r),
+    /** Espace libre par partition surveillée (vide avant le schéma v6). */
+    disk: (r: RangePreset | TimeRange): Promise<DiskHistory | null> => ipcRenderer.invoke('history:disk', r),
     groups: (r: RangePreset | TimeRange, keys?: string[]): Promise<GroupsHistory | null> => ipcRenderer.invoke('history:groups', r, keys),
     group: (key: string, r: RangePreset | TimeRange): Promise<GroupHistory | null> => ipcRenderer.invoke('history:group', key, r),
     procs: (key: string, r: RangePreset | TimeRange): Promise<ProcsHistory | null> => ipcRenderer.invoke('history:procs', key, r),
@@ -135,6 +139,40 @@ const api = {
     delete: (items: TmpDeleteItem[]): Promise<TmpDeleteOutcome> => ipcRenderer.invoke('tmp:delete', items),
     /** Vide les quarantaines restées (suppressions interrompues), après confirmation native du main. */
     emptyQuarantine: (): Promise<TmpDeleteOutcome> => ipcRenderer.invoke('tmp:emptyQuarantine'),
+  },
+  disk: {
+    /** Arbre du dossier personnel pour le soleil (gardé 10 min ; `force` : « Actualiser »). */
+    scan: (force = false): Promise<{ tree: SunNode; truncated: boolean; at: number }> => ipcRenderer.invoke('disk:scan', force),
+    /** Mesure des familles récupérables (relancée si plus de 24 h ou `force`) et raisons de refus déjà connues. */
+    families: (force = false): Promise<{
+      file: FamiliesFile | null; refusals: Partial<Record<FamilyId, string>>; lastRefusals: Partial<Record<FamilyId, string>>; paths: Partial<Record<FamilyId, string[]>>; home: string; measuring: boolean;
+    }> =>
+      ipcRenderer.invoke('disk:families', force),
+    /** Ménage : ids seulement ; le main recalcule les chemins, fait confirmer (boîte native) et revérifie tout. */
+    clean: (ids: FamilyId[]): Promise<{ freedKB: number; done: FamilyId[]; refused: { id: FamilyId; reason: string }[]; cancelled: boolean }> =>
+      ipcRenderer.invoke('disk:clean', ids),
+    /** Disques réels surveillés : taille, libre, place récupérable des familles qui s'y trouvent. */
+    partitions: (): Promise<{ mount: string; sizeKB: number; availKB: number; reclaimKB: number }[]> => ipcRenderer.invoke('disk:partitions'),
+    /** Ouvre un dossier du soleil dans le gestionnaire de fichiers (dossier réel sous HOME seulement). */
+    open: (path: string): Promise<{ ok: true } | { ok: false; error: string }> => ipcRenderer.invoke('disk:open', path),
+    /** Page quittée : le parcours en cours est annulé 30 s plus tard. */
+    leaveScan: (): Promise<void> => ipcRenderer.invoke('disk:scan-cancel'),
+    /** Étape du ménage en cours : mesure des tailles, confirmation, suppression. */
+    onCleanPhase(cb: (phase: 'measuring' | 'confirming' | 'cleaning') => void): () => void {
+      const handler = (_e: IpcRendererEvent, phase: 'measuring' | 'confirming' | 'cleaning') => cb(phase);
+      ipcRenderer.on('disk:clean-phase', handler);
+      return () => {
+        ipcRenderer.removeListener('disk:clean-phase', handler);
+      };
+    },
+    /** Ko lus par le parcours en cours. */
+    onScanProgress(cb: (kb: number) => void): () => void {
+      const handler = (_e: IpcRendererEvent, kb: number) => cb(kb);
+      ipcRenderer.on('disk:scan-progress', handler);
+      return () => {
+        ipcRenderer.removeListener('disk:scan-progress', handler);
+      };
+    },
   },
   /** Assistant d'accueil (premier lancement, rouvrable depuis Réglages › À propos). */
   onboarding: {

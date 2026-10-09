@@ -14,6 +14,8 @@ export const RECORDER_BOUNDS: Record<RecorderNumField, Bound> = {
   leakMinMinutes: { int: true, min: 5, max: 24 * 60 },
   leakMinGrowthMB: { int: false, min: 0 },
   tmpfsAlertMB: { int: true, min: 100, max: 1_048_576 },
+  diskAlertPercent: { int: true, min: 1, max: 50 },
+  diskAlertGB: { int: true, min: 1, max: 10_000 },
 };
 
 export function inBounds(v: unknown, b: Bound): v is number {

@@ -3,7 +3,7 @@ import { existsSync, readFileSync, rmSync, statSync, writeFileSync, mkdirSync } 
 import type { DatabaseSync } from 'node:sqlite';
 import { historyBackups, openHistoryDb, SCHEMA_VERSION } from '../core/history/db';
 import {
-  historyCoverage, historyFrom, pruneLastActiveCache, queryCulprits, queryEvents, queryGroup, queryGroups, queryInactive, queryLastActive, queryProcs, queryProcTree, queryRuleStats, querySystem, queryTop, rangeFromPreset,
+  historyCoverage, historyFrom, pruneLastActiveCache, queryCulprits, queryEvents, queryGroup, queryGroups, queryInactive, queryLastActive, queryProcs, queryProcTree, queryRuleStats, querySystem, queryDisk, queryTop, rangeFromPreset,
   type HistoryCoverage, type LastActiveCache, type QueryOpts,
 } from '../core/history/queries';
 import { countUnseenAlerts, newestAlertTs, queryAlert, queryAlertTimes, queryUnseenAlerts, type UnseenFilter } from '../core/history/alertsQuery';
@@ -66,6 +66,8 @@ export function createHistoryReader(dataDir: string, getConfig: () => RecorderCo
   };
   return {
     system: (r: RangePreset | TimeRange) => run((d) => querySystem(d, toRange(r), opts()), null),
+    /** Espace libre par partition surveillée (schéma v6 ; base plus ancienne : vide). */
+    disk: (r: RangePreset | TimeRange) => run((d) => queryDisk(d, toRange(r), opts()), null),
     groups: (r: RangePreset | TimeRange, keys?: string[]) => run((d) => queryGroups(d, toRange(r), opts(), keys), null),
     group: (key: string, r: RangePreset | TimeRange) => run((d) => queryGroup(d, key, toRange(r), opts()), null),
     procs: (key: string, r: RangePreset | TimeRange) =>

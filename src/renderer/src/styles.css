@@ -1148,3 +1148,70 @@ button.primary:hover:not(:disabled) { background: rgba(124, 92, 255, 0.32); bord
   .tmp-tiles { grid-template-columns: minmax(0, 1fr); }
   .tmp-page .page-head .sub { display: none; }
 }
+
+/* Métriques : petit graphe « Espace libre » en cinquième position */
+.sys-charts:has(> :nth-child(5)) { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+@media (max-width: 1000px) {
+  .sys-charts:has(> :nth-child(5)) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* Page Disque (maquette A) : bandes des partitions, soleil à gauche, familles à droite */
+.disk-page { padding-bottom: 14px; }
+.disk-bands { display: flex; flex-direction: column; gap: 8px; padding: 14px var(--gutter) 10px; }
+.disk-bands .chart-panel { margin: 0; }
+.disk-band-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 7px; }
+.disk-band-head b { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.disk-band-head .sub, .disk-page .sub { color: var(--muted); font-size: 11.5px; }
+.disk-bar { display: flex; height: 24px; gap: 2px; border-radius: var(--r-sm); overflow: hidden; }
+.disk-bar > div { display: flex; align-items: center; padding: 0 8px; font-size: 11px; white-space: nowrap; overflow: hidden; min-width: 0; }
+.disk-bar .used { background: linear-gradient(90deg, #7c5cff, #9b6cff); color: #fff; }
+.disk-bar .free { background: var(--surface-3); color: var(--muted); }
+.disk-main { display: grid; grid-template-columns: minmax(340px, auto) minmax(0, 1fr); gap: 12px; margin: 0 var(--gutter); align-items: start; }
+.disk-main .chart-panel { margin: 0; min-width: 0; }
+.disk-sun-panel .chart-panel-head { gap: 10px; }
+.crumb { font-family: var(--font-mono); font-size: 11.5px; color: #c39cff; display: flex; flex-wrap: wrap; min-width: 0; }
+.crumb .sep { color: var(--muted); margin: 0 4px; }
+.crumb-link { background: none; border: none; padding: 0; color: inherit; font: inherit; cursor: pointer; }
+.crumb-link:disabled { color: var(--text); cursor: default; opacity: 1; }
+.crumb-link:hover:not(:disabled) { text-decoration: underline; }
+.sun { position: relative; display: flex; justify-content: center; padding: 4px 0 2px; }
+.sun svg { display: block; overflow: visible; }
+.sun-arc { cursor: pointer; transition: fill-opacity 0.15s var(--ease-out), stroke-width 0.15s var(--ease-out); }
+.sun-arc:hover { fill-opacity: 1; filter: brightness(1.15); }
+.sun-arc:focus-visible { outline: none; stroke: var(--accent); stroke-width: 2.5; }
+.sun-arc.lit { filter: drop-shadow(0 0 5px rgba(255, 255, 255, 0.55)); }
+.sun-center circle { fill: var(--surface-solid); stroke: var(--border-2); }
+.sun-center.can-up { cursor: pointer; }
+.sun-center.can-up:hover circle { stroke: var(--accent-soft); }
+.sun-center-name { fill: var(--text); font-size: 13px; font-weight: 600; }
+.sun-center-size { fill: var(--muted); font-size: 11px; }
+.sun-tip, .sun-menu { position: absolute; z-index: 5; background: var(--surface-solid); border: 1px solid var(--border-hover); border-radius: var(--r-sm); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
+.sun-tip { pointer-events: none; padding: 7px 9px; display: flex; flex-direction: column; gap: 2px; font-size: 11.5px; max-width: 280px; }
+.sun-tip b { font-size: 12.5px; }
+.sun-tip .mono { font-family: var(--font-mono); color: var(--text-2); word-break: break-all; }
+.sun-tip span { color: var(--muted); }
+.sun-tip .sun-tip-fam { color: #8fe3b0; }
+.sun-menu { padding: 4px; }
+.sun-menu button { display: flex; align-items: center; gap: 6px; border: none; background: none; padding: 6px 9px; font-size: 12px; white-space: nowrap; }
+.sun-menu button:hover { background: var(--surface-hover); }
+.disk-family-list { list-style: none; margin: 0; padding: 0; }
+.disk-family { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto auto; grid-template-areas: 'c n s r' '. w w w'; column-gap: 10px; row-gap: 1px; align-items: center; padding: 7px 2px; border-bottom: 1px solid var(--border); }
+.disk-family:last-child { border-bottom: none; }
+.disk-family input { grid-area: c; margin: 0; accent-color: var(--danger); cursor: pointer; }
+.disk-family input:disabled { cursor: not-allowed; opacity: 0.35; }
+.disk-family .name { grid-area: n; display: flex; align-items: center; gap: 8px; min-width: 0; cursor: pointer; font-size: 12.5px; }
+.disk-family.refused .name { cursor: default; color: var(--text-2); }
+.disk-family .size { grid-area: s; text-align: right; font-size: 12px; }
+.disk-family .reclaim { grid-area: r; text-align: right; font-size: 11.5px; color: var(--success); min-width: 110px; }
+.disk-family .when { grid-area: w; font-size: 10.5px; color: var(--muted); }
+.disk-family .why { grid-column: 2 / -1; font-size: 11px; color: var(--amber); }
+.disk-family.on { background: rgba(255, 92, 138, 0.05); }
+.disk-family .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.disk-badge { flex: none; font-size: 10px; padding: 0 7px; border-radius: 99px; white-space: nowrap; color: #8fe3b0; background: rgba(80, 220, 140, 0.1); border: 1px solid rgba(80, 220, 140, 0.28); }
+.disk-badge.root { color: #ffb35c; background: rgba(255, 160, 60, 0.1); border-color: rgba(255, 160, 60, 0.3); }
+.disk-badge.keep-latest { color: #9fd0ff; background: rgba(92, 200, 255, 0.1); border-color: rgba(92, 200, 255, 0.3); }
+.disk-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; }
+.disk-foot button.danger { font-weight: 600; }
+@media (max-width: 900px) {
+  .disk-main { grid-template-columns: minmax(0, 1fr); }
+}

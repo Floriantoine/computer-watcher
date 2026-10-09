@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { BellRing, Bot, FlaskConical, FolderOpen, Gauge, Hourglass, Settings2, Skull, TrendingUp, X, type LucideIcon } from 'lucide-react';
+import { BellRing, Bot, FlaskConical, FolderOpen, Gauge, HardDrive, Hourglass, Settings2, Skull, TrendingUp, X, type LucideIcon } from 'lucide-react';
 import { alertMessage, type AlertEvent, type AlertType, type AlertsConfig } from '../../../core/alerts';
 import type { ConfigState } from '../../../core/types';
 import type { Route } from '../App';
@@ -11,7 +11,7 @@ import { eventMarkers, formatInstant } from '../metrics';
 import '../alerts.css';
 
 const ICONS: Record<AlertType, LucideIcon> = {
-  leak: TrendingUp, earlyoom_kill: Skull, pressure: Gauge, tmpfs: FolderOpen, forecast: Hourglass, rule_action: Bot, rule_dry_run: FlaskConical,
+  leak: TrendingUp, earlyoom_kill: Skull, pressure: Gauge, tmpfs: FolderOpen, forecast: Hourglass, rule_action: Bot, rule_dry_run: FlaskConical, disk_low: HardDrive,
 };
 const COLORS: Partial<Record<AlertType, string>> = { forecast: '#ffb547', rule_action: '#ff5c8a', rule_dry_run: '#8b91a0' };
 const colorOf = (e: AlertEvent) => COLORS[e.type] ?? eventMarkers([e])[0]!.color;

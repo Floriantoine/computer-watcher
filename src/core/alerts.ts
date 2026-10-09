@@ -3,7 +3,7 @@
 import { APP_DISPLAY_NAME } from './appName';
 
 /** Types d'événements qui sont des alertes (les autres — gap, app_kill — n'en sont pas). */
-export const ALERT_TYPES = ['earlyoom_kill', 'leak', 'tmpfs', 'pressure', 'forecast', 'rule_action', 'rule_dry_run'] as const;
+export const ALERT_TYPES = ['earlyoom_kill', 'leak', 'tmpfs', 'pressure', 'forecast', 'rule_action', 'rule_dry_run', 'disk_low'] as const;
 export type AlertType = (typeof ALERT_TYPES)[number];
 export type AlertChannel = 'both' | 'popup' | 'none';
 export const ALERT_CHANNELS: readonly AlertChannel[] = ['both', 'popup', 'none'];
@@ -31,6 +31,7 @@ export const DEFAULT_ALERTS: AlertsConfig = {
     forecast: 'both',
     rule_action: 'both',
     rule_dry_run: 'popup',
+    disk_low: 'both',
   },
   desktopMinIntervalMin: 5,
   seenUpTo: 0,
@@ -120,6 +121,12 @@ function fmtKB(kb: number): string {
   return `${Math.round(kb)} Ko`;
 }
 
+/** Go arrondis : « 18 Go », « 4,5 Go » sous 10 Go. */
+function fmtGB(kb: number): string {
+  const gb = kb / (1024 * 1024);
+  return gb >= 10 ? `${Math.round(gb)} Go` : `${gb.toFixed(1).replace('.', ',')} Go`;
+}
+
 /** Titre et corps d'une alerte : les mêmes pour le pop-up et la notification du bureau. */
 export function alertMessage(e: AlertEvent): { title: string; body: string } {
   const d = e.detail;
@@ -147,6 +154,12 @@ export function alertMessage(e: AlertEvent): { title: string; body: string } {
     case 'rule_action':
     case 'rule_dry_run':
       return ruleEventText(e.type, d);
+    case 'disk_low': {
+      const avail = Number(d.availKB);
+      const size = Number(d.sizeKB);
+      if (typeof d.mount !== 'string' || !Number.isFinite(avail) || !(size > 0)) return { title: 'Disque presque plein', body: 'Une partition surveillée manque de place.' };
+      return { title: 'Disque presque plein', body: `${d.mount} n’a plus que ${fmtGB(avail)} libres (${Math.round((100 * avail) / size)} %)` };
+    }
   }
 }
 
@@ -188,6 +201,7 @@ export const DESKTOP_TITLES: Record<AlertType, string> = {
   forecast: 'Mémoire bientôt épuisée',
   rule_action: 'Règle exécutée',
   rule_dry_run: 'Règle simulée',
+  disk_low: 'Disque presque plein',
 };
 /** Longueur maximale du corps (caractères, avant échappement). */
 export const DESKTOP_BODY_MAX = 300;

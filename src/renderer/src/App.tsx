@@ -17,6 +17,7 @@ import { Toasts, type Toast } from './components/Toasts';
 import { MainView } from './components/MainView';
 import { MetricsView } from './components/MetricsView';
 import { TmpPage } from './components/TmpPage';
+import { DiskPage } from './components/DiskPage';
 import type { SwapRow } from '../../core/swap';
 import { freshSleepingKeys, sessionServiceIn, sleepingInstances, sleepLabel, stillAsleep, stopOneCheck } from './swapPanel';
 import { SystemBar, type SystemSparks } from './components/SystemBar';
@@ -32,7 +33,7 @@ import type { SettingsSection } from './settingsNav';
 import { leakTimes } from './recorderForm';
 import { findGroup, sortForTile, tileForSort, visibleGroups, ipcErrorMessage, killResultMessages, killRequestForGroup, killRequestForProc, trackKills, type KillRequest, type ViewFilter } from './viewModel';
 
-export type Route = { view: 'main' } | { view: 'detail'; groupId: string } | { view: 'settings'; section?: SettingsSection } | { view: 'metrics'; at?: number } | { view: 'tmp' };
+export type Route = { view: 'main' } | { view: 'detail'; groupId: string } | { view: 'settings'; section?: SettingsSection } | { view: 'metrics'; at?: number } | { view: 'tmp' } | { view: 'disk' };
 
 export function App() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
@@ -536,6 +537,7 @@ export function App() {
               />
             )}
             {route.view === 'tmp' && <TmpPage onToast={pushToast} />}
+            {route.view === 'disk' && <DiskPage onToast={pushToast} />}
             {route.view === 'settings' && (
               <SettingsView
                 request={route}

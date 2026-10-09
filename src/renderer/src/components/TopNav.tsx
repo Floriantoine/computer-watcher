@@ -1,6 +1,6 @@
 import { memo } from 'react';
 import { motion } from 'motion/react';
-import { ChartLine, Cpu, FolderOpen, Settings } from 'lucide-react';
+import { ChartLine, Cpu, FolderOpen, HardDrive, Settings } from 'lucide-react';
 import type { Route } from '../App';
 
 interface Props {
@@ -10,15 +10,16 @@ interface Props {
   unseen?: number;
 }
 
-/** Onglets du haut, dans l'ordre : Processus, Métriques, /tmp. */
+/** Onglets du haut, dans l'ordre : Processus, Métriques, /tmp, Disque. */
 export const NAV_TABS = [
   { id: 'main', label: 'Processus', icon: Cpu, to: { view: 'main' } as Route },
   { id: 'metrics', label: 'Métriques', icon: ChartLine, to: { view: 'metrics' } as Route },
   { id: 'tmp', label: '/tmp', icon: FolderOpen, to: { view: 'tmp' } as Route },
+  { id: 'disk', label: 'Disque', icon: HardDrive, to: { view: 'disk' } as Route },
 ] as const;
 
 /** Onglet actif : le détail d'un groupe relève de Processus ; Réglages n'a pas d'onglet. */
-const activeTab = (r: Route) => (r.view === 'metrics' || r.view === 'tmp' ? r.view : r.view === 'settings' ? null : 'main');
+const activeTab = (r: Route) => (r.view === 'metrics' || r.view === 'tmp' || r.view === 'disk' ? r.view : r.view === 'settings' ? null : 'main');
 
 /**
  * Mémoïsée : son indicateur d'onglet (layoutId) déclencherait sinon, à chaque snapshot, une mesure de mise en page

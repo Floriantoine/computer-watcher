@@ -22,7 +22,7 @@ const clean = (l: TmpListing | null, over: Partial<TmpClean> = {}): TmpClean => 
 
 describe('onglet /tmp', () => {
   it('troisième onglet, juste après Métriques, mène à la page /tmp', () => {
-    expect(NAV_TABS.map((t) => t.id)).toEqual(['main', 'metrics', 'tmp']);
+    expect(NAV_TABS.map((t) => t.id)).toEqual(['main', 'metrics', 'tmp', 'disk']);
     const tmp = NAV_TABS[2];
     expect(tmp.label).toBe('/tmp');
     expect(tmp.to).toEqual({ view: 'tmp' });

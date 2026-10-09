@@ -110,3 +110,12 @@ export const openTestDb: typeof openHistoryDb = (p, opts) => {
   if (!opts?.readOnly) procsInput(r.db);
   return r;
 };
+
+/** Base au schéma v5 exact (schéma v6 sans les tables disque), user_version = 5. Connexion d'écriture. */
+export function createV5Db(path: string): DatabaseSync {
+  const { db } = openHistoryDb(path);
+  db.exec(`BEGIN;
+    DROP TABLE disk_samples; DROP TABLE disk_minute; DROP TABLE disk_hour;
+    PRAGMA user_version = 5; COMMIT;`);
+  return db;
+}

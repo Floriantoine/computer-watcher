@@ -130,6 +130,9 @@ export interface RecorderConfig {
   leakMinGrowthMB: number;
   /** Alerte « fichiers en mémoire » quand Shmem dépasse ce seuil (Mo). */
   tmpfsAlertMB: number;
+  /** Alerte « disque presque plein » : libre sous max(diskAlertPercent % de la taille, diskAlertGB Go). */
+  diskAlertPercent: number;
+  diskAlertGB: number;
 }
 
 /** Mémoire affichée en direct : RSS (rapide) ou PSS (mémoire partagée répartie, lue dans smaps_rollup). */
@@ -221,6 +224,9 @@ export interface SystemSeries {
   /** Somme des pics de tous les groupes par bucket ; null si aucun groupe enregistré dans le bucket. */
   groupsKB: (number | null)[];
 }
+/** Espace libre par partition surveillée (schéma v6) : libre au plus bas de chaque bucket, taille la plus récente. */
+export interface DiskSeries { mount: string; sizeKB: number; availKB: (number | null)[] }
+export interface DiskHistory { ts: number[]; series: DiskSeries[] }
 export interface GroupSeries { key: string; label: string; kind: GroupKind; memKB: (number | null)[] }
 export interface GroupsHistory { ts: number[]; series: GroupSeries[] }
 /** `procCount` : nombre de processus (max du bucket), seulement depuis les échantillons détaillés. */

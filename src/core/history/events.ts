@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
 
-export type EventType = 'earlyoom_kill' | 'pressure' | 'gap' | 'app_kill' | 'leak' | 'tmpfs' | 'forecast' | 'rule_action' | 'rule_dry_run' | 'earlyoom_setup' | 'tmp_clean';
+export type EventType = 'earlyoom_kill' | 'pressure' | 'gap' | 'app_kill' | 'leak' | 'tmpfs' | 'forecast' | 'rule_action' | 'rule_dry_run' | 'earlyoom_setup' | 'tmp_clean' | 'disk_low' | 'disk_clean';
 
 const EARLYOOM = /sending (SIGTERM|SIGKILL) to process (\d+)(?: uid (\d+))? "([^"]*)"/;
 
@@ -98,7 +98,35 @@ export interface TmpCleanEvent {
   detail: { freedKB: number; deleted: string[]; refused: { name: string; reason: string }[]; partial?: true };
 }
 
-export type AppEvent = AppKillEvent | EarlyoomSetupEvent | TmpCleanEvent;
+/** Ménage du disque depuis la page Disque : familles traitées, refusées (avec la raison), place libérée (statfs). */
+export interface DiskCleanEvent {
+  ts: number;
+  type: 'disk_clean';
+  groupKey: null;
+  detail: { freedKB: number; done: string[]; refused: { id: string; reason: string }[] };
+}
+
+export type AppEvent = AppKillEvent | EarlyoomSetupEvent | TmpCleanEvent | DiskCleanEvent;
+
+function parseDiskClean(obj: Record<string, unknown>): DiskCleanEvent | null {
+  if (obj.groupKey !== null) return null;
+  const d = obj.detail as Record<string, unknown> | null;
+  if (typeof d !== 'object' || d === null || Array.isArray(d)) return null;
+  if (!Number.isFinite(d.freedKB as number)) return null;
+  if (!Array.isArray(d.done) || !d.done.every((n: unknown) => typeof n === 'string')) return null;
+  const okRefused = (x: unknown) => typeof x === 'object' && x !== null && typeof (x as { id: unknown }).id === 'string' && typeof (x as { reason: unknown }).reason === 'string';
+  if (!Array.isArray(d.refused) || !d.refused.every(okRefused)) return null;
+  return {
+    ts: obj.ts as number,
+    type: 'disk_clean',
+    groupKey: null,
+    detail: {
+      freedKB: d.freedKB as number,
+      done: [...(d.done as string[])],
+      refused: (d.refused as { id: string; reason: string }[]).map((r) => ({ id: r.id, reason: r.reason })),
+    },
+  };
+}
 
 function parseTmpClean(obj: Record<string, unknown>): TmpCleanEvent | null {
   if (obj.groupKey !== null) return null;
@@ -142,6 +170,11 @@ export function parseAppEvents(text: string): AppEvent[] {
       }
       if (obj.type === 'tmp_clean') {
         const t = parseTmpClean(obj);
+        if (t) out.push(t);
+        continue;
+      }
+      if (obj.type === 'disk_clean') {
+        const t = parseDiskClean(obj);
         if (t) out.push(t);
         continue;
       }
@@ -226,6 +259,20 @@ export function lastSampleTs(db: DatabaseSync): number | null {
 
 export function lastEventTs(db: DatabaseSync, type: EventType): number | null {
   return (db.prepare('SELECT MAX(ts) AS ts FROM events WHERE type = ?').get(type) as { ts: number | null }).ts;
+}
+
+/** Dernière alerte disk_low par point de montage depuis `since` (détail illisible ignoré). */
+export function lastDiskLowByMount(db: DatabaseSync, since: number): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const r of db.prepare("SELECT ts, detail FROM events WHERE type = 'disk_low' AND ts >= ? ORDER BY ts").all(since) as { ts: number; detail: string }[]) {
+    try {
+      const m = (JSON.parse(r.detail) as { mount?: unknown }).mount;
+      if (typeof m === 'string') out.set(m, r.ts);
+    } catch {
+      // détail illisible
+    }
+  }
+  return out;
 }
 
 /** Événements de règles depuis `since` (ordre chronologique) ; détail sans `ruleId` ou `result` texte ignoré. */

@@ -121,3 +121,11 @@ test('popupSnooze : « Ignorer 30 min » seulement pour la prévision', () => {
   expect(popupSnooze(ev(1, 1, 'forecast'))).toBe('Ignorer 30 min');
   expect(popupSnooze(ev(1, 1, 'leak'))).toBeNull();
 });
+
+describe('disk_low : « Voir le disque »', () => {
+  test('pop-up et notification du bureau → page Disque', () => {
+    expect(popupAction(ev(1, 1, 'disk_low'), () => true)).toEqual({ kind: 'disk', label: 'Voir le disque' });
+    expect(clickTarget(ev(1, 1, 'disk_low'), () => true)).toEqual({ view: 'disk' });
+    expect(notificationTarget(ev(1, 1, 'disk_low'))).toEqual({ view: 'disk' });
+  });
+});

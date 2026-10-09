@@ -242,3 +242,15 @@ test('M-2 : XDG_CONFIG_HOME relatif ignoré', async () => {
   const { configDir } = await import('./config');
   expect(configDir({ XDG_CONFIG_HOME: 'rel' }, '/home/u')).toBe('/home/u/.config/computer-watcher');
 });
+
+test('recorder.diskAlertPercent et diskAlertGB : 10 % et 20 Go par défaut, ajoutés si absents, bornes 1–50 et 1–10 000', () => {
+  expect(DEFAULT_RECORDER.diskAlertPercent).toBe(10);
+  expect(DEFAULT_RECORDER.diskAlertGB).toBe(20);
+  const { diskAlertPercent: _p, diskAlertGB: _g, ...old } = DEFAULT_RECORDER;
+  expect(validateConfig({ ...DEFAULT_CONFIG, recorder: old })?.recorder).toMatchObject({ diskAlertPercent: 10, diskAlertGB: 20 });
+  const ok = (r: Partial<typeof DEFAULT_RECORDER>) => validateConfig({ ...DEFAULT_CONFIG, recorder: { ...DEFAULT_RECORDER, ...r } })?.recorder;
+  expect(ok({ diskAlertPercent: 1, diskAlertGB: 1 })).toMatchObject({ diskAlertPercent: 1, diskAlertGB: 1 });
+  expect(ok({ diskAlertPercent: 50, diskAlertGB: 10_000 })).toMatchObject({ diskAlertPercent: 50, diskAlertGB: 10_000 });
+  for (const bad of [0, 51, 2.5, -1, NaN, '10']) expect(ok({ diskAlertPercent: bad as number }), String(bad)).toBeUndefined();
+  for (const bad of [0, 10_001, 1.5, '20']) expect(ok({ diskAlertGB: bad as number }), String(bad)).toBeUndefined();
+});

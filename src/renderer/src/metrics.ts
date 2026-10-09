@@ -1,7 +1,7 @@
 import { APP_DISPLAY_NAME } from '../../core/appName';
-import { ruleEventText } from '../../core/alerts';
+import { alertMessage, ruleEventText } from '../../core/alerts';
 import { topKeysByMax } from '../../core/history/series';
-import type { GroupsHistory, HistoryEvent, RangePreset, SystemSeries, TimeRange, TopOptions, TopResult } from '../../core/types';
+import type { DiskHistory, GroupsHistory, HistoryEvent, RangePreset, SystemSeries, TimeRange, TopOptions, TopResult } from '../../core/types';
 import { formatKB } from './format';
 
 /** Couches du « Reste » (tout ce qui n'est pas dans le top n), dans l'ordre d'affichage. */
@@ -83,7 +83,7 @@ export function breakdownAt(inv: { ts: number[]; layers: { key: string; values: 
 
 const COLORS: Record<string, string> = {
   earlyoom_kill: '#ff5c8a', pressure: '#ffb547', gap: '#8b91a0', app_kill: '#a07cff', leak: '#ff8a3d', tmpfs: REST_TONES.shmem, forecast: '#ffb547',
-  rule_action: '#ff5c8a', rule_dry_run: '#8b91a0', earlyoom_setup: '#5ee0b8', tmp_clean: '#a07cff',
+  rule_action: '#ff5c8a', rule_dry_run: '#8b91a0', earlyoom_setup: '#5ee0b8', tmp_clean: '#a07cff', disk_low: '#ffb547', disk_clean: '#a07cff',
 };
 
 function label(e: HistoryEvent): string {
@@ -103,6 +103,14 @@ function label(e: HistoryEvent): string {
     case 'tmp_clean': {
       const n = Array.isArray(d.deleted) ? d.deleted.length : 0;
       return `Nettoyage de /tmp : ${n} élément${n > 1 ? 's' : ''}, ${formatKB(Math.round(Number(d.freedKB) || 0))} libérés`;
+    }
+    case 'disk_low': {
+      const m = alertMessage({ id: 0, ts: e.ts, type: 'disk_low', groupKey: null, groupLabel: null, detail: d });
+      return `${m.title} : ${m.body}`;
+    }
+    case 'disk_clean': {
+      const n = Array.isArray(d.done) ? d.done.length : 0;
+      return `Ménage du disque : ${n} famille${n > 1 ? 's' : ''}, ${formatKB(Math.round(Number(d.freedKB) || 0))} libérés`;
     }
     case 'leak': return `Fuite probable : ${e.groupLabel ?? '?'} +${formatKB(Number(d.growthKB))}`;
     case 'tmpfs': return `Fichiers en mémoire : ${formatKB(Number(d.shmemKB))}`;
@@ -130,7 +138,7 @@ export function eventMarkers(events: HistoryEvent[]) {
 
 export function alertsFrom(events: HistoryEvent[]): HistoryEvent[] {
   // actions de l'app (kill, installation d'earlyoom, nettoyage de /tmp) : marqueurs dans les graphes, pas des alertes
-  return events.filter((e) => e.type !== 'app_kill' && e.type !== 'earlyoom_setup' && e.type !== 'tmp_clean').sort((a, b) => b.ts - a.ts);
+  return events.filter((e) => e.type !== 'app_kill' && e.type !== 'earlyoom_setup' && e.type !== 'tmp_clean' && e.type !== 'disk_clean').sort((a, b) => b.ts - a.ts);
 }
 
 const p2 = (n: number) => String(n).padStart(2, '0');
@@ -147,6 +155,8 @@ export const INVESTIGATION_LAYERS = 8;
 
 interface MetricsApi {
   system: (r: TimeRange) => Promise<SystemSeries | null>;
+  /** Espace libre par partition (absent : pas de petit graphe « Espace libre »). */
+  disk?: (r: TimeRange) => Promise<DiskHistory | null>;
   top: (r: TimeRange, o?: TopOptions) => Promise<TopResult>;
   events: (r: TimeRange) => Promise<HistoryEvent[]>;
   groups: (r: TimeRange, keys?: string[]) => Promise<GroupsHistory | null>;
@@ -158,9 +168,20 @@ interface MetricsApi {
  */
 export async function fetchMetrics(h: MetricsApi, r: TimeRange) {
   // un seul appel : les deux classements sortent du même parcours de la base
-  const [system, top, events] = await Promise.all([h.system(r), h.top(r, { peakLimit: INVESTIGATION_LAYERS }), h.events(r)]);
+  const [system, top, events, disk] = await Promise.all([
+    h.system(r), h.top(r, { peakLimit: INVESTIGATION_LAYERS }), h.events(r), h.disk ? h.disk(r).catch(() => null) : Promise.resolve(null),
+  ]);
   const groups = top.byMax.length ? await h.groups(r, top.byMax.map((t) => t.key)) : null;
-  return { system, top: top.byAvg, events, groups };
+  return { system, top: top.byAvg, events, groups, disk };
+}
+
+/** Petit graphe « Espace libre » : partition principale (« / », sinon la première), dernière valeur et minimum. */
+export function freeSpaceSeries(d: DiskHistory | null | undefined): { mount: string; ts: number[]; availKB: (number | null)[]; sizeKB: number; lastKB: number | null; minKB: number | null } | null {
+  if (!d || d.ts.length < 2) return null;
+  const s = d.series.find((x) => x.mount === '/') ?? d.series[0];
+  if (!s) return null;
+  const known = s.availKB.filter((v): v is number => v !== null);
+  return { mount: s.mount, ts: d.ts, availKB: s.availKB, sizeKB: s.sizeKB, lastKB: known.at(-1) ?? null, minKB: known.length ? Math.min(...known) : null };
 }
 
 const AUTO_REFRESH_MS = 30_000;
