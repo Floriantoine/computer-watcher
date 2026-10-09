@@ -31,12 +31,35 @@ export function nextVersion(current: string, bump: Bump): string {
   return `${maj}.${min}.${pat + 1}`;
 }
 
-/** Message de l'étiquette annotée (repris comme notes de la version GitHub par le workflow release). */
-export function tagMessage(version: string, subjects: string): string {
+/** Notes de la première version publique (aucune étiquette précédente) : rédigées, pas de liste de commits internes. */
+export const FIRST_RELEASE_NOTES = [
+  'Première version publique.',
+  '',
+  '- Processus regroupés par application et par projet : mémoire, CPU, swap, depuis quand ; arrêt en un clic, avec confirmation pour les programmes protégés.',
+  '- Historique en arrière-plan (service systemd utilisateur, sans sudo) : onglet Métriques, alertes, pics et rejeu.',
+  '- Règles d’arrêt automatique (en simulation d’abord) et alertes de prévision de la mémoire.',
+  '- Panneau Swap, ports ouverts, nettoyage de /tmp.',
+  '- earlyoom : installation et configuration depuis l’app.',
+  '- AppImage et .deb ; nouvelles versions proposées dans l’app (installation sur demande pour l’AppImage).',
+].join('\n');
+
+/** Sujets internes, jamais dans les notes publiques. */
+const HIDDEN = /^(chore|test|merge|ci|build|style|refactor)\b|revue/i;
+/** Références de revue en fin de sujet : (r1–r3), (p1–p4), (M1–M6), (B1 bis), (N1, N2). */
+const REVIEW_REFS = /\s*\((?:[A-Za-z]\d+(?:\s*bis)?(?:\s*[–-]\s*[A-Za-z]?\d+)?(?:,\s*)?)+\)\s*$/;
+
+/**
+ * Message de l'étiquette annotée. Le workflow release en reprend le corps (tout sauf la 1re ligne) comme notes de la version
+ * GitHub et de latest-linux.yml (affichées dans le pop-up de mise à jour). Première version : FIRST_RELEASE_NOTES ; sinon
+ * les sujets des commits depuis la version précédente, sans les sujets internes ni les références de revue.
+ */
+export function tagMessage(version: string, subjects: string, o: { first?: boolean } = {}): string {
+  if (o.first) return `proc-watch v${version}\n\n${FIRST_RELEASE_NOTES}\n`;
   const lines = subjects
     .split('\n')
     .map((s) => s.trim())
-    .filter((s) => s && !s.startsWith('chore(release)'));
+    .filter((s) => s && !s.startsWith('chore(release)') && !HIDDEN.test(s))
+    .map((s) => s.replace(REVIEW_REFS, ''));
   return `proc-watch v${version}\n${lines.length ? `\n${lines.map((s) => `- ${s}`).join('\n')}\n` : ''}`;
 }
 
@@ -64,13 +87,13 @@ export function release(args: ReleaseArgs, d: { run: Run; readPkg: () => { versi
   must('npm', ['run', 'typecheck'], 'npm run typecheck', true);
 
   const prev = git('describe', '--tags', '--abbrev=0', '--match', 'v*');
-  const range = prev.code === 0 ? [`${prev.stdout.trim()}..HEAD`] : ['-n', '30', 'HEAD'];
-  const message = tagMessage(version, git('log', '--no-merges', '--pretty=format:%s', ...range).stdout);
+  const first = prev.code !== 0;
+  const message = first ? tagMessage(version, '', { first }) : tagMessage(version, git('log', '--no-merges', '--pretty=format:%s', `${prev.stdout.trim()}..HEAD`).stdout);
   const push = `git push --atomic origin main ${tag}`;
 
   if (args.dryRun) {
     d.log(`\nSeraient exécutés :\n  npm version ${version} --no-git-tag-version\n  git commit -m "chore(release): ${tag}"\n  git tag -a ${tag}`);
-    d.log(`\nMessage de l'étiquette (notes de la version) :\n${message}`);
+    d.log(`\nMessage de l'étiquette (son corps devient les notes de la version ; modifiable avant le push avec git tag -f -a) :\n${message}`);
     d.log(`Puis, à lancer soi-même pour publier :\n  ${push}`);
     return version;
   }

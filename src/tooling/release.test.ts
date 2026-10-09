@@ -47,6 +47,27 @@ describe('tagMessage', () => {
     expect(tagMessage('0.1.1', 'feat: une chose\nfix: une autre\nchore(release): v0.1.0\n')).toBe('proc-watch v0.1.1\n\n- feat: une chose\n- fix: une autre\n');
     expect(tagMessage('0.1.1', '')).toBe('proc-watch v0.1.1\n');
   });
+  test('jargon de revue retiré : sujets « revue », références (r1–r3), (p1–p4), (M1–M6), (B1 bis), chore/test/merge', () => {
+    const subjects = [
+      'fix(earlyoom): mineurs de la revue de l\'installation (M1–M6)',
+      'fix(tmp): revérification par le chemin réel (r1–r3)',
+      'feat(tmp): supprimer des éléments de /tmp (B1 bis)',
+      'fix(tmp): quarantaine désignée par son descripteur (revue N1)',
+      'chore(mesure): MEASURE_QUERIES',
+      'test(tmp): marge de 30 s',
+      'merge: main',
+      'feat(processus): les tuiles du haut trient les groupes',
+    ].join('\n');
+    expect(tagMessage('0.1.2', subjects)).toBe(
+      'proc-watch v0.1.2\n\n- fix(tmp): revérification par le chemin réel\n- feat(tmp): supprimer des éléments de /tmp\n- feat(processus): les tuiles du haut trient les groupes\n',
+    );
+  });
+  test('première version (aucune étiquette précédente) : message rédigé, pas de liste de commits', () => {
+    const m = tagMessage('0.1.0', 'fix: x (revue N1)\nfeat: y', { first: true });
+    expect(m.startsWith('proc-watch v0.1.0\n\nPremière version publique.')).toBe(true);
+    expect(m).not.toContain('revue');
+    expect(m).toContain('- ');
+  });
 });
 
 describe('release', () => {
@@ -78,6 +99,7 @@ describe('release', () => {
     expect(f.calls.some((c) => c.startsWith('npm version') || c.startsWith('git commit') || c.startsWith('git tag') || c.startsWith('git add'))).toBe(false);
     expect(f.calls.some((c) => c.startsWith('git push'))).toBe(false);
     expect(f.out.join('\n')).toContain('git push --atomic origin main v0.1.1');
+    expect(f.out.join('\n')).toContain('Première version publique.');
   });
   test('réel : version, commit « chore(release): vX.Y.Z », étiquette annotée, jamais de push', () => {
     const f = fake({ prevTag: 'v0.1.0' });
