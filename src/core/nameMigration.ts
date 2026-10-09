@@ -23,6 +23,8 @@ export interface MigrationReport {
   errors: Partial<Record<MigrationStep, string>>;
   leftInPlace: string[];
   skipped: Partial<Record<MigrationStep, string>>;
+  /** Différée : pourquoi (processus qui tient l'ancien dossier, avec pid et nom ; XDG partiel, avec les racines). */
+  detail?: string;
 }
 
 export interface DirMove { from: string; to: string }
@@ -106,6 +108,7 @@ export function migrationLines(r: MigrationReport): string[] {
     case 'nothing': return [];
     case 'done': return ['Migration depuis proc-watch : faite.'];
     case 'deferred':
+      if (r.detail) return [`Migration depuis proc-watch : différée : ${r.detail}.`];
       return ['Migration depuis proc-watch : différée : une ancienne version (proc-watch) est encore ouverte. La quitter, puis relancer Computer Watcher.'];
     case 'partial':
       return [

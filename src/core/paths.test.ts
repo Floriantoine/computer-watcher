@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'vitest';
 import { configDir } from './config';
-import { appEventsPath, clearRequestPath, dataDir, dbPath, focusStatePath, statusPath } from './paths';
+import { appEventsPath, clearRequestPath, dataDir, dbPath, focusStatePath, statusPath, xdgFamilies } from './paths';
 
 test('dataDir suit XDG_DATA_HOME, sinon ~/.local/share', () => {
   expect(dataDir({ XDG_DATA_HOME: '/d' }, '/home/u')).toBe('/d/computer-watcher');
@@ -43,4 +43,15 @@ test('renommage : app et service résolvent les mêmes dossiers, nouveau sinon a
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
+});
+
+test('revue C1 : racines XDG cohérentes seulement si toutes par défaut ou toutes définies (chemins absolus)', () => {
+  expect(xdgFamilies({})).toMatchObject({ config: 'default', data: 'default', cache: 'default', consistent: true });
+  expect(xdgFamilies({ XDG_CONFIG_HOME: '/a', XDG_DATA_HOME: '/b', XDG_CACHE_HOME: '/c' })).toMatchObject({ consistent: true, config: 'explicit' });
+  // valeur relative = ignorée (spécification XDG) = par défaut
+  expect(xdgFamilies({ XDG_CONFIG_HOME: 'rel', XDG_DATA_HOME: '', XDG_CACHE_HOME: './c' }).consistent).toBe(true);
+  for (const env of [{ XDG_CONFIG_HOME: '/a' }, { XDG_DATA_HOME: '/b' }, { XDG_CACHE_HOME: '/c' }, { XDG_CONFIG_HOME: '/a', XDG_DATA_HOME: '/b' }, { XDG_CONFIG_HOME: '/a', XDG_DATA_HOME: 'rel', XDG_CACHE_HOME: '/c' }])
+    expect(xdgFamilies(env).consistent, JSON.stringify(env)).toBe(false);
+  // XDG_RUNTIME_DIR n'entre pas en compte (jamais déplacé)
+  expect(xdgFamilies({ XDG_RUNTIME_DIR: '/run/x' }).consistent).toBe(true);
 });

@@ -46,7 +46,7 @@ import { installDesktopEntry, refreshDesktopEntry } from './desktopEntry';
 import { installedAppImage, installedElsewhere } from './appImageTrust';
 import { acquireLock, blockingSleep } from './singleInstance';
 import { userDataPath } from './userDataPath';
-import { aliveAfterWait, defaultSystemctlSync, migrateEarly, migrateLate, migrationState, realLegacyInstanceAlive, type MigrateDeps } from './migrateName';
+import { defaultSystemctlSync, migrateEarly, migrateLate, migrationState, realDirUser, realLegacyInstance, waitPidGone, type MigrateDeps } from './migrateName';
 import { migrationLines, type MigrationReport } from '../core/nameMigration';
 import { createAppImageBackend } from './appImageUpdate';
 import { relaunchDetached, sanitizeAppImageEnv } from './relaunch';
@@ -77,9 +77,14 @@ app.commandLine.appendSwitch('enable-features', 'NetworkServiceInProcess2');
 // jamais déduits de productName ni du nom affiché ; userData = dossier de config de l'app (voir userDataPath).
 app.setName(APP_NAME);
 
-// Migration proc-watch → computer-watcher, premier temps : avant userData, le verrou d'instance unique et toute lecture de
-// la config, de la base ou du service (arrêt de l'ancien service, puis déplacement des dossiers). Le second temps (nouveau
-// service, entrées du menu, copie AppImage) suit `ready`. Une ancienne instance encore ouverte : rien n'est touché.
+// Migration proc-watch → computer-watcher, premier temps : après le verrou d'instance unique (pris dans le dossier de config
+// résolu, l'ancien tant qu'il n'est pas déplacé), avant toute lecture de la config, de la base ou du service (arrêt de
+// l'ancien service, puis déplacement des dossiers) ; userData est ensuite re-résolu. Le second temps (nouveau service,
+// entrées du menu, copie AppImage) suit `ready`. Instance encore ouverte, dossier encore utilisé, XDG partiel : rien n'est
+// touché. Le démarrage peut attendre jusqu'à une trentaine de secondes au pire (systemctl bloqué, relance qui attend
+// l'instance précédente), sans fenêtre : voir defaultSystemctlSync.
+/** Relance (mise à jour, installation, « Réessayer ») : relevé avant acquireLock, qui retire ces variables. */
+const relaunching = process.env.PROC_WATCH_RELAUNCH === '1' || process.env.APPIMAGE_SILENT_INSTALL === 'true';
 function migrationDeps(): MigrateDeps {
   const r = rootsFrom(process.env, homedir());
   return {
@@ -93,12 +98,10 @@ function migrationDeps(): MigrateDeps {
         return '';
       }
     },
-    legacyInstanceAlive: () =>
-      aliveAfterWait({
-        alive: () => realLegacyInstanceAlive(r.configHome),
-        relaunch: process.env.PROC_WATCH_RELAUNCH === '1' || process.env.APPIMAGE_SILENT_INSTALL === 'true',
-        sleep: blockingSleep,
-      }),
+    legacyInstance: () => realLegacyInstance(r.configHome),
+    dirUser: (dir) => realDirUser(dir),
+    relaunching,
+    sleep: blockingSleep,
     writeNewService: async () => {
       await ensureRecorderService({ enabled: config.recorder.enabled, args: execArgs(), path: unitPath(), run: defaultSystemctl, allowCreate: true });
     },
@@ -124,21 +127,38 @@ function migrationDeps(): MigrateDeps {
     now: () => Date.now(),
   };
 }
-let migration: MigrationReport;
-try {
-  migration = migrateEarly(migrationDeps());
-} catch (e) {
-  console.error('migration :', e);
-  migration = { status: 'partial', done: [], errors: { 'move-dirs': e instanceof Error ? e.message : String(e) }, leftInPlace: [], skipped: {} };
-}
-/** L'ancien service n'est pas (encore) arrêté : jamais de nouveau service à côté de lui (deux enregistreurs). */
-const legacyServiceBlocked = () =>
-  (migration.status === 'partial' || migration.status === 'deferred') && !migration.done.includes('stop-legacy-service') && !migration.skipped['stop-legacy-service'];
 app.setPath('userData', userDataPath());
 
 // Instance unique : un second lancement (bouton « Ouvrir » d'une notification, menu) réveille la fenêtre existante.
 // Relance après une mise à jour : la version précédente peut tenir encore le verrou quelques instants (voir acquireLock).
 const primary = acquireLock({ tryLock: () => app.requestSingleInstanceLock(), env: process.env, sleep: blockingSleep });
+let migration: MigrationReport = { status: 'nothing', done: [], errors: {}, leftInPlace: [], skipped: {} };
+if (primary) {
+  // « Réessayer » : l'instance précédente a passé son pid ; ses dossiers ne bougent qu'une fois qu'elle a réellement quitté
+  const waitPid = Number(process.env.PROC_WATCH_WAIT_PID);
+  delete process.env.PROC_WATCH_WAIT_PID;
+  const gone = !Number.isInteger(waitPid) || waitPid <= 1 || waitPidGone({ pid: waitPid, sleep: blockingSleep });
+  try {
+    migration = gone
+      ? migrateEarly(migrationDeps())
+      : { status: 'deferred', done: [], errors: {}, leftInPlace: [], skipped: {}, detail: `l'instance précédente (pid ${waitPid}) n'a pas quitté` };
+  } catch (e) {
+    console.error('migration :', e);
+    migration = { status: 'partial', done: [], errors: { 'move-dirs': e instanceof Error ? e.message : String(e) }, leftInPlace: [], skipped: {} };
+  }
+  // dossier de config déplacé : le profil Chromium suit (verrou d'instance compris, déplacé avec lui)
+  app.setPath('userData', userDataPath());
+} else {
+  // second lancement, ou ancienne instance qui tient le verrou de l'ancien dossier : jamais de migration ici
+  const holder = realLegacyInstance(rootsFrom(process.env, homedir()).configHome);
+  if (holder && migrationState(migrationDeps()).status !== 'done')
+    migration = { status: 'deferred', done: [], errors: {}, leftInPlace: [], skipped: {}, detail: `l'ancien dossier est encore utilisé par ${holder.name} (pid ${holder.pid}) ; quitter cette instance, puis relancer Computer Watcher` };
+}
+/** Différée faute de XDG cohérent (app d'essai) : dit dans le journal et À propos, jamais de boîte bloquante. */
+const xdgDeferred = () => migration.status === 'deferred' && /^XDG partiel/.test(migration.detail ?? '');
+/** L'ancien service n'est pas (encore) arrêté : jamais de nouveau service à côté de lui (deux enregistreurs). */
+const legacyServiceBlocked = () =>
+  (migration.status === 'partial' || migration.status === 'deferred') && !migration.done.includes('stop-legacy-service') && !migration.skipped['stop-legacy-service'];
 if (!primary) {
   // `npm run dev` / `npm start` pendant que l'app de l'utilisateur tourne avec la même config : pas un plantage.
   console.error(
@@ -146,7 +166,7 @@ if (!primary) {
       'Pour une seconde instance, lancer avec un XDG_CONFIG_HOME temporaire.',
   );
   // migration différée (ancienne version encore ouverte, qui tient le verrou) : le dire avant de s'arrêter
-  if (migration.status === 'deferred')
+  if (migration.status === 'deferred' && !xdgDeferred())
     void app.whenReady().then(async () => {
       const [message, ...detail] = migrationLines(migration);
       await dialog.showMessageBox({ type: 'warning', title: APP_DISPLAY_NAME, message, detail: detail.join('\n'), buttons: ['OK'], noLink: true });
@@ -1002,6 +1022,8 @@ ipcMain.handle('migration:retry', async (): Promise<{ report: MigrationReport; r
   const early = now.status === 'deferred' || !now.done.includes('stop-legacy-service') && !now.skipped['stop-legacy-service'] || !now.done.includes('move-dirs');
   if (early) {
     quitting = true;
+    // la nouvelle instance attend que celle-ci ait réellement quitté avant de toucher aux dossiers
+    process.env.PROC_WATCH_WAIT_PID = String(process.pid);
     if (appImage) {
       await new Promise<void>((resolve, reject) =>
         relaunchDetached({
@@ -1013,11 +1035,13 @@ ipcMain.handle('migration:retry', async (): Promise<{ report: MigrationReport; r
           },
           onFailed: (m) => {
             quitting = false;
+            delete process.env.PROC_WATCH_WAIT_PID;
             reject(new Error(`relance impossible : ${m}`));
           },
         }),
       );
     } else {
+      process.env.PROC_WATCH_RELAUNCH = '1'; // la nouvelle instance réessaie le verrou le temps que celle-ci quitte
       app.relaunch();
       setTimeout(() => app.quit(), 50);
     }
@@ -1334,7 +1358,7 @@ app.whenReady().then(async () => {
     }
     if (quitting) return; // relancée depuis computer-watcher.AppImage : cette instance s'arrête
   }
-  if (migration.status === 'partial' || migration.status === 'deferred') {
+  if (migration.status === 'partial' || (migration.status === 'deferred' && !xdgDeferred())) {
     const [message, ...detail] = migrationLines(migration);
     void dialog.showMessageBox({ type: 'warning', title: APP_DISPLAY_NAME, message, detail: `${detail.join('\n')}\n\nRéglages › À propos : « Réessayer ».`, buttons: ['OK'], noLink: true });
   }

@@ -11,16 +11,22 @@ import {
 import type { InstallOutcome, UninstallItem, UninstallKind, UninstallOptions, UninstallResult } from '../core/onboarding';
 import { LEGACY_UNIT_NAME, UNIT_NAME, type Systemctl } from './recorderService';
 import { APP_DISPLAY_NAME, APP_NAME, LEGACY_APP_NAME } from '../core/appName';
-import { xdgHome } from '../core/paths';
+import { xdgFamilies, xdgHome } from '../core/paths';
 import { systemBin } from '../core/childEnv';
 
 export type { InstallOutcome, UninstallItem, UninstallKind, UninstallOptions, UninstallResult };
 
-export interface Roots { home: string; configHome: string; dataHome: string; cacheHome: string }
+/**
+ * `foreign` : racines d'une autre famille que celle de la config (XDG partiel, voir xdgFamilies) ; la désinstallation n'y
+ * liste ni n'y retire jamais rien.
+ */
+export interface Roots { home: string; configHome: string; dataHome: string; cacheHome: string; foreign?: ('data' | 'cache')[] }
 
 export function rootsFrom(env: NodeJS.ProcessEnv, home: string): Roots {
+  const f = xdgFamilies(env);
   return {
     home,
+    foreign: (['data', 'cache'] as const).filter((k) => f[k] !== f.config),
     // M-2 : une valeur XDG non absolue est ignorée (spécification XDG)
     configHome: xdgHome(env, 'XDG_CONFIG_HOME', join(home, '.config')),
     dataHome: xdgHome(env, 'XDG_DATA_HOME', join(home, '.local/share')),
@@ -277,20 +283,21 @@ function ownFiles(r: Roots, dir: string, files: string[], patterns: RegExp[]): s
  */
 export function uninstallPlan(r: Roots, o: UninstallOptions): UninstallItem[] {
   const p = appPaths(r);
+  const ok = (path: string) => !foreignPath(r, path);
   const item = (kind: UninstallKind, path: string, dir = false): UninstallItem => ({ kind, path, label: LABELS[kind], ...(dir ? { dir } : {}) });
   const out: UninstallItem[] = [];
   const both = [p, p.legacy];
   for (const kind of ['autostart', 'desktop', 'icon', 'service'] as const) {
     for (const set of both) {
       const path = kind === 'service' ? set.unit : set[kind];
-      if (!present(path)) continue;
+      if (!ok(path) || !present(path)) continue;
       // .desktop : seulement ceux que l'app a écrits (un lien symbolique est listé pour être signalé, jamais suivi)
       if ((kind === 'autostart' || kind === 'desktop') && !lstatSync(path).isSymbolicLink() && !managedEntry(r, path)) continue;
       out.push(item(kind, path));
     }
   }
   if (o.history) {
-    for (const set of both) {
+    for (const set of both.filter((x) => ok(x.dataDir))) {
       for (const f of ownFiles(r, set.dataDir, DATA_FILES, DATA_PATTERNS)) out.push(item('history', f));
       if (present(set.dataDir)) out.push(item('history', set.dataDir, true));
     }
@@ -302,7 +309,7 @@ export function uninstallPlan(r: Roots, o: UninstallOptions): UninstallItem[] {
       if (present(set.configDir)) out.push(item('config', set.configDir, true));
     }
     // cache d'electron-updater : arborescence retirée sans suivre de lien ; s'il est un lien, le lien seul
-    for (const set of both) if (present(set.updaterCache)) out.push({ ...item('cache', set.updaterCache), tree: true });
+    for (const set of both) if (ok(set.updaterCache) && present(set.updaterCache)) out.push({ ...item('cache', set.updaterCache), tree: true });
   }
   // la copie en cours d'exécution (nouveau nom) en tout dernier
   for (const set of [p.legacy, p]) if (present(set.appImage)) out.push(item('appimage', set.appImage));
@@ -315,7 +322,13 @@ export function uninstallPlan(r: Roots, o: UninstallOptions): UninstallItem[] {
  */
 function allowed(r: Roots, i: UninstallItem): boolean {
   const p = appPaths(r);
-  return allowedIn(p, i) || allowedIn(p.legacy, i);
+  return !foreignPath(r, i.path) && (allowedIn(p, i) || allowedIn(p.legacy, i));
+}
+
+/** Chemin sous une racine d'une autre famille que la config (XDG partiel) : jamais listé ni retiré. */
+function foreignPath(r: Roots, path: string): boolean {
+  const under = (root: string) => path === root || path.startsWith(root.endsWith('/') ? root : `${root}/`);
+  return (r.foreign ?? []).some((k) => under(k === 'data' ? r.dataHome : r.cacheHome));
 }
 
 function allowedIn(p: AppPathSet, i: UninstallItem): boolean {

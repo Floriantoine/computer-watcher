@@ -63,7 +63,7 @@ describe('chemins', () => {
     });
     // M-2 : XDG relatifs ignorés
     expect(rootsFrom({ XDG_CONFIG_HOME: 'c', XDG_DATA_HOME: './d', XDG_CACHE_HOME: 'k' }, '/home/u')).toEqual({
-      home: '/home/u', configHome: '/home/u/.config', dataHome: '/home/u/.local/share', cacheHome: '/home/u/.cache',
+      home: '/home/u', configHome: '/home/u/.config', dataHome: '/home/u/.local/share', cacheHome: '/home/u/.cache', foreign: [],
     });
   });
 });
@@ -720,5 +720,34 @@ describe('renommage : restes à l’ancien nom (proc-watch)', () => {
     const run = async (args: string[]) => (calls.push(args), { ok: true, stdout: args[0] === 'show' ? `${unit}\n` : '' });
     expect(await stopRecorderForUninstall({ unitPath: unit, run, disabled: false })).toEqual({ stopped: true, error: null });
     expect(calls).toEqual([['show', '-p', 'FragmentPath', '--value', 'proc-watch-recorder.service'], ['disable', '--now', 'proc-watch-recorder.service']]);
+  });
+});
+
+describe('revue M4 : XDG partiel, la désinstallation ne liste jamais les dossiers d’une autre racine', () => {
+  test('config temporaire, données et cache par défaut (les vrais) : seuls config, menu de HOME… et unité de la racine de config', async () => {
+    const home = roots.home;
+    const cfg = join(home, 'tmpcfg');
+    const r = rootsFrom({ XDG_CONFIG_HOME: cfg }, home);
+    expect(r.foreign).toEqual(['data', 'cache']);
+    const p = appPaths(r);
+    for (const d of [p.dataDir, p.legacy.dataDir, p.configDir, p.updaterCache, p.legacy.updaterCache]) mkdirSync(d, { recursive: true });
+    writeFileSync(join(p.dataDir, 'metrics.db'), 'vrai historique');
+    writeFileSync(join(p.legacy.dataDir, 'metrics.db'), 'vrai historique');
+    writeFileSync(join(p.configDir, 'config.json'), '{}');
+    mkdirSync(dirname(p.desktop), { recursive: true });
+    writeFileSync(p.desktop, desktopEntryContent('/x/app'));
+    const plan = uninstallPlan(r, { history: true, config: true });
+    const paths = plan.map((i) => i.path);
+    expect(paths.filter((x) => x.startsWith(r.dataHome) || x.startsWith(r.cacheHome))).toEqual([]);
+    expect(paths).toContain(join(p.configDir, 'config.json'));
+    // plan forgé vers la racine étrangère : refusé à l'exécution
+    const res = await runUninstall([{ kind: 'history', path: join(p.dataDir, 'metrics.db'), label: 'x' }, { kind: 'desktop', path: p.desktop, label: 'x' }], r, { service: okService() });
+    expect(res.failed.map((f) => f.path)).toEqual([join(p.dataDir, 'metrics.db'), p.desktop]);
+    expect(readFileSync(join(p.dataDir, 'metrics.db'), 'utf8')).toBe('vrai historique');
+  });
+  test('racines cohérentes : rien d’étranger', () => {
+    expect(rootsFrom({}, '/home/u').foreign).toEqual([]);
+    expect(rootsFrom({ XDG_CONFIG_HOME: '/c', XDG_DATA_HOME: '/d', XDG_CACHE_HOME: '/k' }, '/home/u').foreign).toEqual([]);
+    expect(rootsFrom({ XDG_DATA_HOME: '/d' }, '/home/u').foreign).toEqual(['data']);
   });
 });

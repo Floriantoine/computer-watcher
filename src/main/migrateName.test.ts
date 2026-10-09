@@ -9,7 +9,10 @@ import { chmodSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { DELETE_CONSENT_TTL_MS, parseOnboardingFile } from '../core/onboarding';
 import { desktopEntryContent } from './desktopEntry';
-import { aliveAfterWait, legacyLockHolderAlive, migrateEarly, migrateName, type MigrateDeps, type SystemctlSync } from './migrateName';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { copyFileSync, readlinkSync } from 'node:fs';
+import { hostname } from 'node:os';
+import { legacyLockHolder, migrateEarly, migrateName, realDirUser, realLegacyInstance, waitPidGone, waitWhile, type MigrateDeps, type SystemctlSync } from './migrateName';
 import { parseMigrationState } from '../core/nameMigration';
 
 const cache = join(homedir(), '.cache');
@@ -32,7 +35,7 @@ const P = () => appPaths(roots);
 const LEGACY = 'proc-watch-recorder.service';
 
 /** systemctl simulé : enregistre les appels et, pour chacun, si l'ancien dossier de config était encore en place. */
-function fakeCtl(o: { frag?: string; showOk?: boolean; active?: string; failOn?: string } = {}) {
+function fakeCtl(o: { frag?: string; showOk?: boolean; active?: string; activeSeq?: string[]; failOn?: string } = {}) {
   const calls: string[][] = [];
   const legacyThere: boolean[] = [];
   const ctl: SystemctlSync = (args) => {
@@ -40,7 +43,11 @@ function fakeCtl(o: { frag?: string; showOk?: boolean; active?: string; failOn?:
     legacyThere.push(existsSync(P().legacy.configDir));
     if (o.failOn && args[0] === o.failOn) return { ok: false, stdout: '' };
     if (args[0] === 'show') return o.showOk === false ? { ok: false, stdout: '' } : { ok: true, stdout: `${o.frag ?? ''}\n` };
-    if (args[0] === 'is-active') return { ok: (o.active ?? 'inactive') === 'active', stdout: `${o.active ?? 'inactive'}\n` };
+    if (args[0] === 'is-active') {
+      const a = o.activeSeq?.shift() ?? o.active ?? 'inactive';
+      return { ok: a === 'active', stdout: `${a}\n` };
+    }
+    if (args[0] === 'is-enabled') return { ok: true, stdout: 'enabled\n' };
     return { ok: true, stdout: '' };
   };
   return { ctl, calls, legacyThere };
@@ -53,7 +60,10 @@ function deps(over: Partial<MigrateDeps> = {}): MigrateDeps & { written: number 
     env: { XDG_RUNTIME_DIR: run } as NodeJS.ProcessEnv,
     systemctl: fakeCtl().ctl,
     mountinfo: () => '',
-    legacyInstanceAlive: () => false,
+    legacyInstance: () => null,
+    dirUser: () => null,
+    relaunching: false,
+    sleep: () => {},
     writeNewService: async () => {
       d.written++;
       mkdirSync(dirname(P().unit), { recursive: true });
@@ -98,8 +108,10 @@ describe('dossiers', () => {
     expect(readFileSync(join(p.dataDir, 'metrics.db'))).toEqual(Buffer.from([1, 2, 3, 4, 5]));
     expect(readFileSync(join(p.dataDir, 'metrics.db-wal'))).toEqual(Buffer.from([9, 8, 7]));
     expect(existsSync(join(p.updaterCache, 'pending'))).toBe(true);
-    expect(readFileSync(join(run, 'computer-watcher', 'focus-abc.json'), 'utf8')).toBe('{}');
-    for (const x of [L.configDir, L.dataDir, L.updaterCache, join(run, 'proc-watch')]) expect(existsSync(x), x).toBe(false);
+    // revue C1 : le dossier d'exécution (fichiers éphémères) n'est jamais déplacé
+    expect(readFileSync(join(run, 'proc-watch', 'focus-abc.json'), 'utf8')).toBe('{}');
+    expect(existsSync(join(run, 'computer-watcher'))).toBe(false);
+    for (const x of [L.configDir, L.dataDir, L.updaterCache]) expect(existsSync(x), x).toBe(false);
     expect(stateOf(p.configDir)).toMatchObject({ done: ['stop-legacy-service', 'move-dirs', 'new-service', 'desktop', 'appimage'], errors: {}, leftInPlace: [] });
   });
 
@@ -183,15 +195,15 @@ describe('ancien service (échec fermé)', () => {
     return L;
   };
 
-  test('Review Focus 3 : disable, puis stop, puis is-active = inactive, tout avant le moindre déplacement', async () => {
+  test('Review Focus 3 / revue M1 : état relevé, stop, is-active = inactive, puis disable, tout avant le moindre déplacement', async () => {
     const L = withUnit();
     const f = fakeCtl({ frag: L.unit });
     const r = migrateEarly(deps({ systemctl: f.ctl }));
     expect(r.errors).toEqual({});
-    expect(f.calls.slice(0, 4)).toEqual([
-      ['show', '-p', 'FragmentPath', '--value', LEGACY], ['disable', LEGACY], ['stop', LEGACY], ['is-active', LEGACY],
+    expect(f.calls.slice(0, 6)).toEqual([
+      ['show', '-p', 'FragmentPath', '--value', LEGACY], ['is-enabled', LEGACY], ['is-active', LEGACY], ['stop', LEGACY], ['is-active', LEGACY], ['disable', LEGACY],
     ]);
-    expect(f.legacyThere.slice(0, 4)).toEqual([true, true, true, true]);
+    expect(f.legacyThere.slice(0, 6)).toEqual([true, true, true, true, true, true]);
     expect(existsSync(L.configDir)).toBe(false);
   });
 
@@ -264,37 +276,41 @@ describe('Review Focus 2 : ancienne instance encore ouverte', () => {
   test('différé : aucun appel systemctl, rien déplacé, aucun état écrit', async () => {
     const L = legacyInstall();
     const f = fakeCtl();
-    const r = await migrateName(deps({ systemctl: f.ctl, legacyInstanceAlive: () => true }));
+    const r = await migrateName(deps({ systemctl: f.ctl, legacyInstance: () => ({ pid: 4242, name: 'proc-watch' }) }));
     expect(r.status).toBe('deferred');
+    expect(r.detail).toMatch(/proc-watch \(pid 4242\)/); // revue M3
     expect(f.calls).toEqual([]);
     expect(existsSync(L.configDir)).toBe(true);
     expect(existsSync(P().configDir)).toBe(false);
     expect(existsSync(join(L.configDir, 'migration.json'))).toBe(false);
   });
 
-  test('verrou d’instance de l’ancien dossier (SingletonLock → hôte-pid) : vivant seulement si ce pid est l’app', () => {
-    const comm = (pid: number) => ({ 10: 'proc-watch', 11: 'electron', 12: 'bash' } as Record<number, string>)[pid] ?? null;
-    const o = { hostname: 'mon-pc', selfPid: 99, comm };
-    expect(legacyLockHolderAlive({ ...o, lockTarget: 'mon-pc-10' })).toBe(true);
-    expect(legacyLockHolderAlive({ ...o, lockTarget: 'mon-pc-11' })).toBe(true); // version de développement (electron)
-    expect(legacyLockHolderAlive({ ...o, lockTarget: 'mon-pc-12' })).toBe(false); // pid réutilisé par autre chose
-    expect(legacyLockHolderAlive({ ...o, lockTarget: 'mon-pc-13' })).toBe(false); // processus disparu (verrou périmé)
-    expect(legacyLockHolderAlive({ ...o, lockTarget: 'autre-pc-10' })).toBe(false); // autre machine (dossier partagé)
-    expect(legacyLockHolderAlive({ ...o, lockTarget: 'mon-pc-99' })).toBe(false); // nous-mêmes
-    expect(legacyLockHolderAlive({ ...o, lockTarget: null })).toBe(false);
-    expect(legacyLockHolderAlive({ ...o, lockTarget: 'n’importe quoi' })).toBe(false);
+  test('verrou d’instance de l’ancien dossier (SingletonLock → hôte-pid) : tenu seulement si ce pid est l’app, sous ses deux noms ou le même exécutable', () => {
+    const comm = (pid: number) => ({ 10: 'proc-watch', 11: 'electron', 12: 'bash', 14: 'computer-watche', 15: 'renommé' } as Record<number, string>)[pid] ?? null;
+    const exe = (pid: number) => (pid === 15 ? '/opt/computer-watcher/computer-watcher' : '/usr/bin/x');
+    const o = { hostname: 'mon-pc', selfPid: 99, comm, exe, selfExe: '/opt/computer-watcher/computer-watcher' };
+    expect(legacyLockHolder({ ...o, lockTarget: 'mon-pc-10' })).toEqual({ pid: 10, name: 'proc-watch' });
+    expect(legacyLockHolder({ ...o, lockTarget: 'mon-pc-11' })).toEqual({ pid: 11, name: 'electron' }); // version de développement
+    expect(legacyLockHolder({ ...o, lockTarget: 'mon-pc-14' })).toEqual({ pid: 14, name: 'computer-watche' }); // revue I1 : nouveau nom
+    expect(legacyLockHolder({ ...o, lockTarget: 'mon-pc-15' })).toEqual({ pid: 15, name: 'renommé' }); // revue I1 : même exécutable que nous
+    expect(legacyLockHolder({ ...o, lockTarget: 'mon-pc-12' })).toBeNull(); // pid réutilisé par autre chose
+    expect(legacyLockHolder({ ...o, lockTarget: 'mon-pc-13' })).toBeNull(); // processus disparu (verrou périmé)
+    expect(legacyLockHolder({ ...o, lockTarget: 'autre-pc-10' })).toBeNull(); // autre machine (dossier partagé)
+    expect(legacyLockHolder({ ...o, lockTarget: 'mon-pc-99' })).toBeNull(); // nous-mêmes
+    expect(legacyLockHolder({ ...o, lockTarget: null })).toBeNull();
+    expect(legacyLockHolder({ ...o, lockTarget: 'n’importe quoi' })).toBeNull();
   });
 
-  test('relance (mise à jour) : attend que l’ancienne instance quitte, au plus 10 s ; lancement normal : n’attend pas', () => {
+  test('relance (mise à jour, « Réessayer ») : attend la libération, au plus 10 s ; lancement normal : n’attend pas', () => {
     let left = 3;
     const slept: number[] = [];
-    expect(aliveAfterWait({ alive: () => left-- > 0, relaunch: true, sleep: (ms) => slept.push(ms) })).toBe(false);
+    expect(waitWhile({ busy: () => (left-- > 0 ? 'x' : null), wait: true, sleep: (ms) => slept.push(ms) })).toBeNull();
     expect(slept).toEqual([250, 250, 250]);
     slept.length = 0;
-    expect(aliveAfterWait({ alive: () => true, relaunch: true, sleep: (ms) => slept.push(ms) })).toBe(true);
+    expect(waitWhile({ busy: () => 'x', wait: true, sleep: (ms) => slept.push(ms) })).toBe('x');
     expect(slept.reduce((a, b) => a + b, 0)).toBe(10_000);
     slept.length = 0;
-    expect(aliveAfterWait({ alive: () => true, relaunch: false, sleep: (ms) => slept.push(ms) })).toBe(true);
+    expect(waitWhile({ busy: () => 'x', wait: false, sleep: (ms) => slept.push(ms) })).toBe('x');
     expect(slept).toEqual([]);
   });
 });
@@ -350,7 +366,7 @@ describe('idempotence', () => {
     legacyInstall();
     expect((await migrateName(deps())).status).toBe('done');
     const f = fakeCtl();
-    const d = deps({ systemctl: f.ctl, legacyInstanceAlive: () => true });
+    const d = deps({ systemctl: f.ctl, legacyInstance: () => ({ pid: 1, name: 'x' }) });
     expect((await migrateName(d)).status).toBe('nothing');
     expect(f.calls).toEqual([]);
     expect(d.written).toBe(0);
@@ -500,5 +516,139 @@ describe('copie AppImage (tâche 7)', () => {
     expect(r.status).toBe('partial');
     expect(relaunched).toEqual([]);
     expect(existsSync(P().appImage)).toBe(false);
+  });
+});
+
+describe('revue de sécurité (C1, I1, M1)', () => {
+  const kids: ChildProcess[] = [];
+  afterAll(() => {
+    for (const k of kids) k.kill();
+  });
+  const started = (c: ChildProcess) => {
+    kids.push(c);
+    return new Promise<void>((r) => setTimeout(r, 300));
+  };
+
+  test('[xdg] les 8 combinaisons XDG_CONFIG_HOME / XDG_DATA_HOME / XDG_RUNTIME_DIR : seule une installation cohérente migre, le dossier d’exécution jamais', () => {
+    const rows: string[] = [];
+    for (let i = 0; i < 8; i++) {
+      const b = join(base, `xdg${n}-${i}`);
+      const home = join(b, 'home');
+      // « vrais » dossiers de l'utilisateur (racines par défaut sous ce HOME factice)
+      const real = { cfg: join(home, '.config/proc-watch'), data: join(home, '.local/share/proc-watch'), cache: join(home, '.cache/proc-watch-updater'), run: join(b, 'run-real/proc-watch') };
+      for (const d of Object.values(real)) mkdirSync(d, { recursive: true });
+      writeFileSync(join(real.cfg, 'config.json'), '{}');
+      writeFileSync(join(real.data, 'metrics.db'), 'DB');
+      const env: NodeJS.ProcessEnv = { PROC_WATCH_NO_RECORDER_SYNC: '1', XDG_RUNTIME_DIR: join(b, 'run-real') };
+      if (i & 1) {
+        env.XDG_CONFIG_HOME = join(b, 'tmpcfg');
+        mkdirSync(join(b, 'tmpcfg/proc-watch'), { recursive: true }); // ancienne version d'essai lancée avec cette config temporaire
+        writeFileSync(join(b, 'tmpcfg/proc-watch/config.json'), '{}');
+      }
+      if (i & 2) mkdirSync((env.XDG_DATA_HOME = join(b, 'tmpdata')), { recursive: true });
+      if (i & 4) mkdirSync((env.XDG_RUNTIME_DIR = join(b, 'tmprun')), { recursive: true });
+      const r = migrateEarly(deps({ roots: rootsFrom(env, home), env, systemctl: fakeCtl().ctl, dirUser: (dir) => realDirUser(dir) }));
+      const moved = Object.entries(real).filter(([, p]) => !existsSync(p)).map(([k]) => k);
+      rows.push(`${i & 1 ? 'tmp' : 'unset'} ${i & 2 ? 'tmp' : 'unset'} ${i & 4 ? 'tmp' : 'real'} → ${r.status}${r.detail ? ' (XDG partiel)' : ''} ; déplacés : ${moved.join(',') || 'aucun'}`);
+      if (i & 3) expect(r.detail, `combinaison ${i}`).toMatch(/XDG partiel/);
+      expect(existsSync(real.run), `combinaison ${i} : exécution`).toBe(true);
+    }
+    expect(rows).toEqual([
+      'unset unset real → done ; déplacés : cfg,data,cache',
+      'tmp unset real → deferred (XDG partiel) ; déplacés : aucun',
+      'unset tmp real → deferred (XDG partiel) ; déplacés : aucun',
+      'tmp tmp real → deferred (XDG partiel) ; déplacés : aucun',
+      'unset unset tmp → done ; déplacés : cfg,data,cache',
+      'tmp unset tmp → deferred (XDG partiel) ; déplacés : aucun',
+      'unset tmp tmp → deferred (XDG partiel) ; déplacés : aucun',
+      'tmp tmp tmp → deferred (XDG partiel) ; déplacés : aucun',
+    ]);
+  });
+
+  test('[xdg] les trois racines définies explicitement (app d’essai complète) : la migration a lieu dans ces racines seulement', () => {
+    const b = join(base, `xdgall${n}`);
+    const env: NodeJS.ProcessEnv = { PROC_WATCH_NO_RECORDER_SYNC: '1', XDG_CONFIG_HOME: join(b, 'c'), XDG_DATA_HOME: join(b, 'd'), XDG_CACHE_HOME: join(b, 'k') };
+    mkdirSync(join(b, 'c/proc-watch'), { recursive: true });
+    mkdirSync(join(b, 'd/proc-watch'), { recursive: true });
+    const r = migrateEarly(deps({ roots: rootsFrom(env, join(b, 'home')), env, systemctl: fakeCtl().ctl }));
+    expect(r.status).toBe('done');
+    expect(existsSync(join(b, 'c/computer-watcher'))).toBe(true);
+    expect(existsSync(join(b, 'd/computer-watcher'))).toBe(true);
+  });
+
+  test('[live] dossier de données utilisé par un processus (cwd), même sous NO_RECORDER_SYNC : échec fermé avec son pid et son nom, rien déplacé sous lui', async () => {
+    const L = legacyInstall();
+    const rec = spawn('sleep', ['30'], { cwd: L.dataDir, stdio: 'ignore' });
+    await started(rec);
+    const env = { XDG_RUNTIME_DIR: run, PROC_WATCH_NO_RECORDER_SYNC: '1' };
+    // selfPid -1 : le « service » est un enfant du processus de test, qui n'est pas l'app
+    const r = migrateEarly(deps({ env, dirUser: (dir) => realDirUser(dir, { selfPid: -1 }) }));
+    expect(r.status).toBe('partial');
+    expect(r.errors['move-dirs']).toContain(`sleep (pid ${rec.pid})`);
+    expect(existsSync(join(L.dataDir, 'metrics.db'))).toBe(true);
+    expect(readlinkSync(`/proc/${rec.pid}/cwd`)).toBe(realpathSync(L.dataDir));
+    expect(existsSync(P().dataDir)).toBe(false);
+  });
+
+  test('[live] fichier de la base ouvert (fd) par un processus : refusé ; le processus lui-même (« l’app ») est exclu', async () => {
+    const L = legacyInstall();
+    const rec = spawn('sh', ['-c', 'exec 3<"$0"; exec sleep 30', join(L.dataDir, 'metrics.db')], { stdio: 'ignore' });
+    await started(rec);
+    expect(realDirUser(L.dataDir, { selfPid: -1 })).toEqual({ pid: rec.pid, name: 'sleep' });
+    // par défaut, l'app (ici le processus de test) et ses descendants sont exclus
+    expect(realDirUser(L.dataDir)).toBeNull();
+    expect(realDirUser(L.dataDir, { selfPid: rec.pid! })).toBeNull();
+    expect(realDirUser(join(roots.home, 'ailleurs'), { selfPid: -1 })).toBeNull();
+  });
+
+  test('[lock] SingletonLock de l’ancien dossier tenu par un Computer Watcher vivant (comm computer-watche) : différé, pid et nom dans le message', async () => {
+    const L = legacyInstall();
+    const bin = join(roots.home, 'computer-watcher');
+    copyFileSync('/usr/bin/sleep', bin);
+    chmodSync(bin, 0o755);
+    const p = spawn(bin, ['30'], { stdio: 'ignore' });
+    await started(p);
+    symlinkSync(`${hostname()}-${p.pid}`, join(L.configDir, 'SingletonLock'));
+    expect(realLegacyInstance(roots.configHome)).toEqual({ pid: p.pid, name: 'computer-watche' });
+    const r = migrateEarly(deps({ legacyInstance: () => realLegacyInstance(roots.configHome) }));
+    expect(r.status).toBe('deferred');
+    expect(r.detail).toContain(`computer-watche (pid ${p.pid})`);
+    expect(existsSync(L.configDir)).toBe(true);
+    expect(existsSync(P().configDir)).toBe(false);
+  });
+
+  test('[lock] « Réessayer » : la nouvelle instance attend que l’ancien pid ait réellement quitté', async () => {
+    const quick = spawn('sleep', ['0.4'], { stdio: 'ignore' });
+    await new Promise((r) => setTimeout(r, 50));
+    const t0 = Date.now();
+    const block = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+    // l'enfant non récolté reste zombie : waitPidGone le tient pour sorti
+    expect(waitPidGone({ pid: quick.pid!, sleep: block, maxMs: 5000 })).toBe(true);
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(250);
+    const slow = spawn('sleep', ['30'], { stdio: 'ignore' });
+    await started(slow);
+    expect(waitPidGone({ pid: slow.pid!, sleep: block, maxMs: 300 })).toBe(false);
+  });
+
+  test('M1 : stop qui échoue → service remis dans son état initial (relancé, réactivé), échec fermé', () => {
+    const L = legacyInstall();
+    mkdirSync(dirname(L.unit), { recursive: true });
+    writeFileSync(L.unit, '[Unit]\n');
+    const f = fakeCtl({ frag: L.unit, active: 'active', failOn: 'stop' });
+    const r = migrateEarly(deps({ systemctl: f.ctl }));
+    expect(r.errors['stop-legacy-service']).toMatch(/stop a échoué.*remis/);
+    expect(f.calls.map((c) => c[0])).toEqual(['show', 'is-enabled', 'is-active', 'stop', 'start', 'enable']);
+    expect(existsSync(L.configDir)).toBe(true);
+  });
+
+  test('M1 : disable qui échoue après l’arrêt → relancé et réactivé, échec fermé, rien déplacé', () => {
+    const L = legacyInstall();
+    mkdirSync(dirname(L.unit), { recursive: true });
+    writeFileSync(L.unit, '[Unit]\n');
+    const f = fakeCtl({ frag: L.unit, activeSeq: ['active', 'inactive'], failOn: 'disable' });
+    const r = migrateEarly(deps({ systemctl: f.ctl }));
+    expect(r.errors['stop-legacy-service']).toMatch(/disable a échoué.*remis/);
+    expect(f.calls.map((c) => c[0])).toEqual(['show', 'is-enabled', 'is-active', 'stop', 'is-active', 'disable', 'start', 'enable']);
+    expect(existsSync(L.configDir)).toBe(true);
   });
 });

@@ -68,4 +68,7 @@ describe('texte (Réglages › À propos, boîte au démarrage)', () => {
   test('différée : ancienne version encore ouverte', () => {
     expect(migrationLines(r({ status: 'deferred' }))[0]).toMatch(/^Migration depuis proc-watch : différée/);
   });
+  test('revue M3 / C1 : différée avec le détail (pid et nom du processus, ou XDG partiel)', () => {
+    expect(migrationLines(r({ status: 'deferred', detail: 'tenue par computer-watche (pid 4242)' }))).toEqual(['Migration depuis proc-watch : différée : tenue par computer-watche (pid 4242).']);
+  });
 });

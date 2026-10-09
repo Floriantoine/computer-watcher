@@ -8,6 +8,7 @@ import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, realpat
 import { hostname } from 'node:os';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import { appDir, legacyDir, newDir } from '../core/appDirs';
+import { xdgFamilies } from '../core/paths';
 import { APP_NAME, LEGACY_APP_NAME } from '../core/appName';
 import { cleanEnv, systemBin } from '../core/childEnv';
 import {
@@ -25,22 +26,38 @@ export type { MigrationReport };
 /** systemctl --user synchrone (avant `ready`, rien d'autre ne tourne encore dans le main). */
 export type SystemctlSync = (args: string[]) => { ok: boolean; stdout: string };
 
+let systemctlStalled = false;
+/**
+ * Avant `ready`, le démarrage attend systemctl : 5 s au plus par appel, puis 1 s seulement pour les appels suivants une fois
+ * qu'un appel a dépassé son délai (gestionnaire systemd --user bloqué). Au pire, avec l'attente d'une ancienne instance ou
+ * d'un dossier encore utilisé (10 s chacune, seulement lors d'une relance), une trentaine de secondes avant la fenêtre.
+ */
 export const defaultSystemctlSync: SystemctlSync = (args) => {
   const bin = systemBin('systemctl', existsSync);
   if (!bin) return { ok: false, stdout: '' };
   // chemin absolu, environnement sans le montage /tmp de l'AppImage (I-A)
-  const r = spawnSync(bin, ['--user', ...args], { timeout: 5000, env: cleanEnv(process.env), encoding: 'utf8' });
+  const r = spawnSync(bin, ['--user', ...args], { timeout: systemctlStalled ? 1000 : 5000, env: cleanEnv(process.env), encoding: 'utf8' });
+  if (r.error && (r.error as NodeJS.ErrnoException).code === 'ETIMEDOUT') systemctlStalled = true;
   return { ok: r.status === 0, stdout: String(r.stdout ?? '') };
 };
 
+/** Processus qui tient un dossier ou un verrou : affiché dans les messages (pid et nom). */
+export interface Holder { pid: number; name: string }
+const holderText = (h: Holder) => `${h.name} (pid ${h.pid})`;
+
 export interface MigrateDeps {
   roots: Roots;
-  /** PROC_WATCH_NO_RECORDER_SYNC (jamais de systemctl), XDG_RUNTIME_DIR (dossier d'exécution). */
+  /** PROC_WATCH_NO_RECORDER_SYNC (jamais de systemctl), XDG_* (cohérence des racines, voir xdgFamilies). */
   env: NodeJS.ProcessEnv;
   systemctl: SystemctlSync;
   mountinfo: () => string;
-  /** Une ancienne instance (proc-watch) tient encore ses dossiers : la migration est différée. */
-  legacyInstanceAlive: () => boolean;
+  /** Instance de l'app (ancienne ou nouvelle) qui tient le verrou de l'ancien dossier de config : migration différée. */
+  legacyInstance: () => Holder | null;
+  /** Processus de l'utilisateur, hors l'app elle-même, qui a son cwd, un fd ou un mmap sous ce dossier (realDirUser). */
+  dirUser: (dir: string) => Holder | null;
+  /** Relance (mise à jour, « Réessayer ») : l'instance précédente quitte ; on attend au plus 10 s qu'elle libère tout. */
+  relaunching: boolean;
+  sleep: (ms: number) => void;
   /** Écrit et active computer-watcher-recorder.service (ensureRecorderService, exécutable courant) ; erreur si impossible. */
   writeNewService: () => Promise<void>;
   /** Icône copiée avec la nouvelle entrée de menu. */
@@ -66,11 +83,7 @@ function present(p: string): boolean {
   }
 }
 
-const runtimeBase = (env: NodeJS.ProcessEnv): string | null => (env.XDG_RUNTIME_DIR && isAbsolute(env.XDG_RUNTIME_DIR) ? env.XDG_RUNTIME_DIR : null);
-const rootsOf = (d: MigrateDeps): string[] => {
-  const run = runtimeBase(d.env);
-  return [...rootList(d.roots), ...(run ? [run] : [])];
-};
+const rootsOf = (d: MigrateDeps): string[] => rootList(d.roots);
 
 /** Dossier de config où l'état est tenu : celui que l'app utilise (nouveau s'il existe, sinon ancien, sinon nouveau). */
 const stateDir = (d: MigrateDeps): string => appDir(d.roots.configHome, present);
@@ -145,11 +158,18 @@ function stopLegacyService(d: MigrateDeps, s: MigrationState): void {
     }
   };
   if (!same(frag, unit)) return fail(`ancien service chargé depuis ${frag}, pas ${unit} : laissé, rien déplacé`);
-  // disable avant stop : un Restart= ne le relance pas au prochain démarrage de session ; puis vérifié arrêté
-  if (!d.systemctl(['disable', LEGACY_UNIT_NAME]).ok) return fail('systemctl --user disable a échoué : ancien service laissé, rien déplacé');
-  if (!d.systemctl(['stop', LEGACY_UNIT_NAME]).ok) return fail('systemctl --user stop a échoué : ancien service laissé, rien déplacé');
+  // état relevé, arrêt vérifié, puis désactivation ; un échec remet le service dans son état initial (relancé, réactivé)
+  const wasEnabled = d.systemctl(['is-enabled', LEGACY_UNIT_NAME]).stdout.trim() === 'enabled';
+  const wasActive = ['active', 'activating', 'reloading'].includes(d.systemctl(['is-active', LEGACY_UNIT_NAME]).stdout.trim());
+  const restore = (why: string) => {
+    if (wasActive) d.systemctl(['start', LEGACY_UNIT_NAME]);
+    if (wasEnabled) d.systemctl(['enable', LEGACY_UNIT_NAME]);
+    fail(`${why} : ancien service remis dans son état initial, rien déplacé (réessayer)`);
+  };
+  if (!d.systemctl(['stop', LEGACY_UNIT_NAME]).ok) return restore('systemctl --user stop a échoué');
   const state = d.systemctl(['is-active', LEGACY_UNIT_NAME]).stdout.trim();
-  if (state !== 'inactive' && state !== 'failed') return fail(`ancien service toujours actif (${state || 'état inconnu'}) : rien déplacé (réessayer)`);
+  if (state !== 'inactive' && state !== 'failed') return restore(`ancien service toujours actif (${state || 'état inconnu'})`);
+  if (!d.systemctl(['disable', LEGACY_UNIT_NAME]).ok) return restore('systemctl --user disable a échoué');
   markDone(s, step);
 }
 
@@ -192,15 +212,16 @@ function inspectNext(path: string): NextKind {
   }
 }
 
-/** Paires ancien → nouveau, toujours dans le même dossier parent. */
+/**
+ * Paires ancien → nouveau, toujours dans le même dossier parent. Jamais le dossier d'exécution ($XDG_RUNTIME_DIR) : il ne
+ * contient que des fichiers éphémères, la nouvelle version recrée le sien.
+ */
 function dirMoves(d: MigrateDeps): DirMove[] {
   const r = d.roots;
-  const run = runtimeBase(d.env);
   return [
     { from: legacyDir(r.configHome), to: newDir(r.configHome) },
     { from: legacyDir(r.dataHome), to: newDir(r.dataHome) },
     { from: join(r.cacheHome, `${LEGACY_APP_NAME}-updater`), to: join(r.cacheHome, `${APP_NAME}-updater`) },
-    ...(run ? [{ from: legacyDir(run), to: newDir(run) }] : []),
   ];
 }
 
@@ -215,8 +236,8 @@ function moveDirs(d: MigrateDeps, s: MigrationState, started: boolean): void {
   const mountinfo = d.mountinfo();
   const mounts = mountPointsOf(mountinfo);
   const [cfg, data, ...rest] = dirMoves(d);
-  // ancre : les données, le cache et le dossier d'exécution ne bougent qu'avec l'ancien dossier de config (ou une migration
-  // déjà commencée) ; une app d'essai à XDG_CONFIG_HOME temporaire ne touche jamais les vrais.
+  // ancre : les données et le cache ne bougent qu'avec l'ancien dossier de config (ou une migration déjà commencée), et
+  // seulement si les trois racines sont de la même famille (vérifié par migrateEarly)
   const anchored = started || present(cfg!.from);
   const errors: string[] = [];
   for (const m of anchored ? [cfg!, data!, ...rest] : []) {
@@ -230,6 +251,13 @@ function moveDirs(d: MigrateDeps, s: MigrationState, started: boolean): void {
     }
     if (decision === 'refuse') {
       errors.push(`${legacy !== 'dir' ? m.from : m.to} : ${REFUSALS[legacy !== 'dir' ? legacy : next] ?? 'refusé'} ; rien déplacé`);
+      continue;
+    }
+    // jamais sous un processus vivant (ancien service, ancienne instance), y compris sous PROC_WATCH_NO_RECORDER_SYNC où
+    // l'arrêt du service n'est pas confirmé ; lors d'une relance, l'instance précédente a 10 s pour tout libérer
+    const user = waitWhile({ busy: () => d.dirUser(m.from), wait: d.relaunching, sleep: d.sleep });
+    if (user) {
+      errors.push(`${m.from} est utilisé par ${holderText(user)} : laissé en place, rien déplacé (le quitter, puis réessayer)`);
       continue;
     }
     try {
@@ -402,18 +430,32 @@ export function migrationState(d: Pick<MigrateDeps, 'roots' | 'env'>): Migration
 }
 
 const NOTHING: MigrationReport = { status: 'nothing', done: [], errors: {}, leftInPlace: [], skipped: {} };
-const DEFERRED: MigrationReport = { status: 'deferred', done: [], errors: {}, leftInPlace: [], skipped: {} };
+const deferred = (detail: string): MigrationReport => ({ status: 'deferred', done: [], errors: {}, leftInPlace: [], skipped: {}, detail });
+
+/** Racines XDG de familles différentes : texte du report « différée » (journal et Réglages › À propos). */
+function xdgPartial(env: NodeJS.ProcessEnv): string | null {
+  const f = xdgFamilies(env);
+  if (f.consistent) return null;
+  const show = (k: 'XDG_CONFIG_HOME' | 'XDG_DATA_HOME' | 'XDG_CACHE_HOME') => `${k} ${env[k] && isAbsolute(env[k]!) ? env[k] : 'par défaut'}`;
+  return `XDG partiel (${show('XDG_CONFIG_HOME')}, ${show('XDG_DATA_HOME')}, ${show('XDG_CACHE_HOME')}) : rien n'est migré tant que ces trois racines ne sont pas toutes par défaut ou toutes définies`;
+}
 
 /** Avant `ready`, synchrone : arrêt de l'ancien service puis dossiers. Rien à faire → 'nothing' ; ancienne instance → 'deferred'. */
 export function migrateEarly(d: MigrateDeps): MigrationReport {
   const s0 = readState(d);
   const legacy = legacyPresent(d);
-  const complete = s0 !== null && nextSteps(s0, { legacyPresent: true, legacyInstanceAlive: false }) === 'nothing';
-  // recherche d'une ancienne instance seulement s'il reste quelque chose à faire
-  const alive = !complete && (s0 !== null || legacy) && d.legacyInstanceAlive();
-  const plan = nextSteps(s0, { legacyPresent: legacy, legacyInstanceAlive: alive });
+  if (nextSteps(s0, { legacyPresent: legacy, legacyInstanceAlive: false }) === 'nothing') return NOTHING;
+  // XDG partiel (app d'essai) : aucune étape n'agit
+  const partial = xdgPartial(d.env);
+  if (partial) {
+    console.error(`migration : différée : ${partial}`);
+    return deferred(partial);
+  }
+  // instance de l'app (ancienne ou nouvelle) qui tient encore l'ancien dossier ; lors d'une relance, on l'attend au plus 10 s
+  const holder = waitWhile({ busy: () => d.legacyInstance(), wait: d.relaunching, sleep: d.sleep });
+  const plan = nextSteps(s0, { legacyPresent: legacy, legacyInstanceAlive: !!holder });
   if (plan === 'nothing') return NOTHING;
-  if (plan === 'deferred') return DEFERRED;
+  if (plan === 'deferred') return deferred(`l'ancien dossier est encore utilisé par ${holderText(holder!)} ; quitter cette instance, puis relancer Computer Watcher`);
   const s = s0 ?? emptyState();
   if (plan.includes('stop-legacy-service')) stopLegacyService(d, s);
   if (plan.includes('move-dirs') && serviceSettled(s)) moveDirs(d, s, s0 !== null);
@@ -442,54 +484,137 @@ export async function migrateName(d: MigrateDeps): Promise<MigrationReport> {
   return late.status === 'nothing' ? early : late; // état illisible (non enregistré) : le bilan du premier temps
 }
 
-// ---------------------------------------------------------------- ancienne instance
+// ---------------------------------------------------------------- ancienne instance, dossier utilisé
+
+const APP_COMMS = [LEGACY_APP_NAME, APP_NAME.slice(0, 15), 'electron'];
 
 /**
- * Le verrou d'instance unique de l'ancien dossier (SingletonLock de Chromium, lien vers « <hôte>-<pid> ») est-il tenu par
- * une app vivante ? Seulement sur cette machine, pas nous, et un processus nommé proc-watch (empaquetée) ou electron (version
- * de développement) : un verrou périmé (processus disparu, pid réutilisé) ne bloque rien.
+ * Qui tient le verrou d'instance unique de l'ancien dossier (SingletonLock de Chromium, lien vers « <hôte>-<pid> ») ? Seulement
+ * sur cette machine, pas nous, et un processus de l'app : comm proc-watch (empaquetée), computer-watche (nouveau nom, tronqué
+ * à 15 caractères), electron (version de développement), ou le même exécutable que nous. Un verrou périmé (processus
+ * disparu, pid réutilisé par autre chose) ne bloque rien.
  */
-export function legacyLockHolderAlive(o: { lockTarget: string | null; hostname: string; selfPid: number; comm: (pid: number) => string | null }): boolean {
+export function legacyLockHolder(o: {
+  lockTarget: string | null;
+  hostname: string;
+  selfPid: number;
+  comm: (pid: number) => string | null;
+  exe?: (pid: number) => string | null;
+  selfExe?: string | null;
+}): Holder | null {
   const m = o.lockTarget === null ? null : /^(.*)-(\d+)$/.exec(o.lockTarget);
-  if (!m || m[1] !== o.hostname) return false;
+  if (!m || m[1] !== o.hostname) return null;
   const pid = Number(m[2]);
-  if (pid === o.selfPid) return false;
+  if (pid === o.selfPid) return null;
   const c = o.comm(pid);
-  return c === LEGACY_APP_NAME || c === 'electron';
+  if (c === null) return null;
+  if (APP_COMMS.includes(c)) return { pid, name: c };
+  const exe = o.exe?.(pid);
+  return exe && o.selfExe && exe === o.selfExe ? { pid, name: c } : null;
 }
 
-/**
- * Relance (mise à jour, installation) : l'ancienne instance quitte juste après avoir lancé celle-ci ; on l'attend au plus
- * 10 s. Lancement ordinaire : pas d'attente. Vrai si elle tourne toujours.
- */
-export function aliveAfterWait(o: { alive: () => boolean; relaunch: boolean; sleep: (ms: number) => void }): boolean {
-  if (!o.alive()) return false;
-  if (!o.relaunch) return true;
-  for (let waited = 0; waited < 10_000; waited += 250) {
-    o.sleep(250);
-    if (!o.alive()) return false;
-  }
-  return true;
-}
-
-/** Ancienne instance réelle : verrou SingletonLock de l'ancien dossier de config, lu sans le suivre ; /proc/<pid>/comm. */
-export function realLegacyInstanceAlive(configHome: string): boolean {
-  let lockTarget: string | null = null;
+const readOr = (f: () => string): string | null => {
   try {
-    lockTarget = readlinkSync(join(legacyDir(configHome), 'SingletonLock'));
+    return f();
   } catch {
-    // pas de verrou : aucune ancienne instance avec ces dossiers
+    return null;
   }
-  return legacyLockHolderAlive({
-    lockTarget,
+};
+
+/** Instance réelle : verrou SingletonLock de l'ancien dossier de config, lu sans le suivre ; /proc/<pid>/comm et exe. */
+export function realLegacyInstance(configHome: string): Holder | null {
+  return legacyLockHolder({
+    lockTarget: readOr(() => readlinkSync(join(legacyDir(configHome), 'SingletonLock'))),
     hostname: hostname(),
     selfPid: process.pid,
-    comm: (pid) => {
-      try {
-        return readFileSync(`/proc/${pid}/comm`, 'utf8').trim();
-      } catch {
-        return null;
-      }
-    },
+    comm: (pid) => readOr(() => readFileSync(`/proc/${pid}/comm`, 'utf8').trim()),
+    exe: (pid) => readOr(() => readlinkSync(`/proc/${pid}/exe`)),
+    selfExe: readOr(() => readlinkSync('/proc/self/exe')),
   });
+}
+
+/** Noms des processus dont un /proc/<pid>/fd illisible (même utilisateur) compte comme « utilisé » : échec fermé. */
+const SUSPECT_UNREADABLE = new Set([...APP_COMMS, 'node']);
+
+/**
+ * Processus de l'utilisateur, hors l'app elle-même (`selfPid` et ses descendants), qui a son cwd, un fd ouvert ou un mmap
+ * sous `dir` (comme scanTmpUsers, en synchrone : avant `ready`). Un processus de l'app ou node dont les fd sont illisibles
+ * compte comme utilisateur (échec fermé). Dossier absent : null.
+ */
+export function realDirUser(dir: string, o: { selfPid?: number; uid?: number } = {}): Holder | null {
+  let real: string;
+  try {
+    real = realpathSync(dir);
+  } catch {
+    return null;
+  }
+  const prefix = `${real}/`;
+  const hit = (l: string | null) => {
+    if (!l) return false;
+    const p = l.replace(/ \(deleted\)$/, '');
+    return p === real || p.startsWith(prefix);
+  };
+  const selfPid = o.selfPid ?? process.pid;
+  const uid = o.uid ?? process.getuid!();
+  const pids = readdirSync('/proc').filter((e) => /^\d+$/.test(e)).map(Number);
+  const parent = new Map<number, number>();
+  for (const pid of pids) {
+    const st = readOr(() => readFileSync(`/proc/${pid}/stat`, 'utf8'));
+    if (st) parent.set(pid, Number(st.slice(st.lastIndexOf(')') + 2).split(' ')[1]));
+  }
+  const ours = new Set([selfPid]);
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const [pid, pp] of parent) if (!ours.has(pid) && ours.has(pp)) (ours.add(pid), (changed = true));
+  }
+  for (const pid of pids) {
+    if (ours.has(pid)) continue;
+    const dirp = `/proc/${pid}`;
+    try {
+      if (lstatSync(dirp).uid !== uid) continue;
+    } catch {
+      continue;
+    }
+    const name = readOr(() => readFileSync(`${dirp}/comm`, 'utf8').trim()) || '?';
+    if (hit(readOr(() => readlinkSync(`${dirp}/cwd`)))) return { pid, name };
+    let fds: string[];
+    try {
+      fds = readdirSync(`${dirp}/fd`);
+    } catch (e) {
+      if (SUSPECT_UNREADABLE.has(name) && (e as NodeJS.ErrnoException).code === 'EACCES') return { pid, name: `${name}, illisible` };
+      continue;
+    }
+    for (const fd of fds) if (hit(readOr(() => readlinkSync(`${dirp}/fd/${fd}`)))) return { pid, name };
+    const maps = readOr(() => readFileSync(`${dirp}/maps`, 'utf8')) ?? '';
+    if (maps.includes(` ${prefix}`) || maps.split('\n').some((l) => l.endsWith(` ${real}`))) return { pid, name };
+  }
+  return null;
+}
+
+/**
+ * Tant que `busy()` renvoie quelque chose : lancement ordinaire, on ne l'attend pas ; relance (`wait`), on attend au plus
+ * 10 s. Renvoie ce qui occupe encore, ou null.
+ */
+export function waitWhile<T>(o: { busy: () => T | null; wait: boolean; sleep: (ms: number) => void }): T | null {
+  let b = o.busy();
+  if (!b || !o.wait) return b;
+  for (let waited = 0; waited < 10_000; waited += 250) {
+    o.sleep(250);
+    b = o.busy();
+    if (!b) return null;
+  }
+  return b;
+}
+
+/** « Réessayer » : attend que l'instance précédente (pid) ait réellement quitté (absente, ou zombie). Vrai si c'est fait. */
+export function waitPidGone(o: { pid: number; sleep: (ms: number) => void; maxMs?: number }): boolean {
+  const alive = () => {
+    const st = readOr(() => readFileSync(`/proc/${o.pid}/stat`, 'utf8'));
+    return !!st && st.slice(st.lastIndexOf(')') + 2, st.lastIndexOf(')') + 3) !== 'Z';
+  };
+  for (let waited = 0; alive(); waited += 100) {
+    if (waited >= (o.maxMs ?? 10_000)) return false;
+    o.sleep(100);
+  }
+  return true;
 }
