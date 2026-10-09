@@ -1,4 +1,4 @@
-// Place occupée par /tmp (tmpfs : en RAM), par dossier de premier niveau. Lecture seule : rien n'est jamais supprimé.
+// Place occupée par /tmp (tmpfs : en RAM), par dossier de premier niveau. Lecture seule (la suppression est dans tmpClean.ts).
 import { lstat, opendir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { TMP_SCAN_LIMITS } from '../core/tmpScanLimits';
@@ -203,10 +203,10 @@ export function topTmpDirs(root = '/tmp', o: TmpScanOptions = {}): Promise<TmpUs
 export function sharedScan(
   scan: () => Promise<TmpUsage> = () => topTmpDirs(),
   { ttlMs = 30_000, now = Date.now }: { ttlMs?: number; now?: () => number } = {},
-): () => Promise<TmpUsage> {
+): (() => Promise<TmpUsage>) & { reset(): void } {
   let running: Promise<TmpUsage> | null = null;
   let last: { at: number; usage: TmpUsage } | null = null;
-  return () => {
+  const get = () => {
     if (last && now() - last.at < ttlMs) return Promise.resolve(last.usage);
     running ??= scan()
       .then((usage) => {
@@ -218,4 +218,6 @@ export function sharedScan(
       });
     return running;
   };
+  /** Oublie le résultat gardé (après une suppression) ; un parcours en cours reste partagé. */
+  return Object.assign(get, { reset: () => void (last = null) });
 }

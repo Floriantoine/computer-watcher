@@ -126,6 +126,14 @@ Au premier lancement de la version installée (AppImage, .deb), proc-watch insta
 | Zoom collé au bout du graphe | suivi « En direct » : la fenêtre avance avec le temps |
 | Survol d'une ligne du Top, de la légende ou d'une alerte | met en avant la courbe ou l'instant correspondant |
 
+### Nettoyer /tmp
+
+Dans Métriques › Alertes, « Voir /tmp » sur une alerte « Fichiers en mémoire » liste les plus gros éléments de premier niveau de /tmp (en RAM), à cocher, puis « Supprimer la sélection (n · taille) ». La confirmation récapitule chaque élément ; la suppression est définitive (la corbeille est sur disque et ne libérerait pas la RAM). Les caches connus (jest, vite, tsx, node-compile-cache…) portent « cache, se reconstruit tout seul ».
+
+Un élément n'est supprimable que s'il appartient à l'utilisateur, n'est ni un point de montage ni au-dessus d'un, ni un socket, une FIFO ou un périphérique, n'est pas dans la liste système (`.X11-unix`, `ssh-*`, `systemd-private-*`, `tmux-*`…) et n'est utilisé par aucun processus de l'utilisateur (fichier ouvert, dossier courant, exécutable, bibliothèque projetée, socket Unix actif) ; sinon la ligne dit pourquoi (« utilisé par jest (pid 1234) », « autre utilisateur », « système », « impossible de vérifier »). Un lien symbolique est supprimé lui-même, jamais sa cible ; un dossier est supprimé sans suivre les liens qu'il contient. Le main revérifie tout juste avant de supprimer (même inode, même propriétaire), 50 éléments au plus par demande, jamais en root. Le résultat s'affiche en toast et un événement `tmp_clean` est ajouté au journal.
+
+Pour les vérifications de l'app, `PROC_WATCH_TMP_ROOT=/chemin/absolu` remplace /tmp, seulement hors app empaquetée et si `NODE_ENV` n'est pas `production` (la racine de test est alors affichée en tête de liste).
+
 ### Pop-ups et notifications d'alerte
 
 - **Pop-ups** : chaque nouvelle alerte (kill earlyoom, fuite, fichiers en mémoire, pression) s'affiche en haut à droite de proc-watch et y reste jusqu'à « Fermer ». Au-delà de 3, un « + n autres » les regroupe (avec « Tout fermer »). L'onglet Métriques porte le nombre d'alertes non vues. Au premier lancement, les alertes déjà enregistrées ne s'affichent pas.

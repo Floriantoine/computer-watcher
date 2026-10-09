@@ -231,3 +231,12 @@ test('lstat par lots parallèles (au plus 64 à la fois)', async () => {
   expect(peak).toBeGreaterThan(1);
   expect(peak).toBeLessThanOrEqual(64);
 });
+
+test('sharedScan.reset : le résultat en cache est oublié (après une suppression)', async () => {
+  let calls = 0;
+  const get = sharedScan(async () => ({ dirs: [], rootFilesKB: ++calls, skipped: 0, truncated: false }), { now: () => 0 });
+  expect((await get()).rootFilesKB).toBe(1);
+  expect((await get()).rootFilesKB).toBe(1);
+  get.reset();
+  expect((await get()).rootFilesKB).toBe(2);
+});

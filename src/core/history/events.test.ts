@@ -64,6 +64,15 @@ test('app events : format, parse validation stricte', () => {
   expect(parseAppEvents(JSON.stringify(bad))).toEqual([{ ...withTargets, detail: { pids: [1], signal: 'SIGTERM' } }]);
 });
 
+test('app events : nettoyage de /tmp (tmp_clean), validé', () => {
+  const e = { ts: 7, type: 'tmp_clean' as const, groupKey: null, detail: { freedKB: 2048, deleted: ['jest_rs'], refused: [{ name: 'x', reason: 'système' }] } };
+  expect(parseAppEvents(formatAppEvent(e))).toEqual([e]);
+  expect(parseAppEvents(JSON.stringify({ ...e, detail: { ...e.detail, freedKB: 'x' } }))).toEqual([]);
+  expect(parseAppEvents(JSON.stringify({ ...e, detail: { ...e.detail, deleted: [1] } }))).toEqual([]);
+  expect(parseAppEvents(JSON.stringify({ ...e, detail: { ...e.detail, refused: [{ name: 'x' }] } }))).toEqual([]);
+  expect(parseAppEvents(JSON.stringify({ ...e, groupKey: 'app:x' }))).toEqual([]);
+});
+
 test('takeAppEvents : flux normal, fichier vide après ack', () => {
   const dir = mkdtempSync(join(tmpdir(), 'pw-e-'));
   const p = join(dir, 'app-events.jsonl');

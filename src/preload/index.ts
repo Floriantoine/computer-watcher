@@ -3,6 +3,7 @@ import type { AlertEvent } from '../core/alerts';
 import type { EarlyoomSettings } from '../core/earlyoom';
 import type { RuleStats } from '../core/rules/types';
 import type { SwapView } from '../core/swap';
+import type { TmpDeleteItem, TmpDeleteOutcome, TmpListing } from '../core/tmpClean';
 import type {
   ApplyResult, Category, EarlyoomStatus, Config, ConfigState, Culprit, InstanceTargets, ProcInfo, Watch, GroupHistory, GroupsHistory, HistoryEvent, KillResult, KillTarget, KillSignal, ProcsHistory, ProcTreeAt, RangePreset,
   RecorderState, Snapshot, SystemSeries, TimeRange, TmpUsage, TopOptions, TopResult,
@@ -113,6 +114,10 @@ const api = {
   tmp: {
     /** Plus gros dossiers de /tmp à cet instant (lecture seule, au plus 100 000 entrées ou 2 s). */
     topDirs: (): Promise<TmpUsage> => ipcRenderer.invoke('tmp:topDirs'),
+    /** Plus gros éléments de premier niveau, chacun avec sa raison de refus éventuelle. */
+    entries: (): Promise<TmpListing> => ipcRenderer.invoke('tmp:entries'),
+    /** Suppression définitive (au plus 50 éléments), revérifiée par le main élément par élément. */
+    delete: (items: TmpDeleteItem[]): Promise<TmpDeleteOutcome> => ipcRenderer.invoke('tmp:delete', items),
   },
   recorder: {
     status: (): Promise<RecorderState> => ipcRenderer.invoke('recorder:status'),

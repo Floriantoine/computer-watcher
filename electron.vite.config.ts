@@ -8,6 +8,8 @@ export default defineConfig({
     build: {
       rollupOptions: {
         input: { index: resolve('src/main/index.ts'), recorder: resolve('src/recorder/index.ts') },
+        // module intégré d'Electron (fs sans la réécriture des archives .asar), fourni à l'exécution
+        external: ['original-fs'],
       },
     },
   },

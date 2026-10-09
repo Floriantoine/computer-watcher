@@ -2,7 +2,7 @@ import { Fragment, useMemo, useState } from 'react';
 import { BellRing, Bot, FlaskConical, FolderOpen, Gauge, Hourglass, Settings2, Skull, TrendingUp, Unplug, type LucideIcon } from 'lucide-react';
 import type { HistoryEvent } from '../../../core/types';
 import { alertsFrom, eventMarkers, formatInstant } from '../metrics';
-import { TmpDirsList } from './TmpDirsList';
+import { TmpCleanList } from './TmpCleanList';
 
 const ICONS: Record<string, LucideIcon> = {
   leak: TrendingUp, earlyoom_kill: Skull, pressure: Gauge, gap: Unplug, tmpfs: FolderOpen, forecast: Hourglass, rule_action: Bot, rule_dry_run: FlaskConical,
@@ -15,13 +15,15 @@ interface Props {
   onHover?: (ts: number | null) => void;
   /** Ouvre Réglages › Alertes. */
   onSettings?: () => void;
+  /** Toast après une suppression dans /tmp. */
+  onToast?: (message: string, kind: 'info' | 'error') => void;
 }
 
 /**
  * Fuites, kills earlyoom, actions et simulations des règles automatiques, pics de pression, fichiers en mémoire et trous d'enregistrement ; un clic place le curseur de l'enquête.
- * Une alerte « fichiers en mémoire » déplie les plus gros dossiers actuels de /tmp.
+ * Une alerte « fichiers en mémoire » déplie les plus gros éléments actuels de /tmp, à cocher pour les supprimer.
  */
-export function AlertsPanel({ events, onPick, onHover, onSettings }: Props) {
+export function AlertsPanel({ events, onPick, onHover, onSettings, onToast }: Props) {
   const alerts = useMemo(() => eventMarkers(alertsFrom(events ?? [])), [events]);
   const [tmpOpen, setTmpOpen] = useState<number | null>(null);
   return (
@@ -54,7 +56,7 @@ export function AlertsPanel({ events, onPick, onHover, onSettings }: Props) {
                       className={`tmpfs-toggle${open ? ' on' : ''}`}
                       data-testid="tmpfs-toggle"
                       aria-expanded={open}
-                      title="Plus gros dossiers de /tmp maintenant (pas à l’instant de l’alerte)"
+                      title="Plus gros éléments de /tmp maintenant (pas à l’instant de l’alerte), à cocher pour les supprimer"
                       onClick={(e) => {
                         e.stopPropagation();
                         setTmpOpen(open ? null : a.ts);
@@ -67,7 +69,7 @@ export function AlertsPanel({ events, onPick, onHover, onSettings }: Props) {
                 </li>
                 {open && (
                   <li className="tmp-dirs-row">
-                    <TmpDirsList />
+                    <TmpCleanList onToast={onToast} />
                   </li>
                 )}
               </Fragment>

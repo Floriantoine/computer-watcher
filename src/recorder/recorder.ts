@@ -603,7 +603,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
         const taken = takeAppEvents(appEventsPath(deps.dataDir));
         d.exec('BEGIN');
         try {
-          for (const e of taken.events) insertEvent(d, e.ts, 'app_kill', e.groupKey, e.detail);
+          for (const e of taken.events) insertEvent(d, e.ts, e.type, e.groupKey, e.detail);
           d.exec('COMMIT');
         } catch (e) {
           d.exec('ROLLBACK');

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
 
-export type EventType = 'earlyoom_kill' | 'pressure' | 'gap' | 'app_kill' | 'leak' | 'tmpfs' | 'forecast' | 'rule_action' | 'rule_dry_run';
+export type EventType = 'earlyoom_kill' | 'pressure' | 'gap' | 'app_kill' | 'leak' | 'tmpfs' | 'forecast' | 'rule_action' | 'rule_dry_run' | 'tmp_clean';
 
 const EARLYOOM = /sending (SIGTERM|SIGKILL) to process (\d+)(?: uid (\d+))? "([^"]*)"/;
 
@@ -63,12 +63,42 @@ export function shouldRecordTmpfs(
   return { record: false, state: { lastTs: state.lastTs, armed: state.armed || now - belowSince >= TMPFS_REARM_MS, belowSince } };
 }
 
-export interface AppEvent {
+export interface AppKillEvent {
   ts: number;
   type: 'app_kill';
   groupKey: string | null;
   /** `targets` : identité pid + startTicks des processus tués (absente des événements plus anciens). */
   detail: { pids: number[]; signal: string; targets?: { pid: number; startTicks: number }[] };
+}
+
+/** Éléments de /tmp supprimés depuis l'app (B1 bis). */
+export interface TmpCleanEvent {
+  ts: number;
+  type: 'tmp_clean';
+  groupKey: null;
+  detail: { freedKB: number; deleted: string[]; refused: { name: string; reason: string }[] };
+}
+
+export type AppEvent = AppKillEvent | TmpCleanEvent;
+
+function parseTmpClean(obj: Record<string, unknown>): TmpCleanEvent | null {
+  if (obj.groupKey !== null) return null;
+  const d = obj.detail as Record<string, unknown> | null;
+  if (typeof d !== 'object' || d === null || Array.isArray(d)) return null;
+  if (!Number.isFinite(d.freedKB as number)) return null;
+  if (!Array.isArray(d.deleted) || !d.deleted.every((n: unknown) => typeof n === 'string')) return null;
+  const okRefused = (x: unknown) => typeof x === 'object' && x !== null && typeof (x as { name: unknown }).name === 'string' && typeof (x as { reason: unknown }).reason === 'string';
+  if (!Array.isArray(d.refused) || !d.refused.every(okRefused)) return null;
+  return {
+    ts: obj.ts as number,
+    type: 'tmp_clean',
+    groupKey: null,
+    detail: {
+      freedKB: d.freedKB as number,
+      deleted: [...(d.deleted as string[])],
+      refused: (d.refused as { name: string; reason: string }[]).map((r) => ({ name: r.name, reason: r.reason })),
+    },
+  };
 }
 
 export const formatAppEvent = (e: AppEvent) => JSON.stringify(e) + '\n';
@@ -84,6 +114,12 @@ export function parseAppEvents(text: string): AppEvent[] {
 
       // validate ts
       if (!Number.isFinite(obj.ts as number)) continue;
+
+      if (obj.type === 'tmp_clean') {
+        const t = parseTmpClean(obj);
+        if (t) out.push(t);
+        continue;
+      }
 
       // validate type
       if (obj.type !== 'app_kill') continue;

@@ -34,7 +34,10 @@ import { clearHistory, createHistoryReader } from './history';
 import { pollDelay, type WindowActivity } from './pollPolicy';
 import { portModes } from './portModes';
 import { PortSweep } from './portSweep';
-import { sharedScan } from './tmpUsage';
+import { promises as originalFsp } from 'original-fs';
+import { isTmpDeleteRequest, MAX_TMP_DELETE } from '../core/tmpClean';
+import { deleteTmpEntries, listTmpEntries, tmpCleanEvent, tmpRootFromEnv, type CleanFs } from './tmpClean';
+import { sharedScan, topTmpDirs } from './tmpUsage';
 import { closeAction, confirmTray, createTrayController, defaultRun, statusNotifierAvailable, type TrayController } from './tray';
 import {
   applyOverride, checkConfigSet, classifySetKey, swapSettingsChanged, isGroupKeys, noKill, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState as computeRecorderState,
@@ -543,8 +546,38 @@ ipcMain.handle('history:procTree', (_e, key: unknown, ts: unknown) => (isProcTre
 ipcMain.handle('history:culprits', (_e, ts: unknown) => (Number.isFinite(ts) ? history.culprits(ts as number) : []));
 ipcMain.handle('history:top', (_e, r: unknown, o: unknown) => (isRange(r) && isTopOptions(o) ? history.top(r, o) : { byAvg: [], byMax: [] }));
 ipcMain.handle('history:events', (_e, r: unknown, groupKey: unknown) => (isRange(r) && isOptionalGroupKey(groupKey) ? history.events(r, groupKey) : []));
-const tmpTopDirs = sharedScan();
+/** /tmp, sauf racine de test (PROC_WATCH_TMP_ROOT, hors production et hors app empaquetée : voir tmpRootFromEnv). */
+const tmpRoot = tmpRootFromEnv(process.env, app.isPackaged);
+if (tmpRoot !== '/tmp') console.error(`proc-watch : racine /tmp de test : ${tmpRoot}`);
+const tmpTopDirs = sharedScan(() => topTmpDirs(tmpRoot));
 ipcMain.handle('tmp:topDirs', () => tmpTopDirs());
+// original-fs : aucune réécriture des archives .asar par Electron (un dossier qui en contient doit se supprimer comme un autre)
+const cleanFs = originalFsp as unknown as CleanFs;
+ipcMain.handle('tmp:entries', () => listTmpEntries(tmpRoot, { fs: cleanFs }));
+let tmpDeleting = false;
+/** Suppression d'éléments de premier niveau : tout est revérifié ici, élément par élément (voir deleteTmpEntries). */
+ipcMain.handle('tmp:delete', async (_e, raw: unknown) => {
+  if (!isTmpDeleteRequest(raw)) throw new Error(`Requête invalide (1 à ${MAX_TMP_DELETE} éléments)`);
+  if (tmpDeleting) throw new Error('Une suppression est déjà en cours');
+  tmpDeleting = true;
+  try {
+    const items = raw.map((i) => ({ name: i.name, ino: i.ino, dev: i.dev }));
+    const outcome = await deleteTmpEntries(tmpRoot, items, { fs: cleanFs });
+    tmpTopDirs.reset();
+    const ev = tmpCleanEvent(outcome, Date.now());
+    if (ev) {
+      try {
+        mkdirSync(data, { recursive: true });
+        appendFileSync(appEventsPath(data), formatAppEvent(ev));
+      } catch (e) {
+        console.error('app event:', e);
+      }
+    }
+    return outcome;
+  } finally {
+    tmpDeleting = false;
+  }
+});
 ipcMain.handle('recorder:status', () => recorderState());
 ipcMain.handle('recorder:setEnabled', async (_e, enabled: unknown) => {
   if (typeof enabled !== 'boolean') throw new Error('Valeur invalide');

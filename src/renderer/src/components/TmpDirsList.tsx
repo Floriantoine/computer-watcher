@@ -50,7 +50,7 @@ export function TmpDirsList() {
           )}
         </>
       )}
-      <div className="sub note">État actuel de /tmp (proc-watch ne supprime jamais rien)</div>
+      <div className="sub note">État actuel de /tmp, en lecture seule ici (suppression : Métriques › Alertes › Voir /tmp)</div>
     </div>
   );
 }
