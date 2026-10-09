@@ -47,9 +47,6 @@
 .alert-popup-actions .alert-popup-settings { margin-left: auto; padding: 3px 7px; color: var(--muted); }
 .alert-popup-x { position: absolute; top: 7px; right: 7px; width: 22px; height: 22px; padding: 0; justify-content: center; border: 0; background: transparent; color: var(--muted); }
 .alert-popup-x:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); border: 0; }
-.alert-popup-tmp { margin-top: 4px; max-height: 180px; overflow: auto; }
-.alert-popup-tmp .tmp-dirs li { display: flex; gap: 8px; padding: 1px 0; }
-.alert-popup-tmp .tmp-dirs .size { color: var(--label); }
 .alert-popup-more {
   pointer-events: auto;
   align-self: flex-end;

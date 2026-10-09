@@ -4,6 +4,7 @@ import { compileProtection } from '../../core/protection';
 import type { Category, Config, ConfigState, Culprit, GroupSummary, InstanceSummary, KillResult, KillSignal, KillTarget, ProcNode, Snapshot } from '../../core/types';
 import { bulkDialogTitle, chunkTargets, freeBlockedReason, freeCandidates, runBulkKill, type BulkRequest, type Preset } from './bulkKill';
 import { AlertPopups, useAlertPopups } from './components/AlertPopups';
+import { notificationTarget } from './alertPopups';
 import { EarlyoomSetupPopup, useEarlyoomReminder } from './components/EarlyoomSetupPopup';
 import { UpdatePopup, useUpdateActions, useUpdateView } from './components/UpdatePopup';
 import { BulkKillDialog } from './components/BulkKillDialog';
@@ -15,6 +16,7 @@ import type { OnboardingInfo } from '../../core/onboarding';
 import { Toasts, type Toast } from './components/Toasts';
 import { MainView } from './components/MainView';
 import { MetricsView } from './components/MetricsView';
+import { TmpPage } from './components/TmpPage';
 import type { SwapRow } from '../../core/swap';
 import { freshSleepingKeys, sessionServiceIn, sleepingInstances, sleepLabel, stillAsleep, stopOneCheck } from './swapPanel';
 import { SystemBar, type SystemSparks } from './components/SystemBar';
@@ -30,7 +32,7 @@ import type { SettingsSection } from './settingsNav';
 import { leakTimes } from './recorderForm';
 import { findGroup, sortForTile, tileForSort, visibleGroups, ipcErrorMessage, killResultMessages, killRequestForGroup, killRequestForProc, trackKills, type KillRequest, type ViewFilter } from './viewModel';
 
-export type Route = { view: 'main' } | { view: 'detail'; groupId: string } | { view: 'settings'; section?: SettingsSection } | { view: 'metrics'; at?: number };
+export type Route = { view: 'main' } | { view: 'detail'; groupId: string } | { view: 'settings'; section?: SettingsSection } | { view: 'metrics'; at?: number } | { view: 'tmp' };
 
 export function App() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
@@ -78,7 +80,11 @@ export function App() {
   const alertPopups = useAlertPopups({
     alerts: configState?.config.alerts,
     onState: setConfigState,
-    onOpenAlert: (e) => (e.type === 'forecast' ? requestFree() : setRoute({ view: 'metrics', at: e.ts })),
+    onOpenAlert: (e) => {
+      const target = notificationTarget(e);
+      if (target === 'free') requestFree();
+      else setRoute(target);
+    },
   });
 
   useEffect(() => {
@@ -123,6 +129,8 @@ export function App() {
   const snapshotRef = useRef(snapshot);
   snapshotRef.current = snapshot;
   const openSettings = useCallback((section: SettingsSection) => setRoute({ view: 'settings', section }), []);
+  // « Voir /tmp » (alertes, explorateur du swap) : page /tmp (stable : le panneau Swap est mémoïsé).
+  const openTmp = useCallback(() => setRoute({ view: 'tmp' }), []);
   // Résultat de recherche valable seulement pour la requête en cours ; en attente de la réponse du main : pas de filtre.
   const query = filter.query.trim();
   const matches = useMemo(
@@ -524,9 +532,10 @@ export function App() {
                 onStopSleeping={onStopSleeping}
                 onStopSwapRow={onStopSwapRow}
                 onSetSwapMinMB={onSetSwapMinMB}
-                onToast={pushToast}
+                onOpenTmp={openTmp}
               />
             )}
+            {route.view === 'tmp' && <TmpPage onToast={pushToast} />}
             {route.view === 'settings' && (
               <SettingsView
                 request={route}

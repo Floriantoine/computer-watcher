@@ -8,7 +8,6 @@ import { badgeCount, clickTarget, pendingPopups, popupAction, popupSnooze, popup
 import { useHistory } from '../history';
 import { settingsSectionForAlert } from '../settingsNav';
 import { eventMarkers, formatInstant } from '../metrics';
-import { TmpDirsList } from './TmpDirsList';
 import '../alerts.css';
 
 const ICONS: Record<AlertType, LucideIcon> = {
@@ -83,7 +82,6 @@ export const AlertPopups = memo(function AlertPopups({ pending, onClose, onClose
   const { visible, more } = popupStack(pending);
   // Mesure de mise en page seulement quand la pile change (pas à chaque snapshot).
   const stackKey = `${visible.map((e) => e.id).join(',')}|${more > 0}`;
-  const [tmpOpen, setTmpOpen] = useState<number | null>(null);
   return (
     <div className="alert-popups" role="region" aria-label="Alertes" aria-live="polite" data-testid="alert-popups">
       <AnimatePresence initial={false}>
@@ -93,7 +91,6 @@ export const AlertPopups = memo(function AlertPopups({ pending, onClose, onClose
           const { title, body } = alertMessage(e);
           const action = popupAction(e, groupPresent);
           const snooze = popupSnooze(e);
-          const open = action.kind === 'tmp' && tmpOpen === e.id;
           return (
             <motion.div
               key={e.id}
@@ -116,19 +113,12 @@ export const AlertPopups = memo(function AlertPopups({ pending, onClose, onClose
                   <span className="mono">{formatInstant(e.ts)}</span>
                 </div>
                 {body && <p>{body}</p>}
-                {open && (
-                  <div className="alert-popup-tmp">
-                    <TmpDirsList />
-                  </div>
-                )}
                 <div className="alert-popup-actions">
                   <button
                     className="alert-popup-go"
-                    aria-expanded={action.kind === 'tmp' ? open : undefined}
                     onClick={() => {
                       const target = clickTarget(e, groupPresent);
-                      if (target === 'tmp') setTmpOpen(open ? null : e.id);
-                      else if (target === 'free') onFree();
+                      if (target === 'free') onFree();
                       else onNavigate(target);
                     }}
                   >

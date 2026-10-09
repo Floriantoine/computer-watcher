@@ -20,6 +20,8 @@ interface Props {
   onStopOne: (row: SwapRow) => void;
   /** Nouveau seuil validé (Entrée ou sortie du champ) : enregistré dans la config. */
   onSetMinMB: (mb: number) => void;
+  /** Ouvre la page /tmp (suppression) depuis l'explorateur en lecture seule ; callback stable (panneau mémoïsé). */
+  onOpenTmp?: () => void;
 }
 
 const ROWS_SHOWN = 30;
@@ -30,7 +32,7 @@ const sameView = (a: SwapView | null | undefined, b: SwapView | null) => JSON.st
  * Onglet Métriques : swap par groupe et instance, état actif / endormi, « Arrêter les endormis ». Relu toutes les 30 s (collecte
  * en pause : rien) ; mémoïsé, il ne se redessine pas à chaque snapshot.
  */
-export const SwapPanel = memo(function SwapPanel({ minMB, swapSeries, onStopSleeping, onStopOne, onSetMinMB }: Props) {
+export const SwapPanel = memo(function SwapPanel({ minMB, swapSeries, onStopSleeping, onStopOne, onSetMinMB, onOpenTmp }: Props) {
   const view = useHistory(() => window.procWatch.swap.view(), [minMB], 30_000, sameView);
   const [all, setAll] = useState(false);
   const [tmpOpen, setTmpOpen] = useState(false);
@@ -79,7 +81,7 @@ export const SwapPanel = memo(function SwapPanel({ minMB, swapSeries, onStopSlee
                   <button className={`tmpfs-toggle ${tmpOpen ? 'on' : ''}`} aria-expanded={tmpOpen} onClick={() => setTmpOpen((o) => !o)}>Voir</button>
                 </span>
               </div>
-              {tmpOpen && <div className="swap-tmp"><TmpDirsList /></div>}
+              {tmpOpen && <div className="swap-tmp"><TmpDirsList onOpenTmp={onOpenTmp} /></div>}
             </>
           )}
           {view.rows.length === 0 && <div className="chart-empty small">Aucun processus dans le swap</div>}

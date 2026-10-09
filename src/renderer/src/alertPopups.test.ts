@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { DEFAULT_ALERTS, type AlertEvent, type AlertsConfig } from '../../core/alerts';
-import { badgeCount, clickTarget, MAX_VISIBLE, pendingPopups, popupAction, popupSnooze, popupStack, sameUnseen, seenAfterClose } from './alertPopups';
+import { badgeCount, clickTarget, MAX_VISIBLE, notificationTarget, pendingPopups, popupAction, popupSnooze, popupStack, sameUnseen, seenAfterClose } from './alertPopups';
 
 const ev = (id: number, ts: number, type: AlertEvent['type'] = 'leak', groupKey: string | null = null): AlertEvent =>
   ({ id, ts, type, groupKey, groupLabel: null, detail: {} });
@@ -92,12 +92,21 @@ describe('popupAction', () => {
 });
 
 describe('clickTarget (action choisie au clic)', () => {
-  test('groupe présent → détail ; groupe disparu depuis l’affichage → Métriques à l’instant ; tmpfs → liste /tmp', () => {
+  test('groupe présent → détail ; groupe disparu depuis l’affichage → Métriques à l’instant ; tmpfs → page /tmp', () => {
     const e = ev(1, 4242, 'leak', 'project:/home/u/acme');
     expect(clickTarget(e, () => true)).toEqual({ view: 'detail', groupId: 'project:/home/u/acme' });
     expect(clickTarget(e, () => false)).toEqual({ view: 'metrics', at: 4242 });
-    expect(clickTarget(ev(2, 7, 'tmpfs'), () => true)).toBe('tmp');
+    expect(clickTarget(ev(2, 7, 'tmpfs'), () => true)).toEqual({ view: 'tmp' });
     expect(clickTarget(ev(3, 9, 'earlyoom_kill'), () => true)).toEqual({ view: 'metrics', at: 9 });
+  });
+});
+
+describe('notificationTarget (notification du bureau « Ouvrir »)', () => {
+  test('tmpfs → page /tmp ; prévision → « Libérer… » ; autre alerte → Métriques à l’instant', () => {
+    expect(notificationTarget(ev(1, 4242, 'tmpfs'))).toEqual({ view: 'tmp' });
+    expect(notificationTarget(ev(2, 7, 'forecast'))).toBe('free');
+    expect(notificationTarget(ev(3, 9, 'leak', 'project:/home/u/acme'))).toEqual({ view: 'metrics', at: 9 });
+    expect(notificationTarget(ev(4, 11, 'earlyoom_kill'))).toEqual({ view: 'metrics', at: 11 });
   });
 });
 

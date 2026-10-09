@@ -240,6 +240,16 @@ export interface ProcTreeRow { pid: number; startTicks: number; ppid: number | n
  * des PROC_TREE_MAX plus gros, non renvoyés.
  */
 export interface ProcTreeAt { ts: number; source: 'detail' | 'minute'; procs: ProcTreeRow[]; recorded: boolean; omitted: number }
+/** Taille et occupation du système de fichiers de /tmp (statfs), et RAM totale, en Ko : tuiles de la page /tmp. */
+export interface TmpFsStats {
+  /** Racine lue (« /tmp », sauf racine de test). */
+  root: string;
+  sizeKB: number;
+  usedKB: number;
+  memTotalKB: number;
+  /** tmpfs (ou ramfs) : ses fichiers occupent la RAM ; faux pour un /tmp sur disque. */
+  inRam: boolean;
+}
 export interface TmpDirUsage { path: string; sizeKB: number }
 /** Occupation actuelle de /tmp (tmpfs, en RAM), calculée à la demande par le main, en lecture seule. */
 export interface TmpUsage {

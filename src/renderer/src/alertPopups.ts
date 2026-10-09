@@ -67,11 +67,18 @@ export function popupSnooze(e: AlertEvent): string | null {
 
 /**
  * Cible du bouton d'action, calculée au clic (le groupe a pu disparaître depuis l'affichage) : sinon Métriques à l'instant.
- * 'free' : kill groupé « Libérer de la mémoire » pré-rempli (prévision ②).
+ * 'free' : kill groupé « Libérer de la mémoire » pré-rempli (prévision ②) ; tmpfs : page /tmp.
  */
-export function clickTarget(e: AlertEvent, groupPresent: (key: string) => boolean): Route | 'tmp' | 'free' {
+export function clickTarget(e: AlertEvent, groupPresent: (key: string) => boolean): Route | 'free' {
   const a = popupAction(e, groupPresent);
-  if (a.kind === 'tmp') return 'tmp';
+  if (a.kind === 'tmp') return { view: 'tmp' };
   if (a.kind === 'free') return 'free';
   return a.kind === 'group' ? { view: 'detail', groupId: a.groupKey } : { view: 'metrics', at: e.ts };
+}
+
+/** Notification du bureau « Ouvrir » : page /tmp (tmpfs), « Libérer… » (prévision), sinon Métriques à l'instant de l'alerte. */
+export function notificationTarget(e: AlertEvent): Route | 'free' {
+  if (e.type === 'forecast') return 'free';
+  if (e.type === 'tmpfs') return { view: 'tmp' };
+  return { view: 'metrics', at: e.ts };
 }

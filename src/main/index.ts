@@ -59,6 +59,7 @@ import { promises as originalFsp } from 'original-fs';
 import type { TmpConfirmSummary, TmpDeleteOutcome } from '../core/tmpClean';
 import { confirmText, createSetAsideStore, createTmpCleaner, tmpCleanEvent, tmpRootFromEnv, type CleanFs } from './tmpClean';
 import { sharedScan, topTmpDirs } from './tmpUsage';
+import { tmpFsStats } from './tmpFsStats';
 import { closeAction, confirmTray, createTrayController, defaultRun, statusNotifierAvailable, type TrayController } from './tray';
 import {
   applyOverride, checkConfigSet, classifySetKey, swapSettingsChanged, isGroupKeys, noKill, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState as computeRecorderState,
@@ -612,6 +613,8 @@ if (tmpRootChoice.warning) console.error(`proc-watch : ${tmpRootChoice.warning}`
 if (tmpRoot !== '/tmp') console.error(`proc-watch : racine /tmp de test : ${tmpRoot}`);
 const tmpTopDirs = sharedScan(() => topTmpDirs(tmpRoot));
 ipcMain.handle('tmp:topDirs', () => tmpTopDirs());
+/** Tuiles de la page /tmp : taille et occupation (statfs), RAM totale ; lecture seule. */
+ipcMain.handle('tmp:stats', () => tmpFsStats(tmpRoot));
 const sizeText = (kb: number) =>
   kb >= 1024 * 1024 ? `${(kb / (1024 * 1024)).toFixed(1).replace('.', ',')} Go` : kb >= 1024 ? `${Math.round(kb / 1024)} Mo` : `${Math.round(kb)} Ko`;
 /** Confirmation native dans le main : chemins exacts (échappés), taille totale, « Annuler » par défaut. */
