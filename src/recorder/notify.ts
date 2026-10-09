@@ -37,7 +37,8 @@ export function notifyArgs(req: NotifyRequest, withActions: boolean): string[] {
 /** Chemin absolu d'un exécutable d'après PATH (entrées relatives ignorées), ou null. */
 export function resolveBin(name: string, pathEnv: string | undefined): string | null {
   for (const dir of (pathEnv ?? '').split(':')) {
-    if (!dir || !isAbsolute(dir)) continue;
+    // montage /tmp/.mount_* d'une AppImage : nom réutilisable par un autre utilisateur après démontage (I-A)
+    if (!dir || !isAbsolute(dir) || dir.startsWith('/tmp/.mount_')) continue;
     const p = join(dir, name);
     try {
       if (!statSync(p).isFile()) continue;

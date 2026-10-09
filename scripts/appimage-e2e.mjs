@@ -172,6 +172,10 @@ try {
     const relaunched = ours();
     report.relaunched = relaunched;
     ok(relaunched.some((p) => p.exe === copy) && relaunched.some((p) => p.exe.includes('/.mount_proc-w')), 'B. la copie relancée tourne (runtime = la copie, app sous son montage)');
+    // I-A : la copie relancée ne reçoit rien qui pointe dans le montage /tmp de l'AppImage qui quitte
+    const rt = relaunched.find((p) => p.exe === copy);
+    const rtEnv = rt ? readFileSync(`/proc/${rt.pid}/environ`, 'utf8') : '';
+    ok(!!rt && !rtEnv.includes('/tmp/.mount_'), 'B. environnement de la copie relancée : aucune entrée sous /tmp/.mount_ (PATH, LD_LIBRARY_PATH…)');
     const ob = JSON.parse(readFileSync(join(cfg, 'proc-watch/onboarding.json'), 'utf8'));
     ok(!('deleteOriginal' in ob) && ob.resume === 'autostart', `B. accord consommé, reprise à « Démarrer avec la session » (${JSON.stringify(ob)})`);
     await killOurs();

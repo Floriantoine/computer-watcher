@@ -57,6 +57,14 @@ describe('launchApp', () => {
     expect(child.unref).toHaveBeenCalled();
   });
 
+  test('I-A : app lancée par le service : environnement sans entrée sous le montage /tmp de l’AppImage du service', () => {
+    const { spawn } = fakeSpawn();
+    const M = '/tmp/.mount_proc-wX';
+    launchApp({ cmd: '/a.AppImage', args: [] }, { spawn: spawn as never, env: { APPDIR: M, APPIMAGE: '/a.AppImage', PATH: `${M}:/usr/bin`, LD_LIBRARY_PATH: `${M}/usr/lib`, HOME: '/h' }, log: () => {} });
+    const env = (spawn.mock.calls[0] as unknown[])[2] as { env: Record<string, string> };
+    expect(env.env).toEqual({ PATH: '/usr/bin', HOME: '/h' });
+  });
+
   test('systemd-run qui ne rend pas la main : tué après timeoutMs ; sorti à temps : rien', () => {
     vi.useFakeTimers();
     try {

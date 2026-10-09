@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { chmodSync, existsSync, realpathSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
-import { copyFileSafe, placeUnder, readFileSafe, removeDirIfEmptySafe, removeFileSafe, removeTreeSafe, writeFileSafe } from './safeFs';
+import { mountPointsOf, copyFileSafe, placeUnder, readFileSafe, removeDirIfEmptySafe, removeFileSafe, removeTreeSafe, writeFileSafe } from './safeFs';
 
 const cache = join(homedir(), '.cache');
 mkdirSync(cache, { recursive: true });
@@ -166,5 +167,54 @@ describe('suppression d’une arborescence (profil Chromium de l’app)', () => 
     writeFileSync(join(root, 'cfg/Preferences'), '{}');
     expect(removeTreeSafe([root], join(root, 'cfg/Preferences'))).toBe('removed');
     expect(removeTreeSafe([root], join(root, 'cfg/none'))).toBe('absent');
+  });
+});
+
+describe('I-B : jamais à travers un point de montage', () => {
+  test('mountinfo : points de montage, espaces décodés', () => {
+    expect(mountPointsOf('1 2 0:5 / /a\\040b rw - ext4 x rw\n3 4 0:6 / /c rw - tmpfs t rw\n')).toEqual(['/a b', '/c']);
+  });
+  test('montage annoncé sous l’arbre (montage lié, même dev) : sous-arbre laissé, signalé, le reste retiré', () => {
+    const t = join(root, 'cfg/Cache');
+    mkdirSync(join(t, 'mnt'), { recursive: true });
+    writeFileSync(join(t, 'mnt/precious'), 'x');
+    writeFileSync(join(t, 'f'), 'y');
+    const real = realpathSync(t);
+    const mi = `1 2 0:5 / ${real}/mnt rw - ext4 x rw\n`;
+    expect(() => removeTreeSafe([root], t, { mountinfo: mi })).toThrow(/point de montage/);
+    expect(existsSync(join(t, 'mnt/precious'))).toBe(true);
+    expect(existsSync(join(t, 'f'))).toBe(false);
+  });
+  test('l’arbre lui-même est un point de montage : refusé, rien retiré', () => {
+    const t = join(root, 'cfg/GPUCache');
+    mkdirSync(t, { recursive: true });
+    writeFileSync(join(t, 'f'), 'y');
+    expect(() => removeTreeSafe([root], t, { mountinfo: `1 2 0:5 / ${realpathSync(t)} rw - tmpfs t rw\n` })).toThrow(/point de montage/);
+    expect(existsSync(join(t, 'f'))).toBe(true);
+  });
+  const unshareOk = (() => {
+    try {
+      execFileSync('unshare', ['-rm', 'true'], { stdio: 'ignore' });
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+  test.skipIf(!unshareOk)('reproduction [mount] (unshare -rm) : montage lié d’une victime et tmpfs sous l’arbre → victime intacte, signalé', () => {
+    const t = join(root, 'cfg/Cache');
+    const victim = join(root, 'victime');
+    mkdirSync(join(t, 'mnt'), { recursive: true });
+    mkdirSync(join(t, 'tmp'), { recursive: true });
+    mkdirSync(victim, { recursive: true });
+    for (let i = 0; i < 5; i++) writeFileSync(join(victim, `f${i}`), 'x');
+    writeFileSync(join(t, 'ordinaire'), 'y');
+    const runner = join(root, 'runner.mjs');
+    writeFileSync(runner, `import { removeTreeSafe } from ${JSON.stringify(join(__dirname, 'safeFs.ts'))};
+try { removeTreeSafe([${JSON.stringify(root)}], ${JSON.stringify(t)}); console.log('ok'); } catch (e) { console.log('ERR ' + e.message); }`);
+    const script = 'mount --bind "$1" "$2/mnt" && mount -t tmpfs none "$2/tmp" && echo z > "$2/tmp/z" && exec node --no-warnings "$3"';
+    const out = execFileSync('unshare', ['-rm', 'sh', '-c', script, 'sh', victim, t, runner], { encoding: 'utf8' });
+    expect(out).toMatch(/ERR .*point de montage/);
+    expect(readdirSync(victim).sort()).toEqual(['f0', 'f1', 'f2', 'f3', 'f4']);
+    expect(existsSync(join(t, 'ordinaire'))).toBe(false);
   });
 });

@@ -10,6 +10,8 @@ import {
 } from './safeFs';
 import type { InstallOutcome, UninstallItem, UninstallKind, UninstallOptions, UninstallResult } from '../core/onboarding';
 import { UNIT_NAME, type Systemctl } from './recorderService';
+import { xdgHome } from '../core/paths';
+import { systemBin } from '../core/childEnv';
 
 export type { InstallOutcome, UninstallItem, UninstallKind, UninstallOptions, UninstallResult };
 
@@ -18,9 +20,10 @@ export interface Roots { home: string; configHome: string; dataHome: string; cac
 export function rootsFrom(env: NodeJS.ProcessEnv, home: string): Roots {
   return {
     home,
-    configHome: env.XDG_CONFIG_HOME || join(home, '.config'),
-    dataHome: env.XDG_DATA_HOME || join(home, '.local/share'),
-    cacheHome: env.XDG_CACHE_HOME || join(home, '.cache'),
+    // M-2 : une valeur XDG non absolue est ignorée (spécification XDG)
+    configHome: xdgHome(env, 'XDG_CONFIG_HOME', join(home, '.config')),
+    dataHome: xdgHome(env, 'XDG_DATA_HOME', join(home, '.local/share')),
+    cacheHome: xdgHome(env, 'XDG_CACHE_HOME', join(home, '.cache')),
   };
 }
 
@@ -458,21 +461,37 @@ export function configSweepPlan(r: Roots): UninstallItem[] {
   return uninstallPlan(r, { history: false, config: true }).filter((i) => i.kind === 'config');
 }
 
+export interface SweepTools { sleep: string; rm: string; rmdir: string }
+
+/** sleep, rm et rmdir par chemin absolu (/usr/bin, sinon /bin) ; l'un manque : null (pas de nettoyage d'après sortie). */
+export function sweepTools(exists: (p: string) => boolean): SweepTools | null {
+  const sleep = systemBin('sleep', exists);
+  const rm = systemBin('rm', exists);
+  const rmdir = systemBin('rmdir', exists);
+  return sleep && rm && rmdir ? { sleep, rm, rmdir } : null;
+}
+
+const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+
 /**
  * Chromium recrée « Session Storage » (base vide) en quittant, après le dernier passage : un /bin/sh détaché (hors du
- * montage de l'AppImage, qui disparaît avec elle) attend la fin du processus (10 s au plus), retire ce seul dossier s'il
- * n'est pas un lien (rm sans suivre de lien, même système de fichiers), puis le dossier de config s'il est vide. Chemins
- * passés en arguments, jamais interpolés dans le script ; dossier de config en lien : rien.
+ * montage de l'AppImage, qui disparaît avec elle) attend la fin du processus (10 s au plus), puis :
+ * - `cd -P` dans le dossier de config et vérifie `pwd -P` = `realDir` (chemin réel relevé avant) ; sinon rien (M-1) ;
+ * - retire « Session Storage » en relatif s'il n'est pas un lien (rm sans suivre de lien, même système de fichiers) ;
+ * - puis le dossier de config s'il est vide.
+ * Aucun PATH hérité : environnement fixe et outils par chemin absolu (I-A). Chemins passés en arguments, jamais
+ * interpolés dans le script.
  */
-export function postExitSweepCommand(pid: number, configDir: string): [string, string[]] {
+export function postExitSweepCommand(pid: number, realDir: string, t: SweepTools): { cmd: string; args: string[]; env: NodeJS.ProcessEnv } {
   const script = [
     'pid=$1; d=$2; i=0',
-    'while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i+1)); done',
-    '[ -L "$d" ] && exit 0',
-    's="$d/Session Storage"',
-    'if [ -d "$s" ] && [ ! -L "$s" ]; then rm -rf --one-file-system -- "$s"; fi',
-    'rmdir -- "$d" 2>/dev/null',
+    `while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 100 ]; do ${shq(t.sleep)} 0.1; i=$((i+1)); done`,
+    'cd -P -- "$d" 2>/dev/null || exit 0',
+    '[ "$(pwd -P)" = "$d" ] || exit 0',
+    `if [ -d "Session Storage" ] && [ ! -L "Session Storage" ]; then ${shq(t.rm)} -rf --one-file-system -- "Session Storage"; fi`,
+    'cd / || exit 0',
+    `${shq(t.rmdir)} -- "$d" 2>/dev/null`,
     'exit 0',
   ].join('\n');
-  return ['/bin/sh', ['-c', script, 'sh', String(pid), configDir]];
+  return { cmd: '/bin/sh', args: ['-c', script, 'sh', String(pid), realDir], env: { PATH: '/usr/bin:/bin', LC_ALL: 'C' } };
 }

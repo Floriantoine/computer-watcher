@@ -1,10 +1,10 @@
 import { spawn } from 'node:child_process';
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from 'electron';
 import appIcon from '../../resources/icon.png?asset';
-import { appendFileSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFileSync, constants as fsConstants, existsSync, lstatSync, realpathSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { access, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { classifyGroups, type InstanceDecision } from '../core/classify/classify';
 import { readPackageHints } from '../core/classify/packageJson';
 import { CpuTracker } from '../core/collector/cpuTracker';
@@ -30,7 +30,7 @@ import type { ConfigState, Group, KillResult, ProcInfo, RecorderState, Watch } f
 import { createFreeOpener, hiddenPlacement, relaunchEnv, secondInstanceAction, startWindowShown, wantsFree } from './launchArgs';
 import {
   appPaths, autostartState, installAppImage, launchTarget, rootsFrom, runUninstall, setAutostart, stopRecorderForUninstall,
-  configSweepPlan, postExitSweepCommand, uninstallPlan, uninstallSummary, verifyAndDeleteOriginal,
+  configSweepPlan, postExitSweepCommand, sweepTools, uninstallPlan, uninstallSummary, verifyAndDeleteOriginal,
 } from './appInstall';
 import { realAppImage, testFeedTrust } from './realAppImage';
 import { hashNoFollow, writeFileSafe } from './safeFs';
@@ -929,8 +929,21 @@ ipcMain.handle('uninstall:run', async (_e, o: unknown) => {
       void sweep.catch(() => {}).finally(() => {
         if (o.config) {
           try {
-            const [cmd, args] = postExitSweepCommand(process.pid, paths.configDir);
-            spawn(cmd, args, { detached: true, stdio: 'ignore' }).unref();
+            // chemin réel relevé maintenant (jamais un lien) ; outils absolus et environnement fixe (I-A, M-1)
+            // (le dossier vient souvent d'être retiré par le dernier passage : chemin réel du parent + nom fixe)
+            const tools = sweepTools(existsSync);
+            const l = lstatSync(paths.configDir, { throwIfNoEntry: false });
+            const parentReal = (() => {
+              try {
+                return realpathSync(dirname(paths.configDir));
+              } catch {
+                return null;
+              }
+            })();
+            if (tools && parentReal && (!l || l.isDirectory())) {
+              const c = postExitSweepCommand(process.pid, join(parentReal, basename(paths.configDir)), tools);
+              spawn(c.cmd, c.args, { detached: true, stdio: 'ignore', env: c.env }).unref();
+            }
           } catch (e) {
             console.error('désinstallation :', e);
           }

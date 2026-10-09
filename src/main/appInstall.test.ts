@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import {
   appPaths, autostartState, installAppImage, verifyAndDeleteOriginal, launchTarget, rootsFrom, runUninstall, setAutostart, stopRecorderForUninstall,
-  configSweepPlan, postExitSweepCommand, uninstallPlan, uninstallSummary, type Roots,
+  configSweepPlan, postExitSweepCommand, sweepTools, uninstallPlan, uninstallSummary, type Roots,
 } from './appInstall';
 
 // Racines temporaires sous ~/.cache/pw-onboard-* (jamais les vrais dossiers de l'utilisateur), retirées à la fin.
@@ -49,6 +49,10 @@ describe('chemins', () => {
     expect(appPaths(rootsFrom({}, '/home/u')).autostart).toBe('/home/u/.config/autostart/proc-watch.desktop');
     expect(appPaths(rootsFrom({ XDG_CACHE_HOME: '/k' }, '/home/u')).updaterCache).toBe('/k/proc-watch-updater');
     expect(appPaths(rootsFrom({}, '/home/u')).updaterCache).toBe('/home/u/.cache/proc-watch-updater');
+    // M-2 : XDG relatifs ignorés
+    expect(rootsFrom({ XDG_CONFIG_HOME: 'c', XDG_DATA_HOME: './d', XDG_CACHE_HOME: 'k' }, '/home/u')).toEqual({
+      home: '/home/u', configHome: '/home/u/.config', dataHome: '/home/u/.local/share', cacheHome: '/home/u/.cache',
+    });
   });
 });
 
@@ -577,9 +581,10 @@ describe('dernier passage sur la configuration (Chromium réécrit son profil en
 });
 
 describe('après la sortie : « Session Storage » recréé par Chromium en quittant (vu avec une vraie AppImage)', () => {
+  const tools = sweepTools(existsSync)!;
   const runSweep = (dir: string) => {
-    const [cmd, args] = postExitSweepCommand(999_999_999, dir); // PID inexistant : pas d'attente
-    execFileSync(cmd, args);
+    const c = postExitSweepCommand(999_999_999, dir, tools); // PID inexistant : pas d'attente
+    execFileSync(c.cmd, c.args, { env: c.env });
   };
   test('retire « Session Storage » puis le dossier de config vide', () => {
     const d = join(roots.configHome, 'proc-watch');
@@ -606,8 +611,28 @@ describe('après la sortie : « Session Storage » recréé par Chromium en quit
     expect(existsSync(join(victim, 'Session Storage'))).toBe(true);
   });
   test('chemins passés en arguments, jamais dans le script', () => {
-    const [, args] = postExitSweepCommand(42, '/c/proc-watch$(id)');
-    expect(args[1]).not.toContain('proc-watch$(id)');
-    expect(args.slice(-2)).toEqual(['42', '/c/proc-watch$(id)']);
+    const c = postExitSweepCommand(42, '/c/proc-watch$(id)', tools);
+    expect(c.args[1]).not.toContain('proc-watch$(id)');
+    expect(c.args.slice(-2)).toEqual(['42', '/c/proc-watch$(id)']);
+  });
+  test('I-A : aucun PATH hérité — env { PATH: /usr/bin:/bin, LC_ALL: C }, sleep/rm/rmdir par chemin absolu', () => {
+    const c = postExitSweepCommand(42, '/c/proc-watch', tools);
+    expect(c.cmd).toBe('/bin/sh');
+    expect(c.env).toEqual({ PATH: '/usr/bin:/bin', LC_ALL: 'C' });
+    const script = c.args[1]!;
+    for (const t of ['sleep', 'rm', 'rmdir']) expect(script).toContain(tools[t as 'sleep']);
+    // aucune commande externe appelée par son nom nu (seules des commandes intégrées au shell : kill, cd, pwd, [, exit)
+    expect(script).not.toMatch(/(^|[\s;(|&])(sleep|rm|rmdir|env|ls|test|cat)\s/m);
+    for (const w of ['kill -0', 'cd -P', 'pwd -P']) expect(script).toContain(w);
+  });
+  test('M-1 : dossier remplacé par un lien après la vérification → cd -P puis pwd -P différent : rien supprimé', () => {
+    const real = join(roots.home, 'ailleurs');
+    mkdirSync(join(real, 'Session Storage'), { recursive: true });
+    writeFileSync(join(real, 'Session Storage/x'), 'x');
+    const expected = join(roots.configHome, 'proc-watch');
+    mkdirSync(roots.configHome, { recursive: true });
+    symlinkSync(real, expected); // le chemin attendu est maintenant un lien vers un autre dossier
+    runSweep(expected);
+    expect(existsSync(join(real, 'Session Storage/x'))).toBe(true);
   });
 });

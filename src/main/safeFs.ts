@@ -4,7 +4,7 @@
 // XDG_CONFIG_HOME, XDG_DATA_HOME) peut être un lien : c'est le choix de l'utilisateur.
 import { createHash, randomBytes } from 'node:crypto';
 import {
-  closeSync, constants as C, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, promises as fsp, readdirSync, readFileSync, renameSync,
+  closeSync, constants as C, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, promises as fsp, readdirSync, readFileSync, readlinkSync, renameSync,
   rmdirSync, unlinkSync, writeSync,
 } from 'node:fs';
 import { sep } from 'node:path';
@@ -341,28 +341,61 @@ export function listDirSafe(roots: readonly string[], path: string): string[] {
 
 const MAX_DEPTH = 32;
 
-/** Vide un dossier ouvert sans suivre de lien : fichiers et liens retirés (un lien n'est jamais suivi), sous-dossiers récursifs. */
-function emptyDir(pfd: number, name: string, depth: number): void {
-  if (depth > MAX_DEPTH) throw new Error('arborescence trop profonde : laissée');
-  const dfd = openSync(fdPath(pfd, name), DIR_NOFOLLOW);
-  try {
-    for (const e of readdirSync(`/proc/self/fd/${dfd}`)) {
-      const st = lstatSync(fdPath(dfd, e));
-      if (st.isDirectory()) {
-        emptyDir(dfd, e, depth + 1);
-        rmdirSync(fdPath(dfd, e));
-      } else unlinkSync(fdPath(dfd, e));
-    }
-  } finally {
-    closeSync(dfd);
+const unescapeMount = (s: string) => s.replace(/\\([0-7]{3})/g, (_, o: string) => String.fromCharCode(parseInt(o, 8)));
+
+/** Points de montage d'un /proc/self/mountinfo (5ᵉ champ, échappements octaux décodés). */
+export function mountPointsOf(mountinfo: string): string[] {
+  return mountinfo.split('\n').map((l) => l.split(' ')[4]).filter((m): m is string => !!m).map(unescapeMount);
+}
+
+const isUnder = (p: string, dir: string) => p.startsWith(dir.endsWith('/') ? dir : `${dir}/`);
+
+/**
+ * Vide un dossier ouvert sans suivre de lien : fichiers et liens retirés (un lien n'est jamais suivi), sous-dossiers
+ * récursifs. Jamais à travers un point de montage : un sous-dossier d'un autre `dev`, ou listé dans mountinfo (montage
+ * lié du même dev), est laissé et noté dans `skipped`. Renvoie vrai si le dossier est entièrement vidé.
+ */
+function emptyDir(dfd: number, real: string, dev: number, mounts: readonly string[], skipped: string[], depth: number): boolean {
+  if (depth > MAX_DEPTH) {
+    skipped.push(`${real} (arborescence trop profonde)`);
+    return false;
   }
+  let complete = true;
+  for (const e of readdirSync(`/proc/self/fd/${dfd}`)) {
+    const child = `${real}/${e}`;
+    const st = lstatSync(fdPath(dfd, e));
+    if (st.isDirectory()) {
+      if (st.dev !== dev || mounts.includes(child)) {
+        skipped.push(child);
+        complete = false;
+        continue;
+      }
+      const cfd = openSync(fdPath(dfd, e), DIR_NOFOLLOW);
+      let done: boolean;
+      try {
+        if (fstatSync(cfd).dev !== dev) {
+          skipped.push(child);
+          complete = false;
+          continue;
+        }
+        done = emptyDir(cfd, child, dev, mounts.filter((m) => isUnder(m, child)), skipped, depth + 1);
+      } finally {
+        closeSync(cfd);
+      }
+      if (done) rmdirSync(fdPath(dfd, e));
+      else complete = false;
+    } else unlinkSync(fdPath(dfd, e));
+  }
+  return complete;
 }
 
 /**
- * Retire une arborescence de proc-watch (profil Chromium de l'app) par descripteurs de dossier, sans jamais suivre de
- * lien. `allowTopLink` : l'élément lui-même peut être un lien (SingletonLock de Chromium), retiré sans être suivi.
+ * Retire une arborescence de proc-watch (profil Chromium de l'app, cache de l'updater) par descripteurs de dossier, sans
+ * jamais suivre de lien ni traverser de point de montage (autre `dev`, ou montage listé dans /proc/self/mountinfo) : ces
+ * sous-arbres sont laissés et signalés (erreur après avoir retiré le reste). `allowTopLink` : l'élément lui-même peut
+ * être un lien (SingletonLock, cache remplacé par un lien), retiré sans être suivi.
  */
-export function removeTreeSafe(roots: readonly string[], path: string, o: { allowTopLink?: boolean } = {}): 'removed' | 'absent' {
+export function removeTreeSafe(roots: readonly string[], path: string, o: { allowTopLink?: boolean; mountinfo?: string } = {}): 'removed' | 'absent' {
   const parent = openParent(roots, path, false);
   if (!parent) return 'absent';
   try {
@@ -374,10 +407,23 @@ export function removeTreeSafe(roots: readonly string[], path: string, o: { allo
       throw e;
     }
     if (st.isSymbolicLink() && !o.allowTopLink) throw linkError(path);
-    if (st.isDirectory()) {
-      emptyDir(parent.fd, parent.name, 0);
-      rmdirSync(fdPath(parent.fd, parent.name));
-    } else unlinkSync(fdPath(parent.fd, parent.name));
+    if (!st.isDirectory()) {
+      unlinkSync(fdPath(parent.fd, parent.name));
+      return 'removed';
+    }
+    const top = openSync(fdPath(parent.fd, parent.name), DIR_NOFOLLOW);
+    let complete: boolean;
+    const skipped: string[] = [];
+    try {
+      const real = readlinkSync(`/proc/self/fd/${top}`);
+      const mounts = mountPointsOf(o.mountinfo ?? readFileSync('/proc/self/mountinfo', 'utf8')).filter((m) => m === real || isUnder(m, real));
+      if (mounts.includes(real) || fstatSync(top).dev !== fstatSync(parent.fd).dev) throw new Error(`${path} est un point de montage : laissé`);
+      complete = emptyDir(top, real, fstatSync(top).dev, mounts, skipped, 0);
+    } finally {
+      closeSync(top);
+    }
+    if (!complete) throw new Error(`point de montage sous ${path} : laissé (${skipped.join(', ')})`);
+    rmdirSync(fdPath(parent.fd, parent.name));
     return 'removed';
   } finally {
     closeSync(parent.fd);

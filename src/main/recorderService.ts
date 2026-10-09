@@ -2,6 +2,8 @@ import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isUsableAppImage } from './realAppImage';
+import { cleanEnv, systemBin } from '../core/childEnv';
+import { xdgHome } from '../core/paths';
 import { dirname, join } from 'node:path';
 
 export const UNIT_NAME = 'proc-watch-recorder.service';
@@ -50,7 +52,7 @@ export function recorderUnit(args: string[]): string {
 }
 
 export function unitPath(env: NodeJS.ProcessEnv = process.env, home: string = homedir()): string {
-  return join(env.XDG_CONFIG_HOME || join(home, '.config'), 'systemd/user', UNIT_NAME);
+  return join(xdgHome(env, 'XDG_CONFIG_HOME', join(home, '.config')), 'systemd/user', UNIT_NAME);
 }
 
 /**
@@ -71,7 +73,10 @@ export type Systemctl = (args: string[]) => Promise<{ ok: boolean; stdout: strin
 
 export const defaultSystemctl: Systemctl = (args) =>
   new Promise((resolve) => {
-    execFile('systemctl', ['--user', ...args], { timeout: 5000 }, (err, stdout) => resolve({ ok: !err, stdout: String(stdout) }));
+    const bin = systemBin('systemctl', existsSync);
+    if (!bin) return resolve({ ok: false, stdout: '' });
+    // chemin absolu, environnement sans le montage /tmp de l'AppImage (I-A)
+    execFile(bin, ['--user', ...args], { timeout: 5000, env: cleanEnv(process.env) }, (err, stdout) => resolve({ ok: !err, stdout: String(stdout) }));
   });
 
 export async function systemctlAvailable(run: Systemctl): Promise<boolean> {

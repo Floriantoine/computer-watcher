@@ -1,5 +1,6 @@
 // src/main/launchArgs.ts — « Libérer de la mémoire » : `--free` (lanceur, barre des tâches) ouvre le kill groupé pré-rempli.
 import { deferSend } from './alerts';
+import { cleanEnv } from '../core/childEnv';
 
 export const FREE_FLAG = '--free';
 export const wantsFree = (argv: readonly string[]): boolean => argv.includes(FREE_FLAG);
@@ -40,10 +41,8 @@ export function createFreeOpener(send: () => void) {
   };
 }
 
-/** Variables posées par le runtime AppImage : retirées avant de lancer la copie installée, qui pose les siennes. */
-const APPIMAGE_RUNTIME_ENV = ['APPIMAGE', 'APPDIR', 'ARGV0', 'OWD'];
-export function relaunchEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const out = { ...env };
-  for (const k of APPIMAGE_RUNTIME_ENV) delete out[k];
-  return out;
-}
+/**
+ * Environnement de la copie relancée : sans les variables du runtime AppImage et sans aucune entrée sous le montage
+ * /tmp de l'AppImage qui quitte (PATH, LD_LIBRARY_PATH, XDG_DATA_DIRS, GSETTINGS_SCHEMA_DIR… : I-A).
+ */
+export const relaunchEnv = (env: NodeJS.ProcessEnv): NodeJS.ProcessEnv => cleanEnv(env);

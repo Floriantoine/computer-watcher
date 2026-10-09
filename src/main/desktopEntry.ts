@@ -2,6 +2,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
 import { hasControlChars } from './appImageTrust';
+import { xdgHome } from '../core/paths';
 import { readFileSafe, writeFileSafe } from './safeFs';
 
 /**
@@ -55,7 +56,7 @@ export function desktopEntryContent(execPath: string, o: EntryOptions = {}): str
  */
 export function installDesktopEntry(target: string, env: NodeJS.ProcessEnv = process.env, home: string = homedir(), iconPng?: string): string {
   if (hasControlChars(target)) throw new Error('Chemin refusé (caractère de contrôle)');
-  const data = env.XDG_DATA_HOME || join(home, '.local/share');
+  const data = xdgHome(env, 'XDG_DATA_HOME', join(home, '.local/share'));
   const roots = [home, data];
   const content = desktopEntryContent(target);
   const file = join(data, 'applications', 'proc-watch.desktop');
@@ -93,7 +94,7 @@ export function refreshDesktopEntry(
   home: string = homedir(),
 ): 'absent' | 'unchanged' | 'updated' | 'kept' | 'foreign' | 'refused' {
   if (hasControlChars(appImage)) return 'refused';
-  const data = env.XDG_DATA_HOME || join(home, '.local/share');
+  const data = xdgHome(env, 'XDG_DATA_HOME', join(home, '.local/share'));
   const roots = [home, data];
   const file = join(data, 'applications', 'proc-watch.desktop');
   const text = readFileSafe(roots, file);
