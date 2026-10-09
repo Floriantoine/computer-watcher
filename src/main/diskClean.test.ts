@@ -51,6 +51,7 @@ function deps(roots: FamilyRoots, o: Partial<CleanDeps> = {}) {
     runRoot: async () => ({ ok: true, cancelled: false }),
     mountinfo: () => '',
     sizes: { npm: 8 * 1024 * 1024, uv: 1024 },
+    rootUnavailable: () => null,
     ...o,
   };
   return { d, asked };
@@ -225,4 +226,18 @@ test('staticRefusal : lien symbolique visible dans la liste, sans parcourir les 
   symlinkSync(precious, join(home, '.cache/uv'));
   expect(staticRefusal('uv', { roots, mountinfo: () => '' })).toMatch(/lien symbolique/);
   expect(staticRefusal('npm', { roots, mountinfo: () => '' })).toBeNull();
+});
+
+test('root indisponible (pacman sans paccache) : refus avec la raison, pkexec jamais lancé', async () => {
+  const { roots } = fakeHome();
+  const calls: string[] = [];
+  const { d, asked } = deps(roots, {
+    runRoot: async (a) => (calls.push(a), { ok: true, cancelled: false }),
+    rootPresent: () => true,
+    rootUnavailable: (id) => (id === 'pkg-cache' ? 'indisponible : installer pacman-contrib (paccache)' : null),
+  });
+  const r = await cleanFamilies(['pkg-cache'], d);
+  expect(r.refused).toEqual([{ id: 'pkg-cache', reason: 'indisponible : installer pacman-contrib (paccache)' }]);
+  expect(calls).toEqual([]);
+  expect(asked).toHaveLength(0);
 });

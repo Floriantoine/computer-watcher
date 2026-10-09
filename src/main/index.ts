@@ -64,6 +64,7 @@ import type { TmpConfirmSummary, TmpDeleteOutcome } from '../core/tmpClean';
 import { confirmText, createSetAsideStore, createTmpCleaner, tmpCleanEvent, tmpRootFromEnv, type CleanFs } from './tmpClean';
 import { sharedScan, topTmpDirs } from './tmpUsage';
 import { createScanCache, scanHome } from './diskScan';
+import { diskRootRunner, runDiskRoot } from './diskRoot';
 import { cleanFamilies, diskCleanEvent, realProcByName, staticRefusal, type CleanDeps, type CleanResult } from './diskClean';
 import { familyRoots, isFamilyRequest, type FamiliesFile, type FamilyId } from '../core/disk/families';
 import { measureFamilies, readFamiliesFile, writeFamiliesFile } from '../core/disk/measure';
@@ -826,7 +827,10 @@ const confirmDiskClean = async (s: { message: string; detail: string }): Promise
   const r = parent ? await dialog.showMessageBox(parent, opts) : await dialog.showMessageBox(opts);
   return r.response === 1;
 };
-const diskRunRoot: CleanDeps['runRoot'] = async () => ({ ok: false, cancelled: false, error: 'action administrateur indisponible' });
+// pkexec d'un script figé ; PROC_WATCH_DISK_ROOT_FAKE=1 (hors paquet seulement) : rien n'est lancé (bout en bout)
+const diskRoot = diskRootRunner(process.env, app.isPackaged);
+if (diskRoot.fake) console.error(`${APP_DISPLAY_NAME} : actions administrateur du disque simulées (PROC_WATCH_DISK_ROOT_FAKE)`);
+const diskRunRoot: CleanDeps['runRoot'] = (action) => runDiskRoot(action, diskRoot.run);
 let diskCleaning = false;
 ipcMain.handle('disk:clean', async (_e, raw: unknown): Promise<CleanResult> => {
   if (!isFamilyRequest(raw)) throw new Error('requête refusée : familles inconnues ou en double');

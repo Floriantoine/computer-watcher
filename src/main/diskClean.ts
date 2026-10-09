@@ -8,9 +8,10 @@ import { join } from 'node:path';
 import { familyDef, familyPaths, isFamilyRequest, JOURNAL_DIR, PKG_CACHE_DIRS, usedByText, type FamilyId, type FamilyRoots } from '../core/disk/families';
 import { browserDropPaths } from '../core/disk/measure';
 import type { DiskCleanEvent } from '../core/history/events';
+import { rootUnavailable, type RootAction } from './diskRoot';
 import { listDirSafe, mountPointsOf, removeTreeSafe } from './safeFs';
 
-export type RootAction = 'pkg-cache' | 'journal';
+export type { RootAction };
 export interface Holder { pid: number; name: string }
 
 export interface CleanResult { freedKB: number; done: FamilyId[]; refused: { id: FamilyId; reason: string }[]; cancelled: boolean }
@@ -31,6 +32,8 @@ export interface CleanDeps {
   sizes?: Partial<Record<FamilyId, number | null>>;
   /** Famille root présente sur ce système (défaut : son dossier existe). */
   rootPresent?(id: RootAction): boolean;
+  /** Famille root indisponible (outil manquant) : raison, ou null (défaut : rootUnavailable de diskRoot.ts). */
+  rootUnavailable?(id: RootAction): string | null;
 }
 
 const fmt = (kb: number) =>
@@ -92,6 +95,8 @@ function checkFamily(id: FamilyId, homeDev: number, d: CleanDeps): string | null
   const def = familyDef(id);
   if (def.root) {
     if (!(d.rootPresent ?? defaultRootPresent)(id as RootAction)) return 'absent';
+    const missing = (d.rootUnavailable ?? ((x: RootAction) => rootUnavailable(x, existsSync)))(id as RootAction);
+    if (missing) return missing;
   } else {
     const paths = familyPaths(id, d.roots);
     if (!paths.some(exists)) return 'absent';
@@ -255,7 +260,7 @@ export function realProcByName(names: readonly string[], o: { selfPid?: number; 
 }
 
 /** Raison de refus visible sans parcourir les processus (lien, autre disque, montage) : pour la liste de la page. */
-export function staticRefusal(id: FamilyId, d: Pick<CleanDeps, 'roots' | 'mountinfo' | 'rootPresent'>): string | null {
+export function staticRefusal(id: FamilyId, d: Pick<CleanDeps, 'roots' | 'mountinfo' | 'rootPresent' | 'rootUnavailable'>): string | null {
   const why = checkFamily(id, lstatSync(d.roots.home).dev, { ...d, dirUser: () => null, procByName: () => null } as unknown as CleanDeps);
   return why === 'absent' ? null : why;
 }
