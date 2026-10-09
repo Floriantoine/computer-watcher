@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { xdgHome } from './paths';
+import { appDir } from './appDirs';
 import { join } from 'node:path';
 import { DEFAULT_CLASSIFY, DEFAULT_CONFIG, DEFAULT_RECORDER, DEFAULT_UI } from './defaults';
 import { inBounds, RECORDER_BOUNDS, type RecorderNumField } from './recorderBounds';
@@ -16,7 +17,7 @@ export { DEFAULT_CONFIG };
 const FILE = 'config.json';
 
 export function configDir(env: NodeJS.ProcessEnv = process.env, home: string = homedir()): string {
-  return join(xdgHome(env, 'XDG_CONFIG_HOME', join(home, '.config')), 'proc-watch');
+  return appDir(xdgHome(env, 'XDG_CONFIG_HOME', join(home, '.config')));
 }
 
 function validateRecorder(raw: unknown): RecorderConfig | null {
