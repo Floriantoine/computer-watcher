@@ -15,13 +15,11 @@ export interface TilesAt { ts: number; values: TileValues | null }
 const dash = '—';
 
 /** Écart « alors vs maintenant » sous la valeur passée (positionné en absolu, comme le badge). */
-function Delta({ d, note }: { d: NowDelta | null; note?: string }) {
+function Delta({ d }: { d: NowDelta | null }) {
   if (!d) return null;
-  return <span className={`tile-delta delta-${d.tone}`} data-testid="tile-delta" title={note ? `${d.title} — ${note}` : d.title}>{d.text}</span>;
+  // Couleur neutre : le signe suffit, sans jugement « mieux / moins bien ».
+  return <span className="tile-delta" data-testid="tile-delta" title={d.title}>{d.text}</span>;
 }
-
-/** Écart de RAM : le direct compte tous les processus, l'historique seulement ceux au-dessus des seuils. */
-const RAM_NOTE = "l'historique ne contient que les processus au-dessus des seuils d'enregistrement";
 
 /** Badge « au HH:MM:SS » d'une tuile à l'instant examiné (positionné en absolu : la hauteur des tuiles ne bouge pas). */
 function At({ text }: { text: string }) {
@@ -42,7 +40,7 @@ export function DetailTiles({ group, memMetric, at, now }: { group: GroupSummary
         <div className="tile" title={v && !v.procRecorded ? 'non enregistré pour cette plage' : undefined}><small>Processus</small><At text={badge} /><b>{v?.procCount ?? dash}</b><Delta d={nowDelta(v?.procCount, group.procCount, 'count')} /></div>
         <div className="tile" title="Mémoire résidente enregistrée par le service (RSS)"><small data-testid="mem-tile-label">RAM</small><At text={badge} /><b>{kb(v?.rssKB)}</b>
           {/* En PSS, le direct n'est pas comparable à l'historique (RSS) : pas d'écart. */}
-          {memMetric !== 'pss' && <Delta d={nowDelta(v?.rssKB, group.rssKB, 'kb')} note={RAM_NOTE} />}
+          {memMetric !== 'pss' && <Delta d={nowDelta(v?.rssKB, group.rssKB, 'kb')} />}
         </div>
         <div className="tile"><small>Swap</small><At text={badge} /><b>{kb(v?.swapKB)}</b><Delta d={nowDelta(v?.swapKB, group.swapKB, 'kb')} /></div>
         <div className="tile"><small>CPU</small><At text={badge} /><b>{v?.cpu == null ? dash : formatCpu(v.cpu)}</b><Delta d={nowDelta(v?.cpu, group.cpuPercent, 'cpu')} /></div>

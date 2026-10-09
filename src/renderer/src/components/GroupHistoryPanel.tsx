@@ -53,8 +53,9 @@ export function GroupHistoryPanel({ groupId, replay: store, markers: extra }: { 
     return (p: { ts: number; exact: number } | null) => {
       const d = latest.current.h;
       if (p === null || !d || d.ts.length < 2) hover(null);
-      // Aperçu calé sur la grille des échantillons : même échantillon → même instant, ni rendu ni requête.
-      else hover(p.ts);
+      // Même instant que le clic : l'échantillon sous le curseur (même échantillon → ni rendu ni requête) ; sur des
+      // buckets d'une heure (7 j, 30 j), l'instant exact survolé (valeurs du bucket le plus proche, badge à l'heure exacte).
+      else hover(replayInstant(p.ts, p.exact, d.ts[1] - d.ts[0]));
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [replay?.hover]);

@@ -202,17 +202,44 @@ export class ReplayController {
   }
 
   /** Envoie la position en attente si rien n'est en vol, si le délai minimal est passé et si la fenêtre est visible. */
+  /**
+   * Arbre en cache pour `ts` : l'échantillon enregistré le plus proche à moins d'un demi-pas du graphe (une minute au
+   * plus : résolution des arbres par minute). Les débuts de bucket glissent à chaque rafraîchissement du graphe ;
+   * l'échantillon, lui, ne bouge pas.
+   */
+  private lookup(ts: number): { key: number; tree: ProcTreeAt } | null {
+    const tol = this.cacheTolerance();
+    const now = Date.now();
+    let best: { key: number; tree: ProcTreeAt } | null = null;
+    let bestD = Infinity;
+    for (const [key, e] of this.cache) {
+      const d = Math.abs(key - ts);
+      if (d <= tol && d < bestD && now - e.at <= REPLAY_CACHE_TTL_MS) {
+        best = { key, tree: e.tree };
+        bestD = d;
+      }
+    }
+    return best;
+  }
+
+  private cacheTolerance(): number {
+    const t = this.series?.ts;
+    if (!t || t.length < 2) return 0;
+    const step = (t[t.length - 1] - t[0]) / (t.length - 1);
+    return Math.min(step, 60_000) / 2;
+  }
+
   private cached(ts: number): ProcTreeAt | null {
-    const hit = this.cache.get(ts);
-    return hit && Date.now() - hit.at <= REPLAY_CACHE_TTL_MS ? hit.tree : null;
+    return this.lookup(ts)?.tree ?? null;
   }
 
   /** Affiche l'arbre en cache de `ts` (remis en tête de la LRU) ; faux s'il n'y est pas. */
   private serveCached(ts: number): boolean {
-    const hit = this.cache.get(ts);
-    if (!hit || Date.now() - hit.at > REPLAY_CACHE_TTL_MS) return false;
-    this.cache.delete(ts);
-    this.cache.set(ts, hit);
+    const hit = this.lookup(ts);
+    if (!hit) return false;
+    const e = this.cache.get(hit.key)!;
+    this.cache.delete(hit.key);
+    this.cache.set(hit.key, e);
     this.tree = hit.tree;
     return true;
   }
@@ -254,9 +281,13 @@ export class ReplayController {
     this.inflight = false;
     this.inflightTs = null;
     if (t) {
-      this.cache.delete(ts);
-      this.cache.set(ts, { tree: t, at: Date.now() });
-      if (this.cache.size > REPLAY_CACHE_SIZE) this.cache.delete(this.cache.keys().next().value!);
+      // Clé : l'horodatage de l'échantillon renvoyé (stable d'un rafraîchissement à l'autre), et l'instant demandé.
+      const e = { tree: t, at: Date.now() };
+      for (const k of t.ts === ts ? [ts] : [ts, t.ts]) {
+        this.cache.delete(k);
+        this.cache.set(k, e);
+      }
+      while (this.cache.size > REPLAY_CACHE_SIZE) this.cache.delete(this.cache.keys().next().value!);
     }
     if (id === this.showId) {
       this.tree = t;

@@ -134,3 +134,16 @@ export function tilesAt(h: GroupHistory | null | undefined, ts: number): TileVal
   if (Math.abs(h.ts[i] - ts) > step) return null;
   return { procCount: h.procCount?.[i] ?? null, procRecorded: h.procCount !== undefined, rssKB: h.rssKB[i] ?? null, swapKB: h.swapKB[i] ?? null, cpu: h.cpu[i] ?? null };
 }
+
+/** Délai pendant lequel les boutons de kill de l'arbre en direct restent sans effet après le retour du rejeu au direct. */
+export const KILL_GUARD_MS = 300;
+
+/** Kill accepté : pas de retour au direct depuis moins de KILL_GUARD_MS (l'arbre en direct vient d'apparaître sous la souris). */
+export function killAllowed(returnedAt: number | null, now: number): boolean {
+  return returnedAt === null || now - returnedAt >= KILL_GUARD_MS;
+}
+
+/** Échap libère l'instant figé : touche non traitée, aucun dialogue ni menu ouvert, pas de saisie en cours. */
+export function escapeUnpins(e: { key: string; defaultPrevented: boolean }, ctx: { overlayOpen: boolean; editing: boolean }): boolean {
+  return e.key === 'Escape' && !e.defaultPrevented && !ctx.overlayOpen && !ctx.editing;
+}

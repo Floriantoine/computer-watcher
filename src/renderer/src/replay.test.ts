@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from 'vitest';
 import type { ProcInfo, ProcNode, ProcTreeAt, ProcTreeRow } from '../../core/types';
-import { ClickDelay, liveKeySet, nextReplayTs, REPLAY_SPEED, replayEmptyText, replayInstant, replayTree, tilesAt, type ReplayNode } from './replay';
+import { ClickDelay, liveKeySet, nextReplayTs, REPLAY_SPEED, replayEmptyText, replayInstant, replayTree, tilesAt, killAllowed, escapeUnpins, type ReplayNode } from './replay';
 import { replayReducer, type ReplayState } from './useReplay';
 
 const row = (pid: number, ppid: number | null, rssKB = 100, swapKB: number | null = 0, lastSeenTs = 1000): ProcTreeRow => ({
@@ -146,5 +146,22 @@ describe('tuiles du détail à l\'instant survolé (séries du graphe)', () => {
     expect(tilesAt(undefined, 0)).toBeNull();
     expect(tilesAt({ ts: [], rssKB: [], swapKB: [], cpu: [] }, 0)).toBeNull();
     expect(tilesAt({ ts: [7], rssKB: [1], swapKB: [0], cpu: [0] }, 7)).toMatchObject({ rssKB: 1 });
+  });
+});
+
+describe('garde-fous du retour au direct', () => {
+  test('kill ignoré pendant 300 ms après le retour du rejeu au direct', () => {
+    expect(killAllowed(null, 1000)).toBe(true);
+    expect(killAllowed(1000, 1000)).toBe(false);
+    expect(killAllowed(1000, 1299)).toBe(false);
+    expect(killAllowed(1000, 1300)).toBe(true);
+  });
+  test('Échap ne libère l\'instant que si aucun dialogue ou menu n\'est ouvert et qu\'on ne tape pas', () => {
+    const k = { key: 'Escape', defaultPrevented: false };
+    expect(escapeUnpins(k, { overlayOpen: false, editing: false })).toBe(true);
+    expect(escapeUnpins(k, { overlayOpen: true, editing: false })).toBe(false);
+    expect(escapeUnpins(k, { overlayOpen: false, editing: true })).toBe(false);
+    expect(escapeUnpins({ ...k, defaultPrevented: true }, { overlayOpen: false, editing: false })).toBe(false);
+    expect(escapeUnpins({ ...k, key: 'Enter' }, { overlayOpen: false, editing: false })).toBe(false);
   });
 });

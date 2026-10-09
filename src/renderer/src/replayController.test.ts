@@ -330,3 +330,46 @@ describe('survol du graphe (aperçu)', () => {
     expect(calls.at(-1)).toMatchObject({ key: 'h', ts: T });
   });
 });
+
+describe('cache par horodatage d\'échantillon (rafraîchissement du graphe)', () => {
+  const series = (from: number, step: number, n = 10) => ({ ts: Array.from({ length: n }, (_, i) => from + i * step), rssKB: [], swapKB: [], cpu: [] });
+  test('les débuts de bucket glissent au rafraîchissement : l\'arbre de l\'échantillon reste servi par le cache', async () => {
+    const { c, calls } = setup();
+    c.setSeries(series(T, 5000));
+    c.hover(T + 5000);
+    calls[0].resolve(treeAt(T + 6200)); // échantillon réel
+    await flush();
+    vi.advanceTimersByTime(200);
+    // Rafraîchissement : la grille a glissé de 1,3 s.
+    c.setSeries(series(T + 1300, 5000));
+    c.hover(T + 6300);
+    vi.advanceTimersByTime(200);
+    expect(calls).toHaveLength(1);
+    expect(c.tree?.ts).toBe(T + 6200);
+  });
+  test('échantillon voisin (plus d\'un demi-pas) : nouvelle requête', async () => {
+    const { c, calls } = setup();
+    c.setSeries(series(T, 5000));
+    c.hover(T + 5000);
+    calls[0].resolve(treeAt(T + 5000));
+    await flush();
+    vi.advanceTimersByTime(200);
+    c.hover(T + 8000);
+    vi.advanceTimersByTime(200);
+    expect(calls).toHaveLength(2);
+  });
+  test('buckets d\'une heure (7 j) : tolérance bornée à la minute des arbres enregistrés', async () => {
+    const { c, calls } = setup();
+    c.setSeries(series(T, 3_600_000));
+    c.hover(T + 600_000);
+    calls[0].resolve(treeAt(T + 600_000));
+    await flush();
+    vi.advanceTimersByTime(200);
+    c.hover(T + 620_000); // même minute
+    vi.advanceTimersByTime(200);
+    expect(calls).toHaveLength(1);
+    c.hover(T + 700_000); // une autre minute
+    vi.advanceTimersByTime(200);
+    expect(calls).toHaveLength(2);
+  });
+});

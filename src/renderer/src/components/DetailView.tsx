@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { ArrowLeft, ChevronRight, Lock, PenLine, Shield, ShieldOff, X } from 'lucide-react';
 import type { Category, GroupSummary as Group, InstanceSummary, MemoryMetric, ProcNode } from '../../../core/types';
@@ -7,6 +7,7 @@ import { procSparkMap, useHistory } from '../history';
 import { GroupHistoryPanel } from './GroupHistoryPanel';
 import { showRevertToAuto, ticksIndex } from '../instances';
 import { headerReclassTarget } from '../reclassHeader';
+import { escapeUnpins, killAllowed } from '../replay';
 import { useReplaySelect, useReplayStore } from '../useReplay';
 import { DetailTilesLive } from './DetailTiles';
 import { CategoryTag } from './CategoryTag';
@@ -66,13 +67,34 @@ export function DetailView(props: Props) {
   const ticksOf = useMemo(() => (ticksRef.current = ticksIndex(props.roots, ticksRef.current)), [props.roots]);
   // Menu « Reclasser » de l'en-tête : ouvert pour un groupe précis, donc fermé dès que le groupe affiché change.
   const [reclassOpenFor, setReclassOpenFor] = useState<string | null>(null);
+  // Retour du rejeu au direct : l'arbre en direct (avec ses boutons de kill) apparaît sous la souris ; ses kills sont
+  // ignorés pendant KILL_GUARD_MS (avant la peinture : useLayoutEffect).
+  const returnedAt = useRef<number | null>(null);
+  const wasExamining = useRef(examining);
+  useLayoutEffect(() => {
+    if (wasExamining.current && !examining) returnedAt.current = performance.now();
+    wasExamining.current = examining;
+  }, [examining]);
+  const latestKill = useRef({ onKillProc: props.onKillProc, onForce: props.onForce });
+  latestKill.current = { onKillProc: props.onKillProc, onForce: props.onForce };
+  const guardedKill = useCallback((node: ProcNode) => {
+    if (killAllowed(returnedAt.current, performance.now())) latestKill.current.onKillProc(node);
+  }, []);
+  const guardedForce = useCallback((pid: number) => {
+    if (killAllowed(returnedAt.current, performance.now())) latestKill.current.onForce([pid]);
+  }, []);
   // Échap : libère l'instant figé (retour au direct), sauf si un menu ou un dialogue a déjà traité la touche.
   const pinned = useReplaySelect(replay, (c) => c.state.instant !== null);
   const unpin = replay.c.live;
   useEffect(() => {
     if (!pinned) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !e.defaultPrevented) unpin();
+      const a = document.activeElement as HTMLElement | null;
+      const ctx = {
+        overlayOpen: !!document.querySelector('[aria-modal="true"], [role="dialog"], [role="menu"]'),
+        editing: !!a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)),
+      };
+      if (escapeUnpins(e, ctx)) unpin();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -184,8 +206,8 @@ export function DetailView(props: Props) {
           pendingPids={props.pendingPids}
           currentUid={props.currentUid}
           sparkOf={sparkOf}
-          onKill={props.onKillProc}
-          onForce={(pid) => props.onForce([pid])}
+          onKill={guardedKill}
+          onForce={guardedForce}
           memMetric={memMetric}
         />
       )}

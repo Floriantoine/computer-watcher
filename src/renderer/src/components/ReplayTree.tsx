@@ -21,7 +21,6 @@ interface RowProps {
   /** « mort depuis HH:MM » ou « toujours là » */
   state: string;
   deltaText: string | null;
-  deltaTone: string | null;
   deltaTitle: string | null;
 }
 
@@ -33,14 +32,14 @@ const sameRow = (a: ProcTreeRow, b: ProcTreeRow): boolean =>
  * dont une valeur affichée a changé sont re-rendues.
  */
 const ReplayRow = memo(
-  function ReplayRow({ row: r, depth, dead, state, deltaText, deltaTone, deltaTitle }: RowProps) {
+  function ReplayRow({ row: r, depth, dead, state, deltaText, deltaTitle }: RowProps) {
     return (
       <tr className={dead ? 'dead' : ''} data-testid="replay-row">
         <td className="pid mono" style={{ paddingLeft: 10 + depth * 18 }}>{r.pid}</td>
         <td className="name">{r.name}</td>
         <td className="num mono">{formatCpu(r.cpu)}</td>
         <td className="num mono">
-          {deltaText && <span className={`row-delta delta-${deltaTone}`} data-testid="row-delta" title={deltaTitle ?? undefined}>{deltaText}</span>}
+          {deltaText && <span className="row-delta" data-testid="row-delta" title={deltaTitle ?? undefined}>{deltaText}</span>}
           {formatKB(Math.round(r.rssKB))}
         </td>
         <td className="num mono">{r.swapKB === null ? '—' : formatKB(r.swapKB)}</td>
@@ -49,7 +48,7 @@ const ReplayRow = memo(
     );
   },
   (a, b) =>
-    a.depth === b.depth && a.dead === b.dead && a.state === b.state && a.deltaText === b.deltaText && a.deltaTone === b.deltaTone &&
+    a.depth === b.depth && a.dead === b.dead && a.state === b.state && a.deltaText === b.deltaText &&
     a.deltaTitle === b.deltaTitle && sameRow(a.row, b.row),
 );
 
@@ -70,7 +69,6 @@ function ReplayTreeImpl({ nodes, at, omitted = 0, liveMem }: { nodes: ReplayNode
           dead={n.dead && n.diedAt !== null}
           state={state}
           deltaText={d?.text ?? null}
-          deltaTone={d?.tone ?? null}
           deltaTitle={d?.title ?? null}
         />,
       );

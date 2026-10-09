@@ -60,9 +60,9 @@ describe('écarts « alors vs maintenant »', () => {
     expect(html).toContain('−340 Mo · −9 %');
     expect(html).toContain('−59 pt');
     expect(html).toContain('title="par rapport à maintenant"');
-    // RAM : l'historique ignore les processus sous les seuils d'enregistrement.
-    expect(html).toContain("title=\"par rapport à maintenant — l&#x27;historique ne contient que les processus au-dessus des seuils d&#x27;enregistrement\"");
-    expect(html).toContain('delta-lower');
+    // Couleur neutre : le signe seul, sans jugement (ni vert ni ambre).
+    expect(html).not.toMatch(/delta-(lower|higher)/);
+    expect(html).not.toContain('seuils'); // l'historique des groupes contient leur total complet
   });
   test('mode PSS : pas d\'écart sur la RAM (historique en RSS, direct en PSS)', () => {
     const html = renderToStaticMarkup(createElement(DetailTiles, { group: g, memMetric: 'pss', at, now: AT }));
@@ -77,6 +77,7 @@ describe('écarts « alors vs maintenant »', () => {
     expect(count(html, 'row-delta')).toBe(1);
     expect(html).toContain('+300 Mo · +60 %');
     expect(html).toContain('mort depuis');
+    expect(html).not.toMatch(/delta-(lower|higher)/);
     expect(html).not.toContain('mort à');
     const pss = renderToStaticMarkup(createElement(ReplayPanel, { tree, instant: AT, onLive: noop, liveRoots, memMetric: 'pss' }));
     expect(count(pss, 'row-delta')).toBe(0);
