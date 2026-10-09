@@ -238,10 +238,16 @@ function migrate(db: DatabaseSync): void {
   }
   // rend la place de l'ancienne table procs, puis vide le journal WAL (un lecteur ouvert peut empêcher la troncature :
   // ce n'est pas une erreur, le journal sera recyclé plus tard)
-  db.exec('PRAGMA incremental_vacuum;');
-  db.exec('PRAGMA busy_timeout = 0;'); // sans attendre le lecteur : busy = 1 dans le résultat, pas une erreur
-  db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
-  db.exec('PRAGMA busy_timeout = 2000;');
+  // Après la validation, la base est déjà une v5 valide : un échec ici ne doit pas faire planter le démarrage.
+  try {
+    db.exec('PRAGMA incremental_vacuum;');
+    db.exec('PRAGMA busy_timeout = 0;'); // sans attendre le lecteur : busy = 1 dans le résultat, pas une erreur
+    db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
+  } catch {
+    // place et journal récupérés plus tard (purge périodique, checkpoint automatique)
+  } finally {
+    db.exec('PRAGMA busy_timeout = 2000;');
+  }
 }
 
 function tableExists(db: DatabaseSync, name: string): boolean {
