@@ -1,5 +1,6 @@
 import type { AlertsConfig } from './alerts';
 import type { EarlyoomSettings } from './earlyoom';
+import type { EarlyoomEnabled, EarlyoomReminderConfig } from './earlyoomSetup';
 import type { RuleIssue, RulesConfig } from './rules/types';
 import type { OpenPortsInfo } from './openPorts';
 
@@ -173,6 +174,8 @@ export interface Config {
   alerts: AlertsConfig;
   /** Règles automatiques (⑥) : éteintes par défaut. */
   rules: RulesConfig;
+  /** « Ne plus rappeler pendant 7 jours » du pop-up earlyoom (horodatage du main) ; absent : rappel au lancement. */
+  earlyoomReminder?: EarlyoomReminderConfig;
 }
 
 export interface ConfigState {
@@ -265,10 +268,13 @@ export interface EarlyoomStatus {
   version: string | null;
   /** `systemctl is-active earlyoom` */
   active: 'active' | 'inactive' | 'failed' | 'unknown';
+  /** `systemctl is-enabled earlyoom` (lancé au démarrage) */
+  enabled: EarlyoomEnabled;
   /** /etc/default/earlyoom lu */
   file: { settings: EarlyoomSettings; converted: string[]; line: string } | null;
   installHint: string;
 }
 export type ApplyResult =
   | { ok: true; line: string }
-  | { ok: false; reason: 'cancelled' | 'invalid' | 'failed' | 'unavailable'; message: string };
+  /** stale : l'état d'earlyoom a changé depuis l'affichage (installation, activation) : rien à faire ou autre action. */
+  | { ok: false; reason: 'cancelled' | 'invalid' | 'failed' | 'unavailable' | 'stale'; message: string };

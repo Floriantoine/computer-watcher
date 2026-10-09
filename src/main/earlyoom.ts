@@ -31,6 +31,15 @@ const readText = (p: string): string | null => {
   }
 };
 
+/** Sortie de `systemctl is-enabled` : enabled, disabled, masked (et -runtime), autre valeur connue → other, rien → unknown. */
+export function parseIsEnabled(out: string | undefined): EarlyoomStatus['enabled'] {
+  const s = (out ?? '').trim().split('\n')[0]?.trim() ?? '';
+  if (s === 'enabled' || s === 'enabled-runtime') return 'enabled';
+  if (s === 'disabled') return 'disabled';
+  if (s === 'masked' || s === 'masked-runtime') return 'masked';
+  return /^[a-z-]+$/.test(s) ? 'other' : 'unknown';
+}
+
 export async function earlyoomStatus(deps: {
   run?: ExecFn;
   exists?: (p: string) => boolean;
@@ -45,17 +54,21 @@ export async function earlyoomStatus(deps: {
   const installed = exists(bin);
   let version: string | null = null;
   let active: EarlyoomStatus['active'] = 'unknown';
+  let enabled: EarlyoomStatus['enabled'] = 'unknown';
   if (installed) {
-    const [v, a] = await Promise.all([
+    // Chemins absolus seulement (binaire, systemctl) : aucune recherche dans le PATH.
+    const [v, a, e] = await Promise.all([
       run(bin, ['-v'], { timeout: 5000 }).catch(() => null),
       run(EARLYOOM_SYSTEMCTL, ['is-active', 'earlyoom'], { timeout: 5000 }).catch(() => null),
+      run(EARLYOOM_SYSTEMCTL, ['is-enabled', 'earlyoom'], { timeout: 5000 }).catch(() => null),
     ]);
     version = (v ? `${v.stdout}\n${v.stderr}` : '').match(/earlyoom\s+v?(\d[\w.+-]*)/)?.[1] ?? null;
     const s = a?.stdout.trim();
     if (s === 'active' || s === 'inactive' || s === 'failed') active = s;
+    enabled = parseIsEnabled(e?.stdout);
   }
   const text = read(EARLYOOM_TARGET);
-  return { installed, version, active, file: text === null ? null : parseEarlyoomDefault(text), installHint: EARLYOOM_INSTALL_HINT };
+  return { installed, version, active, enabled, file: text === null ? null : parseEarlyoomDefault(text), installHint: EARLYOOM_INSTALL_HINT };
 }
 
 
@@ -78,18 +91,18 @@ if (EARLYOOM_LINE_PATTERN.includes("'")) throw new Error('motif earlyoom : apost
  * configuration (ancien fichier restauré), 14 restauration impossible (chemin du .bak sur la sortie standard),
  * 15 ancien fichier restauré mais earlyoom ne redémarre pas.
  */
-export const EARLYOOM_APPLY_SCRIPT = `set -u
-export PATH=/usr/bin:/bin LC_ALL=C
-line="\${1:-}"
-target=${EARLYOOM_TARGET}
-systemctl=${EARLYOOM_SYSTEMCTL}
-pause=2
-re='${EARLYOOM_LINE_PATTERN}'
-[[ -n "$line" ]] || exit 10
+/** Contrôles de la ligne ($line) : non vide, longueur, motif (forme, bornes, base, jetons), SIGKILL ≤ SIGTERM ; sinon 11 (10 si vide). */
+export const LINE_CHECKS = `[[ -n "$line" ]] || exit 10
 (( \${#line} <= ${EARLYOOM_MAX_LINE} )) || exit 11
 [[ "$line" =~ $re ]] || exit 11
 (( BASH_REMATCH[2] <= BASH_REMATCH[1] && BASH_REMATCH[4] <= BASH_REMATCH[3] )) || exit 11
-bak=""
+`;
+
+/**
+ * Sauvegarde (.bak-<date à la ms>[.n], jamais écrasée), écriture atomique, démarrage vérifié et restauration :
+ * commun à « Appliquer » et à l'installation. `start` : commandes de démarrage (dans start_and_check, `|| return 1`).
+ */
+export const writeAndStartFragment = (start: string): string => `bak=""
 if [[ -e "$target" ]]; then
   bak="$target.bak-$(date +%Y%m%dT%H%M%S.%3N)"
   first="$bak"
@@ -102,7 +115,7 @@ fi
 # NRestarts est lu juste après le restart manuel (qui remet le compteur à zéro) puis après l'attente :
 # une hausse signale une boucle de plantages (Restart=always) même si le service est vu actif.
 start_and_check() {
-  "$systemctl" restart earlyoom || return 1
+${start}
   local n1 n2
   n1=$("$systemctl" show -p NRestarts --value earlyoom)
   sleep "$pause"
@@ -122,6 +135,15 @@ restore() {
 start_and_check || restore
 exit 0
 `;
+
+export const EARLYOOM_APPLY_SCRIPT = `set -u
+export PATH=/usr/bin:/bin LC_ALL=C
+line="\${1:-}"
+target=${EARLYOOM_TARGET}
+systemctl=${EARLYOOM_SYSTEMCTL}
+pause=2
+re='${EARLYOOM_LINE_PATTERN}'
+${LINE_CHECKS}${writeAndStartFragment('  "$systemctl" restart earlyoom || return 1')}`;
 
 const BAK_PATH_RE = new RegExp(`^${EARLYOOM_TARGET.replace(/[.]/g, '\\.')}\\.bak-[0-9T.]+$`);
 
@@ -158,6 +180,9 @@ export async function applyEarlyoom(line: string, deps: { run?: ExecFn } = {}): 
   }
 }
 
+/** Un seul script root earlyoom à la fois (« Appliquer », installation, activation). */
+export interface EarlyoomLock { held: boolean }
+
 /**
  * Gestionnaire d'`earlyoom:apply` : valide les réglages, reconstruit la ligne avec la liste protégée du main, refuse
  * si elle diffère de l'aperçu du renderer, demande confirmation dans le main (ligne exacte), puis pkexec.
@@ -167,8 +192,9 @@ export function createEarlyoomApplier(
   getProtected: () => readonly string[],
   confirm: (line: string) => Promise<boolean>,
   apply: (line: string) => Promise<ApplyResult> = (line) => applyEarlyoom(line),
+  /** Verrou partagé avec l'installation (B8 bis) : jamais deux pkexec earlyoom en même temps. */
+  lock: EarlyoomLock = { held: false },
 ): (raw: unknown, expectedLine: unknown) => Promise<ApplyResult> {
-  let busy = false;
   return async (raw, expectedLine) => {
     if (!isEarlyoomSettings(raw)) return { ok: false, reason: 'invalid', message: 'Réglages earlyoom invalides.' };
     const built = buildEarlyoomArgs(raw, getProtected());
@@ -176,13 +202,13 @@ export function createEarlyoomApplier(
     if (expectedLine !== built.line) {
       return { ok: false, reason: 'invalid', message: "La ligne de l'aperçu ne correspond plus à la configuration (liste protégée modifiée ?) : rien n'a été modifié, rouvrir les Réglages." };
     }
-    if (busy) return { ok: false, reason: 'failed', message: 'Une application est déjà en cours.' };
-    busy = true;
+    if (lock.held) return { ok: false, reason: 'failed', message: 'Une application est déjà en cours.' };
+    lock.held = true;
     try {
       if (!(await confirm(built.line))) return { ok: false, reason: 'cancelled', message: "Annulé : rien n'a été modifié." };
       return await apply(built.line);
     } finally {
-      busy = false;
+      lock.held = false;
     }
   };
 }

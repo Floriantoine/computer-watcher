@@ -220,3 +220,20 @@ describe('règles (⑥)', () => {
     expect(existsSync(join(dir, 'config.json.bak'))).toBe(false);
   });
 });
+
+describe('rappel earlyoom (« Ne plus rappeler pendant 7 jours »)', () => {
+  test('absent par défaut, config existante sans le champ → valide, toujours absent', () => {
+    expect(DEFAULT_CONFIG.earlyoomReminder).toBeUndefined();
+    const c = validateConfig(structuredClone(DEFAULT_CONFIG));
+    expect(c).not.toBeNull();
+    expect(c && 'earlyoomReminder' in c).toBe(false);
+  });
+  test('horodatage conservé', () => {
+    expect(validateConfig({ ...structuredClone(DEFAULT_CONFIG), earlyoomReminder: { snoozedAt: 1_800_000_000_000 } })?.earlyoomReminder).toEqual({ snoozedAt: 1_800_000_000_000 });
+  });
+  test.each([null, 'x', { snoozedAt: -1 }, { snoozedAt: 'demain' }, { snoozedAt: 1.5 }])('%j → champ ignoré, reste de la config gardé', (v) => {
+    const c = validateConfig({ ...structuredClone(DEFAULT_CONFIG), protected: ['acme'], earlyoomReminder: v });
+    expect(c?.protected).toEqual(['acme']);
+    expect(c && 'earlyoomReminder' in c).toBe(false);
+  });
+});

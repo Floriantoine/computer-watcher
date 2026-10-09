@@ -64,6 +64,19 @@ test('app events : format, parse validation stricte', () => {
   expect(parseAppEvents(JSON.stringify(bad))).toEqual([{ ...withTargets, detail: { pids: [1], signal: 'SIGTERM' } }]);
 });
 
+test('app events : earlyoom_setup (installation / activation depuis l’app), validation stricte', () => {
+  const ok = { ts: 7, type: 'earlyoom_setup' as const, groupKey: null, detail: { mode: 'install' as const, ok: true, code: 0 } };
+  const late = { ts: 8, type: 'earlyoom_setup' as const, groupKey: null, detail: { mode: 'activate' as const, ok: false, code: null, timedOut: true as const } };
+  expect(parseAppEvents(formatAppEvent(ok) + formatAppEvent(late))).toEqual([ok, late]);
+  // champs en trop écartés
+  expect(parseAppEvents(JSON.stringify({ ...ok, detail: { ...ok.detail, cmd: 'rm -rf /' } }))).toEqual([ok]);
+  for (const detail of [
+    { mode: 'install; reboot', ok: true, code: 0 }, { mode: 'install', ok: 'oui', code: 0 }, { mode: 'install', ok: true, code: 'x' },
+    { mode: 'install', ok: true, code: 1.5 }, { mode: 'install', ok: true }, null,
+  ]) expect(parseAppEvents(JSON.stringify({ ts: 7, type: 'earlyoom_setup', groupKey: null, detail }))).toEqual([]);
+  expect(parseAppEvents(JSON.stringify({ ...ok, groupKey: 'app:x' }))).toEqual([]);
+});
+
 test('takeAppEvents : flux normal, fichier vide après ack', () => {
   const dir = mkdtempSync(join(tmpdir(), 'pw-e-'));
   const p = join(dir, 'app-events.jsonl');

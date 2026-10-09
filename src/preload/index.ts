@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import type { AlertEvent } from '../core/alerts';
 import type { EarlyoomSettings } from '../core/earlyoom';
+import type { EarlyoomSetupMode } from '../core/earlyoomSetup';
 import type { RuleStats } from '../core/rules/types';
 import type { SwapView } from '../core/swap';
 import type {
@@ -66,6 +67,15 @@ const api = {
      * la montre dans une confirmation native, puis lance pkexec d'un script fixe avec la ligne en argument.
      */
     apply: (s: EarlyoomSettings, expectedLine: string): Promise<ApplyResult> => ipcRenderer.invoke('earlyoom:apply', s, expectedLine),
+    /** Pop-up du lancement : mode à proposer (null : rien à faire, « Plus tard » ou pause de 7 jours) et état lu. */
+    reminder: (): Promise<{ mode: EarlyoomSetupMode | null; status: EarlyoomStatus }> => ipcRenderer.invoke('earlyoom:reminder'),
+    /** « Plus tard » (jusqu'au prochain lancement) ou « Ne plus rappeler pendant 7 jours » (config, horodatée par le main). */
+    remindLater: (kind: 'later' | 'week'): Promise<ConfigState> => ipcRenderer.invoke('earlyoom:remindLater', kind),
+    /**
+     * Installer et configurer / Activer : le main relit l'état (le mot-clé doit y correspondre), construit la ligne, la montre
+     * dans une confirmation native avec le paquet, puis un seul pkexec d'un script fixe.
+     */
+    setup: (mode: EarlyoomSetupMode): Promise<ApplyResult> => ipcRenderer.invoke('earlyoom:setup', mode),
   },
   alerts: {
     /** Alertes non vues (les 100 plus récentes d'abord) et leur nombre total. */

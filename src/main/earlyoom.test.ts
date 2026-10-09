@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import { DEFAULT_CONFIG } from '../core/defaults';
 import { buildEarlyoomArgs, checkEarlyoomLine, EARLYOOM_LINE_PATTERN, EARLYOOM_LINE_RE, parseEarlyoomDefault } from '../core/earlyoom';
-import { applyEarlyoom, applyExitMessage, createEarlyoomApplier, EARLYOOM_APPLY_SCRIPT, earlyoomStatus, PKEXEC, type ExecFn } from './earlyoom';
+import { applyEarlyoom, applyExitMessage, createEarlyoomApplier, EARLYOOM_APPLY_SCRIPT, earlyoomStatus, parseIsEnabled, PKEXEC, type ExecFn } from './earlyoom';
 
 const cacheRoot = join(homedir(), '.cache');
 mkdirSync(cacheRoot, { recursive: true });
@@ -500,4 +500,31 @@ describe('earlyoomStatus', () => {
     expect(st.version).toBeNull();
     expect(seen).toContain('/opt/eo');
   });
+  test('is-enabled lu par chemin absolu → enabled / disabled', async () => {
+    const seen: string[] = [];
+    const st = await earlyoomStatus({
+      run: async (cmd, args) => {
+        seen.push([cmd, ...args].join(' '));
+        if (args[0] === 'is-enabled') return { code: 1, stdout: 'disabled\n', stderr: '' };
+        if (args[0] === 'is-active') return { code: 3, stdout: 'inactive\n', stderr: '' };
+        return { code: 0, stdout: 'earlyoom 1.9.0', stderr: '' };
+      },
+      exists: (p) => p === '/usr/bin/earlyoom', read: () => null, env: {},
+    });
+    expect(st).toMatchObject({ installed: true, active: 'inactive', enabled: 'disabled' });
+    expect(seen.sort()).toEqual(['/usr/bin/earlyoom -v', '/usr/bin/systemctl is-active earlyoom', '/usr/bin/systemctl is-enabled earlyoom']);
+  });
+  test('non installé → enabled unknown, aucune commande lancée', async () => {
+    const seen: string[] = [];
+    const st = await earlyoomStatus({ run: async (c) => (seen.push(c), { code: 0, stdout: '', stderr: '' }), exists: () => false, read: () => null, env: {} });
+    expect(st.enabled).toBe('unknown');
+    expect(seen).toEqual([]);
+  });
+});
+
+describe('parseIsEnabled', () => {
+  test.each([
+    ['enabled\n', 'enabled'], ['enabled-runtime', 'enabled'], ['disabled\n', 'disabled'], ['masked', 'masked'], ['masked-runtime', 'masked'],
+    ['static', 'other'], ['not-found', 'other'], ['alias', 'other'], ['', 'unknown'], [undefined, 'unknown'], ['Failed to get unit file state: x', 'unknown'],
+  ])('%j → %s', (out, want) => expect(parseIsEnabled(out)).toBe(want));
 });

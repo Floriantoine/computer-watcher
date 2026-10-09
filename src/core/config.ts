@@ -5,6 +5,7 @@ import { DEFAULT_CLASSIFY, DEFAULT_CONFIG, DEFAULT_RECORDER, DEFAULT_UI } from '
 import { inBounds, RECORDER_BOUNDS, type RecorderNumField } from './recorderBounds';
 import { isCategory } from './classify/categories';
 import { validateAlerts } from './alerts';
+import { validateEarlyoomReminder } from './earlyoomSetup';
 import { validateRulesDetailed } from './rules/config';
 import type { RuleIssue } from './rules/types';
 import type { Category, ClassifyConfig, Config, RecorderConfig, UiConfig } from './types';
@@ -102,7 +103,12 @@ export function validateConfig(raw: unknown): Config | null {
   const alerts = validateAlerts(r.alerts);
   if (!alerts) return null;
   const { rules } = validateRulesDetailed(r.rules);
-  return { version: 1, protected: [...r.protected], othersThreshold: { memMB: t.memMB, cpuPercent: t.cpuPercent }, recorder, ui, classify, alerts, rules };
+  // Rappel earlyoom illisible : simplement absent (le pop-up revient), jamais une raison de réinitialiser la config.
+  const earlyoomReminder = validateEarlyoomReminder(r.earlyoomReminder);
+  return {
+    version: 1, protected: [...r.protected], othersThreshold: { memMB: t.memMB, cpuPercent: t.cpuPercent }, recorder, ui, classify, alerts, rules,
+    ...(earlyoomReminder ? { earlyoomReminder } : {}),
+  };
 }
 
 export function saveConfig(dir: string, config: Config): void {

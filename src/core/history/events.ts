@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
 
-export type EventType = 'earlyoom_kill' | 'pressure' | 'gap' | 'app_kill' | 'leak' | 'tmpfs' | 'forecast' | 'rule_action' | 'rule_dry_run';
+export type EventType = 'earlyoom_kill' | 'pressure' | 'gap' | 'app_kill' | 'leak' | 'tmpfs' | 'forecast' | 'rule_action' | 'rule_dry_run' | 'earlyoom_setup';
 
 const EARLYOOM = /sending (SIGTERM|SIGKILL) to process (\d+)(?: uid (\d+))? "([^"]*)"/;
 
@@ -63,7 +63,27 @@ export function shouldRecordTmpfs(
   return { record: false, state: { lastTs: state.lastTs, armed: state.armed || now - belowSince >= TMPFS_REARM_MS, belowSince } };
 }
 
-export interface AppEvent {
+export type AppEvent = AppKillEvent | EarlyoomSetupEvent;
+
+/** Installation / activation d'earlyoom lancée depuis l'app (pkexec exécuté) : mode, résultat, code de sortie (null : délai dépassé). */
+export interface EarlyoomSetupEvent {
+  ts: number;
+  type: 'earlyoom_setup';
+  groupKey: null;
+  detail: { mode: 'install' | 'activate'; ok: boolean; code: number | null; timedOut?: true };
+}
+
+function parseSetupEvent(obj: Record<string, unknown>): EarlyoomSetupEvent | null {
+  if (obj.groupKey !== null) return null;
+  const d = obj.detail;
+  if (typeof d !== 'object' || d === null || Array.isArray(d)) return null;
+  const { mode, ok, code, timedOut } = d as Record<string, unknown>;
+  if (mode !== 'install' && mode !== 'activate') return null;
+  if (typeof ok !== 'boolean' || !(code === null || Number.isSafeInteger(code))) return null;
+  return { ts: obj.ts as number, type: 'earlyoom_setup', groupKey: null, detail: { mode, ok, code: code as number | null, ...(timedOut === true ? { timedOut: true as const } : {}) } };
+}
+
+export interface AppKillEvent {
   ts: number;
   type: 'app_kill';
   groupKey: string | null;
@@ -84,6 +104,12 @@ export function parseAppEvents(text: string): AppEvent[] {
 
       // validate ts
       if (!Number.isFinite(obj.ts as number)) continue;
+
+      if (obj.type === 'earlyoom_setup') {
+        const e = parseSetupEvent(obj);
+        if (e) out.push(e);
+        continue;
+      }
 
       // validate type
       if (obj.type !== 'app_kill') continue;

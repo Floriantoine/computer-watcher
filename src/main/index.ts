@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Tray } from 'electron';
-import { appendFileSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { classifyGroups, type InstanceDecision } from '../core/classify/classify';
@@ -29,7 +29,9 @@ import { SNOOZE_MS } from '../core/forecast/forecast';
 import { writeSnooze } from '../core/forecast/snooze';
 import { createAlertOpener, createFocusWriter, initSeenUpTo, keepSeenUpTo, markSeen, unseenFilter } from './alerts';
 import { installDesktopEntry } from './desktopEntry';
-import { createEarlyoomApplier, earlyoomStatus } from './earlyoom';
+import { createEarlyoomApplier, earlyoomStatus, type EarlyoomLock } from './earlyoom';
+import { createEarlyoomSetup, keepEarlyoomReminder, setupConfirmation, snoozeReminder } from './earlyoomSetup';
+import { reminderMode } from '../core/earlyoomSetup';
 import { clearHistory, createHistoryReader } from './history';
 import { pollDelay, type WindowActivity } from './pollPolicy';
 import { portModes } from './portModes';
@@ -458,7 +460,7 @@ ipcMain.handle('group:procs', (_e, id: unknown) => (typeof id === 'string' && la
 ipcMain.handle('config:set', (_e, next: unknown) => {
   // validation stricte (règles comprises) et transition des règles : une nouvelle règle démarre en Simulation
   const checked = checkConfigSet(next, config, readSimStatsFile(rulesSimulationPath(data)));
-  const valid = keepSeenUpTo(checked, config);
+  const valid = keepEarlyoomReminder(keepSeenUpTo(checked, config), config);
   const recorderChanged = valid.recorder.enabled !== config.recorder.enabled;
   const trayChanged = valid.ui.trayIcon !== config.ui.trayIcon;
   if (valid.classify.detectPorts !== config.classify.detectPorts) portsAt = 0;
@@ -573,8 +575,55 @@ const confirmEarlyoomLine = async (line: string): Promise<boolean> => {
   const r = parent ? await dialog.showMessageBox(parent, opts) : await dialog.showMessageBox(opts);
   return r.response === 1;
 };
-const applyEarlyoomIpc = createEarlyoomApplier(() => config.protected, confirmEarlyoomLine);
+/** Un seul script root earlyoom à la fois : « Appliquer », installation et activation partagent ce verrou. */
+const earlyoomLock: EarlyoomLock = { held: false };
+const applyEarlyoomIpc = createEarlyoomApplier(() => config.protected, confirmEarlyoomLine, undefined, earlyoomLock);
 ipcMain.handle('earlyoom:apply', (_e, s: unknown, expectedLine: unknown) => applyEarlyoomIpc(s, expectedLine));
+
+// B8 bis : pop-up du lancement (une fois par lancement : « Plus tard » est gardé en mémoire par le main), installation / activation.
+let earlyoomLater = false;
+ipcMain.handle('earlyoom:reminder', async () => {
+  const status = await earlyoomStatus();
+  return { mode: reminderMode({ status, snoozedAt: config.earlyoomReminder?.snoozedAt, later: earlyoomLater, now: Date.now() }), status };
+});
+ipcMain.handle('earlyoom:remindLater', (_e, kind: unknown): ConfigState => {
+  if (kind === 'later') earlyoomLater = true;
+  else if (kind === 'week') {
+    const next = snoozeReminder(config, Date.now());
+    saveConfig(dir, next);
+    config = next;
+    earlyoomLater = true;
+  } else throw new Error('Valeur invalide');
+  return configState();
+});
+const earlyoomSetupIpc = createEarlyoomSetup({
+  status: () => earlyoomStatus(),
+  getProtected: () => config.protected,
+  exists: existsSync,
+  lock: earlyoomLock,
+  confirm: async ({ mode, pm, line }) => {
+    const c = setupConfirmation(mode, pm, line);
+    const opts: Electron.MessageBoxOptions = {
+      type: 'warning', title: 'earlyoom', message: c.message, detail: c.detail, buttons: ['Annuler', c.confirm], defaultId: 0, cancelId: 0, noLink: true,
+    };
+    const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const r = parent ? await dialog.showMessageBox(parent, opts) : await dialog.showMessageBox(opts);
+    return r.response === 1;
+  },
+  log: (e) => {
+    try {
+      mkdirSync(data, { recursive: true });
+      appendFileSync(appEventsPath(data), formatAppEvent(e));
+    } catch (err) {
+      console.error('app event:', err);
+    }
+  },
+});
+ipcMain.handle('earlyoom:setup', async (_e, mode: unknown) => {
+  const r = await earlyoomSetupIpc(mode);
+  if (r.ok) earlyoomLater = true; // réglé : plus de pop-up dans ce lancement
+  return r;
+});
 
 ipcMain.handle('desktop:install', () => {
   if (!app.isPackaged) throw new Error('Disponible uniquement dans la version installée (AppImage ou .deb)');
