@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { basename } from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { installTarget } from './appImageUpdate';
+import { installAndRestart, installTarget, restartCommand } from './appImageUpdate';
+import { InstallError } from './updater';
 
 const COPY = '/home/u/Applications/proc-watch.AppImage';
 
@@ -20,5 +21,55 @@ describe('mise à jour de l’AppImage : la copie installée est remplacée, jam
     expect(src).toMatch(/const appImageFile = process\.env\["APPIMAGE"\]/);
     expect(src).toMatch(/!\/\\d\+\\\.\\d\+\\\.\\d\+\/\.test\(existingBaseName\)\)\s*\{[^}]*destination = appImageFile/);
     expect(/\d+\.\d+\.\d+/.test(basename(COPY))).toBe(false); // « proc-watch.AppImage » : pas de version → écrasé sur place
+  });
+});
+
+describe('I-C : après l’installation, la nouvelle version est relancée par proc-watch, jamais par electron-updater', () => {
+  const M = '/tmp/.mount_proc-wOLD';
+  const fake = (ok: boolean, renamed?: string) => {
+    const calls: unknown[][] = [];
+    const listeners = new Map<string, (p: string) => void>();
+    return {
+      calls,
+      u: {
+        install: (silent: boolean, force: boolean) => {
+          calls.push([silent, force]);
+          if (renamed) listeners.get('appimage-filename-updated')?.(renamed);
+          return ok;
+        },
+        on: (ev: string, cb: (p: string) => void) => void listeners.set(ev, cb),
+      },
+    };
+  };
+  test('install(silencieux, sans relance) puis relance par nous de la copie mise à jour', () => {
+    const f = fake(true);
+    const restarted: string[] = [];
+    installAndRestart(f.u, { appImage: COPY, takeError: () => null, pendingFile: () => '/c/pending.AppImage', restart: (t) => restarted.push(t) });
+    expect(f.calls).toEqual([[true, false]]);
+    expect(restarted).toEqual([COPY]);
+  });
+  test('nom changé par electron-updater (AppImage versionnée) : la relance vise le nouveau fichier', () => {
+    const f = fake(true, '/home/u/dl/proc-watch-0.1.1-x86_64.AppImage');
+    const restarted: string[] = [];
+    installAndRestart(f.u, { appImage: '/home/u/dl/proc-watch-0.1.0-x86_64.AppImage', takeError: () => null, pendingFile: () => null, restart: (t) => restarted.push(t) });
+    expect(restarted).toEqual(['/home/u/dl/proc-watch-0.1.1-x86_64.AppImage']);
+  });
+  test('échec (erreur ou install refusée) : InstallError, aucune relance', () => {
+    const restarted: string[] = [];
+    expect(() => installAndRestart(fake(true).u, { appImage: COPY, takeError: () => new Error('lecture seule'), pendingFile: () => null, restart: (t) => restarted.push(t) })).toThrow(InstallError);
+    expect(() => installAndRestart(fake(false).u, { appImage: COPY, takeError: () => null, pendingFile: () => null, restart: (t) => restarted.push(t) })).toThrow(InstallError);
+    expect(restarted).toEqual([]);
+  });
+  test('échec : « Réessayer » reste possible (verrou interne d’electron-updater relâché)', () => {
+    let reset = 0;
+    expect(() => installAndRestart(fake(false).u, { appImage: COPY, takeError: () => null, pendingFile: () => null, restart: () => {}, onFailure: () => reset++ })).toThrow(InstallError);
+    expect(reset).toBe(1);
+  });
+  test('commande de relance : détachée, environnement sans rien sous l’ancien montage', () => {
+    const c = restartCommand(COPY, { APPIMAGE: COPY, APPDIR: M, PATH: `${M}:${M}/usr/sbin:/usr/bin`, LD_LIBRARY_PATH: `${M}/usr/lib`, HOME: '/home/u' });
+    expect(c.cmd).toBe(COPY);
+    expect(c.args).toEqual([]);
+    expect(JSON.stringify(c.env)).not.toContain('/tmp/.mount_');
+    expect(c.env).toEqual({ PATH: '/usr/bin', HOME: '/home/u' });
   });
 });

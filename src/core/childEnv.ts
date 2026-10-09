@@ -11,7 +11,7 @@ const under = (entry: string, dir: string) => entry === dir || entry.startsWith(
 
 /**
  * Copie de l'environnement sans les variables du runtime AppImage, et sans aucune entrée (listes séparées par « : »)
- * sous APPDIR ou sous /tmp/.mount_* ; une variable qui devient vide est retirée.
+ * sous APPDIR ou sous /tmp/.mount_* ; une variable qui devient vide, ou qui en contient encore une mention, est retirée.
  */
 export function cleanEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const appdir = env.APPDIR && env.APPDIR.startsWith('/') ? env.APPDIR : null;
@@ -23,8 +23,9 @@ export function cleanEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
       out[k] = v;
       continue;
     }
-    const kept = v.split(':').filter((e) => e !== '' && !bad(e));
-    if (kept.length) out[k] = kept.join(':');
+    const kept = v.split(':').filter((e) => e !== '' && !bad(e)).join(':');
+    // m-a : encore une mention du montage (liste séparée par des espaces comme LD_PRELOAD, valeur composée) : retirée
+    if (kept && !kept.includes(MOUNT_PREFIX) && !(appdir && kept.includes(appdir))) out[k] = kept;
   }
   return out;
 }

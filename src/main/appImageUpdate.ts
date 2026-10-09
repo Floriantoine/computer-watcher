@@ -3,6 +3,7 @@
 import { existsSync, writeFileSync } from 'node:fs';
 import { REPO_RELEASES_URL } from '../core/update';
 import { InstallError, type UpdateBackend } from './updater';
+import { cleanEnv } from '../core/childEnv';
 
 export interface AppImageBackendOptions {
   /** Flux de test local (generic) ; null : flux GitHub de app-update.yml (écrit par electron-builder, https). */
@@ -11,6 +12,41 @@ export interface AppImageBackendOptions {
   testConfigPath: string;
   /** AppImage vérifiée de ce processus (realAppImage), remplacée par electron-updater. */
   appImage: string;
+  /** Relance la version installée (chemin du fichier mis à jour) et quitte : jamais par electron-updater (I-C). */
+  restart: (target: string) => void;
+}
+
+/** Relance de la version mise à jour : détachée, environnement sans rien sous le montage /tmp qui va disparaître (I-C). */
+export function restartCommand(target: string, env: NodeJS.ProcessEnv): { cmd: string; args: string[]; env: NodeJS.ProcessEnv } {
+  return { cmd: target, args: [], env: cleanEnv(env) };
+}
+
+export interface InstallerLike {
+  install(isSilent: boolean, isForceRunAfter: boolean): boolean;
+  on(event: 'appimage-filename-updated', cb: (path: string) => void): unknown;
+}
+
+/**
+ * Installe la version téléchargée sans la laisser relancer par electron-updater (qui transmettrait `process.env` brut,
+ * avec le PATH et le LD_LIBRARY_PATH du montage qui va disparaître) : `install(silencieux, sans relance)` — en AppImage,
+ * il exécute alors la nouvelle version une seule fois avec APPIMAGE_EXIT_AFTER_INSTALL (intégration, puis sortie), de
+ * façon synchrone, pendant que notre montage est encore là — puis `restart` relance nous-mêmes le fichier mis à jour.
+ */
+export function installAndRestart(
+  u: InstallerLike,
+  c: { appImage: string; takeError: () => Error | null; pendingFile: () => string | null; restart: (target: string) => void; onFailure?: () => void },
+): void {
+  let target = c.appImage;
+  u.on('appimage-filename-updated', (p) => {
+    target = p;
+  });
+  const ok = u.install(true, false);
+  const failed = c.takeError();
+  if (failed || !ok) {
+    c.onFailure?.();
+    throw new InstallError(failed?.message ?? 'Installation non effectuée', c.pendingFile(), c.appImage);
+  }
+  c.restart(target);
 }
 
 /**
@@ -80,9 +116,14 @@ export async function createAppImageBackend(o: AppImageBackendOptions): Promise<
         }
       }
       lastError = null;
-      u.quitAndInstall(false, true);
-      const failed = lastError as Error | null;
-      if (failed) throw new InstallError(failed.message, pendingFile(), o.appImage);
+      installAndRestart(u, {
+        appImage: o.appImage,
+        takeError: () => lastError,
+        pendingFile,
+        restart: o.restart,
+        // electron-updater garde son verrou « déjà installé » après un échec d'install() : relâché pour « Réessayer »
+        onFailure: () => void ((u as unknown as { quitAndInstallCalled: boolean }).quitAndInstallCalled = false),
+      });
     },
   };
 }

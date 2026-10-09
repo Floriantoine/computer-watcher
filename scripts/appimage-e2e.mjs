@@ -215,6 +215,12 @@ try {
     ok(sha(copy) !== before, 'C. contenu changé');
     ok(readdirSync(join(home, 'Applications')).join(',') === 'proc-watch.AppImage', `C. un seul fichier dans Applications (${readdirSync(join(home, 'Applications')).join(',')})`);
     ok(readdirSync(dl).length === 0, 'C. rien dans Téléchargements');
+    // I-C : la version mise à jour est relancée par proc-watch, environnement sans l'ancien montage /tmp
+    let up = null;
+    await waitFor(() => (up = ours().find((p) => p.exe === copy)), 30000);
+    const upEnv = up ? readFileSync(`/proc/${up.pid}/environ`, 'utf8') : '';
+    ok(!!up, 'C. version mise à jour relancée (runtime = la copie)');
+    ok(!!up && !upEnv.includes('/tmp/.mount_'), 'C. environnement de la version mise à jour : aucune entrée sous /tmp/.mount_');
     report.afterUpdate = ours();
     await killOurs();
   }

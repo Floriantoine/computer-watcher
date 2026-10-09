@@ -35,6 +35,13 @@ describe('I-A : environnement transmis aux processus lancés par l’app (aucune
     const e = cleanEnv({ APPDIR: '/run/user/1000/app', PATH: '/run/user/1000/app/usr/bin:/usr/bin' });
     expect(e.PATH).toBe('/usr/bin');
   });
+  test('m-a : liste séparée par des espaces (LD_PRELOAD) ou valeur composée qui contient encore le montage : variable retirée', () => {
+    const e = cleanEnv({ APPDIR: M, LD_PRELOAD: `/usr/lib/libok.so ${M}/libx.so`, X: `a=${M}/b`, Y: '/run/app/x', OK: '/usr/lib/libok.so' });
+    expect('LD_PRELOAD' in e).toBe(false);
+    expect('X' in e).toBe(false);
+    expect(e.OK).toBe('/usr/lib/libok.so');
+    expect(cleanEnv({ APPDIR: '/run/app', Y: 'k=/run/app/x' })).toEqual({});
+  });
   test('rien sous le montage : inchangé (sauf variables du runtime)', () => {
     expect(cleanEnv({ PATH: '/usr/bin:/bin', HOME: '/h' })).toEqual({ PATH: '/usr/bin:/bin', HOME: '/h' });
   });

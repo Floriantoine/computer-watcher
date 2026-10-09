@@ -44,7 +44,7 @@ import { createAlertOpener, createFocusWriter, initSeenUpTo, keepSeenUpTo, markS
 import { installDesktopEntry, refreshDesktopEntry } from './desktopEntry';
 import { installedAppImage, installedElsewhere } from './appImageTrust';
 import { acquireLock, blockingSleep } from './singleInstance';
-import { createAppImageBackend } from './appImageUpdate';
+import { createAppImageBackend, restartCommand } from './appImageUpdate';
 import { createPrefsStore, createReleasesApiBackend, createUpdateController, type UpdateBackend } from './updater';
 import { isReleaseUrl, RELEASES_API_URL, testFeedFromEnv, updateMode } from '../core/update';
 import { createEarlyoomApplier, earlyoomStatus, type EarlyoomLock } from './earlyoom';
@@ -1076,7 +1076,21 @@ let updateBackend: Promise<UpdateBackend> | null = null;
 const loadUpdateBackend = (): Promise<UpdateBackend> =>
   (updateBackend ??=
     updMode === 'install'
-      ? createAppImageBackend({ testFeed: updateFeed, testConfigPath: join(app.getPath('userData'), 'test-app-update.yml'), appImage: ownImage! })
+      ? createAppImageBackend({
+          testFeed: updateFeed,
+          testConfigPath: join(app.getPath('userData'), 'test-app-update.yml'),
+          appImage: ownImage!,
+          // I-C : relance par nous, détachée, environnement nettoyé (jamais par electron-updater), puis sortie
+          restart: (target) => {
+            app.releaseSingleInstanceLock(); // la nouvelle version prend le verrou
+            const c = restartCommand(target, process.env);
+            const child = spawn(c.cmd, c.args, { detached: true, stdio: 'ignore', env: c.env });
+            child.on('error', (e) => console.error('relance après mise à jour :', e));
+            child.unref();
+            quitting = true;
+            setImmediate(() => app.quit());
+          },
+        })
       : Promise.resolve(createReleasesApiBackend({ url: updateFeed ? `${updateFeed}releases.json` : RELEASES_API_URL, fetch })));
 let installBackend: UpdateBackend | null = null;
 const updater = createUpdateController({
