@@ -176,8 +176,6 @@ export function App() {
     setToasts((t) => [...t, { id, message, kind }]);
     setTimeout(() => setToasts((t) => t.slice(1)), 5000);
   };
-  const pushToastRef = useRef(pushToast);
-  pushToastRef.current = pushToast;
 
   // B8 bis : earlyoom absent ou arrêté → pop-up au lancement (élément mémoïsé : AlertPopups reste mémoïsé entre deux snapshots).
   const eoReminder = useEarlyoomReminder({ onState: setConfigState, onToast: (m, kind) => pushToast(m, kind) });
@@ -189,7 +187,7 @@ export function App() {
   );
   // Mise à jour disponible : pop-up en tête de pile, après celui d'earlyoom.
   const [updateView, setUpdateView] = useUpdateView();
-  const onUpdateAction = useUpdateActions(setUpdateView, (m, kind) => pushToastRef.current(m, kind));
+  const onUpdateAction = useUpdateActions(setUpdateView, (m, kind) => pushToast(m, kind));
   const leads = useMemo(
     () => [eoLead, updateView?.popup && <UpdatePopup key="update" view={updateView} onAction={onUpdateAction} />],
     [eoLead, updateView, onUpdateAction],

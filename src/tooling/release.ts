@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 
 export type Bump = 'patch' | 'minor' | 'major';
 export interface ReleaseArgs { bump: Bump; dryRun: boolean }
-export type Run = (cmd: string, args: string[], opts?: { inherit?: boolean }) => { code: number; stdout: string };
+export type Run = (cmd: string, args: string[], opts?: { inherit?: boolean }) => { code: number; stdout: string; stderr?: string };
 
 const BUMPS: readonly string[] = ['patch', 'minor', 'major'];
 const USAGE = 'Usage : npm run release -- patch|minor|major [--dry-run]';
@@ -44,7 +44,7 @@ export function release(args: ReleaseArgs, d: { run: Run; readPkg: () => { versi
   const git = (...a: string[]) => d.run('git', a);
   const must = (cmd: string, a: string[], what: string, inherit = false) => {
     const r = d.run(cmd, a, { inherit });
-    if (r.code !== 0) throw new Error(`Échec de ${what} (${[cmd, ...a].join(' ')}) : rien n'a été modifié.`);
+    if (r.code !== 0) throw new Error(`Échec de ${what} (${[cmd, ...a].join(' ')})${r.stderr ? ` :\n${r.stderr.trim()}` : ''}`);
     return r.stdout;
   };
 
@@ -86,8 +86,8 @@ export function release(args: ReleaseArgs, d: { run: Run; readPkg: () => { versi
 }
 
 export const defaultRun: Run = (cmd, args, opts) => {
-  const r = spawnSync(cmd, args, { encoding: 'utf8', stdio: opts?.inherit ? 'inherit' : ['ignore', 'pipe', 'inherit'] });
-  return { code: r.status ?? 1, stdout: r.stdout ?? '' };
+  const r = spawnSync(cmd, args, { encoding: 'utf8', stdio: opts?.inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'] });
+  return { code: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 };
 
 export function main(argv: string[]): number {

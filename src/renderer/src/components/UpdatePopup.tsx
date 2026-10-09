@@ -1,5 +1,5 @@
 // Pop-up « Mise à jour X.Y.Z disponible » (même style que les pop-ups d'alerte) et section Réglages › À propos.
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { Download, ExternalLink, Info, RefreshCw, RotateCw, X } from 'lucide-react';
 import type { UpdateView } from '../../../core/update';
@@ -26,9 +26,12 @@ export function useUpdateView(): [UpdateView | null, (v: UpdateView) => void] {
 
 /** Action d'un bouton du pop-up → IPC ; la nouvelle vue arrive par onView (ou la réponse). */
 export function useUpdateActions(setView: (v: UpdateView) => void, onToast: ToastFn) {
+  // Fonction stable (le pop-up reste mémoïsé entre deux snapshots), toast le plus récent.
+  const toast = useRef(onToast);
+  toast.current = onToast;
   return useCallback(
     (a: UpdateAction['kind'], url?: string) => {
-      const fail = (e: unknown) => onToast(`Mise à jour : ${e instanceof Error ? e.message : String(e)}`);
+      const fail = (e: unknown) => toast.current(`Mise à jour : ${e instanceof Error ? e.message : String(e)}`);
       const u = window.procWatch.update;
       if (a === 'download') u.download().then(setView, fail);
       else if (a === 'install') u.install().catch(fail);
@@ -36,7 +39,7 @@ export function useUpdateActions(setView: (v: UpdateView) => void, onToast: Toas
       else if (a === 'ignore') u.ignore().then(setView, fail);
       else if (a === 'open' && url) u.openRelease(url).catch(fail);
     },
-    [setView, onToast],
+    [setView],
   );
 }
 
