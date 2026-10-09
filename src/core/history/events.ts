@@ -98,7 +98,35 @@ export interface TmpCleanEvent {
   detail: { freedKB: number; deleted: string[]; refused: { name: string; reason: string }[]; partial?: true };
 }
 
-export type AppEvent = AppKillEvent | EarlyoomSetupEvent | TmpCleanEvent;
+/** Ménage du disque depuis la page Disque : familles traitées, refusées (avec la raison), place libérée (statfs). */
+export interface DiskCleanEvent {
+  ts: number;
+  type: 'disk_clean';
+  groupKey: null;
+  detail: { freedKB: number; done: string[]; refused: { id: string; reason: string }[] };
+}
+
+export type AppEvent = AppKillEvent | EarlyoomSetupEvent | TmpCleanEvent | DiskCleanEvent;
+
+function parseDiskClean(obj: Record<string, unknown>): DiskCleanEvent | null {
+  if (obj.groupKey !== null) return null;
+  const d = obj.detail as Record<string, unknown> | null;
+  if (typeof d !== 'object' || d === null || Array.isArray(d)) return null;
+  if (!Number.isFinite(d.freedKB as number)) return null;
+  if (!Array.isArray(d.done) || !d.done.every((n: unknown) => typeof n === 'string')) return null;
+  const okRefused = (x: unknown) => typeof x === 'object' && x !== null && typeof (x as { id: unknown }).id === 'string' && typeof (x as { reason: unknown }).reason === 'string';
+  if (!Array.isArray(d.refused) || !d.refused.every(okRefused)) return null;
+  return {
+    ts: obj.ts as number,
+    type: 'disk_clean',
+    groupKey: null,
+    detail: {
+      freedKB: d.freedKB as number,
+      done: [...(d.done as string[])],
+      refused: (d.refused as { id: string; reason: string }[]).map((r) => ({ id: r.id, reason: r.reason })),
+    },
+  };
+}
 
 function parseTmpClean(obj: Record<string, unknown>): TmpCleanEvent | null {
   if (obj.groupKey !== null) return null;
@@ -142,6 +170,11 @@ export function parseAppEvents(text: string): AppEvent[] {
       }
       if (obj.type === 'tmp_clean') {
         const t = parseTmpClean(obj);
+        if (t) out.push(t);
+        continue;
+      }
+      if (obj.type === 'disk_clean') {
+        const t = parseDiskClean(obj);
         if (t) out.push(t);
         continue;
       }

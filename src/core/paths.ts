@@ -36,6 +36,10 @@ export const dbPath = (dir: string) => join(dir, 'metrics.db');
 export const statusPath = (dir: string) => join(dir, 'recorder-status.json');
 export const appEventsPath = (dir: string) => join(dir, 'app-events.jsonl');
 export const clearRequestPath = (dir: string) => join(dir, 'clear-request');
+/** Mesure des familles récupérables de la page Disque (service une fois par jour, ou l'app). */
+export const diskFamiliesPath = (dir: string) => join(dir, 'disk-families.json');
+/** Demande de mesure des familles déposée par l'app, prise par le service à la minute suivante. */
+export const diskMeasureRequestPath = (dir: string) => join(dir, 'disk-measure-request');
 /** « Ignorer 30 min » de la prévision (service et app). */
 export const forecastSnoozePath = (dir: string) => join(dir, 'forecast-snooze.json');
 /** Crédit de Simulation des règles, écrit par le service, lu par le main au passage en Active. */

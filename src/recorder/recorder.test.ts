@@ -360,3 +360,36 @@ test('disque : statfs en échec → tick normal (échantillonnage mémoire intac
   expect(logs.some((l) => l.includes('disque') && l.includes('EIO'))).toBe(true);
   rec.stop();
 });
+
+test('familles du disque : requête de mesure → disk-families.json écrit, requête retirée ; mesure quotidienne', async () => {
+  const { base, procRoot } = setup();
+  let t = 1_000_000;
+  let runs = 0;
+  const rec = createRecorder({
+    dataDir: join(base, 'data'), configDir: join(base, 'cfg'), procRoot, now: () => t, cpuCount: 4, log: () => {},
+    statfs: () => ({ sizeKB: 1, availKB: 1 }), mountinfo: () => '',
+    diskMeasure: async () => {
+      runs++;
+      return [{ id: 'npm', sizeKB: 10, reclaimKB: 10, at: t }];
+    },
+  });
+  rec.start();
+  rec.minuteJob(); // pas de fichier : première mesure
+  await new Promise((r) => setTimeout(r, 20));
+  const file = join(base, 'data', 'disk-families.json');
+  expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ at: 1_000_000, families: [{ id: 'npm', sizeKB: 10, reclaimKB: 10, at: 1_000_000 }] });
+  t += 60_000;
+  rec.minuteJob(); // mesure récente : rien
+  await new Promise((r) => setTimeout(r, 20));
+  expect(runs).toBe(1);
+  writeFileSync(join(base, 'data', 'disk-measure-request'), '');
+  rec.minuteJob();
+  await new Promise((r) => setTimeout(r, 20));
+  expect(runs).toBe(2);
+  expect(existsSync(join(base, 'data', 'disk-measure-request'))).toBe(false);
+  t += 25 * 3600_000;
+  rec.minuteJob(); // plus de 24 h : nouvelle mesure
+  await new Promise((r) => setTimeout(r, 20));
+  expect(runs).toBe(3);
+  rec.stop();
+});

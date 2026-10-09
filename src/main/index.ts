@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from 'electron';
 import appIcon from '../../resources/icon.png?asset';
-import { appendFileSync, constants as fsConstants, existsSync, lstatSync, realpathSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFileSync, constants as fsConstants, existsSync, lstatSync, realpathSync, mkdirSync, readFileSync, renameSync, statfsSync, writeFileSync } from 'node:fs';
 import { access, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -21,7 +21,7 @@ import { APP_DISPLAY_NAME, APP_NAME } from '../core/appName';
 import { killRequest, planKill, sendSignals } from '../core/kill';
 import { compileProtection } from '../core/protection';
 import { formatAppEvent } from '../core/history/events';
-import { appEventsPath, dataDir, focusStatePath, forecastSnoozePath, rulesSimulationPath } from '../core/paths';
+import { appEventsPath, dataDir, diskFamiliesPath, focusStatePath, forecastSnoozePath, rulesSimulationPath } from '../core/paths';
 import { readSimStatsFile } from '../core/rules/simulationFile';
 import { alertIdFromArgv } from '../core/alerts';
 import { ACTIVE_CPU_PERCENT } from '../core/history/queries';
@@ -64,6 +64,9 @@ import type { TmpConfirmSummary, TmpDeleteOutcome } from '../core/tmpClean';
 import { confirmText, createSetAsideStore, createTmpCleaner, tmpCleanEvent, tmpRootFromEnv, type CleanFs } from './tmpClean';
 import { sharedScan, topTmpDirs } from './tmpUsage';
 import { createScanCache, scanHome } from './diskScan';
+import { cleanFamilies, diskCleanEvent, realProcByName, staticRefusal, type CleanDeps, type CleanResult } from './diskClean';
+import { familyRoots, isFamilyRequest, type FamiliesFile, type FamilyId } from '../core/disk/families';
+import { measureFamilies, readFamiliesFile, writeFamiliesFile } from '../core/disk/measure';
 import { tmpFsStats } from './tmpFsStats';
 import { closeAction, confirmTray, createTrayController, defaultRun, statusNotifierAvailable, type TrayController } from './tray';
 import {
@@ -769,6 +772,101 @@ ipcMain.handle('disk:scan', (e, force: unknown) =>
   }, { force: force === true }));
 /** Page quittée : le parcours en cours est annulé 30 s plus tard, sauf retour d'ici là. */
 ipcMain.handle('disk:scan-cancel', () => diskScans.leave());
+
+// Familles récupérables : mesure du service (une fois par jour) ou de l'app (plus de 24 h, « Actualiser », après un ménage).
+const DISK_FAMILIES_MAX_AGE_MS = 24 * 3600_000;
+const diskRoots = () => familyRoots(process.env, homedir());
+let diskMeasuring: Promise<FamiliesFile | null> | null = null;
+const measureDiskFamilies = (): Promise<FamiliesFile | null> =>
+  (diskMeasuring ??= (async () => {
+    try {
+      const at = Date.now();
+      const f: FamiliesFile = { at, families: await measureFamilies(diskRoots()) };
+      mkdirSync(data, { recursive: true, mode: 0o700 });
+      writeFamiliesFile(diskFamiliesPath(data), f);
+      return f;
+    } catch (e) {
+      console.error('disque: mesure des familles :', e);
+      return readFamiliesFile(diskFamiliesPath(data));
+    } finally {
+      diskMeasuring = null;
+    }
+  })());
+const diskMountinfo = () => readFileSync('/proc/self/mountinfo', 'utf8');
+/** Dernières raisons de refus par famille (dernier ménage), montrées dans la liste. */
+const diskLastRefusals = new Map<FamilyId, string>();
+const diskFamiliesView = (f: FamiliesFile | null) => {
+  const roots = diskRoots();
+  const refusals: Partial<Record<FamilyId, string>> = {};
+  for (const m of f?.families ?? []) {
+    let why: string | null = null;
+    try {
+      why = staticRefusal(m.id, { roots, mountinfo: diskMountinfo });
+    } catch (e) {
+      why = `vérification impossible (${(e as Error).message})`;
+    }
+    const last = diskLastRefusals.get(m.id);
+    if (why ?? last) refusals[m.id] = (why ?? last)!;
+  }
+  return { file: f, refusals, measuring: diskMeasuring !== null };
+};
+ipcMain.handle('disk:families', async (_e, force: unknown) => {
+  const f = readFamiliesFile(diskFamiliesPath(data));
+  const age = f ? Date.now() - f.at : Infinity;
+  if (force === true || !f || !(age >= 0 && age < DISK_FAMILIES_MAX_AGE_MS)) return diskFamiliesView(await measureDiskFamilies());
+  return diskFamiliesView(f);
+});
+/** Confirmation native du ménage : récapitulatif par famille, « Annuler » par défaut. */
+const confirmDiskClean = async (s: { message: string; detail: string }): Promise<boolean> => {
+  const opts: Electron.MessageBoxOptions = {
+    type: 'warning', title: 'Libérer de l’espace disque', message: s.message, detail: s.detail,
+    buttons: ['Annuler', 'Supprimer définitivement'], defaultId: 0, cancelId: 0, noLink: true,
+  };
+  const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+  const r = parent ? await dialog.showMessageBox(parent, opts) : await dialog.showMessageBox(opts);
+  return r.response === 1;
+};
+const diskRunRoot: CleanDeps['runRoot'] = async () => ({ ok: false, cancelled: false, error: 'action administrateur indisponible' });
+let diskCleaning = false;
+ipcMain.handle('disk:clean', async (_e, raw: unknown): Promise<CleanResult> => {
+  if (!isFamilyRequest(raw)) throw new Error('requête refusée : familles inconnues ou en double');
+  if (diskCleaning) throw new Error('un ménage est déjà en cours');
+  diskCleaning = true;
+  // aucune lecture d'archive .asar pendant le ménage : un fichier .asar d'un cache est un fichier comme un autre
+  const noAsar = process.noAsar;
+  process.noAsar = true;
+  try {
+    const sizes = Object.fromEntries((readFamiliesFile(diskFamiliesPath(data))?.families ?? []).map((m) => [m.id, m.reclaimKB]));
+    const r = await cleanFamilies(raw, {
+      roots: diskRoots(), confirm: confirmDiskClean, sizes, mountinfo: diskMountinfo, runRoot: diskRunRoot,
+      dirUser: (dir) => realDirUser(dir, { selfExes: ownAppImageExes() }),
+      procByName: (names) => realProcByName(names),
+      statfs: (p) => {
+        const st = statfsSync(p);
+        return { availKB: Math.round((st.bavail * st.bsize) / 1024) };
+      },
+    });
+    for (const id of raw) diskLastRefusals.delete(id);
+    for (const x of r.refused) diskLastRefusals.set(x.id, x.reason);
+    const ev = diskCleanEvent(r, Date.now());
+    if (ev) {
+      try {
+        mkdirSync(data, { recursive: true });
+        appendFileSync(appEventsPath(data), formatAppEvent(ev));
+      } catch (e) {
+        console.error('app event:', e);
+      }
+    }
+    if (r.done.length) {
+      diskScans.clear();
+      void measureDiskFamilies();
+    }
+    return r;
+  } finally {
+    process.noAsar = noAsar;
+    diskCleaning = false;
+  }
+});
 
 ipcMain.handle('recorder:status', () => recorderState());
 ipcMain.handle('recorder:setEnabled', async (_e, enabled: unknown) => {

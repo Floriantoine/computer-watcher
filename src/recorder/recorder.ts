@@ -18,6 +18,8 @@ import { DEV_TOOL } from '../core/grouping/rules';
 import { readEarlyoomThresholds } from '../core/forecast/earlyoom';
 import { diskThresholdKB, initialDiskAlertState, shouldRecordDiskLow, type DiskAlertState } from '../core/disk/alert';
 import { watchedPartitions, type Partition } from '../core/disk/partitions';
+import { familyRoots, type FamilyMeasure } from '../core/disk/families';
+import { measureFamilies, readFamiliesFile, writeFamiliesFile } from '../core/disk/measure';
 import { MarginBuffer, SNOOZE_MS, alertText, conditionHeld, forecast, stepAlert, type AlertState, type Forecast } from '../core/forecast/forecast';
 import { readSnooze, writeSnooze } from '../core/forecast/snooze';
 import { historyBackups, openHistoryDb } from '../core/history/db';
@@ -38,7 +40,7 @@ import type { Group, RecorderConfig as RecCfg } from '../core/types';
 import { flattenGroup } from '../core/snapshot';
 import { aggregateHour, aggregateMinute, clearAll, leakCandidates, purge } from '../core/history/maintenance';
 import { HistoryWriter } from '../core/history/writer';
-import { appEventsPath, clearRequestPath, dbPath, focusStatePath, forecastSnoozePath, rulesSimulationPath, statusPath } from '../core/paths';
+import { appEventsPath, clearRequestPath, dbPath, diskFamiliesPath, diskMeasureRequestPath, focusStatePath, forecastSnoozePath, rulesSimulationPath, statusPath } from '../core/paths';
 import type { RecorderConfig, RecorderStatus, SystemInfo } from '../core/types';
 import type { Notifier } from './notify';
 import { createRuleRunner } from './ruleRunner';
@@ -80,6 +82,8 @@ export interface RecorderDeps {
   statfs?: (mount: string) => { sizeKB: number; availKB: number };
   /** Contenu de /proc/self/mountinfo (défaut : lu à chaque relecture des partitions). */
   mountinfo?: () => string;
+  /** Mesure des familles récupérables (défaut : du à basse priorité sous HOME / XDG). */
+  diskMeasure?: () => Promise<FamilyMeasure[]>;
 }
 
 /** statfs(2) en Ko : taille totale et place disponible pour un utilisateur ordinaire (f_bavail). */
@@ -132,6 +136,9 @@ const FORECAST_WARMUP_MS = 6 * M;
 const PARTITIONS_EVERY_MS = 60_000;
 /** Au redémarrage, les alertes disk_low des dernières 24 h retiennent la suivante (pas de doublon). */
 const DISK_LOW_MEMORY_MS = 24 * H;
+/** Familles du disque mesurées une fois par jour ; après un échec, nouvel essai au plus tôt 1 h plus tard. */
+const FAMILIES_EVERY_MS = 24 * H;
+const FAMILIES_RETRY_MS = H;
 /** Règles : ports en écoute relus au plus toutes les 60 s (classement des instances). */
 const RULE_PORTS_EVERY_MS = 60_000;
 /** Règles : cache des décisions de classement vidé toutes les 60 s (durée du cache de package.json). */
@@ -204,6 +211,9 @@ export function createRecorder(deps: RecorderDeps): Recorder {
   let diskAlerts = new Map<string, DiskAlertState>();
   let diskLastLow = new Map<string, number>();
   let diskError = '';
+  let measuring = false;
+  let measureTriedAt: number | null = null;
+  const measure = deps.diskMeasure ?? (() => measureFamilies(familyRoots(process.env, homedir())));
   const diskLog = (msg: string) => {
     if (msg === diskError) return;
     diskError = msg;
@@ -668,6 +678,25 @@ export function createRecorder(deps: RecorderDeps): Recorder {
           lastHour = Math.floor(lastMinute / H) * H;
           rmSync(clearRequestPath(deps.dataDir), { force: true });
         }
+      });
+      step('familles disque', () => {
+        if (measuring) return;
+        const req = diskMeasureRequestPath(deps.dataDir);
+        const requested = existsSync(req);
+        const f = readFamiliesFile(diskFamiliesPath(deps.dataDir));
+        const stale = !f || !(t - f.at >= 0 && t - f.at < FAMILIES_EVERY_MS);
+        const retryOk = measureTriedAt === null || !(t - measureTriedAt >= 0 && t - measureTriedAt < FAMILIES_RETRY_MS);
+        if (!requested && !(stale && retryOk)) return;
+        if (requested) rmSync(req, { force: true });
+        measuring = true;
+        measureTriedAt = t;
+        // en arrière-plan (du à basse priorité) : la minute suivante n'attend pas
+        measure()
+          .then((families) => writeFamiliesFile(diskFamiliesPath(deps.dataDir), { at: t, families }))
+          .catch((e: unknown) => log(`disque: mesure des familles : ${(e as Error)?.message ?? String(e)}`))
+          .finally(() => {
+            measuring = false;
+          });
       });
       step('agrégation', () => {
         const current = Math.floor(t / M) * M;

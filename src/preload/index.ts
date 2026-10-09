@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import type { AlertEvent } from '../core/alerts';
 import type { EarlyoomSettings } from '../core/earlyoom';
 import type { SunNode } from '../core/disk/sunTree';
+import type { FamiliesFile, FamilyId } from '../core/disk/families';
 import type { EarlyoomSetupMode } from '../core/earlyoomSetup';
 import type { AboutInfo, AutostartInfo, InstallOutcome, OnboardingInfo, UninstallItem, UninstallOptions, UninstallResult } from '../core/onboarding';
 import type { MigrationReport } from '../core/nameMigration';
@@ -140,6 +141,12 @@ const api = {
   disk: {
     /** Arbre du dossier personnel pour le soleil (gardé 10 min ; `force` : « Actualiser »). */
     scan: (force = false): Promise<{ tree: SunNode; truncated: boolean; at: number }> => ipcRenderer.invoke('disk:scan', force),
+    /** Mesure des familles récupérables (relancée si plus de 24 h ou `force`) et raisons de refus déjà connues. */
+    families: (force = false): Promise<{ file: FamiliesFile | null; refusals: Partial<Record<FamilyId, string>>; measuring: boolean }> =>
+      ipcRenderer.invoke('disk:families', force),
+    /** Ménage : ids seulement ; le main recalcule les chemins, fait confirmer (boîte native) et revérifie tout. */
+    clean: (ids: FamilyId[]): Promise<{ freedKB: number; done: FamilyId[]; refused: { id: FamilyId; reason: string }[]; cancelled: boolean }> =>
+      ipcRenderer.invoke('disk:clean', ids),
     /** Page quittée : le parcours en cours est annulé 30 s plus tard. */
     leaveScan: (): Promise<void> => ipcRenderer.invoke('disk:scan-cancel'),
     /** Ko lus par le parcours en cours. */
