@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import type { AlertEvent } from '../core/alerts';
 import type { EarlyoomSettings } from '../core/earlyoom';
+import type { SunNode } from '../core/disk/sunTree';
 import type { EarlyoomSetupMode } from '../core/earlyoomSetup';
 import type { AboutInfo, AutostartInfo, InstallOutcome, OnboardingInfo, UninstallItem, UninstallOptions, UninstallResult } from '../core/onboarding';
 import type { MigrationReport } from '../core/nameMigration';
@@ -135,6 +136,20 @@ const api = {
     delete: (items: TmpDeleteItem[]): Promise<TmpDeleteOutcome> => ipcRenderer.invoke('tmp:delete', items),
     /** Vide les quarantaines restées (suppressions interrompues), après confirmation native du main. */
     emptyQuarantine: (): Promise<TmpDeleteOutcome> => ipcRenderer.invoke('tmp:emptyQuarantine'),
+  },
+  disk: {
+    /** Arbre du dossier personnel pour le soleil (gardé 10 min ; `force` : « Actualiser »). */
+    scan: (force = false): Promise<{ tree: SunNode; truncated: boolean; at: number }> => ipcRenderer.invoke('disk:scan', force),
+    /** Page quittée : le parcours en cours est annulé 30 s plus tard. */
+    leaveScan: (): Promise<void> => ipcRenderer.invoke('disk:scan-cancel'),
+    /** Ko lus par le parcours en cours. */
+    onScanProgress(cb: (kb: number) => void): () => void {
+      const handler = (_e: IpcRendererEvent, kb: number) => cb(kb);
+      ipcRenderer.on('disk:scan-progress', handler);
+      return () => {
+        ipcRenderer.removeListener('disk:scan-progress', handler);
+      };
+    },
   },
   /** Assistant d'accueil (premier lancement, rouvrable depuis Réglages › À propos). */
   onboarding: {

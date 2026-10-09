@@ -63,6 +63,7 @@ import { promises as originalFsp } from 'original-fs';
 import type { TmpConfirmSummary, TmpDeleteOutcome } from '../core/tmpClean';
 import { confirmText, createSetAsideStore, createTmpCleaner, tmpCleanEvent, tmpRootFromEnv, type CleanFs } from './tmpClean';
 import { sharedScan, topTmpDirs } from './tmpUsage';
+import { createScanCache, scanHome } from './diskScan';
 import { tmpFsStats } from './tmpFsStats';
 import { closeAction, confirmTray, createTrayController, defaultRun, statusNotifierAvailable, type TrayController } from './tray';
 import {
@@ -760,6 +761,15 @@ ipcMain.handle('tmp:emptyQuarantine', async () => {
   logTmpClean(outcome);
   return outcome;
 });
+// Page Disque : parcours du dossier personnel (soleil) dans un processus enfant à basse priorité, gardé 10 min.
+const diskScans = createScanCache({ scan: (o, signal) => scanHome(homedir(), { ...o, signal }) });
+ipcMain.handle('disk:scan', (e, force: unknown) =>
+  diskScans.scan((kb) => {
+    if (!e.sender.isDestroyed()) e.sender.send('disk:scan-progress', kb);
+  }, { force: force === true }));
+/** Page quittée : le parcours en cours est annulé 30 s plus tard, sauf retour d'ici là. */
+ipcMain.handle('disk:scan-cancel', () => diskScans.leave());
+
 ipcMain.handle('recorder:status', () => recorderState());
 ipcMain.handle('recorder:setEnabled', async (_e, enabled: unknown) => {
   if (typeof enabled !== 'boolean') throw new Error('Valeur invalide');
