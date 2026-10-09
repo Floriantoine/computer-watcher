@@ -65,6 +65,14 @@ Sur Ubuntu 22.04+, les AppImage demandent `libfuse2` : `sudo apt install libfuse
 sudo apt install ./proc-watch-<version>-amd64.deb
 ```
 
+### Mises à jour
+
+- **AppImage** : proc-watch vérifie les versions publiées 30 s après le lancement puis toutes les 6 h. Une nouvelle version s'annonce dans un pop-up (« Mettre à jour », « Plus tard », « Ignorer cette version ») ; rien n'est téléchargé sans accord. Le fichier est vérifié (sha512) puis installé au redémarrage : l'AppImage est remplacée dans son dossier, le service d'enregistrement et le raccourci du menu suivent le nouveau fichier.
+- **.deb** : le pop-up signale la nouvelle version et ouvre sa page ; la mise à jour se fait avec `apt`.
+- **Depuis les sources** : aucune vérification.
+
+Réglages › À propos : version, vérification automatique (activée par défaut), préversions (désactivées), « Vérifier maintenant ».
+
 ### Depuis les sources
 
 ```bash
@@ -86,6 +94,10 @@ Avec npm 11.10+ (dont npm 12), les scripts d'installation des dépendances sont 
 | `npm run test:recorder` | build, test de performance du service d'enregistrement et test de bout en bout (base, événements, reprise) |
 | `npm run smoke` | build + lancement réel de l'app via Playwright |
 | `npm run dist` | produit l'AppImage et le .deb dans `release/` |
+| `npm run test:update` | build + mises à jour de bout en bout contre un flux local (rien n'est installé) |
+| `npm run release -- patch\|minor\|major [--dry-run]` | prépare une version : vérifications, tests, commit `chore(release): vX.Y.Z` et étiquette annotée, sans pousser |
+
+Publier : `npm run release -- patch`, relire, puis `git push --atomic origin main vX.Y.Z`. Le workflow `release` vérifie l'étiquette, relance les types et les tests, puis publie l'AppImage, le .deb et `latest-linux.yml` (lu par les mises à jour) ; le message de l'étiquette devient les notes de version.
 
 La logique (lecture de `/proc`, regroupement, protection, kill) vit dans `src/core/`, sans dépendance à Electron, et se teste sur de faux répertoires `/proc`. Pour reconnaître une nouvelle appli multi-processus, modifier `src/core/grouping/rules.ts` ; pour classer un nouvel outil de dev (front, back…), `src/core/classify/rules.ts`.
 
