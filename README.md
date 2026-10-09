@@ -51,19 +51,53 @@ Dans un projet, proc-watch découpe les processus en **instances** : un serveur 
 
 ## Installation
 
-### AppImage (toutes distributions)
+Les fichiers sont publiés dans les [Releases](https://github.com/Floriantoine/proc-watcher/releases), avec un fichier `latest-linux.yml` qui donne l'empreinte SHA-512 de l'AppImage.
 
-1. Télécharger `proc-watch-<version>-x86_64.AppImage` depuis les [Releases](https://github.com/Floriantoine/proc-watcher/releases).
-2. `chmod +x proc-watch-*.AppImage` puis le lancer.
-3. Dans **Réglages**, cliquer **Ajouter au menu des applications**.
-
-Sur Ubuntu 22.04+, les AppImage demandent `libfuse2` : `sudo apt install libfuse2`.
-
-### Debian / Ubuntu
+### Debian / Ubuntu (.deb)
 
 ```bash
 sudo apt install ./proc-watch-<version>-amd64.deb
 ```
+
+Le paquet ajoute l'entrée de menu et l'icône. Désinstaller le paquet : `sudo apt remove proc-watch`.
+
+### Toutes distributions (AppImage)
+
+1. Télécharger `proc-watch-<version>-x86_64.AppImage`.
+2. `chmod +x proc-watch-*.AppImage` puis le lancer.
+3. Au premier lancement, l'assistant d'accueil propose **Installer comme une app** : copie dans `~/Applications/proc-watch.AppImage`, entrée de menu et icône, puis relance depuis la copie. Il peut aussi supprimer le fichier téléchargé, seulement si la case est cochée (une confirmation montre le chemin exact). Les mises à jour automatiques remplacent ensuite cette copie.
+
+Sur Ubuntu 22.04+, les AppImage demandent `libfuse2` : `sudo apt install libfuse2`.
+
+### Arch / Manjaro (AUR)
+
+Un paquet `proc-watcher-bin` est prévu ; en attendant, utiliser l'AppImage.
+
+### Vérifier l'empreinte SHA-512
+
+`latest-linux.yml` donne le `sha512` de l'AppImage, encodé en base64 (c'est aussi ce que vérifient les mises à jour automatiques). Pour comparer :
+
+```bash
+sha512sum proc-watch-<version>-x86_64.AppImage | cut -d' ' -f1 | xxd -r -p | base64 -w0; echo
+grep -A2 'proc-watch-<version>-x86_64.AppImage' latest-linux.yml
+```
+
+Les deux valeurs doivent être identiques. Le `.deb` n'y figure pas : comparer `sha256sum proc-watch-<version>-amd64.deb` à l'empreinte affichée par GitHub à côté du fichier.
+
+### Premier lancement
+
+Un assistant de 3 ou 4 écrans (« Passer » à tout moment, Échap ; Alt+← / Alt+→ pour naviguer) :
+
+1. **Installer comme une app** (AppImage seulement) : voir plus haut.
+2. **Démarrer avec la session** (coché par défaut) : `~/.config/autostart/proc-watch.desktop` lance proc-watch avec `--hidden`, caché dans la barre des tâches (fenêtre réduite si le bureau n'a pas de zone de notification). Réglable ensuite dans Réglages › Affichage.
+3. **Historique** : le service d'enregistrement (voir [Historique en arrière-plan](#historique-en-arrière-plan)) : ce qui est noté, où, combien de place.
+4. **Protection contre les gels** : état d'earlyoom et « Installer et configurer ».
+
+Chaque étape affiche le résultat exact (chemins écrits) ou l'erreur. L'assistant ne revient plus ensuite ; il se rouvre depuis Réglages › À propos › **Relancer l'accueil**.
+
+### Désinstaller
+
+Réglages › À propos › **Désinstaller proc-watch…** : deux cases (supprimer aussi l'historique, la configuration) et la liste exacte de ce qui sera retiré, reprise dans une confirmation native. Sont retirés : le démarrage automatique, l'entrée de menu et l'icône (seulement celles écrites par proc-watch, marquées `X-ProcWatch-Managed=1`), le service d'enregistrement (arrêté, désactivé, unité supprimée), puis `~/Applications/proc-watch.AppImage` en dernier, et proc-watch quitte. Seuls les fichiers que proc-watch crée sont touchés (liste exacte, liens symboliques jamais suivis) ; earlyoom n'est jamais modifié. Si un élément ne peut pas être retiré, il est signalé et la copie de l'AppImage reste, pour réessayer. Avec le `.deb`, retirer ensuite le paquet avec `sudo apt remove proc-watch`.
 
 ### Depuis les sources
 
