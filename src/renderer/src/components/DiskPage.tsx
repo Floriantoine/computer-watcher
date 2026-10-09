@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { HardDrive, RefreshCw, Trash2 } from 'lucide-react';
 import { FAMILIES, familyDef, type FamiliesFile, type FamilyId } from '../../../core/disk/families';
 import type { SunNode } from '../../../core/disk/sunTree';
-import { badgeText, breadcrumb, familyOfPath, freedToast, highlighted, measuredAt, selectedTotal, type FamilyPaths } from '../disk';
+import { badgeText, breadcrumb, familyOfPath, freeButtonLabel, freedToast, type CleanPhase, highlighted, measuredAt, selectedTotal, type FamilyPaths } from '../disk';
 import { formatKB } from '../format';
 import { createSingleFlight } from '../tmpClean';
 import { ipcErrorMessage } from '../viewModel';
@@ -53,6 +53,8 @@ export function DiskPage({ onToast }: Props) {
   const [current, setCurrent] = useState<string | null>(null);
   const [selected, setSelected] = useState<ReadonlySet<FamilyId>>(new Set());
   const [busy, setBusy] = useState(false);
+  const [phase, setPhase] = useState<CleanPhase | null>(null);
+  useEffect(() => window.procWatch.disk.onCleanPhase(setPhase), []);
   const flight = useRef(createSingleFlight()).current;
   const alive = useRef(true);
   useEffect(() => {
@@ -134,7 +136,10 @@ export function DiskPage({ onToast }: Props) {
       } catch (e) {
         onToast?.(ipcErrorMessage(e), 'error');
       } finally {
-        if (alive.current) setBusy(false);
+        if (alive.current) {
+          setBusy(false);
+          setPhase(null);
+        }
       }
     });
   };
@@ -254,7 +259,7 @@ export function DiskPage({ onToast }: Props) {
               {selected.size > 0 && ` · ≈ ${formatKB(total)}`}
             </span>
             <button className="danger" data-testid="disk-free-button" disabled={!selected.size || busy} onClick={() => void free()}>
-              <Trash2 size={13} strokeWidth={2} /> {selected.size ? `Libérer ≈ ${formatKB(total)}…` : 'Libérer…'}
+              <Trash2 size={13} strokeWidth={2} /> {freeButtonLabel(selected.size, total, busy ? phase : null)}
             </button>
           </div>
         </section>

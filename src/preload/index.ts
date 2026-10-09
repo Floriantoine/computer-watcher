@@ -157,6 +157,14 @@ const api = {
     open: (path: string): Promise<{ ok: true } | { ok: false; error: string }> => ipcRenderer.invoke('disk:open', path),
     /** Page quittée : le parcours en cours est annulé 30 s plus tard. */
     leaveScan: (): Promise<void> => ipcRenderer.invoke('disk:scan-cancel'),
+    /** Étape du ménage en cours : mesure des tailles, confirmation, suppression. */
+    onCleanPhase(cb: (phase: 'measuring' | 'confirming' | 'cleaning') => void): () => void {
+      const handler = (_e: IpcRendererEvent, phase: 'measuring' | 'confirming' | 'cleaning') => cb(phase);
+      ipcRenderer.on('disk:clean-phase', handler);
+      return () => {
+        ipcRenderer.removeListener('disk:clean-phase', handler);
+      };
+    },
     /** Ko lus par le parcours en cours. */
     onScanProgress(cb: (kb: number) => void): () => void {
       const handler = (_e: IpcRendererEvent, kb: number) => cb(kb);

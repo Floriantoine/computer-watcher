@@ -38,9 +38,16 @@ export interface CleanDeps {
   rootPresent?(id: RootAction): boolean;
   /** Taille de chaque chemin à supprimer, pour la confirmation (absent : « taille inconnue »). */
   pathSizes?(paths: string[]): Promise<Map<string, number>>;
+  /** Plafond de cette mesure (défaut 30 s) ; au-delà : « taille inconnue (mesure trop longue) ». */
+  sizeTimeoutMs?: number;
+  /** Étape en cours, pour l'interface : mesure des tailles, confirmation, suppression. */
+  onPhase?(phase: 'measuring' | 'confirming' | 'cleaning'): void;
   /** Famille root indisponible (outil manquant) : raison, ou null (défaut : rootUnavailable de diskRoot.ts). */
   rootUnavailable?(id: RootAction): string | null;
 }
+
+/** Plafond de la mesure des tailles avant la confirmation (revue n-3). */
+const SIZE_TIMEOUT_MS = 30_000;
 
 const fmt = (kb: number) =>
   kb >= 1024 * 1024 ? `${(kb / (1024 * 1024)).toFixed(1).replace('.', ',')} Go` : kb >= 1024 ? `${Math.round(kb / 1024)} Mo` : `${Math.round(kb)} Ko`;
@@ -112,6 +119,15 @@ function lsReal(p: string): string[] | null {
   }
 }
 
+/** Chemin réel (liens résolus) ; inchangé s'il n'existe pas. */
+function realOr(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
 /** Ce qui sera supprimé, chemin par chemin (affiché dans la confirmation). Corbeille : le contenu de ses dossiers. */
 function targetsOf(id: FamilyId, r: FamilyRoots): { path: string; contents?: true }[] {
   if (id === 'test-browsers') return browserDropPaths(r).map((path) => ({ path }));
@@ -127,7 +143,7 @@ function checkFamily(id: FamilyId, homeDev: number, d: CleanDeps): string | null
     const missing = (d.rootUnavailable ?? ((x: RootAction) => rootUnavailable(x, existsSync)))(id as RootAction);
     if (missing) return missing;
   } else {
-    const xdg = familyRootRefusal(id, d.roots);
+    const xdg = familyRootRefusal(id, d.roots, { real: realOr, ls: lsReal });
     if (xdg) return xdg;
     const paths = familyPaths(id, d.roots);
     if (!paths.some(exists)) return 'absent';
@@ -179,7 +195,7 @@ function statfsPoints(ids: readonly FamilyId[], r: FamilyRoots): string[] {
 }
 
 function confirmSummary(
-  ids: readonly FamilyId[], refused: CleanResult['refused'], sizes: CleanDeps['sizes'], targets: Map<FamilyId, { path: string; contents?: true }[]>, pathKB: Map<string, number>,
+  ids: readonly FamilyId[], refused: CleanResult['refused'], sizes: CleanDeps['sizes'], targets: Map<FamilyId, { path: string; contents?: true }[]>, pathKB: Map<string, number>, sizesTimedOut = false,
 ): { message: string; detail: string } {
   const known = ids.map((id) => sizes?.[id]).filter((v): v is number => typeof v === 'number');
   const total = known.reduce((s, v) => s + v, 0);
@@ -192,7 +208,9 @@ function confirmSummary(
     // chemins exacts, chacun avec sa taille
     const paths = (targets.get(id) ?? []).map((t) => {
       const kb = pathKB.get(t.path);
-      return `    ${t.contents ? 'contenu de ' : ''}${t.path} (${kb === undefined ? 'taille inconnue' : fmt(kb)})`;
+      // chemin réel : une racine XDG en lien affiche où les fichiers sont vraiment
+      const unknown = sizesTimedOut ? 'taille inconnue (mesure trop longue)' : 'taille inconnue';
+      return `    ${t.contents ? 'contenu de ' : ''}${realOr(t.path)} (${kb === undefined ? unknown : fmt(kb)})`;
     });
     return [head, ...paths].join('\n');
   });
@@ -215,12 +233,24 @@ export async function cleanFamilies(ids: readonly FamilyId[], d: CleanDeps): Pro
   if (!ok.length) return { freedKB: 0, done: [], refused, cancelled: false };
   const targets = new Map(ok.filter((id) => !familyDef(id).root).map((id) => [id, targetsOf(id, d.roots)] as const));
   let pathKB = new Map<string, number>();
-  try {
-    if (d.pathSizes) pathKB = await d.pathSizes([...targets.values()].flat().map((t) => t.path));
-  } catch {
-    // tailles inconnues
+  let timedOut = false;
+  if (d.pathSizes) {
+    d.onPhase?.('measuring');
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<'late'>((res) => (timer = setTimeout(() => res('late'), d.sizeTimeoutMs ?? SIZE_TIMEOUT_MS)));
+    try {
+      const r = await Promise.race([d.pathSizes([...targets.values()].flat().map((t) => t.path)), late]);
+      if (r === 'late') timedOut = true;
+      else pathKB = r;
+    } catch {
+      // tailles inconnues
+    } finally {
+      clearTimeout(timer);
+    }
   }
-  if (!(await d.confirm(confirmSummary(ok, refused, d.sizes, targets, pathKB)))) return { freedKB: 0, done: [], refused, cancelled: true };
+  d.onPhase?.('confirming');
+  if (!(await d.confirm(confirmSummary(ok, refused, d.sizes, targets, pathKB, timedOut)))) return { freedKB: 0, done: [], refused, cancelled: true };
+  d.onPhase?.('cleaning');
 
   const points = statfsPoints(ok, d.roots);
   const avail = () => points.map((p) => {

@@ -89,3 +89,12 @@ describe('arcPath (SVG)', () => {
     expect(arcPath(150, 150, 40, 85, 0, 200)).toContain('A85,85 0 1 1');
   });
 });
+
+test('revue n-3 : libellé du bouton pendant la mesure des tailles', async () => {
+  const { freeButtonLabel } = await import('./disk');
+  expect(freeButtonLabel(0, 0, null)).toBe('Libérer…');
+  expect(freeButtonLabel(2, 3 * 1024, null)).toBe('Libérer ≈ 3 Mo…');
+  expect(freeButtonLabel(2, 3 * 1024, 'measuring')).toBe('Mesure des tailles…');
+  expect(freeButtonLabel(2, 3 * 1024, 'confirming')).toBe('Confirmation…');
+  expect(freeButtonLabel(2, 3 * 1024, 'cleaning')).toBe('Suppression…');
+});

@@ -94,3 +94,13 @@ export function arcPath(cx: number, cy: number, r0: number, r1: number, a0: numb
   const large = a1 - a0 > 180 ? 1 : 0;
   return `M${pt(cx, cy, r1, a0)} A${r1},${r1} 0 ${large} 1 ${pt(cx, cy, r1, a1)} L${pt(cx, cy, r0, a1)} A${r0},${r0} 0 ${large} 0 ${pt(cx, cy, r0, a0)} Z`;
 }
+
+export type CleanPhase = 'measuring' | 'confirming' | 'cleaning';
+
+/** Libellé du bouton « Libérer… » (revue n-3 : la mesure des tailles avant la confirmation est signalée). */
+export function freeButtonLabel(count: number, totalKB: number, phase: CleanPhase | null): string {
+  if (phase === 'measuring') return 'Mesure des tailles…';
+  if (phase === 'confirming') return 'Confirmation…';
+  if (phase === 'cleaning') return 'Suppression…';
+  return count ? `Libérer ≈ ${formatKB(totalKB)}…` : 'Libérer…';
+}

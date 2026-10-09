@@ -107,7 +107,7 @@ describe('revue I1 (a) : racine XDG égale à HOME ou hors de HOME', () => {
     expect(familyRootRefusal('uv', familyRoots({ XDG_CACHE_HOME: '/var/cache' }, home))).toMatch(/inhabituelle/);
     expect(familyRootRefusal('uv', familyRoots({ XDG_CACHE_HOME: '/h2' }, home))).toMatch(/inhabituelle/);
     expect(familyRootRefusal('uv', familyRoots({ XDG_CACHE_HOME: '/h/' }, home))).toMatch(/inhabituelle/);
-    expect(familyRootRefusal('uv', familyRoots({ XDG_CACHE_HOME: '/h/../h/.c' }, home))).toBeNull();
+    expect(familyRootRefusal('uv', familyRoots({ XDG_CACHE_HOME: '/h/../h/.cache' }, home))).toBeNull(); // n-2 : le défaut, normalisé
     expect(familyRootRefusal('uv', familyRoots({ XDG_CACHE_HOME: '/h/x/../..' }, home))).toMatch(/inhabituelle/);
     expect(familyRootRefusal('uv', familyRoots({}, home))).toBeNull();
     expect(familyRootRefusal('trash', familyRoots({}, home))).toBeNull();
@@ -124,7 +124,9 @@ describe('revue I1 (b) : signature de l’outil', () => {
     '/c/pip': ['http-v2', 'selfcheck', 'wheels'],
     '/c/pip-projet': ['notes.txt'],
     '/c/yarn': ['v6'],
+    '/c/yarn/v6': ['npm-a-1.0.0-x'],
     '/c/pnpm': ['v10', 'v11', 'v3'],
+    '/c/pnpm/v10': ['files', 'index'],
     '/c/pnpm-faux': ['store.txt'],
     '/c/reg': ['cache', 'CACHEDIR.TAG', 'index', 'src'],
     '/c/git': ['checkouts', 'db'],
@@ -182,5 +184,51 @@ describe('revue m-2 : versions de navigateurs aberrantes et date de modification
     expect(browserVersionsToDrop(['chromium-1100', 'chromium-1140', 'chromium-1150'], mtime)).toEqual(['chromium-1100']);
     const same = (n: string) => ({ 'chromium-1150': 300, 'chromium-1140': 200 })[n] ?? null;
     expect(browserVersionsToDrop(['chromium-1140', 'chromium-1150'], same)).toEqual(['chromium-1140']);
+  });
+});
+
+describe('revue n-1 / n-2 : racine XDG comparée en chemin réel, et qui doit ressembler à un dossier de caches', () => {
+  const home = '/h';
+  const links: Record<string, string> = { '/h/cachelink': '/h', '/h/up': '/', '/h/vers-cache': '/h/.cache' };
+  const real = (p: string) => links[p] ?? p;
+  const dirs: Record<string, string[]> = {
+    '/h/Documents': ['yarn', 'these', 'photos'],
+    '/h/caches': ['uv', 'pip', 'autre'],
+    '/h/tag': ['CACHEDIR.TAG'],
+    '/h/donnees': ['applications', 'icons', 'notes'],
+    '/h/perso': ['Trash'],
+  };
+  const ls = (p: string) => dirs[p] ?? null;
+  const o = { real, ls };
+  test('n-1 : lien vers HOME ou vers un parent de HOME → refusé, chemin réel affiché', async () => {
+    const { familyRootRefusal } = await import('./families');
+    expect(familyRootRefusal('pip', familyRoots({ XDG_CACHE_HOME: '/h/cachelink' }, home), o)).toBe('racine XDG inhabituelle (XDG_CACHE_HOME = /h/cachelink → /h), refusé');
+    expect(familyRootRefusal('pip', familyRoots({ XDG_CACHE_HOME: '/h/up' }, home), o)).toMatch(/→ \/\), refusé/);
+  });
+  test('n-2 : défaut (même via un lien), dossier de caches reconnu (2 outils ou CACHEDIR.TAG) → accepté ; dossier d’utilisateur → refusé', async () => {
+    const { familyRootRefusal } = await import('./families');
+    const r = (env: NodeJS.ProcessEnv) => familyRootRefusal('yarn', familyRoots(env, home), o);
+    expect(r({})).toBeNull();
+    expect(r({ XDG_CACHE_HOME: '/h/vers-cache' })).toBeNull();
+    expect(r({ XDG_CACHE_HOME: '/h/caches' })).toBeNull();
+    expect(r({ XDG_CACHE_HOME: '/h/tag' })).toBeNull();
+    expect(r({ XDG_CACHE_HOME: '/h/Documents' })).toMatch(/racine XDG inhabituelle/);
+    const t = (env: NodeJS.ProcessEnv) => familyRootRefusal('trash', familyRoots(env, home), o);
+    expect(t({ XDG_DATA_HOME: '/h/donnees' })).toBeNull();
+    expect(t({ XDG_DATA_HOME: '/h/perso' })).toMatch(/racine XDG inhabituelle/);
+  });
+  test('n-2 : signatures renforcées — yarn v<n> avec npm-* ou .tmp ; pnpm v<n> avec files ou index', async () => {
+    const { cacheSignature } = await import('./families');
+    const t: Record<string, string[]> = {
+      '/y1': ['v6'], '/y1/v6': ['npm-left-pad-1.3.0-abc'], '/y2': ['v6'], '/y2/v6': ['.tmp'], '/y3': ['v6', 'thesis.docx'], '/y3/v6': ['notes.md'],
+      '/p1': ['v10'], '/p1/v10': ['files', 'index'], '/p2': ['v3'], '/p2/v3': ['files'], '/p3': ['v10'], '/p3/v10': ['notes'],
+    };
+    const l = (p: string) => t[p] ?? null;
+    expect(cacheSignature('yarn', '/y1', l)).toBe(true);
+    expect(cacheSignature('yarn', '/y2', l)).toBe(true);
+    expect(cacheSignature('yarn', '/y3', l)).toBe(false);
+    expect(cacheSignature('pnpm', '/p1', l)).toBe(true);
+    expect(cacheSignature('pnpm', '/p2', l)).toBe(true);
+    expect(cacheSignature('pnpm', '/p3', l)).toBe(false);
   });
 });

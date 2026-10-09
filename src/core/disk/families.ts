@@ -192,17 +192,45 @@ function xdgRootOf(id: FamilyId, r: FamilyRoots): { name: string; path: string }
   return null;
 }
 
+/** Sous-dossiers d'outils connus dans un dossier de caches (XDG_CACHE_HOME). */
+const KNOWN_CACHE_DIRS = new Set([
+  'uv', 'pip', 'yarn', 'pnpm', 'paru', 'yay', 'ms-playwright', 'puppeteer', 'mozilla', 'chromium', 'google-chrome', 'fontconfig',
+  'mesa_shader_cache', 'thumbnails', 'electron', 'electron-builder', 'node-gyp', 'go-build', 'typescript', 'JNA', 'gstreamer-1.0',
+  'matplotlib', 'pre-commit', 'huggingface', 'JetBrains', 'pypoetry', 'deno', 'bun', 'ccache', 'sccache', 'gradle', 'kdeconnect.app',
+]);
+/** Sous-dossiers attendus dans un dossier de données (XDG_DATA_HOME). */
+const KNOWN_DATA_DIRS = new Set(['applications', 'icons', 'Trash', 'pnpm', 'mime', 'fonts']);
+
+export interface RootCheckOptions {
+  /** Chemin réel (liens résolus) ; défaut : le chemin normalisé, sans accès au disque. */
+  real?: (p: string) => string;
+  /** Noms d'un dossier (null : absent ou illisible) ; sans lui, une racine définie hors du défaut est refusée. */
+  ls?: (p: string) => string[] | null;
+}
+
 /**
- * Revue I1 (a) : une racine XDG égale au dossier personnel, ou hors de lui, ferait viser des dossiers de l'utilisateur
- * (`~/uv`, `~/Trash`…) : famille refusée. Familles root et chemins fixes sous HOME : non concernés.
+ * Revue I1 (a), n-1, n-2 : une racine XDG égale au dossier personnel, hors de lui (chemins réels comparés : un lien vers
+ * HOME ou vers un parent compte comme HOME), ou définie ailleurs que le défaut sans ressembler à un dossier de caches
+ * (CACHEDIR.TAG ou deux outils connus) / de données (deux dossiers parmi applications, icons, Trash, pnpm, mime, fonts)
+ * ferait viser des dossiers de l'utilisateur : famille refusée, chemin réel affiché. Familles root et chemins fixes sous
+ * HOME : non concernés.
  */
-export function familyRootRefusal(id: FamilyId, r: FamilyRoots): string | null {
+export function familyRootRefusal(id: FamilyId, r: FamilyRoots, o: RootCheckOptions = {}): string | null {
   const x = xdgRootOf(id, r);
   if (!x) return null;
-  const home = normalize(r.home);
-  const root = normalize(x.path);
-  if (root === home || !root.startsWith(`${home}/`)) return `racine XDG inhabituelle (${x.name} = ${x.path}), refusé`;
-  return null;
+  const real = (p: string) => normalize(o.real ? o.real(normalize(p)) : p);
+  const home = real(r.home);
+  const root = real(x.path);
+  const shown = root === normalize(x.path) ? x.path : `${x.path} → ${root}`;
+  const refuse = `racine XDG inhabituelle (${x.name} = ${shown}), refusé`;
+  if (root === home || !root.startsWith(`${home}/`)) return refuse;
+  const isCache = x.name === 'XDG_CACHE_HOME';
+  if (root === `${home}/${isCache ? '.cache' : '.local/share'}`) return null;
+  const names = o.ls?.(root) ?? null;
+  if (!names) return refuse;
+  if (isCache && names.includes('CACHEDIR.TAG')) return null;
+  const known = isCache ? KNOWN_CACHE_DIRS : KNOWN_DATA_DIRS;
+  return names.filter((n) => known.has(n)).length >= 2 ? null : refuse;
 }
 
 const anyName = (names: string[] | null, re: RegExp) => !!names && names.some((n) => re.test(n));
@@ -218,8 +246,9 @@ export function cacheSignature(id: FamilyId, path: string, ls: (p: string) => st
     case 'npm': return anyName(names, /^index-v\d+$/);
     case 'uv': return anyName(names, /^(CACHEDIR\.TAG|\.lock|(sdists|wheels|archive)-v\d+)$/);
     case 'pip': return anyName(names, /^(http-v2|http|wheels|selfcheck)$/);
-    case 'yarn':
-    case 'pnpm': return anyName(names, /^v\d+$/);
+    // un dossier v<n> qui contient bien des paquets (yarn : npm-* ou .tmp ; pnpm : files ou index)
+    case 'yarn': return (names ?? []).some((n) => /^v\d+$/.test(n) && anyName(ls(join(path, n)), /^(npm-.+|\.tmp)$/));
+    case 'pnpm': return (names ?? []).some((n) => /^v\d+$/.test(n) && anyName(ls(join(path, n)), /^(files|index)$/));
     case 'cargo': {
       const parent = parentOf(path);
       return parent.endsWith('/registry') ? anyName(ls(parent), /^(index|cache)$/) : anyName(ls(parent), /^db$/);

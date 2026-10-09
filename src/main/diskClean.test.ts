@@ -323,3 +323,49 @@ describe('revue de sécurité (reproductions)', () => {
     expect(readdirSync(join(home, '.cache/ms-playwright')).sort()).toEqual(['.links', 'chromium-0999999999999999999999', 'chromium-1155', 'firefox-1466']);
   });
 });
+
+describe('revue n-1 à n-3 (reproductions)', () => {
+  test('n-1 : XDG_CACHE_HOME=~/cachelink (lien vers HOME) — ~/pip gardé, refus avec le chemin réel', async () => {
+    const { home } = fakeHome();
+    mkdirSync(join(home, 'pip/wheels'), { recursive: true });
+    writeFileSync(join(home, 'pip/README'), 'r');
+    symlinkSync(home, join(home, 'cachelink'));
+    const { d, asked } = deps(familyRoots({ XDG_CACHE_HOME: join(home, 'cachelink') }, home));
+    const r = await cleanFamilies(['pip'], d);
+    expect(r.refused).toEqual([{ id: 'pip', reason: `racine XDG inhabituelle (XDG_CACHE_HOME = ${join(home, 'cachelink')} → ${home}), refusé` }]);
+    expect(asked).toHaveLength(0);
+    expect(existsSync(join(home, 'pip/README'))).toBe(true);
+  });
+
+  test('n-2 [Documents] : XDG_CACHE_HOME=~/Documents — ~/Documents/yarn/thesis.docx intact', async () => {
+    const { home } = fakeHome();
+    mkdirSync(join(home, 'Documents/yarn/v6'), { recursive: true });
+    writeFileSync(join(home, 'Documents/yarn/v6/notes.md'), 'n');
+    writeFileSync(join(home, 'Documents/yarn/thesis.docx'), 'T');
+    const { d, asked } = deps(familyRoots({ XDG_CACHE_HOME: join(home, 'Documents') }, home));
+    const r = await cleanFamilies(['yarn'], d);
+    expect(r.done).toEqual([]);
+    expect(r.refused[0].reason).toMatch(/racine XDG inhabituelle|ne ressemble pas/);
+    expect(asked).toHaveLength(0);
+    expect(existsSync(join(home, 'Documents/yarn/thesis.docx'))).toBe(true);
+  });
+
+  test('n-1 : racine en lien vers le défaut (~/cache-lien → ~/.cache) acceptée ; la boîte montre le chemin réel', async () => {
+    const { home } = fakeHome();
+    symlinkSync(join(home, '.cache'), join(home, 'cache-lien'));
+    const { d, asked } = deps(familyRoots({ XDG_CACHE_HOME: join(home, 'cache-lien') }, home));
+    const r = await cleanFamilies(['uv'], d);
+    expect(r.done).toEqual(['uv']);
+    expect(asked[0].detail).toContain(`    ${join(home, '.cache/uv')} (`);
+    expect(asked[0].detail).not.toContain('cache-lien');
+  });
+
+  test('n-3 : mesure des tailles plafonnée — au-delà, « taille inconnue (mesure trop longue) » ; phases signalées', async () => {
+    const { roots } = fakeHome();
+    const phases: string[] = [];
+    const { d, asked } = deps(roots, { pathSizes: () => new Promise(() => {}), sizeTimeoutMs: 50, onPhase: (p) => phases.push(p) });
+    await cleanFamilies(['npm'], d);
+    expect(asked[0].detail).toContain('taille inconnue (mesure trop longue)');
+    expect(phases).toEqual(['measuring', 'confirming', 'cleaning']);
+  });
+});

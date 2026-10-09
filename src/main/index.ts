@@ -872,7 +872,7 @@ const diskRoot = diskRootRunner(process.env, app.isPackaged);
 if (diskRoot.fake) console.error(`${APP_DISPLAY_NAME} : actions administrateur du disque simulées (PROC_WATCH_DISK_ROOT_FAKE)`);
 const diskRunRoot: CleanDeps['runRoot'] = (action) => runDiskRoot(action, diskRoot.run);
 let diskCleaning = false;
-ipcMain.handle('disk:clean', async (_e, raw: unknown): Promise<CleanResult> => {
+ipcMain.handle('disk:clean', async (e, raw: unknown): Promise<CleanResult> => {
   if (!isFamilyRequest(raw)) throw new Error('requête refusée : familles inconnues ou en double');
   if (diskCleaning) throw new Error('un ménage est déjà en cours');
   diskCleaning = true;
@@ -880,6 +880,10 @@ ipcMain.handle('disk:clean', async (_e, raw: unknown): Promise<CleanResult> => {
     const sizes = Object.fromEntries((readFamiliesFile(diskFamiliesPath(data))?.families ?? []).map((m) => [m.id, m.reclaimKB]));
     const r = await cleanFamilies(raw, {
       roots: diskRoots(), confirm: confirmDiskClean, sizes, mountinfo: diskMountinfo, runRoot: diskRunRoot, pathSizes: defaultDu,
+      // étape en cours (« Mesure des tailles… » sur le bouton)
+      onPhase: (phase) => {
+        if (!e.sender.isDestroyed()) e.sender.send('disk:clean-phase', phase);
+      },
       dirUser: (dir) => realDirUser(dir, { selfExes: ownAppImageExes() }),
       procByName: (names) => realProcByName(names),
       statfs: (p) => {
