@@ -223,8 +223,10 @@ try {
     console.log('mountinfo (copie mise à jour) :', report.mountUpdated.join(' / '));
     ok((await win.locator('[data-testid="onboarding"]').count()) === 0, 'D. accueil fait : plus d’assistant');
     await stubDialogs(app);
+    ok(existsSync(join(base, 'cache/proc-watch-updater')), 'D. cache de l’updater présent après la mise à jour');
     const r1 = await win.evaluate(() => window.procWatch.uninstall.run({ history: true, config: true }));
     console.log('désinstallation 1 :', JSON.stringify(r1.result, null, 1));
+    ok(!existsSync(join(base, 'cache/proc-watch-updater')), 'D. cache de l’updater retiré (configuration cochée)');
     for (const p of [join(cfg, 'autostart/proc-watch.desktop'), join(data, 'applications/proc-watch.desktop'), join(data, 'icons/hicolor/512x512/apps/proc-watch.png')])
       ok(!existsSync(p), `D. retiré : ${p.slice(base.length)}`);
     ok(existsSync(unit) && r1.result.kept.some((k) => k.path === unit && /PROC_WATCH_NO_RECORDER_SYNC/.test(k.reason)), 'D. unité gardée (NO_RECORDER_SYNC), et dit');

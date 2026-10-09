@@ -47,6 +47,8 @@ describe('chemins', () => {
     expect(p.configDir).toBe('/c/proc-watch');
     expect(p.dataDir).toBe('/d/proc-watch');
     expect(appPaths(rootsFrom({}, '/home/u')).autostart).toBe('/home/u/.config/autostart/proc-watch.desktop');
+    expect(appPaths(rootsFrom({ XDG_CACHE_HOME: '/k' }, '/home/u')).updaterCache).toBe('/k/proc-watch-updater');
+    expect(appPaths(rootsFrom({}, '/home/u')).updaterCache).toBe('/home/u/.cache/proc-watch-updater');
   });
 });
 
@@ -522,6 +524,45 @@ describe('arrêt du service à la désinstallation (échoue fermé)', () => {
     expect(r.done).toBe(false);
   });
 
+});
+
+describe('cache de l’updater (proc-watch-updater) avec « Supprimer la configuration »', () => {
+  test('listé et retiré seulement avec la configuration ; contenu retiré sans suivre de lien', async () => {
+    const p = await fullInstall();
+    mkdirSync(join(p.updaterCache, 'pending'), { recursive: true });
+    writeFileSync(join(p.updaterCache, 'pending/proc-watch-0.1.1-x86_64.AppImage'), 'x');
+    const victim = join(roots.home, 'victim');
+    mkdirSync(victim);
+    writeFileSync(join(victim, 'precious'), 'x');
+    symlinkSync(victim, join(p.updaterCache, 'lien'));
+    expect(uninstallPlan(roots, { history: false, config: false }).map((i) => i.path)).not.toContain(p.updaterCache);
+    const plan = uninstallPlan(roots, { history: false, config: true });
+    expect(plan.find((i) => i.path === p.updaterCache)).toMatchObject({ kind: 'cache', tree: true });
+    const r = await runUninstall(plan, roots, { service: okService() });
+    expect(r.failed).toEqual([]);
+    expect(existsSync(p.updaterCache)).toBe(false);
+    expect(existsSync(join(victim, 'precious'))).toBe(true);
+  });
+  test('cache remplacé par un lien symbolique : le lien seul est retiré, jamais sa cible', async () => {
+    const p = await fullInstall();
+    const victim = join(roots.home, 'victim-cache');
+    mkdirSync(victim);
+    writeFileSync(join(victim, 'precious'), 'x');
+    mkdirSync(roots.cacheHome, { recursive: true });
+    symlinkSync(victim, p.updaterCache);
+    const r = await runUninstall(uninstallPlan(roots, { history: false, config: true }), roots, { service: okService() });
+    expect(r.failed).toEqual([]);
+    expect(lstatSync(p.updaterCache, { throwIfNoEntry: false })).toBeUndefined();
+    expect(readFileSync(join(victim, 'precious'), 'utf8')).toBe('x');
+  });
+  test('chemin de cache forgé (autre nom sous le cache) : refusé', async () => {
+    await fullInstall();
+    const other = join(roots.cacheHome, 'autre-app');
+    mkdirSync(other, { recursive: true });
+    const r = await runUninstall([{ kind: 'cache', path: other, label: 'x', tree: true }], roots, { service: okService() });
+    expect(existsSync(other)).toBe(true);
+    expect(r.failed[0]!.error).toMatch(/hors de la liste/);
+  });
 });
 
 describe('dernier passage sur la configuration (Chromium réécrit son profil en quittant)', () => {

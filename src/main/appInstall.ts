@@ -13,10 +13,15 @@ import { UNIT_NAME, type Systemctl } from './recorderService';
 
 export type { InstallOutcome, UninstallItem, UninstallKind, UninstallOptions, UninstallResult };
 
-export interface Roots { home: string; configHome: string; dataHome: string }
+export interface Roots { home: string; configHome: string; dataHome: string; cacheHome: string }
 
 export function rootsFrom(env: NodeJS.ProcessEnv, home: string): Roots {
-  return { home, configHome: env.XDG_CONFIG_HOME || join(home, '.config'), dataHome: env.XDG_DATA_HOME || join(home, '.local/share') };
+  return {
+    home,
+    configHome: env.XDG_CONFIG_HOME || join(home, '.config'),
+    dataHome: env.XDG_DATA_HOME || join(home, '.local/share'),
+    cacheHome: env.XDG_CACHE_HOME || join(home, '.cache'),
+  };
 }
 
 export function appPaths(r: Roots) {
@@ -28,11 +33,13 @@ export function appPaths(r: Roots) {
     unit: join(r.configHome, 'systemd/user', UNIT_NAME),
     configDir: join(r.configHome, 'proc-watch'),
     dataDir: join(r.dataHome, 'proc-watch'),
+    /** Cache d'electron-updater (updaterCacheDirName d'app-update.yml : `${nom}-updater`). */
+    updaterCache: join(r.cacheHome, 'proc-watch-updater'),
   };
 }
 
 /** Racines sous lesquelles proc-watch écrit (chaque dossier en dessous est ouvert sans suivre de lien). */
-export const rootList = (r: Roots) => [r.home, r.configHome, r.dataHome];
+export const rootList = (r: Roots) => [r.home, r.configHome, r.dataHome, r.cacheHome];
 
 const code = (e: unknown) => (e as NodeJS.ErrnoException)?.code;
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -234,6 +241,7 @@ const LABELS: Record<UninstallKind, string> = {
   service: 'Service d’enregistrement',
   history: 'Historique',
   config: 'Configuration',
+  cache: 'Cache des mises à jour',
   appimage: 'Application',
 };
 
@@ -271,6 +279,8 @@ export function uninstallPlan(r: Roots, o: UninstallOptions): UninstallItem[] {
     for (const f of ownFiles(r, p.configDir, CONFIG_FILES, CONFIG_PATTERNS)) out.push(item('config', f));
     for (const f of ownFiles(r, p.configDir, [...CHROMIUM_TREES, ...CHROMIUM_LINKS], [])) out.push({ ...item('config', f), tree: true });
     if (present(p.configDir)) out.push(item('config', p.configDir, true));
+    // cache d'electron-updater : arborescence retirée sans suivre de lien ; s'il est un lien, le lien seul
+    if (present(p.updaterCache)) out.push({ ...item('cache', p.updaterCache), tree: true });
   }
   if (present(p.appImage)) out.push(item('appimage', p.appImage));
   return out;
@@ -286,6 +296,7 @@ function allowed(r: Roots, i: UninstallItem): boolean {
     case 'service': return i.path === p.unit && !i.dir;
     case 'appimage': return i.path === p.appImage && !i.dir;
     case 'history': return i.dir ? i.path === p.dataDir : dirname(i.path) === p.dataDir && allowedName(basename(i.path), DATA_FILES, DATA_PATTERNS);
+    case 'cache': return i.path === p.updaterCache && !!i.tree && !i.dir;
     case 'config':
       if (i.dir) return i.path === p.configDir;
       if (dirname(i.path) !== p.configDir) return false;
@@ -373,7 +384,8 @@ export async function runUninstall(plan: readonly UninstallItem[], r: Roots, dep
         continue;
       }
       if (i.tree) {
-        if (removeTreeSafe(roots, i.path, { allowTopLink: CHROMIUM_LINKS.includes(basename(i.path)) }) === 'removed') removed(i.path);
+        const topLink = i.kind === 'cache' || CHROMIUM_LINKS.includes(basename(i.path));
+        if (removeTreeSafe(roots, i.path, { allowTopLink: topLink }) === 'removed') removed(i.path);
         continue;
       }
       if (removeFileSafe(roots, i.path) === 'removed') removed(i.path);
