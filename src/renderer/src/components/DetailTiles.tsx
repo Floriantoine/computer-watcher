@@ -1,0 +1,47 @@
+// src/renderer/src/components/DetailTiles.tsx — tuiles du haut du détail : en direct, ou à l'instant survolé / figé du graphe
+import type { GroupSummary, MemoryMetric } from '../../../core/types';
+import { formatAge, formatCpu, formatKB } from '../format';
+import { fallbackTitle, memTileLabel } from '../memMetric';
+import { formatInstant } from '../metrics';
+import type { TileValues } from '../replay';
+import { AnimatedNumber } from './ui';
+
+/** Instant examiné : son horodatage et les valeurs lues dans les séries du graphe (null : hors des séries). */
+export interface TilesAt { ts: number; values: TileValues | null }
+
+const dash = '—';
+
+/** Badge « au HH:MM:SS » d'une tuile à l'instant examiné (positionné en absolu : la hauteur des tuiles ne bouge pas). */
+function At({ text }: { text: string }) {
+  return <span className="tile-at" data-testid="tile-at">{text}</span>;
+}
+
+/**
+ * Processus, RAM, Swap, CPU et Plus ancien. Avec `at`, les quatre premières montrent l'instant examiné (sans animation,
+ * pour suivre la souris) et « Plus ancien » vaut « — » (l'âge n'est pas enregistré).
+ */
+export function DetailTiles({ group, memMetric, at, now }: { group: GroupSummary; memMetric: MemoryMetric; at: TilesAt | null; now?: number }) {
+  if (at) {
+    const v = at.values;
+    const badge = `au ${formatInstant(at.ts, now)}`;
+    const kb = (n: number | null | undefined) => (n == null ? dash : formatKB(Math.round(n)));
+    return (
+      <div className="summary is-at" data-testid="detail-tiles">
+        <div className="tile"><small>Processus</small><At text={badge} /><b>{v?.procCount ?? dash}</b></div>
+        <div className="tile" title="Mémoire résidente enregistrée par le service (RSS)"><small data-testid="mem-tile-label">RAM</small><At text={badge} /><b>{kb(v?.rssKB)}</b></div>
+        <div className="tile"><small>Swap</small><At text={badge} /><b>{kb(v?.swapKB)}</b></div>
+        <div className="tile"><small>CPU</small><At text={badge} /><b>{v?.cpu == null ? dash : formatCpu(v.cpu)}</b></div>
+        <div className="tile"><small>Plus ancien</small><b data-testid="tile-oldest">{dash}</b></div>
+      </div>
+    );
+  }
+  return (
+    <div className="summary" data-testid="detail-tiles">
+      <div className="tile"><small>Processus</small><b>{group.procCount}</b></div>
+      <div className="tile" title={fallbackTitle(memMetric, group)}><small data-testid="mem-tile-label">{memTileLabel(memMetric, group)}</small><b><AnimatedNumber value={group.rssKB} /></b></div>
+      <div className="tile"><small>Swap</small><b><AnimatedNumber value={group.swapKB} /></b></div>
+      <div className="tile"><small>CPU</small><b>{formatCpu(group.cpuPercent)}</b></div>
+      <div className="tile"><small>Plus ancien</small><b data-testid="tile-oldest" className={group.oldestAgeSec > 86400 ? 'old' : ''}>{formatAge(group.oldestAgeSec)}</b></div>
+    </div>
+  );
+}

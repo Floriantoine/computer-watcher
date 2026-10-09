@@ -294,8 +294,8 @@ select option { background: var(--surface-solid); color: var(--text); }
 .page-head .spacer { flex: 1; }
 .back { width: 34px; height: 34px; padding: 0; justify-content: center; }
 
-.summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; padding: 14px var(--gutter); }
-.tile { background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border-2); border-radius: var(--r-lg); padding: 10px 12px; }
+.summary { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; padding: 14px var(--gutter); }
+.tile { position: relative; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--border-2); border-radius: var(--r-lg); padding: 10px 12px; }
 .tile small { display: block; color: var(--label); font-size: 11px; }
 .tile b { display: block; font-size: 19px; font-weight: 600; letter-spacing: -0.01em; margin-top: 2px; font-variant-numeric: tabular-nums; }
 
@@ -1108,3 +1108,10 @@ button.primary:hover:not(:disabled) { background: rgba(124, 92, 255, 0.32); bord
 .swap-threshold input:focus { outline: none; border-color: var(--accent); }
 .swap-threshold.invalid input { border-color: var(--danger-border); color: var(--danger); }
 .swap-threshold .field-error { position: absolute; top: 100%; right: 0; margin-top: 3px; white-space: nowrap; font-size: 11px; color: var(--danger); }
+
+/* ---------- Rejeu au survol : tuiles à l'instant examiné, Instances restées en direct ---------- */
+/* Badge en absolu : la hauteur des tuiles ne change pas (le graphe ne bouge pas sous la souris). */
+.tile-at { position: absolute; top: 9px; right: 10px; padding: 0 6px; border-radius: 99px; font-size: 10px; line-height: 16px; color: var(--text); background: rgba(231, 233, 238, 0.1); border: 1px solid rgba(231, 233, 238, 0.2); font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none; }
+.summary.is-at .tile { border-color: rgba(231, 233, 238, 0.18); background: rgba(231, 233, 238, 0.05); }
+.instances-panel.is-live-only > :not(.chart-panel-head), .instances-panel.is-live-only .chart-panel-head > :not(.live-note) { opacity: 0.45; transition: opacity 0.15s; }
+.live-note { flex: none; padding: 0 7px; border-radius: 99px; font-size: 10.5px; line-height: 17px; color: var(--text-2); background: rgba(255, 255, 255, 0.07); border: 1px solid var(--border-2); }

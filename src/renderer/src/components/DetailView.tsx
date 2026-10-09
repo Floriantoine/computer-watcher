@@ -1,22 +1,20 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { ArrowLeft, ChevronRight, History, Lock, PenLine, Shield, ShieldOff, X } from 'lucide-react';
+import { ArrowLeft, ChevronRight, Lock, PenLine, Shield, ShieldOff, X } from 'lucide-react';
 import type { Category, GroupSummary as Group, InstanceSummary, MemoryMetric, ProcNode } from '../../../core/types';
 import { formatAge, formatKB } from '../format';
 import { procSparkMap, useHistory } from '../history';
 import { GroupHistoryPanel } from './GroupHistoryPanel';
 import { showRevertToAuto, ticksIndex } from '../instances';
-import { fallbackTitle, memTileLabel } from '../memMetric';
 import { headerReclassTarget } from '../reclassHeader';
-import { formatInstant } from '../metrics';
-import { liveKeySet, replayEmptyText, replayTree } from '../replay';
-import { useReplay, type Replay } from '../useReplay';
+import { useReplay } from '../useReplay';
+import { DetailTiles } from './DetailTiles';
 import { CategoryTag } from './CategoryTag';
 import { InstancesPanel } from './InstancesPanel';
 import { ReclassMenu } from './ReclassMenu';
 import { ProcTree } from './ProcTree';
-import { ReplayTree } from './ReplayTree';
-import { AnimatedNumber, ForceButton, GroupIcon } from './ui';
+import { ReplayPanel } from './ReplayPanel';
+import { ForceButton, GroupIcon } from './ui';
 
 interface Props {
   group: Group | undefined;
@@ -50,41 +48,6 @@ function BackButton({ onBack }: { onBack: () => void }) {
   );
 }
 
-/** Arbre reconstruit à l'instant examiné, à la place de l'arbre en direct. */
-function ReplayPanel({ replay, liveRoots }: { replay: Replay; liveRoots: ProcNode[] | null }) {
-  const instant = replay.instant!;
-  const tree = replay.tree;
-  const live = useMemo(() => liveKeySet(liveRoots), [liveRoots]);
-  // Tant que l'arbre en direct n'est pas arrivé, personne n'est déclaré mort.
-  const nodes = useMemo(
-    () => (tree ? replayTree(tree.procs, (pid, st) => liveRoots === null || live.has(`${pid}:${st}`)) : []),
-    [tree, live, liveRoots],
-  );
-  return (
-    <div className="panel replay-panel">
-      <div className="panel-head replay-banner" data-testid="replay-banner">
-        <History size={14} strokeWidth={2} />
-        {/* Instant de l'arbre affiché (l'arbre précédent reste à l'écran pendant le chargement du suivant). */}
-        <h3>Arbre au {formatInstant(tree ? tree.ts : instant)}</h3>
-        <span className="sub">
-          — seuls les processus au-dessus des seuils d'enregistrement apparaissent{tree?.source === 'minute' ? ' (moyennes par minute)' : ''}
-        </span>
-        <span className="spacer" />
-        <button className="tree-toggle-all" data-testid="replay-live" onClick={replay.live}>Revenir au direct</button>
-      </div>
-      {tree === undefined ? (
-        <p className="empty">Chargement…</p>
-      ) : tree === null ? (
-        <p className="empty">Historique indisponible</p>
-      ) : nodes.length === 0 ? (
-        <p className="empty" data-testid="replay-empty">{replayEmptyText(tree)}</p>
-      ) : (
-        <ReplayTree nodes={nodes} at={tree.ts} omitted={tree.omitted} />
-      )}
-    </div>
-  );
-}
-
 export function DetailView(props: Props) {
   const { group, onBack, memMetric = 'rss' } = props;
   const groupId = group?.id;
@@ -101,6 +64,17 @@ export function DetailView(props: Props) {
   const ticksOf = useMemo(() => (ticksRef.current = ticksIndex(props.roots, ticksRef.current)), [props.roots]);
   // Menu « Reclasser » de l'en-tête : ouvert pour un groupe précis, donc fermé dès que le groupe affiché change.
   const [reclassOpenFor, setReclassOpenFor] = useState<string | null>(null);
+  // Échap : libère l'instant figé (retour au direct), sauf si un menu ou un dialogue a déjà traité la touche.
+  const pinned = replay.pinned !== null;
+  const unpin = replay.live;
+  useEffect(() => {
+    if (!pinned) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !e.defaultPrevented) unpin();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [pinned, unpin]);
   if (!group && props.pending) return <p className="empty">Chargement…</p>;
   if (!group) {
     return (
@@ -169,12 +143,7 @@ export function DetailView(props: Props) {
             </motion.button>
           ))}
       </div>
-      <div className="summary">
-        <div className="tile"><small>Processus</small><b>{group.procCount}</b></div>
-        <div className="tile" title={fallbackTitle(memMetric, group)}><small data-testid="mem-tile-label">{memTileLabel(memMetric, group)}</small><b><AnimatedNumber value={group.rssKB} /></b></div>
-        <div className="tile"><small>Swap</small><b><AnimatedNumber value={group.swapKB} /></b></div>
-        <div className="tile"><small>Plus ancien</small><b className={group.oldestAgeSec > 86400 ? 'old' : ''}>{formatAge(group.oldestAgeSec)}</b></div>
-      </div>
+      <DetailTiles group={group} memMetric={memMetric} at={replay.tiles} />
       {(group.kind === 'project' || group.kind === 'deleted') && group.instances.length > 0 && (
         <InstancesPanel
           group={group}
@@ -187,6 +156,7 @@ export function DetailView(props: Props) {
           onForce={props.onForce}
           onKillInstances={props.onKillInstances}
           memMetric={memMetric}
+          liveOnly={replay.instant !== null}
         />
       )}
       {!others && <GroupHistoryPanel key={group.id} groupId={group.id} replay={replay} />}

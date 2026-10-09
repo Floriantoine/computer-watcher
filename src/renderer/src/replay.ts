@@ -1,5 +1,5 @@
 // src/renderer/src/replay.ts — rejeu « voyage dans le temps » : arbre reconstruit depuis l'historique (pur)
-import type { ProcNode, ProcTreeAt, ProcTreeRow, TimeRange } from '../../core/types';
+import type { GroupHistory, ProcNode, ProcTreeAt, ProcTreeRow, TimeRange } from '../../core/types';
 
 export interface ReplayNode { row: ProcTreeRow; dead: boolean; diedAt: number | null; children: ReplayNode[] }
 
@@ -92,4 +92,27 @@ export function replayEmptyText(t: ProcTreeAt): string {
   return t.recorded
     ? "Aucun processus au-dessus des seuils d'enregistrement à cet instant"
     : "Trou d'enregistrement : le service n'échantillonnait pas à cet instant";
+}
+
+/** Valeurs des tuiles du détail à un instant (aperçu au survol, instant figé) ; null = non enregistré. */
+export interface TileValues { procCount: number | null; rssKB: number | null; swapKB: number | null; cpu: number | null }
+
+/**
+ * Tuiles à l'instant `ts`, lues dans les séries déjà chargées du graphe (aucune requête) : point le plus proche, comme
+ * l'infobulle. null si `ts` est à plus d'un pas de la série (instant figé sorti de la plage affichée) ou sans données.
+ */
+export function tilesAt(h: GroupHistory | null | undefined, ts: number): TileValues | null {
+  const n = h?.ts.length ?? 0;
+  if (!h || n === 0) return null;
+  let lo = 0;
+  let hi = n - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (h.ts[mid] < ts) lo = mid + 1;
+    else hi = mid;
+  }
+  const i = lo > 0 && ts - h.ts[lo - 1] <= h.ts[lo] - ts ? lo - 1 : lo;
+  const step = n > 1 ? (h.ts[n - 1] - h.ts[0]) / (n - 1) : 0;
+  if (Math.abs(h.ts[i] - ts) > step) return null;
+  return { procCount: h.procCount?.[i] ?? null, rssKB: h.rssKB[i] ?? null, swapKB: h.swapKB[i] ?? null, cpu: h.cpu[i] ?? null };
 }

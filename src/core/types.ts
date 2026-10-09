@@ -223,7 +223,8 @@ export interface SystemSeries {
 }
 export interface GroupSeries { key: string; label: string; kind: GroupKind; memKB: (number | null)[] }
 export interface GroupsHistory { ts: number[]; series: GroupSeries[] }
-export interface GroupHistory { ts: number[]; rssKB: (number | null)[]; swapKB: (number | null)[]; cpu: (number | null)[] }
+/** `procCount` : nombre de processus (max du bucket), seulement depuis les échantillons détaillés. */
+export interface GroupHistory { ts: number[]; rssKB: (number | null)[]; swapKB: (number | null)[]; cpu: (number | null)[]; procCount?: (number | null)[] }
 export interface ProcSeries { pid: number; startTicks: number; memKB: (number | null)[] }
 export interface ProcsHistory { ts: number[]; series: ProcSeries[] }
 export interface Culprit { key: string; label: string; kind: GroupKind; deltaKB: number; memKB: number }
