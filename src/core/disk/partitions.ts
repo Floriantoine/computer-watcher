@@ -35,3 +35,19 @@ export function watchedPartitions(mountinfo: string, sizeKB?: (mount: string) =>
   }
   return [...byKey.values()].sort((a, b) => (a.mount < b.mount ? -1 : a.mount > b.mount ? 1 : 0));
 }
+
+/**
+ * Partition surveillée qui contient `path` : le montage le plus long qui le contient, rattaché par périphérique (`maj:min`
+ * ou source `/dev/…`) à une partition de `parts`. Système virtuel (tmpfs…) ou inconnu : null.
+ */
+export function partitionOf(mountinfo: string, path: string, parts: readonly Partition[]): Partition | null {
+  const entries = parseMountinfo(mountinfo);
+  const inside = (m: string) => m === '/' || path === m || path.startsWith(`${m}/`);
+  const host = entries.filter((e) => inside(e.mount)).sort((a, b) => b.mount.length - a.mount.length)[0];
+  if (!host) return null;
+  for (const p of parts) {
+    const same = entries.some((e) => e.mount === p.mount && (e.majmin === host.majmin || (e.source.startsWith('/dev/') && e.source === host.source)));
+    if (same) return p;
+  }
+  return null;
+}

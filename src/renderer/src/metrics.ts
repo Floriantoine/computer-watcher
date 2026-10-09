@@ -1,7 +1,7 @@
 import { APP_DISPLAY_NAME } from '../../core/appName';
 import { alertMessage, ruleEventText } from '../../core/alerts';
 import { topKeysByMax } from '../../core/history/series';
-import type { GroupsHistory, HistoryEvent, RangePreset, SystemSeries, TimeRange, TopOptions, TopResult } from '../../core/types';
+import type { DiskHistory, GroupsHistory, HistoryEvent, RangePreset, SystemSeries, TimeRange, TopOptions, TopResult } from '../../core/types';
 import { formatKB } from './format';
 
 /** Couches du « Reste » (tout ce qui n'est pas dans le top n), dans l'ordre d'affichage. */
@@ -155,6 +155,8 @@ export const INVESTIGATION_LAYERS = 8;
 
 interface MetricsApi {
   system: (r: TimeRange) => Promise<SystemSeries | null>;
+  /** Espace libre par partition (absent : pas de petit graphe « Espace libre »). */
+  disk?: (r: TimeRange) => Promise<DiskHistory | null>;
   top: (r: TimeRange, o?: TopOptions) => Promise<TopResult>;
   events: (r: TimeRange) => Promise<HistoryEvent[]>;
   groups: (r: TimeRange, keys?: string[]) => Promise<GroupsHistory | null>;
@@ -166,9 +168,20 @@ interface MetricsApi {
  */
 export async function fetchMetrics(h: MetricsApi, r: TimeRange) {
   // un seul appel : les deux classements sortent du même parcours de la base
-  const [system, top, events] = await Promise.all([h.system(r), h.top(r, { peakLimit: INVESTIGATION_LAYERS }), h.events(r)]);
+  const [system, top, events, disk] = await Promise.all([
+    h.system(r), h.top(r, { peakLimit: INVESTIGATION_LAYERS }), h.events(r), h.disk ? h.disk(r).catch(() => null) : Promise.resolve(null),
+  ]);
   const groups = top.byMax.length ? await h.groups(r, top.byMax.map((t) => t.key)) : null;
-  return { system, top: top.byAvg, events, groups };
+  return { system, top: top.byAvg, events, groups, disk };
+}
+
+/** Petit graphe « Espace libre » : partition principale (« / », sinon la première), dernière valeur et minimum. */
+export function freeSpaceSeries(d: DiskHistory | null | undefined): { mount: string; ts: number[]; availKB: (number | null)[]; sizeKB: number; lastKB: number | null; minKB: number | null } | null {
+  if (!d || d.ts.length < 2) return null;
+  const s = d.series.find((x) => x.mount === '/') ?? d.series[0];
+  if (!s) return null;
+  const known = s.availKB.filter((v): v is number => v !== null);
+  return { mount: s.mount, ts: d.ts, availKB: s.availKB, sizeKB: s.sizeKB, lastKB: known.at(-1) ?? null, minKB: known.length ? Math.min(...known) : null };
 }
 
 const AUTO_REFRESH_MS = 30_000;

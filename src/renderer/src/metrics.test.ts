@@ -234,3 +234,19 @@ test('eventMarkers : earlyoom_setup (installation / activation depuis l’app) ;
   expect(m[2]!.color).toBe('#5ee0b8');
   expect(alertsFrom([ev({ mode: 'install', ok: true, code: 0 })])).toEqual([]);
 });
+
+test('freeSpaceSeries : partition principale (« / », sinon la première), dernière valeur et minimum ; trop peu de points → null', async () => {
+  const { freeSpaceSeries } = await import('./metrics');
+  const disk = {
+    ts: [1, 2, 3],
+    series: [
+      { mount: '/data', sizeKB: 100, availKB: [50, 40, 30] },
+      { mount: '/', sizeKB: 1000, availKB: [300, null, 250] },
+    ],
+  };
+  expect(freeSpaceSeries(disk)).toEqual({ mount: '/', ts: [1, 2, 3], availKB: [300, null, 250], sizeKB: 1000, lastKB: 250, minKB: 250 });
+  expect(freeSpaceSeries({ ts: [1, 2], series: [{ mount: '/data', sizeKB: 100, availKB: [50, 40] }] })?.mount).toBe('/data');
+  expect(freeSpaceSeries({ ts: [1], series: [{ mount: '/', sizeKB: 1, availKB: [1] }] })).toBeNull();
+  expect(freeSpaceSeries(null)).toBeNull();
+  expect(freeSpaceSeries({ ts: [], series: [] })).toBeNull();
+});

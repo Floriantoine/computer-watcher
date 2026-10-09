@@ -66,7 +66,9 @@ import { sharedScan, topTmpDirs } from './tmpUsage';
 import { createScanCache, scanHome } from './diskScan';
 import { diskRootRunner, runDiskRoot } from './diskRoot';
 import { cleanFamilies, diskCleanEvent, realProcByName, staticRefusal, type CleanDeps, type CleanResult } from './diskClean';
-import { familyRoots, isFamilyRequest, type FamiliesFile, type FamilyId } from '../core/disk/families';
+import { familyPaths, familyRoots, isFamilyRequest, type FamiliesFile, type FamilyId } from '../core/disk/families';
+import { partitionOf, watchedPartitions } from '../core/disk/partitions';
+import { openInFileManager } from './diskOpen';
 import { measureFamilies, readFamiliesFile, writeFamiliesFile } from '../core/disk/measure';
 import { tmpFsStats } from './tmpFsStats';
 import { closeAction, confirmTray, createTrayController, defaultRun, statusNotifierAvailable, type TrayController } from './tray';
@@ -695,6 +697,7 @@ ipcMain.handle('instances:targets', (_e, keys: unknown) => {
 });
 
 ipcMain.handle('history:system', (_e, r: unknown) => (isRange(r) ? history.system(r) : null));
+ipcMain.handle('history:disk', (_e, r: unknown) => (isRange(r) ? history.disk(r) : null));
 ipcMain.handle('history:groups', (_e, r: unknown, keys: unknown) => (isRange(r) && isGroupKeys(keys) ? history.groups(r, keys) : null));
 ipcMain.handle('history:group', (_e, key: unknown, r: unknown) => (typeof key === 'string' && isRange(r) ? history.group(key, r) : null));
 ipcMain.handle('history:procs', (_e, key: unknown, r: unknown) => (typeof key === 'string' && isRange(r) ? history.procs(key, r) : null));
@@ -798,7 +801,10 @@ const diskMountinfo = () => readFileSync('/proc/self/mountinfo', 'utf8');
 const diskLastRefusals = new Map<FamilyId, string>();
 const diskFamiliesView = (f: FamiliesFile | null) => {
   const roots = diskRoots();
+  // refus visibles sans parcourir les processus (lien, autre disque, montage, outil manquant) : case désactivée ;
+  // refus du dernier ménage (utilisé par…) : seulement affichés, la famille reste cochable
   const refusals: Partial<Record<FamilyId, string>> = {};
+  const lastRefusals: Partial<Record<FamilyId, string>> = {};
   for (const m of f?.families ?? []) {
     let why: string | null = null;
     try {
@@ -806,10 +812,12 @@ const diskFamiliesView = (f: FamiliesFile | null) => {
     } catch (e) {
       why = `vérification impossible (${(e as Error).message})`;
     }
-    const last = diskLastRefusals.get(m.id);
-    if (why ?? last) refusals[m.id] = (why ?? last)!;
+    if (why) refusals[m.id] = why;
+    else if (diskLastRefusals.has(m.id)) lastRefusals[m.id] = diskLastRefusals.get(m.id)!;
   }
-  return { file: f, refusals, measuring: diskMeasuring !== null };
+  // chemins des familles (affichage seulement : liens soleil ↔ familles ; la suppression les recalcule)
+  const paths = Object.fromEntries((f?.families ?? []).filter((m) => !['pkg-cache', 'journal'].includes(m.id)).map((m) => [m.id, familyPaths(m.id, roots)]));
+  return { file: f, refusals, lastRefusals, paths, home: roots.home, measuring: diskMeasuring !== null };
 };
 ipcMain.handle('disk:families', async (_e, force: unknown) => {
   const f = readFamiliesFile(diskFamiliesPath(data));
@@ -817,6 +825,38 @@ ipcMain.handle('disk:families', async (_e, force: unknown) => {
   if (force === true || !f || !(age >= 0 && age < DISK_FAMILIES_MAX_AGE_MS)) return diskFamiliesView(await measureDiskFamilies());
   return diskFamiliesView(f);
 });
+/** Bandes de la page : chaque disque réel surveillé (statfs) et la place récupérable des familles qui s'y trouvent. */
+ipcMain.handle('disk:partitions', () => {
+  const mi = diskMountinfo();
+  const parts = watchedPartitions(mi, (m) => {
+    try {
+      const st = statfsSync(m);
+      return Math.round((st.blocks * st.bsize) / 1024);
+    } catch {
+      return null;
+    }
+  });
+  const roots = diskRoots();
+  // familles refusées d'avance (lien, outil manquant…) : pas comptées comme récupérables
+  const fams = (readFamiliesFile(diskFamiliesPath(data))?.families ?? []).filter((m) => {
+    try {
+      return !staticRefusal(m.id, { roots, mountinfo: () => mi });
+    } catch {
+      return false;
+    }
+  });
+  return parts.flatMap((p) => {
+    try {
+      const st = statfsSync(p.mount);
+      const reclaimKB = fams.reduce((s, m) => (m.reclaimKB !== null && partitionOf(mi, familyPaths(m.id, roots)[0], parts)?.mount === p.mount ? s + m.reclaimKB : s), 0);
+      return [{ mount: p.mount, sizeKB: Math.round((st.blocks * st.bsize) / 1024), availKB: Math.round((st.bavail * st.bsize) / 1024), reclaimKB }];
+    } catch {
+      return [];
+    }
+  });
+});
+/** « Ouvrir dans le gestionnaire de fichiers » : dossier réel sous HOME seulement. */
+ipcMain.handle('disk:open', (_e, path: unknown) => openInFileManager(path, { home: homedir() }));
 /** Confirmation native du ménage : récapitulatif par famille, « Annuler » par défaut. */
 const confirmDiskClean = async (s: { message: string; detail: string }): Promise<boolean> => {
   const opts: Electron.MessageBoxOptions = {

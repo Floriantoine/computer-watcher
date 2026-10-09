@@ -14,7 +14,11 @@ import { listDirSafe, mountPointsOf, removeTreeSafe } from './safeFs';
 export type { RootAction };
 export interface Holder { pid: number; name: string }
 
-export interface CleanResult { freedKB: number; done: FamilyId[]; refused: { id: FamilyId; reason: string }[]; cancelled: boolean }
+/**
+ * `freedKB` : place libérée mesurée (statfs avant / après) ; `estimatedKB` : somme des estimations des familles traitées
+ * (certains systèmes de fichiers, btrfs notamment, ne montrent la place libérée qu'après quelques secondes).
+ */
+export interface CleanResult { freedKB: number; estimatedKB?: number; done: FamilyId[]; refused: { id: FamilyId; reason: string }[]; cancelled: boolean }
 
 export interface CleanDeps {
   roots: FamilyRoots;
@@ -63,15 +67,18 @@ function rootOf(r: FamilyRoots, p: string): string {
  * Échec fermé : toute erreur de vérification refuse.
  */
 function checkPath(p: string, homeDev: number, d: CleanDeps): string | null {
+  // affichage : chemin abrégé sous le dossier personnel (« ~/.cache/uv »)
+  const home = d.roots.home.replace(/\/+$/, '');
+  const shown = p.startsWith(`${home}/`) ? `~/${p.slice(home.length + 1)}` : p;
   let st;
   try {
     st = lstatSync(p);
   } catch (e) {
     return (e as NodeJS.ErrnoException).code === 'ENOENT' ? null : `vérification impossible (${(e as Error).message})`;
   }
-  if (st.isSymbolicLink()) return `${p} : lien symbolique, refusé (jamais suivi)`;
-  if (!st.isDirectory()) return `${p} : pas un dossier`;
-  if (st.dev !== homeDev) return `${p} : sur un autre disque que le dossier personnel`;
+  if (st.isSymbolicLink()) return `${shown} : lien symbolique, refusé (jamais suivi)`;
+  if (!st.isDirectory()) return `${shown} : pas un dossier`;
+  if (st.dev !== homeDev) return `${shown} : sur un autre disque que le dossier personnel`;
   let real: string;
   try {
     real = realpathSync(p);
@@ -85,7 +92,7 @@ function checkPath(p: string, homeDev: number, d: CleanDeps): string | null {
     return 'points de montage illisibles';
   }
   const m = mounts.find((x) => isUnder(x, real));
-  if (m) return `point de montage sous ${p} (${m})`;
+  if (m) return `point de montage sous ${shown}`;
   const user = d.dirUser(p);
   return user ? usedByText(user) : null;
 }
@@ -207,7 +214,8 @@ export async function cleanFamilies(ids: readonly FamilyId[], d: CleanDeps): Pro
   }
   const after = avail();
   const freedKB = Math.max(0, before.reduce<number>((s, b, i) => (b === null || after[i] === null ? s : s + (after[i]! - b)), 0));
-  return { freedKB, done, refused, cancelled: false };
+  const estimatedKB = done.reduce((t, id) => t + (d.sizes?.[id] ?? 0), 0);
+  return { freedKB, ...(estimatedKB > 0 ? { estimatedKB } : {}), done, refused, cancelled: false };
 }
 
 /** Événement d'historique (app-events.jsonl) : rien si aucune famille traitée ni refusée (annulé). */

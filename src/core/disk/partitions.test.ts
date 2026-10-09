@@ -57,3 +57,19 @@ test('vfat sous 1 Go (taille connue) : ignorée ; au-delà : surveillée', () =>
 test('lignes vides ou mal formées : ignorées sans planter', () => {
   expect(watchedPartitions('\n\nn importe quoi\n1 2 3\n')).toEqual([]);
 });
+
+test('partitionOf : partition surveillée qui contient un chemin (sous-volume btrfs compris)', async () => {
+  const { partitionOf } = await import('./partitions');
+  const mi = [
+    line(30, '0:28', '/@', '/', 'btrfs', '/dev/nvme0n1p2'),
+    line(31, '0:28', '/@home', '/home', 'btrfs', '/dev/nvme0n1p2'),
+    line(32, '0:28', '/@cache', '/var/cache', 'btrfs', '/dev/nvme0n1p2'),
+    line(33, '8:17', '/', '/data', 'ext4', '/dev/sdb1'),
+    line(34, '0:40', '/', '/tmp', 'tmpfs', 'tmpfs'),
+  ].join('\n');
+  const parts = watchedPartitions(mi);
+  expect(partitionOf(mi, '/home/u/.cache/uv', parts)?.mount).toBe('/');
+  expect(partitionOf(mi, '/var/cache/pacman/pkg', parts)?.mount).toBe('/');
+  expect(partitionOf(mi, '/data/x', parts)?.mount).toBe('/data');
+  expect(partitionOf(mi, '/tmp/x', parts)).toBeNull();
+});

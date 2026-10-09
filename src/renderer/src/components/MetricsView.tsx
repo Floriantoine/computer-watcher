@@ -8,7 +8,7 @@ import { formatKB } from '../format';
 import { useHistory } from '../history';
 import { ipcErrorMessage } from '../viewModel';
 import {
-  breakdownAt, eventMarkers, fetchMetrics, formatInstant, INVESTIGATION_LAYERS, investigationSeries, PRESET_MS, refreshMsFor, REST_HINTS, REST_KEYS, REST_TONES,
+  breakdownAt, eventMarkers, fetchMetrics, freeSpaceSeries, formatInstant, INVESTIGATION_LAYERS, investigationSeries, PRESET_MS, refreshMsFor, REST_HINTS, REST_KEYS, REST_TONES,
 } from '../metrics';
 import { useChartZoom, ZoomChip } from '../chartZoom';
 import { AlertsPanel } from './AlertsPanel';
@@ -73,6 +73,8 @@ interface SysChart {
   sub: string;
   series: ChartSeries[];
   format: { left: ValueFormat };
+  /** Horodatages propres (Espace libre : table disque) ; défaut : ceux du système. */
+  ts?: number[];
 }
 
 const NO_PIDS = new Set<number>();
@@ -117,6 +119,7 @@ export function MetricsView({ at, canOpen, onOpenGroup, onOpenSettings, openPort
     null,
   );
 
+  const free = useMemo(() => freeSpaceSeries(data?.disk), [data?.disk]);
   const sysCharts = useMemo((): SysChart[] | null => {
     if (!system || system.ts.length < 2) return null;
     const pct = (v: number | null | undefined) => (v == null ? '—' : `${Math.round(v)} %`);
@@ -142,8 +145,15 @@ export function MetricsView({ at, canOpen, onOpenGroup, onOpenSettings, openPort
         value: pct(last(system.cpu)), sub: `pic ${pct(peak(system.cpu))}`,
         series: [{ label: 'CPU', values: system.cpu, tone: 'cpu' }], format: PCT,
       },
+      ...(free
+        ? [{
+            id: 'disk', title: `Espace libre ${free.mount}`, icon: <HardDrive size={13} strokeWidth={2} />,
+            value: free.lastKB === null ? '—' : formatKB(free.lastKB), sub: `sur ${formatKB(free.sizeKB)} · min ${free.minKB === null ? '—' : formatKB(free.minKB)}`,
+            series: [{ label: 'Libre', values: free.availKB, tone: 'psi' as const }], format: KB, ts: free.ts,
+          }]
+        : []),
     ];
-  }, [system]);
+  }, [system, free]);
 
   const inv = useMemo(() => {
     const g = data?.groups;
@@ -220,7 +230,7 @@ export function MetricsView({ at, canOpen, onOpenGroup, onOpenSettings, openPort
               {'sub' in c && <span className="sub">{c.sub}</span>}
             </div>
             {'series' in c ? (
-              <TimeChart ts={system!.ts} series={c.series} height={96} format={c.format} markers={markers} focusMarker={hoverTs} markerLabels={false} xRange={view} onWheel={z.onWheel} onDragPan={z.onDragPan} onCursor={setCursor} onSelectRange={z.onSelectRange} />
+              <TimeChart ts={('ts' in c && c.ts) || system!.ts} series={c.series} height={96} format={c.format} markers={markers} focusMarker={hoverTs} markerLabels={false} xRange={view} onWheel={z.onWheel} onDragPan={z.onDragPan} onCursor={setCursor} onSelectRange={z.onSelectRange} />
             ) : (
               <div className="chart-empty small">{data === undefined ? 'Chargement…' : 'Pas de données'}</div>
             )}

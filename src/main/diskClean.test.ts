@@ -62,7 +62,7 @@ describe('cleanFamilies', () => {
     const { home, roots } = fakeHome();
     const { d, asked } = deps(roots);
     const r = await cleanFamilies(['npm', 'uv'], d);
-    expect(r).toEqual({ freedKB: 1000, done: ['npm', 'uv'], refused: [], cancelled: false });
+    expect(r).toEqual({ freedKB: 1000, estimatedKB: 8 * 1024 * 1024 + 1024, done: ['npm', 'uv'], refused: [], cancelled: false });
     expect(existsSync(join(home, '.npm/_cacache'))).toBe(false);
     expect(existsSync(join(home, '.cache/uv'))).toBe(false);
     expect(existsSync(join(home, '.npm/_logs/garde.log'))).toBe(true);
@@ -80,7 +80,7 @@ describe('cleanFamilies', () => {
     symlinkSync(precious, join(home, '.cache/uv'));
     const { d } = deps(roots);
     const r = await cleanFamilies(['uv', 'npm'], d);
-    expect(r.refused).toEqual([{ id: 'uv', reason: expect.stringMatching(/lien symbolique/) }]);
+    expect(r.refused).toEqual([{ id: 'uv', reason: '~/.cache/uv : lien symbolique, refusé (jamais suivi)' }]);
     expect(r.done).toEqual(['npm']);
     expect(readdirSync(precious)).toEqual(['these.odt']);
     expect(existsSync(join(home, '.cache/uv'))).toBe(true); // le lien lui-même reste
