@@ -539,9 +539,10 @@ const SUSPECT_UNREADABLE = new Set([...APP_COMMS, 'node']);
 /**
  * Processus de l'utilisateur, hors l'app elle-même (`selfPid` et ses descendants), qui a son cwd, un fd ouvert ou un mmap
  * sous `dir` (comme scanTmpUsers, en synchrone : avant `ready`). Un processus de l'app ou node dont les fd sont illisibles
- * compte comme utilisateur (échec fermé). Dossier absent : null.
+ * compte comme utilisateur (échec fermé). `selfExes` : exécutables qui sont aussi l'app (le démon FUSE de notre AppImage,
+ * qui n'est pas un descendant). Dossier absent : null.
  */
-export function realDirUser(dir: string, o: { selfPid?: number; uid?: number } = {}): Holder | null {
+export function realDirUser(dir: string, o: { selfPid?: number; uid?: number; selfExes?: readonly string[] } = {}): Holder | null {
   let real: string;
   try {
     real = realpathSync(dir);
@@ -576,6 +577,8 @@ export function realDirUser(dir: string, o: { selfPid?: number; uid?: number } =
       continue;
     }
     const name = readOr(() => readFileSync(`${dirp}/comm`, 'utf8').trim()) || '?';
+    const exe = readOr(() => readlinkSync(`${dirp}/exe`));
+    if (exe && o.selfExes?.includes(exe)) continue;
     if (hit(readOr(() => readlinkSync(`${dirp}/cwd`)))) return { pid, name };
     let fds: string[];
     try {
@@ -617,4 +620,17 @@ export function waitPidGone(o: { pid: number; sleep: (ms: number) => void; maxMs
     o.sleep(100);
   }
   return true;
+}
+
+/**
+ * Exécutables qui sont aussi « l'app » : en AppImage (le binaire en cours sous APPDIR), le fichier AppImage lui-même, que
+ * fait tourner le démon FUSE du montage (il n'est pas un descendant du processus principal).
+ */
+export function ownAppImageExes(env: NodeJS.ProcessEnv = process.env): string[] {
+  const img = env.APPIMAGE;
+  const dir = env.APPDIR;
+  const self = readOr(() => readlinkSync('/proc/self/exe'));
+  if (!img || !dir || !self || !self.startsWith(`${dir.replace(/\/+$/, '')}/`)) return [];
+  const real = readOr(() => realpathSync(img));
+  return real ? [real] : [];
 }

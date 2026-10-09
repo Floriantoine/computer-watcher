@@ -46,7 +46,7 @@ import { installDesktopEntry, refreshDesktopEntry } from './desktopEntry';
 import { installedAppImage, installedElsewhere } from './appImageTrust';
 import { acquireLock, blockingSleep } from './singleInstance';
 import { userDataPath } from './userDataPath';
-import { defaultSystemctlSync, migrateEarly, migrateLate, migrationState, realDirUser, realLegacyInstance, waitPidGone, type MigrateDeps } from './migrateName';
+import { defaultSystemctlSync, migrateEarly, ownAppImageExes, migrateLate, migrationState, realDirUser, realLegacyInstance, waitPidGone, type MigrateDeps } from './migrateName';
 import { migrationLines, type MigrationReport } from '../core/nameMigration';
 import { createAppImageBackend } from './appImageUpdate';
 import { relaunchDetached, sanitizeAppImageEnv } from './relaunch';
@@ -99,7 +99,7 @@ function migrationDeps(): MigrateDeps {
       }
     },
     legacyInstance: () => realLegacyInstance(r.configHome),
-    dirUser: (dir) => realDirUser(dir),
+    dirUser: (dir) => realDirUser(dir, { selfExes: ownAppImageExes() }),
     relaunching,
     sleep: blockingSleep,
     writeNewService: async () => {

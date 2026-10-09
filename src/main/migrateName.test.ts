@@ -601,6 +601,14 @@ describe('revue de sécurité (C1, I1, M1)', () => {
     expect(realDirUser(join(roots.home, 'ailleurs'), { selfPid: -1 })).toBeNull();
   });
 
+  test('[live] le démon FUSE de notre propre AppImage (exécutable = notre AppImage, pas un descendant) fait partie de l’app : exclu', async () => {
+    const L = legacyInstall();
+    const rec = spawn('sleep', ['30'], { cwd: L.configDir, stdio: 'ignore' });
+    await started(rec);
+    expect(realDirUser(L.configDir, { selfPid: -1 })).toEqual({ pid: rec.pid, name: 'sleep' });
+    expect(realDirUser(L.configDir, { selfPid: -1, selfExes: [realpathSync('/usr/bin/sleep')] })).toBeNull();
+  });
+
   test('[lock] SingletonLock de l’ancien dossier tenu par un Computer Watcher vivant (comm computer-watche) : différé, pid et nom dans le message', async () => {
     const L = legacyInstall();
     const bin = join(roots.home, 'computer-watcher');

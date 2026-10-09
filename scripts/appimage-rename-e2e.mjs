@@ -176,7 +176,9 @@ const stubDialogs = (app) => app.evaluate(({ dialog }) => {
 const exited = (app) => new Promise((r) => app.process().once('exit', r));
 const shot = async (win, name) => shots && win.screenshot({ path: join(shots, `${name}.png`) }).catch(() => {});
 
-const L = { cfg: join(cfg, 'proc-watch'), data: join(data, 'proc-watch'), menu: join(data, 'applications/proc-watch.desktop'), auto: join(cfg, 'autostart/proc-watch.desktop'), icon: join(data, 'icons/hicolor/512x512/apps/proc-watch.png'), cache: join(cacheHome, 'proc-watch-updater'), run: join(runtime, 'proc-watch') };
+const L = { cfg: join(cfg, 'proc-watch'), data: join(data, 'proc-watch'), menu: join(data, 'applications/proc-watch.desktop'), auto: join(cfg, 'autostart/proc-watch.desktop'), icon: join(data, 'icons/hicolor/512x512/apps/proc-watch.png'), cache: join(cacheHome, 'proc-watch-updater') };
+/** Dossier d'exécution à l'ancien nom : éphémère, jamais déplacé ni retiré par l'app (la nouvelle version recrée le sien). */
+const legacyRun = join(runtime, 'proc-watch');
 const N = { cfg: join(cfg, 'computer-watcher'), data: join(data, 'computer-watcher'), menu: join(data, 'applications/computer-watcher.desktop'), auto: join(cfg, 'autostart/computer-watcher.desktop'), icon: join(data, 'icons/hicolor/512x512/apps/computer-watcher.png'), cache: join(cacheHome, 'computer-watcher-updater') };
 const ROWS = [1, 2, 3].map((i) => ({ ts: Date.now() - i * 60_000, detail: `{"e2e":"rename-${i}"}` }));
 
@@ -236,6 +238,12 @@ try {
   {
     const moved = await waitFor(() => existsSync(newCopy) && !existsSync(oldCopy), 120000, 500);
     ok(moved, 'C. computer-watcher.AppImage en place, ancienne copie proc-watch.AppImage supprimée');
+    if (!moved) {
+      // diagnostic : état de la migration et ce qui tourne
+      for (const f of [join(L.cfg, 'migration.json'), join(N.cfg, 'migration.json')]) if (existsSync(f)) console.log(`diagnostic ${f.slice(base.length)} :`, readFileSync(f, 'utf8'));
+      for (const d of [cfg, data, join(home, 'Applications')]) console.log(`diagnostic ${d.slice(base.length)} :`, readdirSync(d).join(' '));
+      console.log('diagnostic processus :', JSON.stringify(ours()));
+    }
     ok(existsSync(newCopy) && sha(newCopy) === sha(V020), 'C. la nouvelle copie est la 0.2.0, identique');
     ok(existsSync(newCopy) && (statSync(newCopy).mode & 0o777) === 0o755, 'C. nouvelle copie en 0755');
     let p = null;
@@ -255,6 +263,7 @@ try {
     db.close();
     ok(JSON.stringify(rows) === JSON.stringify([...ROWS].sort((a, b) => a.detail.localeCompare(b.detail))), 'C. historique intact dans ~/.local/share/computer-watcher (3 lignes connues)');
     for (const [k, path] of Object.entries(L)) ok(!existsSync(path), `C. ancien absent : ${k} (${path.slice(base.length)})`);
+    ok(!existsSync(join(runtime, 'computer-watcher')) || !existsSync(legacyRun) || readdirSync(legacyRun).every((f) => f.startsWith('focus-')), 'C. dossier d’exécution jamais déplacé (seulement des fichiers de focus éphémères)');
     ok(readFileSync(N.menu, 'utf8').includes(`Exec="${newCopy}"`) && readFileSync(N.menu, 'utf8').includes('Name=Computer Watcher'), 'C. menu computer-watcher.desktop « Computer Watcher » vers la nouvelle copie');
     ok(readFileSync(N.auto, 'utf8').includes(`Exec="${newCopy}" --hidden`), 'C. démarrage automatique computer-watcher.desktop --hidden vers la nouvelle copie');
     ok(existsSync(N.icon), 'C. icône computer-watcher.png');
