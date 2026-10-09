@@ -1,5 +1,5 @@
 // src/renderer/src/components/ReplayTree.tsx — arbre rejoué (lecture seule : aucun bouton de kill)
-import type { ReactElement } from 'react';
+import { memo, type ReactElement } from 'react';
 import { formatCpu, formatKB } from '../format';
 import { nowDelta } from '../nowDelta';
 import type { ReplayNode } from '../replay';
@@ -15,7 +15,7 @@ function hhmm(ts: number, at: number): string {
 
 /** `omitted` : processus au-delà de la taille maximale renvoyée (les plus petits), signalés en dernière ligne. */
 /** `liveMem` : RSS actuel des processus encore vivants (écart « alors vs maintenant » sur la mémoire) ; absent : pas d'écart. */
-export function ReplayTree({ nodes, at, omitted = 0, liveMem }: { nodes: ReplayNode[]; at: number; omitted?: number; liveMem?: ReadonlyMap<string, number> }): ReactElement {
+function ReplayTreeImpl({ nodes, at, omitted = 0, liveMem }: { nodes: ReplayNode[]; at: number; omitted?: number; liveMem?: ReadonlyMap<string, number> }): ReactElement {
   const rows: ReactElement[] = [];
   const walk = (ns: ReplayNode[], depth: number) => {
     for (const n of ns) {
@@ -58,3 +58,6 @@ export function ReplayTree({ nodes, at, omitted = 0, liveMem }: { nodes: ReplayN
     </div>
   );
 }
+
+/** Mémoïsé : l'aperçu au survol re-rend le détail à chaque image (tuiles), l'arbre seulement quand il change. */
+export const ReplayTree = memo(ReplayTreeImpl);
