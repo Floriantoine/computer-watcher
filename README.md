@@ -2,6 +2,9 @@
 
 Voir ce qui tourne sur ta machine Linux, depuis combien de temps, ce que ça consomme — et le tuer en un clic.
 
+> [!IMPORTANT]
+> **Installe proc-watch avec l'AppImage** pour recevoir les mises à jour automatiques : télécharge `proc-watch-<version>-x86_64.AppImage` dans les [Releases](https://github.com/Floriantoine/proc-watcher/releases), rends-la exécutable (`chmod +x`), lance-la et choisis **Installer comme une app**. Le paquet `.deb` ne se met pas à jour tout seul : il signale seulement les nouvelles versions. Détails dans [Installation](#installation).
+
 Né d'un PC gelé dix minutes par 19 Go de swap : vieilles sessions de terminal, serveurs de dev oubliés dans des worktrees supprimés, navigateur gourmand. proc-watch regroupe tout ça pour qu'on le voie et qu'on le nettoie avant d'en arriver là.
 
 ![Détail d'un projet : instances classées, ports, doublon](docs/screenshot-main.png)
