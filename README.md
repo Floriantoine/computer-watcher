@@ -165,6 +165,8 @@ Au premier lancement de la version installée (AppImage, .deb), proc-watch insta
 
 ### Onglet Métriques
 
+![Onglet Métriques sur 24 h : tuiles, petits graphes, enquête mémoire par groupe avec alertes, top consommateurs, ports ouverts et swap](docs/screenshot-metrics.png)
+
 - **Enquête — mémoire par groupe** : courbe de la mémoire par groupe sur la période choisie ; cliquer place un curseur sur un instant. Le panneau « À <heure> » liste alors les groupes dont la mémoire a le plus augmenté dans les 5 minutes précédentes.
 - **Top consommateurs** : les groupes les plus gourmands en mémoire (moyenne) sur la plage, avec mini-courbe, pic et moyenne.
 - **Alertes** : fuites, kills earlyoom, pics de pression et trous d'enregistrement ; un clic place le curseur de l'enquête sur l'événement. Une fuite probable est signalée quand la mémoire d'un groupe monte de façon quasi continue (≥ 80 % des minutes sur 1 h, +300 Mo par défaut, réglable), et un badge « fuite ? » apparaît alors sur sa carte.
