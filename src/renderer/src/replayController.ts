@@ -44,7 +44,7 @@ export interface ReplayDeps {
 
 export const REPLAY_TICK_MS = 1000;
 /** Au plus une requête `history:procTree` par intervalle (survol continu du graphe). */
-export const REPLAY_THROTTLE_MS = 100;
+export const REPLAY_THROTTLE_MS = 200;
 /** Arbres gardés par horodatage d'échantillon (LRU). */
 export const REPLAY_CACHE_SIZE = 50;
 /** Un arbre en cache plus vieux que ça est redemandé (les « mort à » des processus récents peuvent avoir changé). */
@@ -71,13 +71,18 @@ export class ReplayController {
   private inflight = false;
   /** Génération du groupe : une réponse d'un autre groupe est ignorée, même pour le cache. */
   private gen = 0;
-  /** Dernière requête dont la réponse peut s'afficher. */
   private reqId = 0;
+  /** Requête dont la réponse peut s'afficher (-1 : aucune). */
+  private showId = -1;
+  /** Requête en vol : son id et son instant (un retour sur cet échantillon ne relance rien). */
+  private inflightId = -1;
+  private inflightTs: number | null = null;
   /** Instant à demander dès que possible (dernière position gagnante). */
   private pending: number | null = null;
   /** Instant dont l'arbre est voulu (celui affiché ou attendu). */
   private wanted: number | null = null;
-  private lastSent = -Infinity;
+  /** Dernier changement d'arbre (requête envoyée ou arbre servi par le cache pendant le survol). */
+  private lastSwap = -Infinity;
   private cache = new Map<number, { tree: ProcTreeAt; at: number }>();
   private offResume: (() => void) | null;
 
@@ -133,8 +138,9 @@ export class ReplayController {
 
   private reset(): void {
     this.gen++;
-    this.reqId++;
+    this.showId = -1;
     this.inflight = false;
+    this.inflightTs = null;
     this.pending = null;
     this.wanted = null;
     this.preview = null;
@@ -166,18 +172,28 @@ export class ReplayController {
     if (ts === this.wanted) return;
     this.wanted = ts;
     if (ts === null) {
-      this.reqId++; // la requête en cours ne s'affichera pas
+      this.showId = -1; // la requête en cours ne s'affichera pas
       this.pending = null;
       this.tree = undefined;
       return;
     }
-    const hit = this.cache.get(ts);
-    if (hit && Date.now() - hit.at <= REPLAY_CACHE_TTL_MS) {
-      this.cache.delete(ts); // remis en tête (LRU)
-      this.cache.set(ts, hit);
-      this.reqId++;
+    // Retour à l'instant figé (ou instant joué) : tout de suite depuis le cache ; survol : au rythme du throttle.
+    if (this.preview === null || this.state.playing) {
+      if (this.serveCached(ts)) {
+        this.showId = -1;
+        this.pending = null;
+        return;
+      }
+    } else if (this.cached(ts)) {
+      this.showId = -1; // la requête en vol (autre échantillon) ne s'affichera pas
+      this.pending = ts;
+      this.pump();
+      return;
+    }
+    // Même échantillon que la requête en vol : rien à relancer, sa réponse s'affichera.
+    if (this.inflight && ts === this.inflightTs) {
+      this.showId = this.inflightId;
       this.pending = null;
-      this.tree = hit.tree;
       return;
     }
     // L'arbre précédent reste affiché pendant la requête (le bandeau affiche l'instant de l'arbre à l'écran).
@@ -186,9 +202,27 @@ export class ReplayController {
   }
 
   /** Envoie la position en attente si rien n'est en vol, si le délai minimal est passé et si la fenêtre est visible. */
+  private cached(ts: number): ProcTreeAt | null {
+    const hit = this.cache.get(ts);
+    return hit && Date.now() - hit.at <= REPLAY_CACHE_TTL_MS ? hit.tree : null;
+  }
+
+  /** Affiche l'arbre en cache de `ts` (remis en tête de la LRU) ; faux s'il n'y est pas. */
+  private serveCached(ts: number): boolean {
+    const hit = this.cache.get(ts);
+    if (!hit || Date.now() - hit.at > REPLAY_CACHE_TTL_MS) return false;
+    this.cache.delete(ts);
+    this.cache.set(ts, hit);
+    this.tree = hit.tree;
+    return true;
+  }
+
   private pump(): void {
-    if (this.pending === null || this.inflight || this.throttle || !this.deps.isLive()) return;
-    const wait = this.lastSent + REPLAY_THROTTLE_MS - Date.now();
+    if (this.pending === null || this.throttle || !this.deps.isLive()) return;
+    // Arbre en cache : pas besoin d'attendre la requête en vol.
+    const fromCache = this.cached(this.pending) !== null;
+    if (this.inflight && !fromCache) return;
+    const wait = this.lastSwap + REPLAY_THROTTLE_MS - Date.now();
     if (wait > 0) {
       this.throttle = setTimeout(() => {
         this.throttle = null;
@@ -198,9 +232,16 @@ export class ReplayController {
     }
     const ts = this.pending;
     this.pending = null;
+    this.lastSwap = Date.now();
+    if (fromCache && this.serveCached(ts)) {
+      this.deps.onChange();
+      return;
+    }
     this.inflight = true;
-    this.lastSent = Date.now();
     const id = ++this.reqId;
+    this.showId = id;
+    this.inflightId = id;
+    this.inflightTs = ts;
     const gen = this.gen;
     this.deps.fetch(this.groupId, ts).then(
       (t) => this.settle(gen, id, ts, t),
@@ -211,12 +252,13 @@ export class ReplayController {
   private settle(gen: number, id: number, ts: number, t: ProcTreeAt | null): void {
     if (gen !== this.gen) return;
     this.inflight = false;
+    this.inflightTs = null;
     if (t) {
       this.cache.delete(ts);
       this.cache.set(ts, { tree: t, at: Date.now() });
       if (this.cache.size > REPLAY_CACHE_SIZE) this.cache.delete(this.cache.keys().next().value!);
     }
-    if (id === this.reqId) {
+    if (id === this.showId) {
       this.tree = t;
       this.deps.onChange();
     }

@@ -135,12 +135,12 @@ describe('gestes et textes du rejeu', () => {
 describe('tuiles du détail à l\'instant survolé (séries du graphe)', () => {
   const h = { ts: [0, 5000, 10_000], rssKB: [100, 200, null], swapKB: [1, 2, 3], cpu: [5, 6, 7], procCount: [3, 4, 5] };
   test('point le plus proche, aucune requête : valeurs des séries déjà chargées', () => {
-    expect(tilesAt(h, 4000)).toEqual({ procCount: 4, rssKB: 200, swapKB: 2, cpu: 6 });
-    expect(tilesAt(h, 0)).toEqual({ procCount: 3, rssKB: 100, swapKB: 1, cpu: 5 });
+    expect(tilesAt(h, 4000)).toEqual({ procCount: 4, procRecorded: true, rssKB: 200, swapKB: 2, cpu: 6 });
+    expect(tilesAt(h, 0)).toEqual({ procCount: 3, procRecorded: true, rssKB: 100, swapKB: 1, cpu: 5 });
     expect(tilesAt(h, 9000)).toMatchObject({ rssKB: null, swapKB: 3 }); // trou dans la série
   });
   test('sans nombre de processus (séries par minute) ou hors de la plage chargée : null', () => {
-    expect(tilesAt({ ...h, procCount: undefined }, 5000)?.procCount).toBeNull();
+    expect(tilesAt({ ...h, procCount: undefined }, 5000)).toMatchObject({ procCount: null, procRecorded: false });
     expect(tilesAt(h, 60_000)).toBeNull();
     expect(tilesAt(h, -20_000)).toBeNull();
     expect(tilesAt(undefined, 0)).toBeNull();

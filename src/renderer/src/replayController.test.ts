@@ -48,9 +48,9 @@ test('une requête à la fois aussi pour le clic : le nouvel instant part au ret
   expect(calls.map((x) => x.ts)).toEqual([T]);
   calls[0].resolve(treeAt(T));
   await flush();
-  // L'arbre de T s'affiche (le bandeau montre son instant) ; T+5000 part après le délai de 100 ms.
+  // L'arbre de T s'affiche (le bandeau montre son instant) ; T+5000 part après le délai de 200 ms.
   expect(c.tree?.ts).toBe(T);
-  vi.advanceTimersByTime(100);
+  vi.advanceTimersByTime(200);
   expect(calls.map((x) => x.ts)).toEqual([T, T + 5000]);
   calls[1].resolve(treeAt(T + 5000));
   await flush();
@@ -104,7 +104,7 @@ test('changement de groupe : retour au direct immédiat, requête en cours aband
   expect(c.tree).toBeUndefined();
   expect(onChange).not.toHaveBeenCalled(); // appelé pendant le rendu : pas de notification
   c.pick(T + 1);
-  vi.advanceTimersByTime(100); // délai minimal entre deux requêtes
+  vi.advanceTimersByTime(200); // délai minimal entre deux requêtes
   expect(calls.at(-1)).toMatchObject({ key: 'h', ts: T + 1 });
 });
 
@@ -132,7 +132,7 @@ describe('survol du graphe (aperçu)', () => {
     expect(c.tree).toBeUndefined();
   });
 
-  test('throttle : au plus une requête toutes les 100 ms, la dernière position gagne', async () => {
+  test('throttle : au plus une requête toutes les 200 ms, la dernière position gagne', async () => {
     const { c, calls } = setup();
     c.hover(T);
     calls[0].resolve(treeAt(T));
@@ -143,7 +143,7 @@ describe('survol du graphe (aperçu)', () => {
       vi.advanceTimersByTime(2.5);
     }
     expect(calls).toHaveLength(1);
-    vi.advanceTimersByTime(50); // 100 ms depuis la première requête
+    vi.advanceTimersByTime(150); // 200 ms depuis la première requête
     expect(calls.map((x) => x.ts)).toEqual([T, T + 20_000]);
     calls[1].resolve(treeAt(T + 20_000));
     await flush();
@@ -152,7 +152,7 @@ describe('survol du graphe (aperçu)', () => {
     expect(c.tree?.ts).toBe(T + 20_000);
   });
 
-  test('throttle sur un balayage continu de 1 s : une requête toutes les 100 ms, même avec des réponses immédiates', async () => {
+  test('throttle sur un balayage continu de 1 s : une requête toutes les 200 ms, même avec des réponses immédiates', async () => {
     const { c, calls, fetch } = setup();
     const sent: number[] = [];
     fetch.mockImplementation((key: string, ts: number) => {
@@ -165,10 +165,24 @@ describe('survol du graphe (aperçu)', () => {
       await flush();
       vi.advanceTimersByTime(8);
     }
-    // 0, 100, …, 900 ms puis 1000 ms (fin du balayage) : 11 requêtes, espacées d'au moins 100 ms, sur 125 positions.
+    // 0, 200, …, 800 ms puis 1000 ms (fin du balayage) : 6 requêtes, espacées d'au moins 200 ms, sur 125 positions.
     const times = sent.map((x) => x - sent[0]);
-    expect(times).toEqual([0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]);
+    expect(times).toEqual([0, 200, 400, 600, 800, 1000]);
     expect(calls.at(-1)!.ts).toBe(T + 99_200); // dernière position
+  });
+
+  test('même échantillon que la requête en vol : pas de nouvelle requête, sa réponse s\'affiche', async () => {
+    const { c, calls } = setup();
+    c.hover(T);
+    c.hover(T + 1000); // en attente
+    c.hover(T); // revient sur l'échantillon en vol
+    vi.advanceTimersByTime(1000);
+    expect(calls).toHaveLength(1);
+    calls[0].resolve(treeAt(T));
+    await flush();
+    vi.advanceTimersByTime(1000);
+    expect(calls).toHaveLength(1);
+    expect(c.tree?.ts).toBe(T);
   });
 
   test('cache : un instant déjà chargé s\'affiche sans requête', async () => {
@@ -176,22 +190,46 @@ describe('survol du graphe (aperçu)', () => {
     c.hover(T);
     calls[0].resolve(treeAt(T));
     await flush();
-    vi.advanceTimersByTime(100);
+    vi.advanceTimersByTime(200);
     c.hover(T + 2000);
     calls[1].resolve(treeAt(T + 2000));
     await flush();
     c.hover(null);
+    vi.advanceTimersByTime(200);
     c.hover(T);
     expect(c.tree?.ts).toBe(T); // tout de suite, depuis le cache
     vi.advanceTimersByTime(1000);
     expect(calls).toHaveLength(2);
   });
 
+  test('balayage sur des instants en cache : l\'arbre change au plus une fois toutes les 200 ms (dernière position)', async () => {
+    const { c, calls } = setup();
+    for (const ts of [T, T + 1000]) {
+      c.hover(ts);
+      vi.advanceTimersByTime(200);
+      calls.at(-1)!.resolve(treeAt(ts));
+      await flush();
+    }
+    vi.advanceTimersByTime(200);
+    let changes = 0;
+    let last = c.tree;
+    for (let ms = 0; ms < 1000; ms += 10) {
+      c.hover(ms % 20 ? T + 1000 : T);
+      vi.advanceTimersByTime(10);
+      if (c.tree !== last) changes++;
+      last = c.tree;
+    }
+    expect(calls).toHaveLength(2); // aucune requête
+    expect(changes).toBeLessThanOrEqual(6);
+    vi.advanceTimersByTime(200);
+    expect(c.tree?.ts).toBe(T + 1000); // la dernière position gagne
+  });
+
   test('cache LRU borné : le plus ancien usage est évincé', async () => {
     const { c, calls } = setup();
     const load = async (ts: number) => {
       c.hover(ts);
-      vi.advanceTimersByTime(100);
+      vi.advanceTimersByTime(200);
       const call = calls.at(-1)!;
       if (call.ts === ts) {
         call.resolve(treeAt(ts));
@@ -203,10 +241,10 @@ describe('survol du graphe (aperçu)', () => {
     await load(T + 1000); // évince T + 1
     const n = calls.length;
     c.hover(T);
-    vi.advanceTimersByTime(100);
+    vi.advanceTimersByTime(200);
     expect(calls).toHaveLength(n); // T toujours en cache
     c.hover(T + 1);
-    vi.advanceTimersByTime(100);
+    vi.advanceTimersByTime(200);
     expect(calls).toHaveLength(n + 1);
   });
 
@@ -215,13 +253,15 @@ describe('survol du graphe (aperçu)', () => {
     c.hover(T);
     calls[0].resolve(treeAt(T));
     await flush();
-    vi.advanceTimersByTime(100);
+    vi.advanceTimersByTime(200);
     c.hover(T + 5000);
-    c.hover(T); // cache : affiché tout de suite, la requête en cours devient périmée
+    c.hover(T); // cache (servi au prochain créneau de 200 ms) : la requête en cours devient périmée
     calls[1].resolve(treeAt(T + 5000));
     await flush();
     expect(c.tree?.ts).toBe(T);
-    vi.advanceTimersByTime(100);
+    vi.advanceTimersByTime(200);
+    expect(c.tree?.ts).toBe(T);
+    vi.advanceTimersByTime(200);
     c.hover(T + 9000);
     c.hover(null);
     calls[2].resolve(treeAt(T + 9000));
@@ -235,7 +275,7 @@ describe('survol du graphe (aperçu)', () => {
     c.pick(T);
     calls[0].resolve(treeAt(T));
     await flush();
-    vi.advanceTimersByTime(100);
+    vi.advanceTimersByTime(200);
     c.hover(T + 3000);
     expect(c.shown).toBe(T + 3000); // le survol reste un aperçu
     c.hover(null);
@@ -286,7 +326,7 @@ describe('survol du graphe (aperçu)', () => {
     c.setGroup('h');
     expect(c.shown).toBeNull();
     c.hover(T);
-    vi.advanceTimersByTime(100);
+    vi.advanceTimersByTime(200);
     expect(calls.at(-1)).toMatchObject({ key: 'h', ts: T });
   });
 });

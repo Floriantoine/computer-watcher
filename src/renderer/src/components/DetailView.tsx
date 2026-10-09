@@ -7,13 +7,13 @@ import { procSparkMap, useHistory } from '../history';
 import { GroupHistoryPanel } from './GroupHistoryPanel';
 import { showRevertToAuto, ticksIndex } from '../instances';
 import { headerReclassTarget } from '../reclassHeader';
-import { useReplay } from '../useReplay';
-import { DetailTiles } from './DetailTiles';
+import { useReplaySelect, useReplayStore } from '../useReplay';
+import { DetailTilesLive } from './DetailTiles';
 import { CategoryTag } from './CategoryTag';
 import { InstancesPanel } from './InstancesPanel';
 import { ReclassMenu } from './ReclassMenu';
 import { ProcTree } from './ProcTree';
-import { ReplayPanel } from './ReplayPanel';
+import { ReplayPanelLive } from './ReplayPanel';
 import { ForceButton, GroupIcon } from './ui';
 
 interface Props {
@@ -57,7 +57,9 @@ export function DetailView(props: Props) {
     [groupId, others],
   );
   const sparks = useMemo(() => procSparkMap(procs), [procs]);
-  const replay = useReplay(groupId ?? '');
+  const replay = useReplayStore(groupId ?? '');
+  // Le détail ne se re-rend qu'au passage direct ↔ instant examiné (le survol re-rend seulement tuiles et arbre rejoué).
+  const examining = useReplaySelect(replay, (c) => c.shown !== null);
   const sparkOf = useCallback((pid: number, startTicks: number) => sparks.get(`${pid}:${startTicks}`), [sparks]);
   // Index pid → startTicks : même objet tant que l'arbre a les mêmes processus (lignes d'instances mémoïsées).
   const ticksRef = useRef<Map<number, number> | undefined>(undefined);
@@ -65,8 +67,8 @@ export function DetailView(props: Props) {
   // Menu « Reclasser » de l'en-tête : ouvert pour un groupe précis, donc fermé dès que le groupe affiché change.
   const [reclassOpenFor, setReclassOpenFor] = useState<string | null>(null);
   // Échap : libère l'instant figé (retour au direct), sauf si un menu ou un dialogue a déjà traité la touche.
-  const pinned = replay.pinned !== null;
-  const unpin = replay.live;
+  const pinned = useReplaySelect(replay, (c) => c.state.instant !== null);
+  const unpin = replay.c.live;
   useEffect(() => {
     if (!pinned) return;
     const onKey = (e: KeyboardEvent) => {
@@ -143,7 +145,7 @@ export function DetailView(props: Props) {
             </motion.button>
           ))}
       </div>
-      <DetailTiles group={group} memMetric={memMetric} at={replay.tiles} />
+      <DetailTilesLive store={replay} group={group} memMetric={memMetric} />
       {(group.kind === 'project' || group.kind === 'deleted') && group.instances.length > 0 && (
         <InstancesPanel
           group={group}
@@ -156,7 +158,7 @@ export function DetailView(props: Props) {
           onForce={props.onForce}
           onKillInstances={props.onKillInstances}
           memMetric={memMetric}
-          liveOnly={replay.instant !== null}
+          liveOnly={examining}
         />
       )}
       {!others && <GroupHistoryPanel key={group.id} groupId={group.id} replay={replay} />}
@@ -171,8 +173,8 @@ export function DetailView(props: Props) {
             </div>
           ))}
         </div>
-      ) : replay.instant !== null ? (
-        <ReplayPanel replay={replay} liveRoots={props.roots} memMetric={memMetric} />
+      ) : examining ? (
+        <ReplayPanelLive store={replay} liveRoots={props.roots} memMetric={memMetric} />
       ) : !props.roots ? (
         <div className="panel"><p className="empty">Chargement…</p></div>
       ) : (

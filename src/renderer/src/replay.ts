@@ -106,7 +106,14 @@ export function replayEmptyText(t: ProcTreeAt): string {
 }
 
 /** Valeurs des tuiles du détail à un instant (aperçu au survol, instant figé) ; null = non enregistré. */
-export interface TileValues { procCount: number | null; rssKB: number | null; swapKB: number | null; cpu: number | null }
+export interface TileValues {
+  procCount: number | null;
+  /** Faux : nombre de processus non enregistré pour cette plage (agrégats par minute ou par heure). */
+  procRecorded: boolean;
+  rssKB: number | null;
+  swapKB: number | null;
+  cpu: number | null;
+}
 
 /**
  * Tuiles à l'instant `ts`, lues dans les séries déjà chargées du graphe (aucune requête) : point le plus proche, comme
@@ -125,5 +132,5 @@ export function tilesAt(h: GroupHistory | null | undefined, ts: number): TileVal
   const i = lo > 0 && ts - h.ts[lo - 1] <= h.ts[lo] - ts ? lo - 1 : lo;
   const step = n > 1 ? (h.ts[n - 1] - h.ts[0]) / (n - 1) : 0;
   if (Math.abs(h.ts[i] - ts) > step) return null;
-  return { procCount: h.procCount?.[i] ?? null, rssKB: h.rssKB[i] ?? null, swapKB: h.swapKB[i] ?? null, cpu: h.cpu[i] ?? null };
+  return { procCount: h.procCount?.[i] ?? null, procRecorded: h.procCount !== undefined, rssKB: h.rssKB[i] ?? null, swapKB: h.swapKB[i] ?? null, cpu: h.cpu[i] ?? null };
 }

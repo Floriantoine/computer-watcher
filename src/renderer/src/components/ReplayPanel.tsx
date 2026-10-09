@@ -1,16 +1,31 @@
 // src/renderer/src/components/ReplayPanel.tsx — arbre reconstruit à l'instant examiné (survol ou instant figé), lecture seule
 import { useMemo } from 'react';
 import { History } from 'lucide-react';
-import type { MemoryMetric, ProcNode } from '../../../core/types';
+import type { MemoryMetric, ProcNode, ProcTreeAt } from '../../../core/types';
 import { formatInstant } from '../metrics';
 import { liveKeySet, liveMemMap, replayEmptyText, replayTree } from '../replay';
-import type { Replay } from '../useReplay';
+import { useReplaySelect, type ReplayStore } from '../useReplay';
 import { ReplayTree } from './ReplayTree';
 
+interface Props {
+  /** undefined = chargement, null = pas de base */
+  tree: ProcTreeAt | null | undefined;
+  /** Instant demandé, affiché tant qu'aucun arbre n'est arrivé. */
+  instant: number;
+  onLive: () => void;
+  liveRoots: ProcNode[] | null;
+  memMetric?: MemoryMetric;
+}
+
+/** Panneau relié au rejeu : re-rendu seulement quand l'arbre change (ou, avant le premier arbre, l'instant). */
+export function ReplayPanelLive({ store, liveRoots, memMetric }: { store: ReplayStore; liveRoots: ProcNode[] | null; memMetric?: MemoryMetric }) {
+  const tree = useReplaySelect(store, (c) => c.tree);
+  const instant = useReplaySelect(store, (c) => (c.tree === undefined ? c.shown : null));
+  return <ReplayPanel tree={tree} instant={instant ?? 0} onLive={store.c.live} liveRoots={liveRoots} memMetric={memMetric} />;
+}
+
 /** Arbre reconstruit à l'instant examiné, à la place de l'arbre en direct. */
-export function ReplayPanel({ replay, liveRoots, memMetric = 'rss' }: { replay: Replay; liveRoots: ProcNode[] | null; memMetric?: MemoryMetric }) {
-  const instant = replay.instant!;
-  const tree = replay.tree;
+export function ReplayPanel({ tree, instant, onLive, liveRoots, memMetric = 'rss' }: Props) {
   const live = useMemo(() => liveKeySet(liveRoots), [liveRoots]);
   // Mémoire actuelle des processus encore vivants (écart « alors vs maintenant ») ; en PSS, pas comparable au RSS enregistré.
   const liveMem = useMemo(() => (memMetric === 'pss' ? undefined : liveMemMap(liveRoots)), [liveRoots, memMetric]);
@@ -29,7 +44,7 @@ export function ReplayPanel({ replay, liveRoots, memMetric = 'rss' }: { replay: 
           — seuls les processus au-dessus des seuils d'enregistrement apparaissent{tree?.source === 'minute' ? ' (moyennes par minute)' : ''}
         </span>
         <span className="spacer" />
-        <button className="tree-toggle-all" data-testid="replay-live" onClick={replay.live}>Revenir au direct</button>
+        <button className="tree-toggle-all" data-testid="replay-live" onClick={onLive}>Revenir au direct</button>
       </div>
       {tree === undefined ? (
         <p className="empty">Chargement…</p>

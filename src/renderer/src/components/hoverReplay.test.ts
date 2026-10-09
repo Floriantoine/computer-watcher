@@ -2,7 +2,6 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, test } from 'vitest';
 import type { GroupSummary, InstanceSummary, ProcNode, ProcTreeAt, ProcTreeRow } from '../../../core/types';
-import type { Replay } from '../useReplay';
 import { DetailTiles } from './DetailTiles';
 import { InstancesPanel } from './InstancesPanel';
 import { ReplayPanel } from './ReplayPanel';
@@ -28,7 +27,7 @@ describe('tuiles du détail', () => {
   });
 
   test('aperçu ou instant figé : valeurs de l\'instant, badge « au HH:MM:SS », « Plus ancien » en —', () => {
-    const at = { ts: AT, values: { procCount: 7, rssKB: 3 * 1024 * 1024, swapKB: 512, cpu: 41.6 } };
+    const at = { ts: AT, values: { procCount: 7, procRecorded: true, rssKB: 3 * 1024 * 1024, swapKB: 512, cpu: 41.6 } };
     const html = renderToStaticMarkup(createElement(DetailTiles, { group, memMetric: 'rss', at, now: AT }));
     expect(count(html, 'tile-at')).toBe(4);
     expect(html).toContain('au 10:54:35');
@@ -39,6 +38,12 @@ describe('tuiles du détail', () => {
     expect(html).toMatch(/data-testid="tile-oldest"[^>]*>—</);
   });
 
+  test('plage par minute ou par heure : Processus « — » avec « non enregistré pour cette plage »', () => {
+    const at = { ts: AT, values: { procCount: null, procRecorded: false, rssKB: 1024, swapKB: 0, cpu: 1 } };
+    const html = renderToStaticMarkup(createElement(DetailTiles, { group, memMetric: 'rss', at, now: AT }));
+    expect(html).toMatch(/title="non enregistré pour cette plage"[^]*?>—</);
+  });
+
   test('instant sans valeurs (hors des séries, nombre de processus non enregistré) : —', () => {
     const html = renderToStaticMarkup(createElement(DetailTiles, { group, memMetric: 'pss', at: { ts: AT, values: null }, now: AT }));
     expect(html.match(/>—</g)?.length).toBe(5);
@@ -47,7 +52,7 @@ describe('tuiles du détail', () => {
 
 describe('écarts « alors vs maintenant »', () => {
   const g = { ...group, procCount: 109, rssKB: 4000 * 1024, swapKB: 1024 * 1024, cpuPercent: 109 };
-  const at = { ts: AT, values: { procCount: 96, rssKB: 3660 * 1024, swapKB: 1024 * 1024, cpu: 50 } };
+  const at = { ts: AT, values: { procCount: 96, procRecorded: true, rssKB: 3660 * 1024, swapKB: 1024 * 1024, cpu: 50 } };
   test('tuiles : écart sous la valeur passée, infobulle « par rapport à maintenant », rien si égal', () => {
     const html = renderToStaticMarkup(createElement(DetailTiles, { group: g, memMetric: 'rss', at, now: AT }));
     expect(count(html, 'tile-delta')).toBe(3); // swap égal : rien
@@ -55,6 +60,8 @@ describe('écarts « alors vs maintenant »', () => {
     expect(html).toContain('−340 Mo · −9 %');
     expect(html).toContain('−59 pt');
     expect(html).toContain('title="par rapport à maintenant"');
+    // RAM : l'historique ignore les processus sous les seuils d'enregistrement.
+    expect(html).toContain("title=\"par rapport à maintenant — l&#x27;historique ne contient que les processus au-dessus des seuils d&#x27;enregistrement\"");
     expect(html).toContain('delta-lower');
   });
   test('mode PSS : pas d\'écart sur la RAM (historique en RSS, direct en PSS)', () => {
@@ -66,13 +73,12 @@ describe('écarts « alors vs maintenant »', () => {
     const r = (pid: number, rssKB: number, lastSeenTs = AT): ProcTreeRow => ({ pid, startTicks: pid, ppid: null, name: `p${pid}`, rssKB, swapKB: 0, cpu: 0, sampleTs: AT, lastSeenTs });
     const tree: ProcTreeAt = { ts: AT, source: 'detail', procs: [r(10, 800 * 1024), r(11, 100 * 1024), r(12, 50 * 1024, AT + 60_000)], recorded: true, omitted: 0 };
     const liveRoots = [10, 11].map((pid) => ({ proc: { pid, startTicks: pid, rssKB: pid === 10 ? 500 * 1024 : 100 * 1024 }, children: [] })) as unknown as ProcNode[];
-    const replay = { instant: AT, pinned: null, playing: false, tree, tiles: null, pick: noop, play: noop, pause: noop, live: noop, hover: noop, setSeries: noop } as Replay;
-    const html = renderToStaticMarkup(createElement(ReplayPanel, { replay, liveRoots }));
+    const html = renderToStaticMarkup(createElement(ReplayPanel, { tree, instant: AT, onLive: noop, liveRoots }));
     expect(count(html, 'row-delta')).toBe(1);
     expect(html).toContain('+300 Mo · +60 %');
     expect(html).toContain('mort depuis');
     expect(html).not.toContain('mort à');
-    const pss = renderToStaticMarkup(createElement(ReplayPanel, { replay, liveRoots, memMetric: 'pss' }));
+    const pss = renderToStaticMarkup(createElement(ReplayPanel, { tree, instant: AT, onLive: noop, liveRoots, memMetric: 'pss' }));
     expect(count(pss, 'row-delta')).toBe(0);
   });
 });
@@ -80,10 +86,8 @@ describe('écarts « alors vs maintenant »', () => {
 describe('arbre rejoué pendant l\'aperçu', () => {
   const row = (pid: number, ppid: number | null): ProcTreeRow => ({ pid, startTicks: pid, ppid, name: `p${pid}`, rssKB: 100, swapKB: 0, cpu: 1, sampleTs: AT, lastSeenTs: AT });
   const tree: ProcTreeAt = { ts: AT, source: 'detail', procs: [row(10, null), row(11, 10), row(12, 10)], recorded: true, omitted: 0 };
-  const replay = { instant: AT, pinned: null, playing: false, tree, tiles: null, pick: noop, play: noop, pause: noop, live: noop, hover: noop, setSeries: noop } as Replay;
-
   test('aucun bouton de kill : seul « Revenir au direct »', () => {
-    const html = renderToStaticMarkup(createElement(ReplayPanel, { replay, liveRoots: null }));
+    const html = renderToStaticMarkup(createElement(ReplayPanel, { tree, instant: AT, onLive: noop, liveRoots: null }));
     expect(count(html, 'replay-row')).toBe(3);
     expect(html.match(/<button/g)?.length).toBe(1);
     expect(count(html, 'replay-live')).toBe(1);

@@ -4,7 +4,9 @@ import { formatAge, formatCpu, formatKB } from '../format';
 import { fallbackTitle, memTileLabel } from '../memMetric';
 import { formatInstant } from '../metrics';
 import { nowDelta, type NowDelta } from '../nowDelta';
-import type { TileValues } from '../replay';
+import { tilesAt, type TileValues } from '../replay';
+import { useReplaySelect, type ReplayStore } from '../useReplay';
+import { useMemo } from 'react';
 import { AnimatedNumber } from './ui';
 
 /** Instant examiné : son horodatage et les valeurs lues dans les séries du graphe (null : hors des séries). */
@@ -13,10 +15,13 @@ export interface TilesAt { ts: number; values: TileValues | null }
 const dash = '—';
 
 /** Écart « alors vs maintenant » sous la valeur passée (positionné en absolu, comme le badge). */
-function Delta({ d }: { d: NowDelta | null }) {
+function Delta({ d, note }: { d: NowDelta | null; note?: string }) {
   if (!d) return null;
-  return <span className={`tile-delta delta-${d.tone}`} data-testid="tile-delta" title={d.title}>{d.text}</span>;
+  return <span className={`tile-delta delta-${d.tone}`} data-testid="tile-delta" title={note ? `${d.title} — ${note}` : d.title}>{d.text}</span>;
 }
+
+/** Écart de RAM : le direct compte tous les processus, l'historique seulement ceux au-dessus des seuils. */
+const RAM_NOTE = "l'historique ne contient que les processus au-dessus des seuils d'enregistrement";
 
 /** Badge « au HH:MM:SS » d'une tuile à l'instant examiné (positionné en absolu : la hauteur des tuiles ne bouge pas). */
 function At({ text }: { text: string }) {
@@ -34,10 +39,10 @@ export function DetailTiles({ group, memMetric, at, now }: { group: GroupSummary
     const kb = (n: number | null | undefined) => (n == null ? dash : formatKB(Math.round(n)));
     return (
       <div className="summary is-at" data-testid="detail-tiles">
-        <div className="tile"><small>Processus</small><At text={badge} /><b>{v?.procCount ?? dash}</b><Delta d={nowDelta(v?.procCount, group.procCount, 'count')} /></div>
+        <div className="tile" title={v && !v.procRecorded ? 'non enregistré pour cette plage' : undefined}><small>Processus</small><At text={badge} /><b>{v?.procCount ?? dash}</b><Delta d={nowDelta(v?.procCount, group.procCount, 'count')} /></div>
         <div className="tile" title="Mémoire résidente enregistrée par le service (RSS)"><small data-testid="mem-tile-label">RAM</small><At text={badge} /><b>{kb(v?.rssKB)}</b>
           {/* En PSS, le direct n'est pas comparable à l'historique (RSS) : pas d'écart. */}
-          {memMetric !== 'pss' && <Delta d={nowDelta(v?.rssKB, group.rssKB, 'kb')} />}
+          {memMetric !== 'pss' && <Delta d={nowDelta(v?.rssKB, group.rssKB, 'kb')} note={RAM_NOTE} />}
         </div>
         <div className="tile"><small>Swap</small><At text={badge} /><b>{kb(v?.swapKB)}</b><Delta d={nowDelta(v?.swapKB, group.swapKB, 'kb')} /></div>
         <div className="tile"><small>CPU</small><At text={badge} /><b>{v?.cpu == null ? dash : formatCpu(v.cpu)}</b><Delta d={nowDelta(v?.cpu, group.cpuPercent, 'cpu')} /></div>
@@ -54,4 +59,12 @@ export function DetailTiles({ group, memMetric, at, now }: { group: GroupSummary
       <div className="tile"><small>Plus ancien</small><b data-testid="tile-oldest" className={group.oldestAgeSec > 86400 ? 'old' : ''}>{formatAge(group.oldestAgeSec)}</b></div>
     </div>
   );
+}
+
+/** Tuiles reliées au rejeu : seules à se re-rendre quand le survol change d'échantillon. */
+export function DetailTilesLive({ store, group, memMetric }: { store: ReplayStore; group: GroupSummary; memMetric: MemoryMetric }) {
+  const instant = useReplaySelect(store, (c) => c.shown);
+  const series = useReplaySelect(store, (c) => c.series);
+  const at = useMemo(() => (instant === null ? null : { ts: instant, values: tilesAt(series, instant) }), [instant, series]);
+  return <DetailTiles group={group} memMetric={memMetric} at={at} />;
 }

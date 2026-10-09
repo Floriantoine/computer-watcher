@@ -9,16 +9,20 @@ import { TimeChart, type ChartMarker } from './charts/TimeChart';
 import { KB_FORMAT, PERCENT_FORMAT } from './charts/uplotTheme';
 import { RangeSelector } from './RangeSelector';
 import { ClickDelay, replayInstant } from '../replay';
-import type { Replay } from '../useReplay';
+import { useReplaySelect, type ReplayStore } from '../useReplay';
 
 const CHART_FORMAT = { left: KB_FORMAT, right: PERCENT_FORMAT };
+/** Sans rejeu : un magasin vide (les hooks restent appelés dans le même ordre). */
+const EMPTY_STORE = { c: undefined, subscribe: () => () => {} } as unknown as ReplayStore;
+const NO_STORE_OR = (s: ReplayStore | undefined) => s ?? EMPTY_STORE;
 
 /**
  * Panneau « Historique » : RAM, swap et CPU du groupe sur la plage choisie, avec les mêmes gestes que l'onglet Métriques.
  * Marqueurs : alertes du groupe et pressions système (survol : infobulle). Avec `replay`, le survol montre le détail à
  * l'instant pointé (aperçu), un clic le fige et « Rejouer » le fait avancer à ×60.
  */
-export function GroupHistoryPanel({ groupId, replay, markers: extra }: { groupId: string; replay?: Replay; markers?: ChartMarker[] }) {
+export function GroupHistoryPanel({ groupId, replay: store, markers: extra }: { groupId: string; replay?: ReplayStore; markers?: ChartMarker[] }) {
+  const replay = store?.c;
   const [range, setRange] = useState<RangePreset>('1h');
   const z = useChartZoom(PRESET_MS[range]);
   const h = useHistory(() => window.procWatch.history.group(groupId, z.range()), [groupId, range, z.zoom], refreshMsFor(range, z.frozen));
@@ -32,7 +36,8 @@ export function GroupHistoryPanel({ groupId, replay, markers: extra }: { groupId
   const [hover, setHover] = useState<number | null>(null);
   const enough = !!h && h.ts.length >= 2;
   // Trait de l'instant figé (ou joué) ; l'aperçu au survol suit déjà le curseur du graphe.
-  const pinned = replay?.pinned ?? null;
+  const pinned = useReplaySelect(NO_STORE_OR(store), (c) => c?.state.instant ?? null);
+  const playing = useReplaySelect(NO_STORE_OR(store), (c) => c?.state.playing ?? false);
   const markers = useMemo((): ChartMarker[] => {
     const m: ChartMarker[] = [...eventMarkers(events ?? []), ...(extra ?? [])];
     if (pinned !== null) m.push({ ts: pinned, color: '#e7e9ee', label: 'Instant examiné' });
@@ -48,7 +53,8 @@ export function GroupHistoryPanel({ groupId, replay, markers: extra }: { groupId
     return (p: { ts: number; exact: number } | null) => {
       const d = latest.current.h;
       if (p === null || !d || d.ts.length < 2) hover(null);
-      else hover(replayInstant(p.ts, p.exact, d.ts[1] - d.ts[0]));
+      // Aperçu calé sur la grille des échantillons : même échantillon → même instant, ni rendu ni requête.
+      else hover(p.ts);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [replay?.hover]);
@@ -90,14 +96,14 @@ export function GroupHistoryPanel({ groupId, replay, markers: extra }: { groupId
           </span>
         )}
         <span className="spacer" />
-        {replay && replay.pinned !== null && (
+        {replay && pinned !== null && (
           <button
             className="replay-play"
             data-testid="replay-play"
-            onClick={() => (replay.playing ? replay.pause() : replay.play(z.view ?? z.range()))}
+            onClick={() => (playing ? replay.pause() : replay.play(z.view ?? z.range()))}
           >
-            {replay.playing ? <Pause size={13} strokeWidth={2} /> : <Play size={13} strokeWidth={2} />}
-            {replay.playing ? 'Pause' : 'Rejouer'}
+            {playing ? <Pause size={13} strokeWidth={2} /> : <Play size={13} strokeWidth={2} />}
+            {playing ? 'Pause' : 'Rejouer'}
           </button>
         )}
         <ZoomChip zoom={z.zoom} onReset={() => z.setZoom(null)} />
