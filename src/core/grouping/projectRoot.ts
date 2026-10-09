@@ -1,13 +1,24 @@
 // src/core/grouping/projectRoot.ts
 import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-export function findProjectRoot(cwd: string, exists: (p: string) => boolean = existsSync): string | null {
+// La racine git (dépôt ou worktree) définit le projet : front/ et backend/ avec
+// leur propre package.json restent ensemble. Sans .git au-dessus, le package.json
+// le plus proche. Le home ne regroupe jamais ses sous-dossiers.
+export function findProjectRoot(
+  cwd: string,
+  exists: (p: string) => boolean = existsSync,
+  home: string = homedir(),
+): string | null {
+  let nearestPkg: string | null = null;
   let dir = cwd;
   for (;;) {
-    if (exists(join(dir, '.git')) || exists(join(dir, 'package.json'))) return dir;
+    if (dir === home && dir !== cwd) return nearestPkg;
+    if (exists(join(dir, '.git'))) return dir;
+    if (nearestPkg === null && exists(join(dir, 'package.json'))) nearestPkg = dir;
     const parent = dirname(dir);
-    if (parent === dir) return null;
+    if (parent === dir) return nearestPkg;
     dir = parent;
   }
 }
