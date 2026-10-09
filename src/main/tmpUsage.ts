@@ -1,4 +1,4 @@
-// Place occupée par /tmp (tmpfs : en RAM), par dossier de premier niveau. Lecture seule : rien n'est jamais supprimé.
+// Place occupée par /tmp (tmpfs : en RAM), par dossier de premier niveau. Lecture seule (la suppression est dans tmpClean.ts).
 import { lstat, opendir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { TMP_SCAN_LIMITS } from '../core/tmpScanLimits';
@@ -203,19 +203,31 @@ export function topTmpDirs(root = '/tmp', o: TmpScanOptions = {}): Promise<TmpUs
 export function sharedScan(
   scan: () => Promise<TmpUsage> = () => topTmpDirs(),
   { ttlMs = 30_000, now = Date.now }: { ttlMs?: number; now?: () => number } = {},
-): () => Promise<TmpUsage> {
+): (() => Promise<TmpUsage>) & { reset(): void } {
   let running: Promise<TmpUsage> | null = null;
   let last: { at: number; usage: TmpUsage } | null = null;
-  return () => {
+  /** Incrémentée par reset : un parcours lancé avant ne remplit plus le cache et n'est plus partagé. */
+  let gen = 0;
+  const get = () => {
     if (last && now() - last.at < ttlMs) return Promise.resolve(last.usage);
-    running ??= scan()
+    if (running) return running;
+    const mine = gen;
+    const p: Promise<TmpUsage> = scan()
       .then((usage) => {
-        last = { at: now(), usage };
+        if (mine === gen) last = { at: now(), usage };
         return usage;
       })
       .finally(() => {
-        running = null;
+        if (running === p) running = null;
       });
-    return running;
+    running = p;
+    return p;
   };
+  /** Oublie le résultat gardé et le parcours en cours (après une suppression : leur état est périmé). */
+  const reset = () => {
+    gen++;
+    last = null;
+    running = null;
+  };
+  return Object.assign(get, { reset });
 }

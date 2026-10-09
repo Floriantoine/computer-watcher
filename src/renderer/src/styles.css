@@ -633,6 +633,28 @@ table.tree td.spark-cell .spark { width: 64px; }
 .tmp-dirs .size { flex: none; text-align: right; font-variant-numeric: tabular-nums; }
 .tmp-dirs .note { color: var(--label); font-style: italic; }
 .tmp-dirs .partial { color: #ffb547; }
+.tmp-clean li { align-items: center; }
+.tmp-clean li input[type='checkbox'] { flex: none; margin: 0; accent-color: var(--danger); cursor: pointer; }
+.tmp-clean li input[type='checkbox']:disabled { cursor: not-allowed; opacity: 0.35; }
+.tmp-clean li input[type='checkbox']:focus-visible { outline: 2px solid var(--accent, #7aa2ff); outline-offset: 2px; }
+.tmp-clean label.path { cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
+.tmp-clean label.path svg { flex: none; color: var(--muted); }
+.tmp-clean li.refused label.path { cursor: default; color: var(--text-2); }
+.tmp-clean .tmp-badge { flex: none; font-size: 10.5px; color: #8fe3b0; background: rgba(80, 220, 140, 0.1); border: 1px solid rgba(80, 220, 140, 0.28); border-radius: 99px; padding: 0 7px; white-space: nowrap; }
+.tmp-clean .tmp-why { flex: none; max-width: 45%; font-size: 11px; color: var(--amber); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tmp-clean-actions { display: flex; justify-content: flex-end; margin-top: 4px; }
+.tmp-clean .tmp-recent { flex: none; display: inline-flex; align-items: center; gap: 3px; font-size: 10.5px; color: var(--amber); white-space: nowrap; }
+.tmp-clean label.path svg.warn { color: var(--amber); }
+.tmp-clean-actions button { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: 11.5px; }
+.tmp-clean-actions button.danger { background: rgba(255, 92, 138, 0.14); border-color: rgba(255, 92, 138, 0.38); color: #ffb0c6; font-weight: 600; }
+.tmp-clean-actions button:disabled { opacity: 0.45; cursor: not-allowed; }
+.tmp-clean-quarantine { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; justify-content: space-between; margin-top: 4px; }
+.tmp-clean-quarantine .sub { display: inline-flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.tmp-clean-quarantine button.danger { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: 11.5px; background: rgba(255, 92, 138, 0.14); border-color: rgba(255, 92, 138, 0.38); color: #ffb0c6; font-weight: 600; }
+.tmp-clean-summary { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; padding: 6px 8px; border: 1px solid rgba(255, 92, 138, 0.25); border-radius: var(--r-sm); background: rgba(255, 92, 138, 0.05); }
+.tmp-clean-summary ul { flex: none; overflow: visible; }
+.tmp-clean-summary li { display: flex; gap: 8px; align-items: center; }
+.tmp-clean-summary .tmp-clean-uninspectable { color: var(--amber); display: flex; gap: 5px; align-items: flex-start; }
 .metrics-list .list-cols { display: inline-flex; color: var(--label); font-size: 11px; padding-right: 6px; }
 .metrics-list .list-cols span { width: 62px; text-align: right; }
 .metrics-list .mono { white-space: nowrap; }

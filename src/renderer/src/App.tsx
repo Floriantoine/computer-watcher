@@ -494,6 +494,7 @@ export function App() {
                 onStopSleeping={onStopSleeping}
                 onStopSwapRow={onStopSwapRow}
                 onSetSwapMinMB={onSetSwapMinMB}
+                onToast={pushToast}
               />
             )}
             {route.view === 'settings' && (

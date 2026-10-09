@@ -39,6 +39,8 @@ interface Props {
   onStopSleeping?: (keys: readonly string[]) => void;
   onStopSwapRow?: (row: SwapRow) => void;
   onSetSwapMinMB?: (mb: number) => void;
+  /** Toast (résultat d'une suppression dans /tmp). */
+  onToast?: (message: string, kind: 'info' | 'error') => void;
 }
 
 /** Teintes des couches de l'enquête (de la plus grosse à la 8e) ; les trois couches du Reste ont les leurs, en pointillés. */
@@ -75,7 +77,7 @@ interface SysChart {
 
 const NO_PIDS = new Set<number>();
 
-export function MetricsView({ at, canOpen, onOpenGroup, onOpenSettings, openPorts, pendingPids = NO_PIDS, onFreePort, onOpenPortGroup, swapMinMB = 100, onStopSleeping, onStopSwapRow, onSetSwapMinMB }: Props) {
+export function MetricsView({ at, canOpen, onOpenGroup, onOpenSettings, openPorts, pendingPids = NO_PIDS, onFreePort, onOpenPortGroup, swapMinMB = 100, onStopSleeping, onStopSwapRow, onSetSwapMinMB, onToast }: Props) {
   const [preset, setPreset] = useState<RangePreset>(() => presetFor(at));
   const z = useChartZoom(PRESET_MS[preset]);
   const { zoom, view, setZoom } = z;
@@ -286,7 +288,7 @@ export function MetricsView({ at, canOpen, onOpenGroup, onOpenSettings, openPort
           </AnimatePresence>
         </section>
         <TopConsumers top={data?.top} canOpen={canOpen} onOpenGroup={onOpenGroup} onHover={setHoverKey} />
-        <AlertsPanel events={events} onPick={setCursor} onHover={setHoverTs} onSettings={onOpenSettings && (() => onOpenSettings('alerts'))} />
+        <AlertsPanel events={events} onPick={setCursor} onHover={setHoverTs} onSettings={onOpenSettings && (() => onOpenSettings('alerts'))} onToast={onToast} />
       </div>
       {onFreePort && onOpenPortGroup && <OpenPortsPanel info={openPorts ?? null} pendingPids={pendingPids} onFree={onFreePort} onOpenGroup={onOpenPortGroup} />}
       {onStopSleeping && onStopSwapRow && onSetSwapMinMB && (

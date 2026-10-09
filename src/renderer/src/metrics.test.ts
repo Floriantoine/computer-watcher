@@ -89,6 +89,12 @@ test('alertsFrom : récents d\'abord, sans app_kill', () => {
   expect(alertsFrom([ev(1, 'leak'), ev(2, 'app_kill'), ev(3, 'gap')]).map((e) => e.ts)).toEqual([3, 1]);
 });
 
+test('tmp_clean : action de l’app (pas une alerte), marqueur « Nettoyage de /tmp »', () => {
+  const e = { ts: 4, type: 'tmp_clean', groupKey: null, groupLabel: null, detail: { freedKB: 2 * G, deleted: ['a', 'b'], refused: [] } };
+  expect(alertsFrom([e])).toEqual([]);
+  expect(eventMarkers([e])[0].label).toBe('Nettoyage de /tmp : 2 éléments, 2,0 Go libérés');
+});
+
 test('eventMarkers : gap sans from/to, et base recréée', () => {
   const m = eventMarkers([
     { ts: 1, type: 'gap', groupKey: null, groupLabel: null, detail: { reason: 'base illisible, recréée', backup: '/x.bak' } },

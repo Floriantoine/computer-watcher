@@ -82,7 +82,7 @@ export function breakdownAt(inv: { ts: number[]; layers: { key: string; values: 
 
 const COLORS: Record<string, string> = {
   earlyoom_kill: '#ff5c8a', pressure: '#ffb547', gap: '#8b91a0', app_kill: '#a07cff', leak: '#ff8a3d', tmpfs: REST_TONES.shmem, forecast: '#ffb547',
-  rule_action: '#ff5c8a', rule_dry_run: '#8b91a0', earlyoom_setup: '#5ee0b8',
+  rule_action: '#ff5c8a', rule_dry_run: '#8b91a0', earlyoom_setup: '#5ee0b8', tmp_clean: '#a07cff',
 };
 
 function label(e: HistoryEvent): string {
@@ -99,6 +99,10 @@ function label(e: HistoryEvent): string {
         return `Trou d'enregistrement (${Math.round((to - from) / 60_000)} min)`;
       }
     case 'app_kill': return 'Kill depuis proc-watch';
+    case 'tmp_clean': {
+      const n = Array.isArray(d.deleted) ? d.deleted.length : 0;
+      return `Nettoyage de /tmp : ${n} élément${n > 1 ? 's' : ''}, ${formatKB(Math.round(Number(d.freedKB) || 0))} libérés`;
+    }
     case 'leak': return `Fuite probable : ${e.groupLabel ?? '?'} +${formatKB(Number(d.growthKB))}`;
     case 'tmpfs': return `Fichiers en mémoire : ${formatKB(Number(d.shmemKB))}`;
     case 'forecast': {
@@ -124,7 +128,8 @@ export function eventMarkers(events: HistoryEvent[]) {
 }
 
 export function alertsFrom(events: HistoryEvent[]): HistoryEvent[] {
-  return events.filter((e) => e.type !== 'app_kill' && e.type !== 'earlyoom_setup').sort((a, b) => b.ts - a.ts);
+  // actions de l'app (kill, installation d'earlyoom, nettoyage de /tmp) : marqueurs dans les graphes, pas des alertes
+  return events.filter((e) => e.type !== 'app_kill' && e.type !== 'earlyoom_setup' && e.type !== 'tmp_clean').sort((a, b) => b.ts - a.ts);
 }
 
 const p2 = (n: number) => String(n).padStart(2, '0');

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
 
-export type EventType = 'earlyoom_kill' | 'pressure' | 'gap' | 'app_kill' | 'leak' | 'tmpfs' | 'forecast' | 'rule_action' | 'rule_dry_run' | 'earlyoom_setup';
+export type EventType = 'earlyoom_kill' | 'pressure' | 'gap' | 'app_kill' | 'leak' | 'tmpfs' | 'forecast' | 'rule_action' | 'rule_dry_run' | 'earlyoom_setup' | 'tmp_clean';
 
 const EARLYOOM = /sending (SIGTERM|SIGKILL) to process (\d+)(?: uid (\d+))? "([^"]*)"/;
 
@@ -63,8 +63,6 @@ export function shouldRecordTmpfs(
   return { record: false, state: { lastTs: state.lastTs, armed: state.armed || now - belowSince >= TMPFS_REARM_MS, belowSince } };
 }
 
-export type AppEvent = AppKillEvent | EarlyoomSetupEvent;
-
 /** Installation / activation d'earlyoom lancée depuis l'app (pkexec exécuté) : mode, résultat, code de sortie (null : délai dépassé). */
 export interface EarlyoomSetupEvent {
   ts: number;
@@ -91,6 +89,38 @@ export interface AppKillEvent {
   detail: { pids: number[]; signal: string; targets?: { pid: number; startTicks: number }[] };
 }
 
+/** Éléments de /tmp supprimés depuis l'app (B1 bis). */
+export interface TmpCleanEvent {
+  ts: number;
+  type: 'tmp_clean';
+  groupKey: null;
+  /** `partial` : un élément a pu être supprimé en partie (échec en cours de route, reste en quarantaine). */
+  detail: { freedKB: number; deleted: string[]; refused: { name: string; reason: string }[]; partial?: true };
+}
+
+export type AppEvent = AppKillEvent | EarlyoomSetupEvent | TmpCleanEvent;
+
+function parseTmpClean(obj: Record<string, unknown>): TmpCleanEvent | null {
+  if (obj.groupKey !== null) return null;
+  const d = obj.detail as Record<string, unknown> | null;
+  if (typeof d !== 'object' || d === null || Array.isArray(d)) return null;
+  if (!Number.isFinite(d.freedKB as number)) return null;
+  if (!Array.isArray(d.deleted) || !d.deleted.every((n: unknown) => typeof n === 'string')) return null;
+  const okRefused = (x: unknown) => typeof x === 'object' && x !== null && typeof (x as { name: unknown }).name === 'string' && typeof (x as { reason: unknown }).reason === 'string';
+  if (!Array.isArray(d.refused) || !d.refused.every(okRefused)) return null;
+  return {
+    ts: obj.ts as number,
+    type: 'tmp_clean',
+    groupKey: null,
+    detail: {
+      freedKB: d.freedKB as number,
+      deleted: [...(d.deleted as string[])],
+      refused: (d.refused as { name: string; reason: string }[]).map((r) => ({ name: r.name, reason: r.reason })),
+      ...(d.partial === true ? { partial: true as const } : {}),
+    },
+  };
+}
+
 export const formatAppEvent = (e: AppEvent) => JSON.stringify(e) + '\n';
 
 export function parseAppEvents(text: string): AppEvent[] {
@@ -108,6 +138,11 @@ export function parseAppEvents(text: string): AppEvent[] {
       if (obj.type === 'earlyoom_setup') {
         const e = parseSetupEvent(obj);
         if (e) out.push(e);
+        continue;
+      }
+      if (obj.type === 'tmp_clean') {
+        const t = parseTmpClean(obj);
+        if (t) out.push(t);
         continue;
       }
 

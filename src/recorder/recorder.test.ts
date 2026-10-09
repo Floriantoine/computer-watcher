@@ -89,13 +89,15 @@ test('minuteJob : agrège, purge, ingère les événements de l\'app, traite cle
   writeFileSync(
     join(base, 'data', 'app-events.jsonl'),
     JSON.stringify({ ts: 1_000_100, type: 'app_kill', groupKey: 'app:chrome', detail: { pids: [10], signal: 'SIGTERM' } }) + '\n' +
-      JSON.stringify({ ts: 1_000_200, type: 'earlyoom_setup', groupKey: null, detail: { mode: 'install', ok: true, code: 0 } }) + '\n',
+      JSON.stringify({ ts: 1_000_200, type: 'earlyoom_setup', groupKey: null, detail: { mode: 'install', ok: true, code: 0 } }) + '\n' +
+      JSON.stringify({ ts: 1_000_300, type: 'tmp_clean', groupKey: null, detail: { freedKB: 10, deleted: ['jest_rs'], refused: [] } }) + '\n',
   );
   advance(60_000);
   rec.minuteJob();
   expect(db().prepare('SELECT COUNT(*) n FROM group_minute').get()).toEqual({ n: 3 });
   expect(db().prepare("SELECT COUNT(*) n FROM events WHERE type='app_kill'").get()).toEqual({ n: 1 });
   expect(db().prepare("SELECT ts, detail FROM events WHERE type='earlyoom_setup'").all()).toEqual([{ ts: 1_000_200, detail: '{"mode":"install","ok":true,"code":0}' }]);
+  expect(db().prepare("SELECT COUNT(*) n FROM events WHERE type='tmp_clean'").get()).toEqual({ n: 1 });
   writeFileSync(join(base, 'data', 'clear-request'), '');
   rec.minuteJob();
   expect(db().prepare('SELECT COUNT(*) n FROM system_samples').get()).toEqual({ n: 0 });
