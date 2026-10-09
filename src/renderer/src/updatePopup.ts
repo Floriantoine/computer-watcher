@@ -28,6 +28,13 @@ export function updatePopupText(v: UpdateView): UpdatePopupText {
     case 'error':
       return { title, body: `Échec du téléchargement : ${s.error ?? 'erreur inconnue'}`, progress: null, actions: [{ kind: 'download', label: 'Réessayer' }, LATER] };
     default:
+      if (s.mode === 'relaunch')
+        return {
+          title,
+          body: `${notes} Cette AppImage n’est pas la copie installée : lancez proc-watch depuis le menu pour mettre à jour.`,
+          progress: null,
+          actions: [LATER, IGNORE],
+        };
       if (s.mode === 'notify')
         return {
           title,
@@ -41,6 +48,7 @@ export function updatePopupText(v: UpdateView): UpdatePopupText {
 
 const MODE_TEXT: Record<UpdateState['mode'], string> = {
   install: 'AppImage : mise à jour téléchargée et vérifiée (sha512), installée au redémarrage, sur demande.',
+  relaunch: 'AppImage lancée hors de la copie installée (~/Applications) : lancez proc-watch depuis le menu pour mettre à jour.',
   notify: 'Paquet (.deb) : notification seulement, la mise à jour se télécharge depuis la page des versions.',
   off: 'Lancée depuis les sources : aucune vérification des mises à jour.',
 };

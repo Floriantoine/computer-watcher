@@ -1,11 +1,14 @@
 // Mises à jour (logique pure) : mode selon le format d'installation, comparaison de versions, machine à états du pop-up.
 
 /**
- * `install` : AppImage empaquetée, téléchargement (sha512 vérifié par electron-updater) puis installation au redémarrage ;
+ * `install` : AppImage de ce processus (voir ownAppImage), téléchargement (sha512 vérifié par electron-updater) puis
+ * installation au redémarrage ;
+ * `relaunch` : AppImage lancée hors de la copie installée (~/Applications/proc-watch.AppImage) : on ne met pas à jour
+ * l'original téléchargé, on invite à lancer proc-watch depuis le menu ;
  * `notify` : .deb (ou autre version empaquetée) : notification et lien vers la page des versions, jamais d'installation ;
  * `off` : lancée depuis les sources, aucune vérification (sauf flux de test local).
  */
-export type UpdateMode = 'off' | 'install' | 'notify';
+export type UpdateMode = 'off' | 'install' | 'relaunch' | 'notify';
 
 export const REPO_RELEASES_URL = 'https://github.com/Floriantoine/proc-watcher/releases';
 /** API publique : versions publiées (brouillons exclus par GitHub pour un accès anonyme). */
@@ -15,17 +18,25 @@ export const CHECK_EVERY_MS = 6 * 3600_000;
 /** « Plus tard » : pop-up caché pendant 24 h (en mémoire : revient au prochain lancement). */
 export const LATER_MS = 24 * 3600_000;
 
-export function updateMode(p: { isPackaged: boolean; appImage: string | undefined; testFeed: string | null }): UpdateMode {
+/** `appImage` : AppImage vérifiée de ce processus (ownAppImage), jamais la variable APPIMAGE brute. */
+export function updateMode(p: { isPackaged: boolean; appImage: string | null; testFeed: string | null; installedElsewhere: boolean }): UpdateMode {
   if (!p.isPackaged && !p.testFeed) return 'off';
-  return p.appImage ? 'install' : 'notify';
+  if (!p.appImage) return 'notify';
+  return p.installedElsewhere ? 'relaunch' : 'install';
 }
+
+/** Option exigée en plus de PROC_WATCH_UPDATE_FEED : argv ne vient pas de l'environnement de session. */
+export const TEST_FEED_FLAG = '--update-feed-test';
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]']);
 
-/** PROC_WATCH_UPDATE_FEED : flux de test (http ou https sur la boucle locale), ignoré dans une version empaquetée. */
-export function testFeedFromEnv(env: NodeJS.ProcessEnv, isPackaged: boolean): string | null {
+/**
+ * PROC_WATCH_UPDATE_FEED : flux de test (http ou https sur la boucle locale), seulement avec l'option --update-feed-test
+ * (passée par scripts/update-e2e.mjs) et jamais dans une version empaquetée.
+ */
+export function testFeedFromEnv(env: NodeJS.ProcessEnv, isPackaged: boolean, argv: readonly string[]): string | null {
   const raw = env.PROC_WATCH_UPDATE_FEED;
-  if (isPackaged || !raw) return null;
+  if (isPackaged || !raw || !argv.includes(TEST_FEED_FLAG)) return null;
   let u: URL;
   try {
     u = new URL(raw);
@@ -37,9 +48,22 @@ export function testFeedFromEnv(env: NodeJS.ProcessEnv, isPackaged: boolean): st
   return u.toString();
 }
 
-/** Seules les pages des versions du dépôt, en https, sont ouvertes dans le navigateur. */
+const RELEASES_PATH = '/Floriantoine/proc-watcher/releases';
+
+/**
+ * Seules les pages des versions du dépôt sont ouvertes dans le navigateur : URL analysée, https://github.com exactement
+ * (ni identifiants ni port), chemin sous /Floriantoine/proc-watcher/releases, aucun segment « .. » (même encodé).
+ */
 export function isReleaseUrl(url: unknown): url is string {
-  return typeof url === 'string' && (url === REPO_RELEASES_URL || url.startsWith(`${REPO_RELEASES_URL}/`));
+  if (typeof url !== 'string' || /\.\.|%2e/i.test(url)) return false;
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== 'https:' || u.hostname !== 'github.com' || u.port || u.username || u.password) return false;
+  return u.pathname === RELEASES_PATH || u.pathname.startsWith(`${RELEASES_PATH}/`);
 }
 
 interface Parsed { core: [number, number, number]; pre: (string | number)[] }
@@ -148,7 +172,9 @@ export type UpdateEvent =
   | { type: 'download' }
   | { type: 'progress'; percent: number }
   | { type: 'downloaded' }
-  | { type: 'later'; at: number };
+  | { type: 'later'; at: number }
+  /** Proposition retirée (préversions désactivées) ; sans effet pendant un téléchargement ou une fois prête. */
+  | { type: 'withdraw' };
 
 export function initialUpdateState(mode: UpdateMode, current: string): UpdateState {
   return { mode, current, phase: 'idle', available: null, progress: null, error: null, lastCheck: null, lastResult: null, snoozedUntil: null };
@@ -175,8 +201,8 @@ export function reduceUpdate(s: UpdateState, e: UpdateEvent): UpdateState {
       if (busy(s)) return s;
       return { ...s, phase: 'idle', available: null, error: null, lastCheck: e.at, lastResult: 'none' };
     case 'error':
-      if (s.phase === 'downloading') return { ...s, phase: 'error', progress: null, error: e.message };
-      if (s.phase === 'ready') return s;
+      // téléchargement ou installation échoués : dans le pop-up, « Réessayer » (le fichier vérifié reste en cache)
+      if (s.phase === 'downloading' || s.phase === 'ready') return { ...s, phase: 'error', progress: null, error: e.message, snoozedUntil: null };
       return { ...s, phase: s.available ? 'available' : 'idle', error: e.message, lastCheck: e.at, lastResult: 'error' };
     case 'download':
       if (s.mode !== 'install' || !s.available || (s.phase !== 'available' && s.phase !== 'error')) return s;
@@ -185,6 +211,8 @@ export function reduceUpdate(s: UpdateState, e: UpdateEvent): UpdateState {
       return s.phase === 'downloading' ? { ...s, progress: Math.max(0, Math.min(100, e.percent)) } : s;
     case 'downloaded':
       return s.phase === 'downloading' ? { ...s, phase: 'ready', progress: 100 } : s;
+    case 'withdraw':
+      return s.phase === 'available' || s.phase === 'error' ? { ...s, phase: 'idle', available: null, progress: null, error: null } : s;
     case 'later':
       return s.phase === 'downloading' ? s : { ...s, snoozedUntil: e.at + LATER_MS };
   }

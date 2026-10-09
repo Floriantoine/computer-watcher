@@ -6,11 +6,16 @@
 //   B. sha512 faux : « Échec du téléchargement » et « Réessayer ».
 //   C. pas une AppImage : notification seulement (« Voir la version », pas de téléchargement).
 //   D. sans flux : aucune vérification (Réglages › À propos).
+//   E. APPIMAGE/APPDIR hérités d'une autre application : jamais le mode installation (notification seulement).
+//   F. copie installée (~/Applications/proc-watch.AppImage) présente, autre AppImage lancée : « lancez proc-watch depuis le menu ».
+//   G. variable PROC_WATCH_UPDATE_FEED sans l'option --update-feed-test : ignorée.
+// « AppImage » factice : APPDIR = dossier du binaire electron en cours, APPIMAGE = petit fichier ordinaire hors de APPDIR.
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { createServer } from 'node:http';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { _electron as electron } from 'playwright';
 
 const payload = randomBytes(64 * 1024);
@@ -53,14 +58,21 @@ const ok = (cond, msg) => {
   if (!cond) failures++;
 };
 
-async function launch(name, extra) {
+const electronDir = dirname(realpathSync(createRequire(import.meta.url)('electron')));
+
+/** `appImage` : AppImage factice de ce processus ; `flag` : option --update-feed-test (vrai par défaut). */
+async function launch(name, extra, o = {}) {
   const dir = join(root, name);
   mkdirSync(dir, { recursive: true });
-  const env = { ...process.env, XDG_CONFIG_HOME: join(dir, 'config'), XDG_CACHE_HOME: join(dir, 'cache'), PROC_WATCH_NO_RECORDER_SYNC: '1', ...extra };
-  delete env.APPIMAGE;
-  if (extra.APPIMAGE) env.APPIMAGE = extra.APPIMAGE;
-  if (!extra.PROC_WATCH_UPDATE_FEED) delete env.PROC_WATCH_UPDATE_FEED;
-  const app = await electron.launch({ args: ['.'], env });
+  const env = { ...process.env, XDG_CONFIG_HOME: join(dir, 'config'), XDG_CACHE_HOME: join(dir, 'cache'), PROC_WATCH_NO_RECORDER_SYNC: '1' };
+  for (const k of ['APPIMAGE', 'APPDIR', 'PROC_WATCH_UPDATE_FEED', 'APPIMAGE_SILENT_INSTALL']) delete env[k];
+  Object.assign(env, extra);
+  if (o.appImage) {
+    const img = join(dir, 'proc-watch-0.1.0-x86_64.AppImage');
+    writeFileSync(img, 'factice : jamais exécuté');
+    Object.assign(env, { APPIMAGE: img, APPDIR: electronDir });
+  }
+  const app = await electron.launch({ args: o.flag === false ? ['.'] : ['.', '--update-feed-test'], env });
   if (process.env.E2E_DEBUG) {
     app.process().stderr?.on('data', (b) => process.stderr.write(`[${name}] ${b}`));
     app.process().stdout?.on('data', (b) => process.stdout.write(`[${name}] ${b}`));
@@ -96,7 +108,7 @@ try {
   // A. AppImage : vérification automatique (30 s), téléchargement vérifié, jamais d'installation
   {
     const t0 = Date.now();
-    const { app, win } = await launch('a', { PROC_WATCH_UPDATE_FEED: feed, APPIMAGE: join(root, 'a', 'proc-watch-0.1.0-x86_64.AppImage') });
+    const { app, win } = await launch('a', { PROC_WATCH_UPDATE_FEED: feed }, { appImage: true });
     try {
       const popup = win.locator('[data-testid="update-popup"]');
       await popup.waitFor({ timeout: 45000 });
@@ -124,7 +136,7 @@ try {
   // B. sha512 faux : erreur et « Réessayer » ; « Ignorer cette version » gardé
   {
     badSha = true;
-    const { app, win } = await launch('b', { PROC_WATCH_UPDATE_FEED: feed, APPIMAGE: join(root, 'b', 'proc-watch-0.1.0-x86_64.AppImage') });
+    const { app, win } = await launch('b', { PROC_WATCH_UPDATE_FEED: feed }, { appImage: true });
     try {
       await openAbout(win);
       await press(win.locator('[data-testid="about-check-now"]'));
@@ -137,7 +149,7 @@ try {
       await quit(app);
     }
     badSha = false;
-    const again = await launch('b2', { PROC_WATCH_UPDATE_FEED: feed, APPIMAGE: join(root, 'b2', 'proc-watch-0.1.0-x86_64.AppImage') });
+    const again = await launch('b2', { PROC_WATCH_UPDATE_FEED: feed }, { appImage: true });
     try {
       await openAbout(again.win);
       await press(again.win.locator('[data-testid="about-check-now"]'));
@@ -177,6 +189,53 @@ try {
       ok((await win.locator('[data-testid="about-card"]').innerText()).includes('aucune vérification'), 'D. À propos : « aucune vérification »');
       ok(await win.locator('[data-testid="about-check-now"]').isDisabled(), 'D. « Vérifier maintenant » désactivé');
       ok(hits.length === before, 'D. aucune requête');
+    } finally {
+      await quit(app);
+    }
+  }
+  // E. APPIMAGE / APPDIR hérités d'une autre application (terminal d'un éditeur en AppImage) : notification seulement
+  {
+    const other = join(root, 'Editeur-1.2.3.AppImage');
+    writeFileSync(other, 'autre application');
+    const otherMount = join(root, '.mount_Editeur');
+    mkdirSync(otherMount, { recursive: true });
+    const { app, win } = await launch('e', { PROC_WATCH_UPDATE_FEED: feed, APPIMAGE: other, APPDIR: otherMount });
+    try {
+      await openAbout(win);
+      ok((await win.locator('[data-testid="about-card"]').innerText()).includes('Paquet (.deb)'), 'E. APPIMAGE hérité : pas le mode AppImage');
+      await press(win.locator('[data-testid="about-check-now"]'));
+      await win.locator('[data-testid="update-popup"]').waitFor({ timeout: 15000 });
+      ok((await win.locator('[data-testid="update-popup-download"]').count()) === 0, 'E. aucun bouton de téléchargement (l’autre AppImage ne peut pas être remplacée)');
+    } finally {
+      await quit(app);
+    }
+  }
+  // F. copie installée présente, AppImage téléchargée lancée : on ne met pas à jour l'original
+  {
+    const home = join(root, 'f-home');
+    mkdirSync(join(home, 'Applications'), { recursive: true });
+    writeFileSync(join(home, 'Applications', 'proc-watch.AppImage'), 'copie installée');
+    const before = hits.filter((h) => h === `/${FILE}`).length;
+    const { app, win } = await launch('f', { PROC_WATCH_UPDATE_FEED: feed, HOME: home }, { appImage: true });
+    try {
+      await openAbout(win);
+      await press(win.locator('[data-testid="about-check-now"]'));
+      await win.locator('[data-testid="update-popup"]').waitFor({ timeout: 15000 });
+      ok((await win.locator('[data-testid="update-popup-body"]').innerText()).includes('lancez proc-watch depuis le menu pour mettre à jour'), 'F. « lancez proc-watch depuis le menu pour mettre à jour »');
+      ok((await win.locator('[data-testid="update-popup-download"]').count()) === 0, 'F. aucun bouton de téléchargement');
+      ok(hits.filter((h) => h === `/${FILE}`).length === before, 'F. rien téléchargé');
+    } finally {
+      await quit(app);
+    }
+  }
+  // G. variable seule, sans l'option --update-feed-test : ignorée
+  {
+    const before = hits.length;
+    const { app, win } = await launch('g', { PROC_WATCH_UPDATE_FEED: feed }, { appImage: true, flag: false });
+    try {
+      await openAbout(win);
+      ok((await win.locator('[data-testid="about-card"]').innerText()).includes('aucune vérification'), 'G. sans --update-feed-test : aucune vérification');
+      ok(hits.length === before, 'G. aucune requête');
     } finally {
       await quit(app);
     }

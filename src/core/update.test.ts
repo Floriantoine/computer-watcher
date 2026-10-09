@@ -44,32 +44,39 @@ describe('compareVersions / isNewer', () => {
 });
 
 describe('updateMode', () => {
+  const base = { isPackaged: true, appImage: null, testFeed: null, installedElsewhere: false };
   test('source (non empaquetée) sans flux de test : aucune vérification', () => {
-    expect(updateMode({ isPackaged: false, appImage: undefined, testFeed: null })).toBe('off');
-    expect(updateMode({ isPackaged: false, appImage: '/home/u/x.AppImage', testFeed: null })).toBe('off');
+    expect(updateMode({ ...base, isPackaged: false })).toBe('off');
+    expect(updateMode({ ...base, isPackaged: false, appImage: '/home/u/x.AppImage' })).toBe('off');
   });
-  test('AppImage empaquetée : installation possible', () => {
-    expect(updateMode({ isPackaged: true, appImage: '/home/u/proc-watch-0.1.0-x86_64.AppImage', testFeed: null })).toBe('install');
+  test('AppImage de ce processus, empaquetée : installation possible', () => {
+    expect(updateMode({ ...base, appImage: '/home/u/Applications/proc-watch.AppImage' })).toBe('install');
   });
-  test('pas une AppImage (.deb) : notification seulement, jamais d’installation automatique', () => {
-    expect(updateMode({ isPackaged: true, appImage: undefined, testFeed: null })).toBe('notify');
-    expect(updateMode({ isPackaged: true, appImage: '', testFeed: null })).toBe('notify');
-    expect(updateMode({ isPackaged: false, appImage: undefined, testFeed: 'http://127.0.0.1:9/' })).toBe('notify');
+  test('pas une AppImage de ce processus (.deb, APPIMAGE hérité refusé) : notification seulement', () => {
+    expect(updateMode(base)).toBe('notify');
+    expect(updateMode({ ...base, isPackaged: false, testFeed: 'http://127.0.0.1:9/' })).toBe('notify');
+  });
+  test('AppImage lancée hors de la copie installée : « lancez proc-watch depuis le menu »', () => {
+    expect(updateMode({ ...base, appImage: '/home/u/Téléchargements/proc-watch-0.1.0-x86_64.AppImage', installedElsewhere: true })).toBe('relaunch');
   });
   test('flux de test local : vérification même depuis les sources', () => {
-    expect(updateMode({ isPackaged: false, appImage: '/home/u/a.AppImage', testFeed: 'http://127.0.0.1:9/' })).toBe('install');
+    expect(updateMode({ ...base, isPackaged: false, appImage: '/home/u/a.AppImage', testFeed: 'http://127.0.0.1:9/' })).toBe('install');
   });
 });
 
 describe('testFeedFromEnv', () => {
-  test('seulement une adresse locale (boucle) en http(s), et jamais dans une version empaquetée', () => {
-    expect(testFeedFromEnv({ PROC_WATCH_UPDATE_FEED: 'http://127.0.0.1:8123' }, false)).toBe('http://127.0.0.1:8123/');
-    expect(testFeedFromEnv({ PROC_WATCH_UPDATE_FEED: 'http://localhost:8123/feed/' }, false)).toBe('http://localhost:8123/feed/');
-    expect(testFeedFromEnv({ PROC_WATCH_UPDATE_FEED: 'http://127.0.0.1:8123' }, true)).toBeNull();
-    expect(testFeedFromEnv({ PROC_WATCH_UPDATE_FEED: 'http://example.com/' }, false)).toBeNull();
-    expect(testFeedFromEnv({ PROC_WATCH_UPDATE_FEED: 'file:///tmp/x' }, false)).toBeNull();
-    expect(testFeedFromEnv({ PROC_WATCH_UPDATE_FEED: 'pas une url' }, false)).toBeNull();
-    expect(testFeedFromEnv({}, false)).toBeNull();
+  const flag = ['electron', '.', '--update-feed-test'];
+  test('variable ET option --update-feed-test, adresse locale (boucle) en http(s), jamais dans une version empaquetée', () => {
+    expect(testFeedFromEnv({ PROC_WATCH_UPDATE_FEED: 'http://127.0.0.1:8123' }, false, flag)).toBe('http://127.0.0.1:8123/');
+    expect(testFeedFromEnv({ PROC_WATCH_UPDATE_FEED: 'http://localhost:8123/feed/' }, false, flag)).toBe('http://localhost:8123/feed/');
+    expect(testFeedFromEnv({ PROC_WATCH_UPDATE_FEED: 'http://127.0.0.1:8123' }, true, flag)).toBeNull();
+    expect(testFeedFromEnv({ PROC_WATCH_UPDATE_FEED: 'http://example.com/' }, false, flag)).toBeNull();
+    expect(testFeedFromEnv({ PROC_WATCH_UPDATE_FEED: 'file:///tmp/x' }, false, flag)).toBeNull();
+    expect(testFeedFromEnv({ PROC_WATCH_UPDATE_FEED: 'pas une url' }, false, flag)).toBeNull();
+    expect(testFeedFromEnv({}, false, flag)).toBeNull();
+  });
+  test('variable seule (héritée de la session) : ignorée', () => {
+    expect(testFeedFromEnv({ PROC_WATCH_UPDATE_FEED: 'http://127.0.0.1:8123' }, false, ['electron', '.'])).toBeNull();
   });
 });
 
@@ -81,6 +88,15 @@ describe('isReleaseUrl', () => {
     expect(isReleaseUrl('https://github.com/Floriantoine/proc-watcher-evil/releases')).toBe(false);
     expect(isReleaseUrl('https://evil.example/Floriantoine/proc-watcher/releases')).toBe(false);
     expect(isReleaseUrl(42)).toBe(false);
+  });
+  test('analyse de l’URL : hôte exact, pas de « .. », pas d’identifiants ni de port', () => {
+    expect(isReleaseUrl('https://github.com/Floriantoine/proc-watcher/releases/../../../autre/depot')).toBe(false);
+    expect(isReleaseUrl('https://github.com/Floriantoine/proc-watcher/releases/%2e%2e/%2E%2E/x')).toBe(false);
+    expect(isReleaseUrl('https://github.com.evil.example/Floriantoine/proc-watcher/releases/')).toBe(false);
+    expect(isReleaseUrl('https://github.com@evil.example/Floriantoine/proc-watcher/releases/')).toBe(false);
+    expect(isReleaseUrl('https://u:p@github.com/Floriantoine/proc-watcher/releases/')).toBe(false);
+    expect(isReleaseUrl('https://github.com:8443/Floriantoine/proc-watcher/releases/')).toBe(false);
+    expect(isReleaseUrl('https://github.com/Floriantoine/proc-watcher/releasesX')).toBe(false);
   });
 });
 
@@ -199,6 +215,21 @@ describe('reduceUpdate (machine à états)', () => {
   test('vérification désactivée : pas de pop-up', () => {
     const s = reduceUpdate(start(), found('0.1.1'));
     expect(popupVisible(s, { ...DEFAULT_UPDATE_PREFS, enabled: false }, 0)).toBe(false);
+  });
+  test('échec de l’installation : erreur dans le pop-up (réessai possible)', () => {
+    let s = reduceUpdate(reduceUpdate(reduceUpdate(start(), found('0.1.1')), { type: 'download' }), { type: 'downloaded' });
+    s = reduceUpdate(s, { type: 'error', message: 'EACCES', at: 1 });
+    expect(s.phase).toBe('error');
+    expect(s.error).toBe('EACCES');
+    expect(reduceUpdate(s, { type: 'download' }).phase).toBe('downloading');
+  });
+  test('retrait : une proposition (préversion désactivée) disparaît, sauf pendant le téléchargement', () => {
+    const s = reduceUpdate(start(), found('0.2.0-beta.1'));
+    const w = reduceUpdate(s, { type: 'withdraw' });
+    expect(w.available).toBeNull();
+    expect(w.phase).toBe('idle');
+    const d = reduceUpdate(s, { type: 'download' });
+    expect(reduceUpdate(d, { type: 'withdraw' })).toBe(d);
   });
   test('mode off : aucun événement ne change l’état', () => {
     const s = initialUpdateState('off', '0.1.0');

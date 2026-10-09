@@ -30,6 +30,8 @@ import { SNOOZE_MS } from '../core/forecast/forecast';
 import { writeSnooze } from '../core/forecast/snooze';
 import { createAlertOpener, createFocusWriter, initSeenUpTo, keepSeenUpTo, markSeen, unseenFilter } from './alerts';
 import { installDesktopEntry, refreshDesktopEntry } from './desktopEntry';
+import { installedElsewhere, ownAppImage } from './appImageTrust';
+import { acquireLock, blockingSleep } from './singleInstance';
 import { createAppImageBackend } from './appImageUpdate';
 import { createPrefsStore, createReleasesApiBackend, createUpdateController, type UpdateBackend } from './updater';
 import { isReleaseUrl, RELEASES_API_URL, testFeedFromEnv, updateMode } from '../core/update';
@@ -54,7 +56,8 @@ import { autoManageService, defaultSystemctl, recorderSyncDisabled, ensureRecord
 app.commandLine.appendSwitch('enable-features', 'NetworkServiceInProcess2');
 
 // Instance unique : un second lancement (bouton « Ouvrir » d'une notification, menu) réveille la fenêtre existante.
-const primary = app.requestSingleInstanceLock();
+// Relance après une mise à jour : la version précédente peut tenir encore le verrou quelques instants (voir acquireLock).
+const primary = acquireLock({ tryLock: () => app.requestSingleInstanceLock(), env: process.env, sleep: blockingSleep });
 if (!primary) {
   // `npm run dev` / `npm start` pendant que l'app de l'utilisateur tourne avec la même config : pas un plantage.
   console.error(
@@ -112,31 +115,40 @@ const freeOpener = createFreeOpener(() => {
 const history = createHistoryReader(data, () => config.recorder);
 let systemdOk = false;
 
-const execArgs = () => recorderExecArgs({ appImage: process.env.APPIMAGE, execPath: process.execPath, appPath: app.getAppPath() });
+/**
+ * AppImage de ce processus, vérifiée (APPDIR contient le binaire en cours, APPIMAGE est un fichier hors de APPDIR) : un
+ * APPIMAGE hérité d'une autre application (terminal d'un éditeur en AppImage) n'est jamais utilisé pour le service,
+ * le raccourci du menu ni les mises à jour.
+ */
+const ownImage = ownAppImage(process.env, process.execPath);
+const execArgs = () => recorderExecArgs({ appImage: ownImage ?? undefined, execPath: process.execPath, appPath: app.getAppPath() });
 
 /**
  * `explicit` : action de l'utilisateur (réglage) ; sinon synchronisation au démarrage (création réservée à autoManageService).
  * `restart` : nouvelle version de l'app (mise à jour) : le service est relancé même si son unité n'a pas changé.
  */
-async function doSync(explicit: boolean, restart = false): Promise<void> {
+async function doSync(explicit: boolean, restart = false): Promise<boolean> {
   systemdOk = await systemctlAvailable(defaultSystemctl);
-  if (!systemdOk || recorderSyncDisabled()) return;
+  if (!systemdOk || recorderSyncDisabled()) return false;
   // Au démarrage en dev (non empaqueté, sans PROC_WATCH_RECORDER_DEV) : jamais de création d'unité, mais une unité
   // existante est tenue à jour (ou retirée si l'historique est désactivé), comme en mode empaqueté.
   const allowCreate = explicit || autoManageService(app.isPackaged);
   try {
     await ensureRecorderService({ enabled: config.recorder.enabled, args: execArgs(), path: unitPath(), run: defaultSystemctl, allowCreate, restart });
+    return true;
   } catch (e) {
     console.error('recorder service:', e);
+    return false;
   }
 }
 
-let syncing: Promise<void> = Promise.resolve();
-/** Sérialise les synchronisations pour éviter des appels systemctl concurrents. */
-function syncRecorder(explicit: boolean, restart = false): Promise<void> {
+let syncing: Promise<unknown> = Promise.resolve();
+/** Sérialise les synchronisations pour éviter des appels systemctl concurrents ; vrai si la synchronisation a abouti. */
+function syncRecorder(explicit: boolean, restart = false): Promise<boolean> {
   const run = () => doSync(explicit, restart);
-  syncing = syncing.then(run, run);
-  return syncing;
+  const next = syncing.then(run, run);
+  syncing = next;
+  return next;
 }
 
 const recorderState = (): RecorderState =>
@@ -704,7 +716,7 @@ ipcMain.handle('earlyoom:setup', async (_e, mode: unknown) => {
 
 ipcMain.handle('desktop:install', () => {
   if (!app.isPackaged) throw new Error('Disponible uniquement dans la version installée (AppImage ou .deb)');
-  return installDesktopEntry(process.env.APPIMAGE || process.execPath, process.env, undefined, appIcon);
+  return installDesktopEntry(ownImage ?? process.execPath, process.env, undefined, appIcon);
 });
 
 ipcMain.handle('alerts:unseen', () => history.unseenAlerts(config.alerts.seenUpTo, unseenFilter(config)));
@@ -821,8 +833,9 @@ app.on('second-instance', (_e, argv) => {
 // Mises à jour : AppImage empaquetée → proposition puis installation sur demande ; .deb → notification seulement ;
 // sources → rien (sauf PROC_WATCH_UPDATE_FEED vers un flux de test local). Réglages dans updater.json.
 const updatePrefs = createPrefsStore(join(dir, 'updater.json'));
-const updateFeed = testFeedFromEnv(process.env, app.isPackaged);
-const updMode = updateMode({ isPackaged: app.isPackaged, appImage: process.env.APPIMAGE, testFeed: updateFeed });
+const updateFeed = testFeedFromEnv(process.env, app.isPackaged, process.argv);
+// Copie installée (~/Applications/proc-watch.AppImage) présente mais pas lancée : l'original n'est pas mis à jour.
+const updMode = updateMode({ isPackaged: app.isPackaged, appImage: ownImage, testFeed: updateFeed, installedElsewhere: !!ownImage && installedElsewhere(ownImage, homedir()) });
 let updateBackend: Promise<UpdateBackend> | null = null;
 const loadUpdateBackend = (): Promise<UpdateBackend> =>
   (updateBackend ??=
@@ -845,8 +858,14 @@ const updater = createUpdateController({
             await b.download(onProgress);
           },
           install: () => {
+            if (!installBackend?.install) throw new Error('Installation indisponible');
             quitting = true;
-            installBackend?.install?.();
+            try {
+              installBackend.install();
+            } catch (e) {
+              quitting = false; // installation échouée : l'app reste ouverte et fonctionne normalement
+              throw e;
+            }
           },
         },
   loadPrefs: () => updatePrefs.load(),
@@ -882,29 +901,31 @@ ipcMain.handle('update:openRelease', (_e, url: unknown) => {
   return shell.openExternal(url);
 });
 
-/** Version installée changée depuis le lancement précédent (mise à jour) : vrai une fois, puis mémorisé. */
-function versionChangedSinceLastRun(): boolean {
-  if (!app.isPackaged) return false; // sources : jamais d'écriture ni de relance du service
-  const prefs = updatePrefs.load();
+/**
+ * Nouvelle version depuis le lancement précédent (mise à jour) : le service est relancé (nouveau code), puis la version est
+ * mémorisée, seulement si la synchronisation a abouti (sinon nouvel essai au prochain lancement). Sources : jamais.
+ */
+async function syncAfterUpdate(): Promise<void> {
   const version = app.getVersion();
-  if (prefs.lastRunVersion === version) return false;
+  const changed = app.isPackaged && updatePrefs.load().lastRunVersion !== version;
+  const ok = await syncRecorder(false, changed);
+  if (!changed || !ok) return;
   try {
-    updatePrefs.save({ ...prefs, lastRunVersion: version });
+    updatePrefs.save({ ...updatePrefs.load(), lastRunVersion: version });
   } catch (e) {
     console.error('updater:', e);
   }
-  return true;
 }
 
 app.whenReady().then(() => {
   if (!primary) return;
   createWindow();
   // Après une mise à jour de l'AppImage, le fichier a souvent un nouveau nom : l'unité du service (ExecStart) est réécrite
-  // par la synchronisation (chemin d'APPIMAGE), et relancée même si elle est identique (nouveau code).
-  void syncRecorder(false, versionChangedSinceLastRun());
-  if (app.isPackaged && process.env.APPIMAGE) {
+  // par la synchronisation (AppImage vérifiée), et relancée même si elle est identique (nouveau code).
+  void syncAfterUpdate();
+  if (app.isPackaged && ownImage) {
     try {
-      refreshDesktopEntry(process.env.APPIMAGE);
+      refreshDesktopEntry(ownImage);
     } catch (e) {
       console.error('desktop entry:', e);
     }

@@ -18,6 +18,11 @@ export async function createAppImageBackend(o: AppImageBackendOptions): Promise<
   u.autoInstallOnAppQuit = false; // installation seulement par « Redémarrer et installer »
   u.allowDowngrade = false;
   u.fullChangelog = false;
+  // Erreur sans écouteur : EventEmitter relancerait l'exception. Gardée pour l'installation (voir install()).
+  let lastError: Error | null = null;
+  u.on('error', (e: Error) => {
+    lastError = e;
+  });
   u.logger = { info: () => {}, debug: () => {}, warn: (m: unknown) => console.warn('updater:', m), error: (m: unknown) => console.error('updater:', m) };
   if (o.testFeed) {
     writeFileSync(o.testConfigPath, 'updaterCacheDirName: proc-watch-updater-test\n');
@@ -44,8 +49,12 @@ export async function createAppImageBackend(o: AppImageBackendOptions): Promise<
       }
     },
     install() {
-      // Remplace l'AppImage (même dossier), puis relance la nouvelle version ; l'app quitte juste après.
+      // Remplace l'AppImage (même dossier), puis relance la nouvelle version ; l'app quitte juste après. L'installation
+      // est synchrone : un échec (dossier en lecture seule…) est signalé par l'événement `error`, renvoyé ici en exception.
+      lastError = null;
       u.quitAndInstall(false, true);
+      const failed = lastError as Error | null;
+      if (failed) throw new Error(`Installation impossible : ${failed.message}`);
     },
   };
 }

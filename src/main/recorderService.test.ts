@@ -127,3 +127,12 @@ test('restart : unité inchangée mais nouvelle version de l’app → le servic
   expect(await ensureRecorderService({ enabled: true, args: ['/a'], path, run, restart: true, allowCreate: false })).toBe('absent');
   expect(calls).toEqual([]);
 });
+
+test('caractère de contrôle dans un argument (chemin d’AppImage) : refusé, unité jamais écrite', async () => {
+  const path = join(mkdtempSync(join(tmpdir(), 'pw-ctl-')), 'proc-watch-recorder.service');
+  const f = fake();
+  expect(() => recorderUnit(['/home/u/a\nExecStartPre=/bin/x.AppImage'])).toThrow();
+  await expect(ensureRecorderService({ enabled: true, args: ['/home/u/a\rb'], path, run: f.run })).rejects.toThrow();
+  expect(existsSync(path)).toBe(false);
+  expect(f.calls).toEqual([]);
+});

@@ -15,6 +15,8 @@ export function recorderExecArgs(p: { appImage?: string; execPath: string; appPa
 }
 
 export function recorderUnit(args: string[]): string {
+  // une fin de ligne dans un chemin injecterait une directive (ExecStartPre=…) : refusé
+  if (args.some((a) => /[\x00-\x1f\x7f]/.test(a))) throw new Error('Argument refusé (caractère de contrôle)');
   return [
     '[Unit]',
     'Description=proc-watch recorder (historique des processus)',
@@ -82,8 +84,8 @@ export async function ensureRecorderService(o: {
     await o.run(['daemon-reload']);
     return 'removed';
   }
-  if (!exists && o.allowCreate === false) return 'absent';
   const content = recorderUnit(o.args);
+  if (!exists && o.allowCreate === false) return 'absent';
   if (exists && readFileSync(o.path, 'utf8') === content) {
     await o.run(['enable', '--now', UNIT_NAME]);
     if (!o.restart) return 'unchanged';

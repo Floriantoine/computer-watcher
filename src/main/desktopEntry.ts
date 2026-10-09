@@ -1,6 +1,10 @@
-import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { hasControlChars } from './appImageTrust';
+
+/** Clé posée dans les raccourcis écrits par proc-watch : seuls ceux-là sont repointés après une mise à jour. */
+export const MANAGED_KEY = 'X-ProcWatch-Managed=1';
 
 function escapeExec(p: string): string {
   return p.replace(/[\\"`$]/g, '\\$&').replace(/%/g, '%%');
@@ -16,6 +20,7 @@ export function desktopEntryContent(execPath: string): string {
     'Icon=proc-watch',
     'Terminal=false',
     'Categories=System;Monitor;',
+    MANAGED_KEY,
     '',
   ].join('\n');
 }
@@ -37,6 +42,7 @@ export function installDesktopEntry(target: string, env: NodeJS.ProcessEnv = pro
       // icône facultative
     }
   }
+  if (hasControlChars(target)) throw new Error('Chemin refusé (caractère de contrôle)');
   const dir = entryDir(env, home);
   mkdirSync(dir, { recursive: true });
   const file = join(dir, 'proc-watch.desktop');
@@ -45,10 +51,16 @@ export function installDesktopEntry(target: string, env: NodeJS.ProcessEnv = pro
 }
 
 /**
- * Après une mise à jour de l'AppImage (nouveau nom de fichier, l'ancien est supprimé par electron-updater) : un raccourci
- * créé par proc-watch pour une AppImage est repointé sur `appImage`. Raccourci absent, modifié à la main ou d'un paquet : rien.
+ * Après une mise à jour de l'AppImage sous un nouveau nom (electron-updater supprime l'ancienne et place la nouvelle dans le
+ * même dossier) : le raccourci écrit par proc-watch (clé X-ProcWatch-Managed) est repointé sur `appImage`, seulement si
+ * son ancienne cible n'existe plus et que `appImage` est dans le même dossier. Lancer une autre copie ne le détourne jamais.
  */
-export function refreshDesktopEntry(appImage: string, env: NodeJS.ProcessEnv = process.env, home: string = homedir()): 'absent' | 'unchanged' | 'updated' | 'foreign' {
+export function refreshDesktopEntry(
+  appImage: string,
+  env: NodeJS.ProcessEnv = process.env,
+  home: string = homedir(),
+): 'absent' | 'unchanged' | 'updated' | 'kept' | 'foreign' | 'refused' {
+  if (hasControlChars(appImage)) return 'refused';
   const file = join(entryDir(env, home), 'proc-watch.desktop');
   let text: string;
   try {
@@ -58,9 +70,11 @@ export function refreshDesktopEntry(appImage: string, env: NodeJS.ProcessEnv = p
   }
   const want = desktopEntryContent(appImage);
   if (text === want) return 'unchanged';
+  if (!text.split('\n').includes(MANAGED_KEY)) return 'foreign';
   const exec = /^Exec="(.*)"$/m.exec(text);
-  // Seulement un fichier identique à ce que proc-watch écrit, à la ligne Exec près, et qui lançait une AppImage.
-  if (!exec || !/\.AppImage$/i.test(exec[1]) || text !== desktopEntryContent(exec[1].replace(/\\(.)/g, '$1').replace(/%%/g, '%'))) return 'foreign';
+  if (!exec) return 'foreign';
+  const old = exec[1].replace(/%%/g, '%').replace(/\\(.)/g, '$1');
+  if (existsSync(old) || dirname(old) !== dirname(appImage)) return 'kept';
   writeFileSync(file, want);
   return 'updated';
 }

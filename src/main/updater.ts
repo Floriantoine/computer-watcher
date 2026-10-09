@@ -26,7 +26,7 @@ export interface UpdateBackend {
   check(allowPrerelease: boolean): Promise<FoundRelease | null>;
   /** AppImage seulement : téléchargement, sha512 vérifié par electron-updater avant de résoudre. */
   download?(onProgress: (percent: number) => void): Promise<void>;
-  /** AppImage seulement : remplace le fichier et relance l'app (electron-updater). */
+  /** AppImage seulement : remplace le fichier et relance l'app (electron-updater) ; lève une erreur si l'installation échoue. */
   install?(): void;
 }
 
@@ -110,7 +110,11 @@ export function createUpdateController(d: UpdaterDeps) {
     },
     install(): void {
       if (d.mode !== 'install' || state.phase !== 'ready' || !d.backend?.install) return;
-      d.backend.install();
+      try {
+        d.backend.install();
+      } catch (e) {
+        dispatch({ type: 'error', message: message(e), at: d.now() });
+      }
     },
     later(): void {
       dispatch({ type: 'later', at: d.now() });
@@ -130,7 +134,10 @@ export function createUpdateController(d: UpdaterDeps) {
         if (typeof r[k] !== 'boolean') throw new Error('Réglage invalide');
         next[k] = r[k];
       }
+      const before = d.loadPrefs();
       d.savePrefs(next);
+      // Préversions désactivées : une préversion proposée (pas encore téléchargée) est retirée.
+      if (before.prerelease && !next.prerelease && state.available && !isNewer(state.available.version, d.current, false)) dispatch({ type: 'withdraw' });
       const v = view();
       d.send(v);
       return v;
@@ -155,7 +162,33 @@ export function pickRelease(list: unknown, allowPrerelease: boolean): FoundRelea
   return best;
 }
 
-/** Mode notification : un GET HTTPS de l'API publique, délai de 15 s, réponse limitée à 2 Mo. */
+const MAX_API_BYTES = 2_000_000;
+
+/** Corps lu en flux, arrêté (et la connexion annulée) dès qu'il dépasse `max` octets ; content-length vérifié avant. */
+async function readCapped(res: Response, max: number): Promise<string> {
+  const tooBig = () => new Error('Réponse trop grande');
+  if (Number(res.headers.get('content-length') ?? 0) > max) {
+    await res.body?.cancel().catch(() => {});
+    throw tooBig();
+  }
+  if (!res.body) return '';
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      await reader.cancel().catch(() => {});
+      throw tooBig();
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+/** Mode notification : un GET HTTPS de l'API publique, délai de 15 s, réponse limitée à 2 Mo (lue en flux). */
 export function createReleasesApiBackend(o: { url: string; fetch: typeof fetch; timeoutMs?: number }): UpdateBackend {
   return {
     async check(allowPrerelease) {
@@ -165,9 +198,7 @@ export function createReleasesApiBackend(o: { url: string; fetch: typeof fetch; 
         redirect: 'error',
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const text = await res.text();
-      if (text.length > 2_000_000) throw new Error('Réponse trop grande');
-      return pickRelease(JSON.parse(text), allowPrerelease);
+      return pickRelease(JSON.parse(await readCapped(res, MAX_API_BYTES)), allowPrerelease);
     },
   };
 }

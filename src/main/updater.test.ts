@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from 'vitest';
 import { DEFAULT_UPDATE_PREFS, type UpdateMode, type UpdatePrefs } from '../core/update';
-import { createPrefsStore, createUpdateController, pickRelease, type UpdateBackend, type UpdateView } from './updater';
+import { createPrefsStore, createReleasesApiBackend, createUpdateController, pickRelease, type UpdateBackend, type UpdateView } from './updater';
 
 function setup(o: { mode?: UpdateMode; backend?: Partial<UpdateBackend> | null; prefs?: Partial<UpdatePrefs> } = {}) {
   let prefs: UpdatePrefs = { ...DEFAULT_UPDATE_PREFS, ...o.prefs };
@@ -118,6 +118,45 @@ describe('createUpdateController', () => {
     expect(install).not.toHaveBeenCalled();
     expect(c.view().state.phase).toBe('available');
   });
+  test('installation qui échoue (dossier en lecture seule) : erreur visible dans le pop-up', async () => {
+    const { c } = setup({
+      backend: {
+        download: async () => {},
+        install: () => {
+          throw new Error('EACCES: permission denied');
+        },
+      },
+    });
+    await c.check(false);
+    await c.download();
+    expect(() => c.install()).not.toThrow();
+    expect(c.view().state.phase).toBe('error');
+    expect(c.view().state.error).toContain('EACCES');
+    expect(c.view().popup).toBe(true);
+  });
+  test('mode relaunch (copie installée ailleurs) : ni téléchargement ni installation', async () => {
+    const download = vi.fn(async () => {});
+    const { c } = setup({ mode: 'relaunch', backend: { download } });
+    await c.check(false);
+    expect(c.view().popup).toBe(true);
+    await c.download();
+    expect(download).not.toHaveBeenCalled();
+  });
+  test('préversions désactivées : une préversion déjà proposée est retirée', async () => {
+    const check = vi.fn(async () => ({ version: '0.2.0-beta.1', notes: '', url: 'https://github.com/Floriantoine/proc-watcher/releases/tag/v0.2.0-beta.1' }));
+    const { c } = setup({ backend: { check }, prefs: { prerelease: true } });
+    await c.check(true);
+    expect(c.view().state.available?.version).toBe('0.2.0-beta.1');
+    c.setPrefs({ prerelease: false });
+    expect(c.view().state.available).toBeNull();
+    expect(c.view().popup).toBe(false);
+  });
+  test('préversions désactivées : une version finale proposée reste', async () => {
+    const { c } = setup({ prefs: { prerelease: true } });
+    await c.check(true);
+    c.setPrefs({ prerelease: false });
+    expect(c.view().state.available?.version).toBe('0.1.1');
+  });
   test('installation avant la fin du téléchargement : refusée', async () => {
     const install = vi.fn();
     const { c } = setup({ backend: { install, download: async () => {} } });
@@ -184,6 +223,31 @@ describe('pickRelease (API GitHub, mode notification)', () => {
   test('réponse inattendue : rien', () => {
     expect(pickRelease({ message: 'rate limited' }, false)).toBeNull();
     expect(pickRelease([], false)).toBeNull();
+  });
+});
+
+describe('createReleasesApiBackend', () => {
+  const list = JSON.stringify([{ tag_name: 'v0.1.1', html_url: 'https://github.com/Floriantoine/proc-watcher/releases/tag/v0.1.1', body: 'x', draft: false, prerelease: false }]);
+  const respond = (body: string, headers: Record<string, string> = {}) => (async () => new Response(body, { status: 200, headers })) as unknown as typeof fetch;
+  test('réponse normale', async () => {
+    expect((await createReleasesApiBackend({ url: 'https://x', fetch: respond(list) }).check(false))?.version).toBe('0.1.1');
+  });
+  test('content-length au-delà de 2 Mo : refusé sans lire', async () => {
+    await expect(createReleasesApiBackend({ url: 'https://x', fetch: respond(list, { 'content-length': '3000000' }) }).check(false)).rejects.toThrow(/trop grande/);
+  });
+  test('corps en flux au-delà de 2 Mo (sans content-length) : lecture arrêtée', async () => {
+    let pulled = 0;
+    const chunk = new Uint8Array(256 * 1024);
+    const stream = new ReadableStream<Uint8Array>({
+      pull(ctl) {
+        pulled++;
+        if (pulled > 100) ctl.close();
+        else ctl.enqueue(chunk);
+      },
+    });
+    const f = (async () => new Response(stream, { status: 200 })) as unknown as typeof fetch;
+    await expect(createReleasesApiBackend({ url: 'https://x', fetch: f }).check(false)).rejects.toThrow(/trop grande/);
+    expect(pulled).toBeLessThan(20);
   });
 });
 
