@@ -10,12 +10,17 @@
 //   npx electron-builder --linux AppImage --publish never --config B/eb.yml -c.directories.output=B/v011 -c.extraMetadata.version=0.1.1
 // Usage : node scripts/appimage-e2e.mjs <dépôt> <B> <P> <T> <dossier de captures hors du dépôt>
 // Ces AppImages de test pointent vers le flux local : ne jamais les publier.
+//
+// `node scripts/appimage-e2e.mjs --rename` (npm run test:appimage-rename) : scénario du renommage v0.1.3 → 0.2.0, construction
+// comprise, dans scripts/appimage-rename-e2e.mjs.
 import { createHash } from 'node:crypto';
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+
+if (process.argv[2] === '--rename') await import('./appimage-rename-e2e.mjs'); // se termine par process.exit
 
 const [wt, build, port, token, shots] = process.argv.slice(2);
 const { _electron: electron } = createRequire(join(wt, 'package.json'))('playwright');
@@ -29,8 +34,8 @@ const ok = (c, m) => {
 };
 const report = {};
 
-const V010 = join(build, 'v010/proc-watch-0.1.0-x86_64.AppImage');
-const V011 = join(build, 'v011/proc-watch-0.1.1-x86_64.AppImage');
+const V010 = join(build, 'v010/computer-watcher-0.1.0-x86_64.AppImage');
+const V011 = join(build, 'v011/computer-watcher-0.1.1-x86_64.AppImage');
 
 // flux local : seulement sous /<jeton>/
 const hits = [];
@@ -39,31 +44,34 @@ const server = createServer((req, res) => {
   hits.push(p);
   if (!p.startsWith(`/${token}/`)) return void res.writeHead(404).end();
   const name = p.slice(token.length + 2);
-  const file = name === 'latest-linux.yml' ? join(build, 'v011/latest-linux.yml') : name === 'proc-watch-0.1.1-x86_64.AppImage' ? V011 : null;
+  const file = name === 'latest-linux.yml' ? join(build, 'v011/latest-linux.yml') : name === 'computer-watcher-0.1.1-x86_64.AppImage' ? V011 : null;
   if (!file) return void res.writeHead(404).end();
   const body = readFileSync(file);
   res.writeHead(200, { 'content-length': body.length }).end(body);
 });
 await new Promise((r) => server.listen(Number(port), '127.0.0.1', r));
 
-/** Montages proc-watch déjà présents avant le test : jamais touchés. */
-const preMounts = new Set(readFileSync('/proc/self/mountinfo', 'utf8').split('\n').map((l) => l.split(' ')[4]).filter((m) => m && m.startsWith('/tmp/.mount_proc-w')));
-console.log('montages proc-watch préexistants :', preMounts.size);
+/** Montages de l'app déjà présents avant le test : jamais touchés. */
+const preMounts = new Set(readFileSync('/proc/self/mountinfo', 'utf8').split('\n').map((l) => l.split(' ')[4]).filter((m) => m && m.startsWith('/tmp/.mount_comput')));
+console.log('montages de l’app préexistants :', preMounts.size);
 const base = mkdtempSync(join(homedir(), '.cache', 'pw-appimage-e2e-'));
 const home = join(base, 'home');
 const cfg = join(base, 'cfg');
 const data = join(base, 'data');
 const dl = join(home, 'Téléchargements');
 mkdirSync(dl, { recursive: true });
-const downloaded = join(dl, 'proc-watch-0.1.0-x86_64.AppImage');
+const downloaded = join(dl, 'computer-watcher-0.1.0-x86_64.AppImage');
 copyFileSync(V010, downloaded);
 chmodSync(downloaded, 0o755);
-const copy = join(home, 'Applications/proc-watch.AppImage');
-const unit = join(cfg, 'systemd/user/proc-watch-recorder.service');
+const copy = join(home, 'Applications/computer-watcher.AppImage');
+const unit = join(cfg, 'systemd/user/computer-watcher-recorder.service');
 mkdirSync(join(cfg, 'systemd/user'), { recursive: true });
 writeFileSync(unit, '[Unit]\nDescription=unité factice du test (jamais chargée)\n');
 
-const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: cfg, XDG_DATA_HOME: data, XDG_CACHE_HOME: join(base, 'cache'), PROC_WATCH_NO_RECORDER_SYNC: '1' };
+// dossier d'exécution temporaire aussi (la migration du renommage le déplacerait) ; socket Wayland de la session par chemin absolu
+mkdirSync(join(base, 'run'), { mode: 0o700 });
+const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: cfg, XDG_DATA_HOME: data, XDG_CACHE_HOME: join(base, 'cache'), XDG_RUNTIME_DIR: join(base, 'run'), PROC_WATCH_NO_RECORDER_SYNC: '1' };
+if (process.env.XDG_RUNTIME_DIR && process.env.WAYLAND_DISPLAY && !process.env.WAYLAND_DISPLAY.startsWith('/')) env.WAYLAND_DISPLAY = join(process.env.XDG_RUNTIME_DIR, process.env.WAYLAND_DISPLAY);
 for (const k of ['APPIMAGE', 'APPDIR', 'ARGV0', 'OWD', 'PROC_WATCH_UPDATE_FEED', 'ELECTRON_RUN_AS_NODE']) delete env[k];
 
 /**
@@ -93,12 +101,12 @@ function ours() {
     // le runtime AppImage remplace son processus par l'app (exec) : le démon FUSE (lisible) en est l'enfant
     for (const pid of [...set]) {
       const parent = byPid.get(byPid.get(pid)?.ppid);
-      if (parent && !set.has(parent.pid) && parent.exe.includes('/.mount_proc-w')) { set.add(parent.pid); changed = true; }
+      if (parent && !set.has(parent.pid) && parent.exe.includes('/.mount_comput')) { set.add(parent.pid); changed = true; }
     }
   }
-  // processus de l'app sous un montage proc-watch apparu pendant le test (Chromium rend exe/environ illisibles, pas cmdline)
+  // processus de l'app sous un montage de l'app apparu pendant le test (Chromium rend exe/environ illisibles, pas cmdline)
   for (const p of all) {
-    const m = /^(\/tmp\/\.mount_proc-w[^/]+)\//.exec(p.exe);
+    const m = /^(\/tmp\/\.mount_comput[^/]+)\//.exec(p.exe);
     if (m && !preMounts.has(m[1])) set.add(p.pid);
   }
   return all.filter((p) => set.has(p.pid)).map(({ pid, exe }) => ({ pid, exe }));
@@ -158,9 +166,9 @@ try {
     await win.locator('[data-testid="onboarding"]').screenshot({ path: join(shots, 'a2-install-result.png') });
     ok(existsSync(copy) && sha(copy) === sha(downloaded), 'A. copie dans $HOME/Applications, identique');
     ok((statSync(copy).mode & 0o777) === 0o755, 'A. copie en 0755');
-    const entry = readFileSync(join(data, 'applications/proc-watch.desktop'), 'utf8');
+    const entry = readFileSync(join(data, 'applications/computer-watcher.desktop'), 'utf8');
     ok(entry.includes(`Exec="${copy}"`) && entry.includes('X-ProcWatch-Managed=1'), 'A. entrée de menu vers la copie, marquée');
-    ok(existsSync(join(data, 'icons/hicolor/512x512/apps/proc-watch.png')), 'A. icône écrite');
+    ok(existsSync(join(data, 'icons/hicolor/512x512/apps/computer-watcher.png')), 'A. icône écrite');
     await stubDialogs(app);
     await win.locator('[data-testid="onb-delete-original"]').check();
     const gone = exited(app);
@@ -171,13 +179,13 @@ try {
     ok(deleted, 'B. copie relancée : fichier téléchargé supprimé par l’accord');
     const relaunched = ours();
     report.relaunched = relaunched;
-    ok(relaunched.some((p) => p.exe === copy) && relaunched.some((p) => p.exe.includes('/.mount_proc-w')), 'B. la copie relancée tourne (runtime = la copie, app sous son montage)');
+    ok(relaunched.some((p) => p.exe === copy) && relaunched.some((p) => p.exe.includes('/.mount_comput')), 'B. la copie relancée tourne (runtime = la copie, app sous son montage)');
     // I-A : la copie relancée ne reçoit rien qui pointe dans le montage /tmp de l'AppImage qui quitte
     const rt = relaunched.find((p) => p.exe === copy);
     const rtEnv = rt ? readFileSync(`/proc/${rt.pid}/environ`, 'utf8') : '';
     ok(!!rt && !rtEnv.includes('/tmp/.mount_'), 'B. environnement de la copie relancée : aucune entrée sous /tmp/.mount_ (PATH, LD_LIBRARY_PATH…)');
     ok(rtEnv.split('\0').includes('PROC_WATCH_RELAUNCH=1'), 'B. relance marquée PROC_WATCH_RELAUNCH=1 (nouveaux essais du verrou)');
-    const ob = JSON.parse(readFileSync(join(cfg, 'proc-watch/onboarding.json'), 'utf8'));
+    const ob = JSON.parse(readFileSync(join(cfg, 'computer-watcher/onboarding.json'), 'utf8'));
     ok(!('deleteOriginal' in ob) && ob.resume === 'autostart', `B. accord consommé, reprise à « Démarrer avec la session » (${JSON.stringify(ob)})`);
     await killOurs();
     ok(ours().length === 0, 'B. copie relancée arrêtée (par PID)');
@@ -197,7 +205,7 @@ try {
     await win.locator('[data-testid="onboarding"]').screenshot({ path: join(shots, 'c1-autostart.png') });
     await win.locator('[data-testid="onb-next"]').click();
     await win.locator('[data-testid="onb-content-history"]').waitFor({ timeout: 10000 });
-    const auto = readFileSync(join(cfg, 'autostart/proc-watch.desktop'), 'utf8');
+    const auto = readFileSync(join(cfg, 'autostart/computer-watcher.desktop'), 'utf8');
     ok(auto.includes(`Exec="${copy}" --hidden`) && auto.includes('X-ProcWatch-Managed=1'), 'C. démarrage auto : copie --hidden, marqué');
     await win.keyboard.press('Escape');
     await win.locator('[data-testid="onboarding"]').waitFor({ state: 'detached', timeout: 10000 });
@@ -216,9 +224,9 @@ try {
     const replaced = await waitFor(() => existsSync(copy) && statSync(copy).size > 0 && sha(copy) === sha(V011), 60000);
     ok(replaced, 'C. la copie de $HOME/Applications est remplacée par la 0.1.1, sur place');
     ok(sha(copy) !== before, 'C. contenu changé');
-    ok(readdirSync(join(home, 'Applications')).join(',') === 'proc-watch.AppImage', `C. un seul fichier dans Applications (${readdirSync(join(home, 'Applications')).join(',')})`);
+    ok(readdirSync(join(home, 'Applications')).join(',') === 'computer-watcher.AppImage', `C. un seul fichier dans Applications (${readdirSync(join(home, 'Applications')).join(',')})`);
     ok(readdirSync(dl).length === 0, 'C. rien dans Téléchargements');
-    // I-C : la version mise à jour est relancée par proc-watch, environnement sans l'ancien montage /tmp
+    // I-C : la version mise à jour est relancée par l'app, environnement sans l'ancien montage /tmp
     let up = null;
     await waitFor(() => (up = ours().find((p) => p.exe === copy)), 30000);
     const upEnv = up ? readFileSync(`/proc/${up.pid}/environ`, 'utf8') : '';
@@ -236,17 +244,17 @@ try {
     console.log('mountinfo (copie mise à jour) :', report.mountUpdated.join(' / '));
     ok((await win.locator('[data-testid="onboarding"]').count()) === 0, 'D. accueil fait : plus d’assistant');
     await stubDialogs(app);
-    ok(existsSync(join(base, 'cache/proc-watch-updater')), 'D. cache de l’updater présent après la mise à jour');
+    ok(existsSync(join(base, 'cache/computer-watcher-updater')), 'D. cache de l’updater présent après la mise à jour');
     const r1 = await win.evaluate(() => window.procWatch.uninstall.run({ history: true, config: true }));
     console.log('désinstallation 1 :', JSON.stringify(r1.result, null, 1));
-    ok(!existsSync(join(base, 'cache/proc-watch-updater')), 'D. cache de l’updater retiré (configuration cochée)');
-    for (const p of [join(cfg, 'autostart/proc-watch.desktop'), join(data, 'applications/proc-watch.desktop'), join(data, 'icons/hicolor/512x512/apps/proc-watch.png')])
+    ok(!existsSync(join(base, 'cache/computer-watcher-updater')), 'D. cache de l’updater retiré (configuration cochée)');
+    for (const p of [join(cfg, 'autostart/computer-watcher.desktop'), join(data, 'applications/computer-watcher.desktop'), join(data, 'icons/hicolor/512x512/apps/computer-watcher.png')])
       ok(!existsSync(p), `D. retiré : ${p.slice(base.length)}`);
     ok(existsSync(unit) && r1.result.kept.some((k) => k.path === unit && /PROC_WATCH_NO_RECORDER_SYNC/.test(k.reason)), 'D. unité gardée (NO_RECORDER_SYNC), et dit');
     ok(existsSync(copy) && !r1.result.done, 'D. copie gardée tant que l’unité reste (réessayer)');
     // le test retire l'unité factice (jamais chargée), puis réessaie : tout part, l'app quitte
     rmSync(unit);
-    console.log('config avant le 2e passage :', existsSync(join(cfg, 'proc-watch')) ? readdirSync(join(cfg, 'proc-watch')).join(' | ') : '(retirée)');
+    console.log('config avant le 2e passage :', existsSync(join(cfg, 'computer-watcher')) ? readdirSync(join(cfg, 'computer-watcher')).join(' | ') : '(retirée)');
     const gone = exited(app);
     const r2 = await win.evaluate(() => window.procWatch.uninstall.run({ history: true, config: true }));
     console.log('désinstallation 2 :', JSON.stringify(r2.result));
@@ -255,11 +263,11 @@ try {
     ok(await Promise.race([gone.then(() => true), sleep(15000).then(() => false)]), 'D. l’app quitte');
     const tExit = Date.now();
     await sleep(2000);
-    if (existsSync(join(cfg, 'proc-watch'))) {
+    if (existsSync(join(cfg, 'computer-watcher'))) {
       const walk = (d) => readdirSync(d, { withFileTypes: true }).flatMap((e) => { const f = join(d, e.name); return [`${f.slice(cfg.length)} ${Math.round(statSync(f).mtimeMs - tExit)}ms`, ...(e.isDirectory() ? walk(f) : [])]; });
-      console.log('reste :', walk(join(cfg, 'proc-watch')).join(' | '));
+      console.log('reste :', walk(join(cfg, 'computer-watcher')).join(' | '));
     }
-    ok(!existsSync(join(cfg, 'proc-watch')), `D. configuration retirée (${existsSync(join(cfg, 'proc-watch')) ? readdirSync(join(cfg, 'proc-watch')).join(' | ') : ''})`);
+    ok(!existsSync(join(cfg, 'computer-watcher')), `D. configuration retirée (${existsSync(join(cfg, 'computer-watcher')) ? readdirSync(join(cfg, 'computer-watcher')).join(' | ') : ''})`);
     await killOurs();
   }
 } catch (e) {
