@@ -43,3 +43,18 @@ test('verrou obtenu : APPIMAGE_SILENT_INSTALL retiré de l’environnement (pas 
   expect(acquireLock({ tryLock: () => true, env: env2, sleep: () => {} })).toBe(true);
   expect('APPIMAGE_SILENT_INSTALL' in env2).toBe(false);
 });
+
+test('n-3 : relance par proc-watch (PROC_WATCH_RELAUNCH=1) : réessaie aussi, et la variable est retirée', () => {
+  const env: NodeJS.ProcessEnv = { PROC_WATCH_RELAUNCH: '1', HOME: '/home/u' };
+  const t = tries([false, false, true]);
+  const slept: number[] = [];
+  expect(acquireLock({ tryLock: t.tryLock, env, sleep: (ms) => slept.push(ms) })).toBe(true);
+  expect(slept).toEqual([250, 250]);
+  expect(env).toEqual({ HOME: '/home/u' });
+});
+
+test('n-3 : autre valeur que « 1 » : pas de nouvel essai', () => {
+  const t = tries([false]);
+  expect(acquireLock({ tryLock: t.tryLock, env: { PROC_WATCH_RELAUNCH: 'oui' }, sleep: () => {} })).toBe(false);
+  expect(t.count()).toBe(1);
+});

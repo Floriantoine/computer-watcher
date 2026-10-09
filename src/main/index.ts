@@ -27,12 +27,12 @@ import { ACTIVE_CPU_PERCENT } from '../core/history/queries';
 import { swapTargets, swapView, SWAP_IDLE_MS, SWAP_LOOKBACK_MS, type SwapView } from '../core/swap';
 import { buildSnapshot, flattenGroup, groupProcs, instanceTargets, isWatch, othersFollowed, type Classification, type FullSnapshot } from '../core/snapshot';
 import type { ConfigState, Group, KillResult, ProcInfo, RecorderState, Watch } from '../core/types';
-import { createFreeOpener, hiddenPlacement, relaunchEnv, secondInstanceAction, startWindowShown, wantsFree } from './launchArgs';
+import { createFreeOpener, hiddenPlacement, secondInstanceAction, startWindowShown, wantsFree } from './launchArgs';
 import {
   appPaths, autostartState, installAppImage, launchTarget, rootsFrom, runUninstall, setAutostart, stopRecorderForUninstall,
   configSweepPlan, postExitSweepCommand, sweepTools, uninstallPlan, uninstallSummary, verifyAndDeleteOriginal,
 } from './appInstall';
-import { realAppImage, testFeedTrust } from './realAppImage';
+import { isUsableAppImage, realAppImage, testFeedTrust } from './realAppImage';
 import { hashNoFollow, writeFileSafe } from './safeFs';
 import {
   DELETE_CONSENT_TTL_MS, isUninstallOptions, onboardingSteps, takeDeleteConsent, parseOnboardingFile, serializeOnboarding, shouldOpenOnboarding, startIndex,
@@ -44,7 +44,8 @@ import { createAlertOpener, createFocusWriter, initSeenUpTo, keepSeenUpTo, markS
 import { installDesktopEntry, refreshDesktopEntry } from './desktopEntry';
 import { installedAppImage, installedElsewhere } from './appImageTrust';
 import { acquireLock, blockingSleep } from './singleInstance';
-import { createAppImageBackend, restartCommand } from './appImageUpdate';
+import { createAppImageBackend } from './appImageUpdate';
+import { relaunchDetached, sanitizeAppImageEnv } from './relaunch';
 import { createPrefsStore, createReleasesApiBackend, createUpdateController, type UpdateBackend } from './updater';
 import { isReleaseUrl, RELEASES_API_URL, testFeedFromEnv, updateMode } from '../core/update';
 import { createEarlyoomApplier, earlyoomStatus, type EarlyoomLock } from './earlyoom';
@@ -139,6 +140,17 @@ let uninstalling = false;
 // Flux de test des mises à jour (sources + --update-feed-test + flux local) : seul cas où APPDIR est tenu pour un montage.
 const updateFeed = testFeedFromEnv(process.env, app.isPackaged, process.argv);
 const ownImage = realAppImage(process.env, testFeedTrust(process.env, updateFeed, app.isPackaged));
+// n-2 : en AppImage, PATH, LD_LIBRARY_PATH, XDG_DATA_DIRS et GSETTINGS_SCHEMA_DIR sans le montage /tmp, pour tout processus
+// lancé ensuite (xdg-open d'openExternal compris) ; APPIMAGE et APPDIR gardés
+if (ownImage) sanitizeAppImageEnv(process.env);
+/** Dépendances communes des relances détachées (copie installée, version mise à jour). */
+const relaunchHooks = () => ({
+  env: process.env,
+  usable: isUsableAppImage,
+  spawn: (cmd: string, args: string[], opts: { detached: true; stdio: 'ignore'; env: NodeJS.ProcessEnv }) => spawn(cmd, args, opts),
+  releaseLock: () => app.releaseSingleInstanceLock(),
+  reacquireLock: () => app.requestSingleInstanceLock(),
+});
 /** N1 : copie installée (~/Applications/proc-watch.AppImage) présente → le service pointe vers elle, jamais vers l'original. */
 const execArgs = () =>
   recorderExecArgs({ appImage: recorderAppImage(ownImage, installedAppImage(homedir())) ?? undefined, execPath: process.execPath, appPath: app.getAppPath() });
@@ -827,14 +839,24 @@ ipcMain.handle('onboarding:relaunch', async (_e, del: unknown): Promise<{ relaun
   }
   const steps = onboardingSteps(true);
   writeOnboarding({ version: 1, done: false, resume: steps[steps.indexOf('install') + 1], ...(consent ? { deleteOriginal: consent } : {}) });
-  app.releaseSingleInstanceLock(); // la copie relancée prend le verrou
-  // Processus détaché lancé tout de suite, pas app.relaunch : son assistant de relance s'exécute depuis le montage de
-  // l'AppImage en cours, démonté quand elle quitte (vérifié avec une vraie AppImage : la copie ne démarrait jamais).
-  const child = spawn(paths.appImage, [], { detached: true, stdio: 'ignore', env: relaunchEnv(process.env) });
-  child.on('error', (e) => console.error('relance :', e));
-  child.unref();
+  // Processus détaché, pas app.relaunch : son assistant de relance s'exécute depuis le montage de l'AppImage en cours,
+  // démonté quand elle quitte (vérifié avec une vraie AppImage : la copie ne démarrait jamais). On ne quitte qu'une fois
+  // la copie démarrée (n-1) ; sinon l'app reste ouverte et l'erreur s'affiche dans l'accueil.
   quitting = true;
-  setTimeout(() => app.quit(), 50);
+  await new Promise<void>((resolve, reject) =>
+    relaunchDetached({
+      ...relaunchHooks(),
+      target: paths.appImage,
+      onStarted: () => {
+        setTimeout(() => app.quit(), 50);
+        resolve();
+      },
+      onFailed: (m) => {
+        quitting = false;
+        reject(new Error(`Copie installée, mais pas relancée : ${m}. Lancer proc-watch depuis le menu.`));
+      },
+    }),
+  );
   return { relaunched: true };
 });
 
@@ -1082,13 +1104,24 @@ const loadUpdateBackend = (): Promise<UpdateBackend> =>
           appImage: ownImage!,
           // I-C : relance par nous, détachée, environnement nettoyé (jamais par electron-updater), puis sortie
           restart: (target) => {
-            app.releaseSingleInstanceLock(); // la nouvelle version prend le verrou
-            const c = restartCommand(target, process.env);
-            const child = spawn(c.cmd, c.args, { detached: true, stdio: 'ignore', env: c.env });
-            child.on('error', (e) => console.error('relance après mise à jour :', e));
-            child.unref();
             quitting = true;
-            setImmediate(() => app.quit());
+            relaunchDetached({
+              ...relaunchHooks(),
+              target,
+              onStarted: () => setImmediate(() => app.quit()),
+              // n-1 : rien n'a démarré : l'app reste ouverte, verrou repris, chemin affiché
+              onFailed: (m) => {
+                quitting = false;
+                void dialog.showMessageBox({
+                  type: 'warning',
+                  title: 'proc-watch',
+                  message: 'Mise à jour installée ; relance proc-watch depuis le menu.',
+                  detail: m,
+                  buttons: ['OK'],
+                  noLink: true,
+                });
+              },
+            });
           },
         })
       : Promise.resolve(createReleasesApiBackend({ url: updateFeed ? `${updateFeed}releases.json` : RELEASES_API_URL, fetch })));

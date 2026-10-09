@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { basename } from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { installAndRestart, installTarget, restartCommand } from './appImageUpdate';
+import { installAndRestart, installTarget } from './appImageUpdate';
 import { InstallError } from './updater';
 
 const COPY = '/home/u/Applications/proc-watch.AppImage';
@@ -64,12 +64,5 @@ describe('I-C : après l’installation, la nouvelle version est relancée par p
     let reset = 0;
     expect(() => installAndRestart(fake(false).u, { appImage: COPY, takeError: () => null, pendingFile: () => null, restart: () => {}, onFailure: () => reset++ })).toThrow(InstallError);
     expect(reset).toBe(1);
-  });
-  test('commande de relance : détachée, environnement sans rien sous l’ancien montage', () => {
-    const c = restartCommand(COPY, { APPIMAGE: COPY, APPDIR: M, PATH: `${M}:${M}/usr/sbin:/usr/bin`, LD_LIBRARY_PATH: `${M}/usr/lib`, HOME: '/home/u' });
-    expect(c.cmd).toBe(COPY);
-    expect(c.args).toEqual([]);
-    expect(JSON.stringify(c.env)).not.toContain('/tmp/.mount_');
-    expect(c.env).toEqual({ PATH: '/usr/bin', HOME: '/home/u' });
   });
 });

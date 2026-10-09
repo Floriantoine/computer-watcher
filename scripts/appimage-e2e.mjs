@@ -176,6 +176,7 @@ try {
     const rt = relaunched.find((p) => p.exe === copy);
     const rtEnv = rt ? readFileSync(`/proc/${rt.pid}/environ`, 'utf8') : '';
     ok(!!rt && !rtEnv.includes('/tmp/.mount_'), 'B. environnement de la copie relancée : aucune entrée sous /tmp/.mount_ (PATH, LD_LIBRARY_PATH…)');
+    ok(rtEnv.split('\0').includes('PROC_WATCH_RELAUNCH=1'), 'B. relance marquée PROC_WATCH_RELAUNCH=1 (nouveaux essais du verrou)');
     const ob = JSON.parse(readFileSync(join(cfg, 'proc-watch/onboarding.json'), 'utf8'));
     ok(!('deleteOriginal' in ob) && ob.resume === 'autostart', `B. accord consommé, reprise à « Démarrer avec la session » (${JSON.stringify(ob)})`);
     await killOurs();
@@ -187,6 +188,8 @@ try {
     const { app, win } = await launch(copy);
     const env2 = await app.evaluate(() => ({ APPIMAGE: process.env.APPIMAGE }));
     report.mountCopy = await mountOf(app);
+    const mainEnv = await app.evaluate(() => ({ PATH: process.env.PATH, LD: process.env.LD_LIBRARY_PATH ?? null, APPDIR: process.env.APPDIR, RELAUNCH: process.env.PROC_WATCH_RELAUNCH ?? null }));
+    ok(!mainEnv.PATH.includes('/tmp/.mount_') && mainEnv.LD === null && !!mainEnv.APPDIR, `C. n-2 : process.env du main sans le montage (PATH, LD_LIBRARY_PATH), APPDIR gardé`);
     console.log('mountinfo (copie) :', report.mountCopy.join(' / '));
     ok(env2.APPIMAGE === copy, `C. APPIMAGE = la copie (${env2.APPIMAGE})`);
     await win.locator('[data-testid="onb-content-autostart"]').waitFor({ timeout: 20000 });

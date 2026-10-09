@@ -3,7 +3,6 @@
 import { existsSync, writeFileSync } from 'node:fs';
 import { REPO_RELEASES_URL } from '../core/update';
 import { InstallError, type UpdateBackend } from './updater';
-import { cleanEnv } from '../core/childEnv';
 
 export interface AppImageBackendOptions {
   /** Flux de test local (generic) ; null : flux GitHub de app-update.yml (écrit par electron-builder, https). */
@@ -14,11 +13,6 @@ export interface AppImageBackendOptions {
   appImage: string;
   /** Relance la version installée (chemin du fichier mis à jour) et quitte : jamais par electron-updater (I-C). */
   restart: (target: string) => void;
-}
-
-/** Relance de la version mise à jour : détachée, environnement sans rien sous le montage /tmp qui va disparaître (I-C). */
-export function restartCommand(target: string, env: NodeJS.ProcessEnv): { cmd: string; args: string[]; env: NodeJS.ProcessEnv } {
-  return { cmd: target, args: [], env: cleanEnv(env) };
 }
 
 export interface InstallerLike {
