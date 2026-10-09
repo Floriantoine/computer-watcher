@@ -153,7 +153,8 @@ export interface AboutInfo {
 
 export interface UninstallOptions { history: boolean; config: boolean }
 export type UninstallKind = 'autostart' | 'desktop' | 'icon' | 'service' | 'history' | 'config' | 'appimage';
-export interface UninstallItem { kind: UninstallKind; path: string; label: string; dir?: boolean }
+/** `tree` : arborescence du profil Chromium de l'app (configuration), retirée sans suivre de lien. */
+export interface UninstallItem { kind: UninstallKind; path: string; label: string; dir?: boolean; tree?: boolean }
 
 export interface UninstallResult {
   removed: string[];

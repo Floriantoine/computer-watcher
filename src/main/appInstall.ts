@@ -6,7 +6,7 @@ import { basename, dirname, isAbsolute, join } from 'node:path';
 import { desktopEntryContent, installDesktopEntry, isManagedEntry } from './desktopEntry';
 import { isUsableAppImage } from './realAppImage';
 import {
-  chmodSafe, copyFileSafe, fdPath, hashNoFollow, listDirSafe, openParent, readFileSafe, removeDirIfEmptySafe, removeFileSafe, writeFileSafe,
+  chmodSafe, copyFileSafe, fdPath, hashNoFollow, listDirSafe, openParent, readFileSafe, removeDirIfEmptySafe, removeFileSafe, removeTreeSafe, writeFileSafe,
 } from './safeFs';
 import type { InstallOutcome, UninstallItem, UninstallKind, UninstallOptions, UninstallResult } from '../core/onboarding';
 import { UNIT_NAME, type Systemctl } from './recorderService';
@@ -207,7 +207,21 @@ const DATA_FILES = [
   'metrics.db', 'metrics.db-wal', 'metrics.db-shm', 'recorder-status.json', 'app-events.jsonl', 'app-events.jsonl.ingest', 'clear-request',
   'forecast-snooze.json', 'rules-simulation.json', 'app-focus.json', 'tmp-set-aside.json',
 ];
-const CONFIG_FILES = ['config.json', 'config.json.bak', 'onboarding.json'];
+/** `.updaterId` : identifiant écrit par electron-updater dans le dossier de l'app. */
+const CONFIG_FILES = ['config.json', 'config.json.bak', 'onboarding.json', 'updater.json', 'test-app-update.yml', '.updaterId'];
+/**
+ * Profil Chromium de l'app (le dossier de config est aussi son `userData`) : noms connus seulement, retirés en
+ * arborescence sans suivre de lien. Tout autre nom reste.
+ */
+const CHROMIUM_TREES = [
+  'Cache', 'Code Cache', 'Crashpad', 'DawnGraphiteCache', 'DawnWebGPUCache', 'Dictionaries', 'GPUCache', 'GPUPersistentCache', 'Local Storage',
+  'Session Storage', 'Shared Dictionary', 'blob_storage', 'IndexedDB', 'WebStorage', 'Service Worker', 'shared_proto_db', 'VideoDecodeStats',
+  'Partitions', 'Network', 'DIPS', 'DIPS-wal', 'DIPS-journal', 'DevToolsActivePort', 'Trust Tokens', 'Trust Tokens-journal', 'Preferences',
+  'Local State', 'Network Persistent State', 'TransportSecurity', 'Cookies', 'Cookies-journal', 'declarative_performance_observer.db',
+  'declarative_performance_observer.db-journal', 'SharedStorage', 'SharedStorage-wal',
+];
+/** Liens symboliques de Chromium (verrou d'instance) : retirés eux-mêmes, jamais suivis. */
+const CHROMIUM_LINKS = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const tmpOf = (names: string[]) => new RegExp(`^(?:${names.map(esc).join('|')})\\.\\d+\\.tmp$`);
 const DATA_PATTERNS = [/^metrics\.db\.(?:pre-v\d+|bak)-\d{8}T\d{6}(?:-wal|-shm)?$/, tmpOf(DATA_FILES)];
@@ -255,6 +269,7 @@ export function uninstallPlan(r: Roots, o: UninstallOptions): UninstallItem[] {
   }
   if (o.config) {
     for (const f of ownFiles(r, p.configDir, CONFIG_FILES, CONFIG_PATTERNS)) out.push(item('config', f));
+    for (const f of ownFiles(r, p.configDir, [...CHROMIUM_TREES, ...CHROMIUM_LINKS], [])) out.push({ ...item('config', f), tree: true });
     if (present(p.configDir)) out.push(item('config', p.configDir, true));
   }
   if (present(p.appImage)) out.push(item('appimage', p.appImage));
@@ -271,7 +286,10 @@ function allowed(r: Roots, i: UninstallItem): boolean {
     case 'service': return i.path === p.unit && !i.dir;
     case 'appimage': return i.path === p.appImage && !i.dir;
     case 'history': return i.dir ? i.path === p.dataDir : dirname(i.path) === p.dataDir && allowedName(basename(i.path), DATA_FILES, DATA_PATTERNS);
-    case 'config': return i.dir ? i.path === p.configDir : dirname(i.path) === p.configDir && allowedName(basename(i.path), CONFIG_FILES, CONFIG_PATTERNS);
+    case 'config':
+      if (i.dir) return i.path === p.configDir;
+      if (dirname(i.path) !== p.configDir) return false;
+      return i.tree ? [...CHROMIUM_TREES, ...CHROMIUM_LINKS].includes(basename(i.path)) : allowedName(basename(i.path), CONFIG_FILES, CONFIG_PATTERNS);
     default: return false;
   }
 }
@@ -354,6 +372,10 @@ export async function runUninstall(plan: readonly UninstallItem[], r: Roots, dep
         res.kept.push({ path: i.path, reason: 'pas créé par proc-watch (sans X-ProcWatch-Managed=1) : laissé' });
         continue;
       }
+      if (i.tree) {
+        if (removeTreeSafe(roots, i.path, { allowTopLink: CHROMIUM_LINKS.includes(basename(i.path)) }) === 'removed') removed(i.path);
+        continue;
+      }
       if (removeFileSafe(roots, i.path) === 'removed') removed(i.path);
     } catch (e) {
       fail(i.path, e instanceof Error && !code(e) ? e.message : `${code(e) ?? msg(e)}`);
@@ -365,7 +387,7 @@ export async function runUninstall(plan: readonly UninstallItem[], r: Roots, dep
 
 /** Texte de la confirmation native : exactement ce qui sera retiré. */
 export function uninstallSummary(plan: readonly UninstallItem[], o: { deb: boolean }): { message: string; detail: string } {
-  const lines = plan.length ? plan.map((i) => `• ${i.label}${i.dir ? ' (dossier, s’il est vide)' : ''} : ${i.path}`) : ['• (aucun fichier de proc-watch trouvé)'];
+  const lines = plan.length ? plan.map((i) => `• ${i.label}${i.dir ? ' (dossier, s’il est vide)' : i.tree ? ' (profil de l’app, avec son contenu)' : ''} : ${i.path}`) : ['• (aucun fichier de proc-watch trouvé)'];
   const kept: string[] = [];
   const hasHistory = plan.some((i) => i.kind === 'history');
   const hasConfig = plan.some((i) => i.kind === 'config');
@@ -414,4 +436,31 @@ export async function stopRecorderForUninstall(o: { unitPath: string; run: Syste
   if (!same(frag, o.unitPath)) return { stopped: false, error: `service chargé depuis ${frag}, pas ${o.unitPath} : laissé` };
   const d = await o.run(['disable', '--now', UNIT_NAME]);
   return d.ok ? { stopped: true, error: null } : { stopped: false, error: 'systemctl --user disable --now a échoué : service laissé en place' };
+}
+
+/**
+ * Dernier passage, juste avant de quitter après une désinstallation complète avec « configuration » cochée : Chromium
+ * réécrit une partie de son profil (Session Storage…) en cours de route. Configuration seulement, mêmes règles.
+ */
+export function configSweepPlan(r: Roots): UninstallItem[] {
+  return uninstallPlan(r, { history: false, config: true }).filter((i) => i.kind === 'config');
+}
+
+/**
+ * Chromium recrée « Session Storage » (base vide) en quittant, après le dernier passage : un /bin/sh détaché (hors du
+ * montage de l'AppImage, qui disparaît avec elle) attend la fin du processus (10 s au plus), retire ce seul dossier s'il
+ * n'est pas un lien (rm sans suivre de lien, même système de fichiers), puis le dossier de config s'il est vide. Chemins
+ * passés en arguments, jamais interpolés dans le script ; dossier de config en lien : rien.
+ */
+export function postExitSweepCommand(pid: number, configDir: string): [string, string[]] {
+  const script = [
+    'pid=$1; d=$2; i=0',
+    'while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i+1)); done',
+    '[ -L "$d" ] && exit 0',
+    's="$d/Session Storage"',
+    'if [ -d "$s" ] && [ ! -L "$s" ]; then rm -rf --one-file-system -- "$s"; fi',
+    'rmdir -- "$d" 2>/dev/null',
+    'exit 0',
+  ].join('\n');
+  return ['/bin/sh', ['-c', script, 'sh', String(pid), configDir]];
 }

@@ -1,11 +1,12 @@
 import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import {
   appPaths, autostartState, installAppImage, verifyAndDeleteOriginal, launchTarget, rootsFrom, runUninstall, setAutostart, stopRecorderForUninstall,
-  uninstallPlan, uninstallSummary, type Roots,
+  configSweepPlan, postExitSweepCommand, uninstallPlan, uninstallSummary, type Roots,
 } from './appInstall';
 
 // Racines temporaires sous ~/.cache/pw-onboard-* (jamais les vrais dossiers de l'utilisateur), retirées à la fin.
@@ -310,6 +311,22 @@ describe('désinstaller', () => {
     expect(all.filter((i) => i.dir).map((i) => i.path)).toEqual([p.dataDir, p.configDir]);
   });
 
+  test('configuration : fichiers des mises à jour et profil Chromium de l’app (noms connus) retirés, dossier retiré ; inconnus gardés', async () => {
+    const p = await fullInstall();
+    writeFileSync(join(p.configDir, 'updater.json'), '{}');
+    writeFileSync(join(p.configDir, '.updaterId'), 'id');
+    mkdirSync(join(p.configDir, 'GPUCache/sub'), { recursive: true });
+    writeFileSync(join(p.configDir, 'GPUCache/sub/data_0'), 'x');
+    mkdirSync(join(p.configDir, 'Local Storage/leveldb'), { recursive: true });
+    writeFileSync(join(p.configDir, 'Preferences'), '{}');
+    symlinkSync('host-123', join(p.configDir, 'SingletonLock'));
+    const plan = uninstallPlan(roots, { history: false, config: true });
+    for (const n of ['updater.json', '.updaterId', 'GPUCache', 'Local Storage', 'Preferences', 'SingletonLock']) expect(plan.map((i) => i.path)).toContain(join(p.configDir, n));
+    const r = await runUninstall(plan, roots, { service: okService() });
+    expect(r.failed).toEqual([]);
+    expect(existsSync(p.configDir)).toBe(false);
+  });
+
   test('fichiers inconnus des dossiers de données et de config : jamais listés, dossier laissé', async () => {
     const p = await fullInstall();
     writeFileSync(join(p.dataDir, 'notes-perso.txt'), 'à moi');
@@ -505,4 +522,51 @@ describe('arrêt du service à la désinstallation (échoue fermé)', () => {
     expect(r.done).toBe(false);
   });
 
+});
+
+describe('dernier passage sur la configuration (Chromium réécrit son profil en quittant)', () => {
+  test('ne liste que la configuration (jamais historique, service, menu ni AppImage)', async () => {
+    const p = await fullInstall();
+    mkdirSync(join(p.configDir, 'Session Storage'), { recursive: true });
+    const plan = configSweepPlan(roots);
+    expect(plan.every((i) => i.kind === 'config')).toBe(true);
+    expect(plan.map((i) => i.path)).toContain(join(p.configDir, 'Session Storage'));
+    expect(plan.at(-1)!.path).toBe(p.configDir);
+  });
+});
+
+describe('après la sortie : « Session Storage » recréé par Chromium en quittant (vu avec une vraie AppImage)', () => {
+  const runSweep = (dir: string) => {
+    const [cmd, args] = postExitSweepCommand(999_999_999, dir); // PID inexistant : pas d'attente
+    execFileSync(cmd, args);
+  };
+  test('retire « Session Storage » puis le dossier de config vide', () => {
+    const d = join(roots.configHome, 'proc-watch');
+    mkdirSync(join(d, 'Session Storage'), { recursive: true });
+    writeFileSync(join(d, 'Session Storage/000003.log'), 'x');
+    runSweep(d);
+    expect(existsSync(d)).toBe(false);
+  });
+  test('autre fichier présent : dossier gardé ; « Session Storage » en lien : jamais suivi ; dossier de config en lien : rien', () => {
+    const d = join(roots.configHome, 'proc-watch');
+    const victim = join(roots.home, 'victim');
+    mkdirSync(victim, { recursive: true });
+    writeFileSync(join(victim, 'precious'), 'x');
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, 'autre'), 'x');
+    symlinkSync(victim, join(d, 'Session Storage'));
+    runSweep(d);
+    expect(existsSync(join(victim, 'precious'))).toBe(true);
+    expect(existsSync(join(d, 'autre'))).toBe(true);
+    const linked = join(roots.configHome, 'lien');
+    mkdirSync(join(victim, 'Session Storage'));
+    symlinkSync(victim, linked);
+    runSweep(linked);
+    expect(existsSync(join(victim, 'Session Storage'))).toBe(true);
+  });
+  test('chemins passés en arguments, jamais dans le script', () => {
+    const [, args] = postExitSweepCommand(42, '/c/proc-watch$(id)');
+    expect(args[1]).not.toContain('proc-watch$(id)');
+    expect(args.slice(-2)).toEqual(['42', '/c/proc-watch$(id)']);
+  });
 });

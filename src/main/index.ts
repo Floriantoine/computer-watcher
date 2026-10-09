@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from 'electron';
 import appIcon from '../../resources/icon.png?asset';
 import { appendFileSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -26,10 +27,10 @@ import { ACTIVE_CPU_PERCENT } from '../core/history/queries';
 import { swapTargets, swapView, SWAP_IDLE_MS, SWAP_LOOKBACK_MS, type SwapView } from '../core/swap';
 import { buildSnapshot, flattenGroup, groupProcs, instanceTargets, isWatch, othersFollowed, type Classification, type FullSnapshot } from '../core/snapshot';
 import type { ConfigState, Group, KillResult, ProcInfo, RecorderState, Watch } from '../core/types';
-import { createFreeOpener, hiddenPlacement, secondInstanceAction, startWindowShown, wantsFree } from './launchArgs';
+import { createFreeOpener, hiddenPlacement, relaunchEnv, secondInstanceAction, startWindowShown, wantsFree } from './launchArgs';
 import {
   appPaths, autostartState, installAppImage, launchTarget, rootsFrom, runUninstall, setAutostart, stopRecorderForUninstall,
-  uninstallPlan, uninstallSummary, verifyAndDeleteOriginal,
+  configSweepPlan, postExitSweepCommand, uninstallPlan, uninstallSummary, verifyAndDeleteOriginal,
 } from './appInstall';
 import { realAppImage, testFeedTrust } from './realAppImage';
 import { hashNoFollow, writeFileSafe } from './safeFs';
@@ -827,7 +828,11 @@ ipcMain.handle('onboarding:relaunch', async (_e, del: unknown): Promise<{ relaun
   const steps = onboardingSteps(true);
   writeOnboarding({ version: 1, done: false, resume: steps[steps.indexOf('install') + 1], ...(consent ? { deleteOriginal: consent } : {}) });
   app.releaseSingleInstanceLock(); // la copie relancée prend le verrou
-  app.relaunch({ execPath: paths.appImage, args: [] });
+  // Processus détaché lancé tout de suite, pas app.relaunch : son assistant de relance s'exécute depuis le montage de
+  // l'AppImage en cours, démonté quand elle quitte (vérifié avec une vraie AppImage : la copie ne démarrait jamais).
+  const child = spawn(paths.appImage, [], { detached: true, stdio: 'ignore', env: relaunchEnv(process.env) });
+  child.on('error', (e) => console.error('relance :', e));
+  child.unref();
   quitting = true;
   setTimeout(() => app.quit(), 50);
   return { relaunched: true };
@@ -915,7 +920,24 @@ ipcMain.handle('uninstall:run', async (_e, o: unknown) => {
   });
   if (result.done) {
     quitting = true;
-    setTimeout(() => app.quit(), 2500); // le renderer affiche le résultat, puis l'app quitte
+    // le renderer affiche le résultat, puis l'app quitte sans arrêt « propre » de Chromium (qui réécrirait son profil) ;
+    // configuration cochée : dernier passage juste avant (vérifié avec une vraie AppImage : Session Storage revenait)
+    // dernier passage sur la configuration, puis sortie immédiate ; Chromium recrée quand même « Session Storage » en
+    // quittant (vérifié avec une vraie AppImage) : un /bin/sh détaché le retire une fois le processus terminé
+    setTimeout(() => {
+      const sweep = o.config ? runUninstall(configSweepPlan(roots), roots, { service: { stop: async () => null, reload: async () => {} } }) : Promise.resolve();
+      void sweep.catch(() => {}).finally(() => {
+        if (o.config) {
+          try {
+            const [cmd, args] = postExitSweepCommand(process.pid, paths.configDir);
+            spawn(cmd, args, { detached: true, stdio: 'ignore' }).unref();
+          } catch (e) {
+            console.error('désinstallation :', e);
+          }
+        }
+        app.exit(0);
+      });
+    }, 2500);
   }
   return { cancelled: false as const, result };
 });

@@ -3,7 +3,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, 
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
-import { copyFileSafe, placeUnder, readFileSafe, removeDirIfEmptySafe, removeFileSafe, writeFileSafe } from './safeFs';
+import { copyFileSafe, placeUnder, readFileSafe, removeDirIfEmptySafe, removeFileSafe, removeTreeSafe, writeFileSafe } from './safeFs';
 
 const cache = join(homedir(), '.cache');
 mkdirSync(cache, { recursive: true });
@@ -143,5 +143,28 @@ describe('suppression par descripteur de dossier (m2)', () => {
     expect(readFileSafe([root], join(root, 'd/none'))).toBeNull();
     writeFileSync(join(root, 'd/g'), 'ok');
     expect(readFileSafe([root], join(root, 'd/g'))).toBe('ok');
+  });
+});
+
+describe('suppression d’une arborescence (profil Chromium de l’app)', () => {
+  test('fichiers, sous-dossiers et liens symboliques retirés sans jamais suivre un lien', () => {
+    const t = join(root, 'cfg/GPUCache');
+    mkdirSync(join(t, 'a/b'), { recursive: true });
+    writeFileSync(join(t, 'a/b/f'), 'x');
+    writeFileSync(join(t, 'g'), 'y');
+    symlinkSync(victimDir, join(t, 'lien-dossier'));
+    symlinkSync(join(victimDir, 'proc-watch.desktop'), join(t, 'lien-fichier'));
+    expect(removeTreeSafe([root], t)).toBe('removed');
+    expect(existsSync(t)).toBe(false);
+    expect(readFileSync(join(victimDir, 'proc-watch.desktop'), 'utf8')).toBe('FOREIGN');
+  });
+  test('racine de l’arborescence en lien : refusé ; fichier simple : retiré ; absent : « absent »', () => {
+    mkdirSync(join(root, 'cfg'), { recursive: true });
+    symlinkSync(victimDir, join(root, 'cfg/Cache'));
+    expect(() => removeTreeSafe([root], join(root, 'cfg/Cache'))).toThrow(/lien symbolique/);
+    expect(existsSync(join(victimDir, 'proc-watch.desktop'))).toBe(true);
+    writeFileSync(join(root, 'cfg/Preferences'), '{}');
+    expect(removeTreeSafe([root], join(root, 'cfg/Preferences'))).toBe('removed');
+    expect(removeTreeSafe([root], join(root, 'cfg/none'))).toBe('absent');
   });
 });

@@ -39,3 +39,11 @@ export function createFreeOpener(send: () => void) {
     },
   };
 }
+
+/** Variables posées par le runtime AppImage : retirées avant de lancer la copie installée, qui pose les siennes. */
+const APPIMAGE_RUNTIME_ENV = ['APPIMAGE', 'APPDIR', 'ARGV0', 'OWD'];
+export function relaunchEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out = { ...env };
+  for (const k of APPIMAGE_RUNTIME_ENV) delete out[k];
+  return out;
+}

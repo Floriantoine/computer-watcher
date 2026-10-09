@@ -338,3 +338,48 @@ export function listDirSafe(roots: readonly string[], path: string): string[] {
     closeSync(parent.fd);
   }
 }
+
+const MAX_DEPTH = 32;
+
+/** Vide un dossier ouvert sans suivre de lien : fichiers et liens retirés (un lien n'est jamais suivi), sous-dossiers récursifs. */
+function emptyDir(pfd: number, name: string, depth: number): void {
+  if (depth > MAX_DEPTH) throw new Error('arborescence trop profonde : laissée');
+  const dfd = openSync(fdPath(pfd, name), DIR_NOFOLLOW);
+  try {
+    for (const e of readdirSync(`/proc/self/fd/${dfd}`)) {
+      const st = lstatSync(fdPath(dfd, e));
+      if (st.isDirectory()) {
+        emptyDir(dfd, e, depth + 1);
+        rmdirSync(fdPath(dfd, e));
+      } else unlinkSync(fdPath(dfd, e));
+    }
+  } finally {
+    closeSync(dfd);
+  }
+}
+
+/**
+ * Retire une arborescence de proc-watch (profil Chromium de l'app) par descripteurs de dossier, sans jamais suivre de
+ * lien. `allowTopLink` : l'élément lui-même peut être un lien (SingletonLock de Chromium), retiré sans être suivi.
+ */
+export function removeTreeSafe(roots: readonly string[], path: string, o: { allowTopLink?: boolean } = {}): 'removed' | 'absent' {
+  const parent = openParent(roots, path, false);
+  if (!parent) return 'absent';
+  try {
+    let st;
+    try {
+      st = lstatSync(fdPath(parent.fd, parent.name));
+    } catch (e) {
+      if (code(e) === 'ENOENT') return 'absent';
+      throw e;
+    }
+    if (st.isSymbolicLink() && !o.allowTopLink) throw linkError(path);
+    if (st.isDirectory()) {
+      emptyDir(parent.fd, parent.name, 0);
+      rmdirSync(fdPath(parent.fd, parent.name));
+    } else unlinkSync(fdPath(parent.fd, parent.name));
+    return 'removed';
+  } finally {
+    closeSync(parent.fd);
+  }
+}

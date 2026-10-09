@@ -122,7 +122,7 @@ export function AboutSetup({ onToast, onReopenOnboarding }: { onToast: ToastFn; 
             <p className="hint" style={{ margin: '8px 0 0' }}>Sera retiré (une confirmation reprend cette liste) :</p>
             <ul className="about-plan" data-testid="uninstall-plan">
               {plan === null ? <li>…</li> : plan.length === 0 ? <li>Aucun fichier de proc-watch trouvé.</li> : plan.map((i) => (
-                <li key={i.path}>{i.label}{i.dir ? ' (dossier, s’il est vide)' : ''} : <code>{i.path}</code></li>
+                <li key={i.path}>{i.label}{i.dir ? ' (dossier, s’il est vide)' : i.tree ? ' (profil de l’app, avec son contenu)' : ''} : <code>{i.path}</code></li>
               ))}
             </ul>
             <div className="s-foot">
