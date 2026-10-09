@@ -44,6 +44,8 @@ export function testFeedFromEnv(env: NodeJS.ProcessEnv, isPackaged: boolean, arg
     return null;
   }
   if ((u.protocol !== 'http:' && u.protocol !== 'https:') || !LOOPBACK.has(u.hostname)) return null;
+  // jeton aléatoire (≥ 32 caractères) en tête du chemin : un autre utilisateur local qui prendrait le port ne le connaît pas
+  if (!/^\/[A-Za-z0-9_-]{32,}(\/|$)/.test(u.pathname)) return null;
   if (!u.pathname.endsWith('/')) u.pathname += '/';
   return u.toString();
 }

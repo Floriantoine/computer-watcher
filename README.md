@@ -131,7 +131,7 @@ Avec npm 11.10+ (dont npm 12), les scripts d'installation des dépendances sont 
 | `npm run test:recorder` | build, test de performance du service d'enregistrement et test de bout en bout (base, événements, reprise) |
 | `npm run smoke` | build + lancement réel de l'app via Playwright |
 | `npm run dist` | produit l'AppImage et le .deb dans `release/` |
-| `npm run test:update` | build + mises à jour de bout en bout contre un flux local (rien n'est installé) |
+| `npm run test:update` | build + mises à jour de bout en bout contre un flux local (rien n'est installé) ; le flux de test n'est accepté que depuis les sources, avec l'option `--update-feed-test`, une adresse en boucle locale et un jeton aléatoire en tête du chemin (`http://127.0.0.1:<port>/<jeton ≥ 32 caractères>/`) ; jamais dans une version empaquetée |
 | `npm run release -- patch\|minor\|major [--dry-run]` | prépare une version : vérifications, tests, commit `chore(release): vX.Y.Z` et étiquette annotée, sans pousser |
 
 Publier : `npm run release -- patch`, relire, puis `git push --atomic origin main vX.Y.Z`. Le workflow `release` a deux jobs. `build`, en lecture seule, vérifie que le commit étiqueté est sur `main` et que l'étiquette correspond à `package.json`, relance les types et les tests, puis construit l'AppImage, le .deb et `latest-linux.yml` (lu par les mises à jour). `publish`, seul à pouvoir écrire, n'exécute aucun code npm : il crée la version GitHub avec ces fichiers.

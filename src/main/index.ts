@@ -28,13 +28,13 @@ import { buildSnapshot, flattenGroup, groupProcs, instanceTargets, isWatch, othe
 import type { ConfigState, Group, KillResult, ProcInfo, RecorderState, Watch } from '../core/types';
 import { createFreeOpener, hiddenPlacement, secondInstanceAction, startWindowShown, wantsFree } from './launchArgs';
 import {
-  appPaths, autostartState, deleteOriginalArgs, installAppImage, launchTarget, parseDeleteOriginalArgs, rootsFrom, runUninstall, setAutostart, stopRecorderForUninstall,
+  appPaths, autostartState, installAppImage, launchTarget, rootsFrom, runUninstall, setAutostart, stopRecorderForUninstall,
   uninstallPlan, uninstallSummary, verifyAndDeleteOriginal,
 } from './appInstall';
 import { realAppImage, testFeedTrust } from './realAppImage';
 import { hashNoFollow, writeFileSafe } from './safeFs';
 import {
-  isUninstallOptions, onboardingSteps, parseOnboardingFile, serializeOnboarding, shouldOpenOnboarding, startIndex,
+  DELETE_CONSENT_TTL_MS, isUninstallOptions, onboardingSteps, takeDeleteConsent, parseOnboardingFile, serializeOnboarding, shouldOpenOnboarding, startIndex,
   type AboutInfo, type AutostartInfo, type OnboardingFile, type OnboardingInfo,
 } from '../core/onboarding';
 import { SNOOZE_MS } from '../core/forecast/forecast';
@@ -812,7 +812,7 @@ ipcMain.handle('onboarding:relaunch', async (_e, del: unknown): Promise<{ relaun
   if (!copy) throw new Error(`Copie introuvable ou pas un fichier ordinaire : ${paths.appImage} (installer d'abord)`);
   if (copy.sha256 !== src.sha256) throw new Error(`${paths.appImage} ne correspond pas à l’AppImage lancée : réinstaller`);
   if (!(await access(paths.appImage, fsConstants.X_OK).then(() => true, () => false))) throw new Error(`${paths.appImage} n’est pas exécutable (dossier monté en noexec ?)`);
-  const args: string[] = [];
+  let consent: OnboardingFile['deleteOriginal'];
   if (del === true) {
     const ok = await confirmNative({
       title: 'Supprimer le fichier téléchargé',
@@ -821,30 +821,47 @@ ipcMain.handle('onboarding:relaunch', async (_e, del: unknown): Promise<{ relaun
       confirm: 'Relancer et supprimer',
     });
     if (!ok) return { relaunched: false };
-    args.push(...deleteOriginalArgs({ path: appImage, sha256: src.sha256 }));
+    // accord transmis par onboarding.json (0600, dossier ouvert sans suivre de lien), jamais par la ligne de commande
+    consent = { path: appImage, sha256: src.sha256, ino: src.ino, expires: Date.now() + DELETE_CONSENT_TTL_MS };
   }
   const steps = onboardingSteps(true);
-  writeOnboarding({ version: 1, done: false, resume: steps[steps.indexOf('install') + 1] });
+  writeOnboarding({ version: 1, done: false, resume: steps[steps.indexOf('install') + 1], ...(consent ? { deleteOriginal: consent } : {}) });
   app.releaseSingleInstanceLock(); // la copie relancée prend le verrou
-  app.relaunch({ execPath: paths.appImage, args });
+  app.relaunch({ execPath: paths.appImage, args: [] });
   quitting = true;
   setTimeout(() => app.quit(), 50);
   return { relaunched: true };
 });
 
-/** Consentement reçu de l'instance précédente (`--delete-original=…`) : traité une fois, dans la copie installée seulement. */
+/**
+ * Accord reçu de l'instance précédente par onboarding.json : lu et effacé une seule fois (le fichier est réécrit sans lui
+ * avant toute suppression), refusé s'il a expiré ; traité seulement dans la copie installée. La ligne de commande
+ * (anciens --delete-original=…) est ignorée.
+ */
 let originalDeletion: { path: string; ok: boolean; message: string } | null = null;
 async function deletePendingOriginal(): Promise<void> {
-  const req = parseDeleteOriginalArgs(process.argv);
-  if (!req) return;
+  const taken = takeDeleteConsent(readOnboarding(), Date.now());
+  if (!taken.consent && !taken.error) return;
+  const path = taken.consent?.path ?? readOnboarding()?.deleteOriginal?.path ?? '';
+  try {
+    writeOnboarding(taken.rest!); // usage unique : effacé avant d'agir
+  } catch (e) {
+    originalDeletion = { path, ok: false, message: `accord non effacé (${e instanceof Error ? e.message : String(e)}) : rien supprimé` };
+    return;
+  }
+  if (!taken.consent) {
+    originalDeletion = { path, ok: false, message: taken.error! };
+    return;
+  }
+  const c = taken.consent;
   try {
     const here = appImage ? await realpath(appImage).catch(() => null) : null;
     const copy = await realpath(paths.appImage).catch(() => null);
     if (!here || here !== copy) throw new Error('proc-watch ne tourne pas depuis la copie installée : rien supprimé');
-    await verifyAndDeleteOriginal({ path: req.path, sha256: req.sha256, copy: paths.appImage });
-    originalDeletion = { path: req.path, ok: true, message: '' };
+    await verifyAndDeleteOriginal({ path: c.path, sha256: c.sha256, ino: c.ino, copy: paths.appImage });
+    originalDeletion = { path: c.path, ok: true, message: '' };
   } catch (e) {
-    originalDeletion = { path: req.path, ok: false, message: e instanceof Error ? e.message : String(e) };
+    originalDeletion = { path: c.path, ok: false, message: e instanceof Error ? e.message : String(e) };
   }
 }
 

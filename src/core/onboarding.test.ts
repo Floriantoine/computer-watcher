@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import {
-  ONBOARDING_STEPS, onboardingSteps, parseOnboardingFile, serializeOnboarding, shouldOpenOnboarding, startIndex, wizardKey, stepPosition,
+  DELETE_CONSENT_TTL_MS, ONBOARDING_STEPS, onboardingSteps, takeDeleteConsent, parseOnboardingFile, serializeOnboarding, shouldOpenOnboarding, startIndex, wizardKey, stepPosition,
 } from './onboarding';
 
 describe('étapes', () => {
@@ -69,5 +69,44 @@ describe('clavier', () => {
   test('flèches sans Alt (champs, cases) : rien', () => {
     expect(wizardKey('ArrowRight', 0, 4)).toBeNull();
     expect(wizardKey('a', 0, 4)).toBeNull();
+  });
+});
+
+describe('consentement « supprimer le fichier téléchargé » (R1 : par onboarding.json, jamais par l’argv)', () => {
+  const sha = 'b'.repeat(64);
+  const consent = { path: '/home/u/dl/proc-watch-1.0.0-x86_64.AppImage', sha256: sha, ino: 42, expires: 1_000_000 };
+  test('aller-retour dans le fichier d’état', () => {
+    const f = { version: 1 as const, done: false, resume: 'autostart' as const, deleteOriginal: consent };
+    expect(parseOnboardingFile(serializeOnboarding(f))).toEqual(f);
+  });
+  test.each([
+    { ...consent, path: 'relatif' },
+    { ...consent, sha256: 'abc' },
+    { ...consent, ino: -1 },
+    { ...consent, ino: 1.5 },
+    { ...consent, expires: 'demain' },
+  ])('consentement mal formé : ignoré (%o)', (bad) => {
+    const parsed = parseOnboardingFile(JSON.stringify({ version: 1, done: false, deleteOriginal: bad }));
+    expect(parsed).toEqual({ version: 1, done: false });
+  });
+  test('à usage unique : le fichier sans consentement est rendu pour réécriture immédiate', () => {
+    const r = takeDeleteConsent({ version: 1, done: false, resume: 'autostart', deleteOriginal: consent }, 999_999);
+    expect(r.consent).toEqual(consent);
+    expect(r.rest).toEqual({ version: 1, done: false, resume: 'autostart' });
+    expect(r.error).toBeNull();
+  });
+  test('expiré : refusé (et effacé quand même)', () => {
+    const r = takeDeleteConsent({ version: 1, done: false, deleteOriginal: consent }, 1_000_001);
+    expect(r.consent).toBeNull();
+    expect(r.error).toMatch(/expiré/);
+    expect(r.rest).toEqual({ version: 1, done: false });
+  });
+  test('aucun consentement : rien', () => {
+    expect(takeDeleteConsent({ version: 1, done: true }, 0)).toEqual({ consent: null, error: null, rest: { version: 1, done: true } });
+    expect(takeDeleteConsent(null, 0)).toEqual({ consent: null, error: null, rest: null });
+  });
+  test('durée de validité : quelques minutes', () => {
+    expect(DELETE_CONSENT_TTL_MS).toBeGreaterThanOrEqual(60_000);
+    expect(DELETE_CONSENT_TTL_MS).toBeLessThanOrEqual(10 * 60_000);
   });
 });

@@ -19,8 +19,39 @@ export function onboardingSteps(appImage: boolean): OnboardingStep[] {
 
 export const stepPosition = (index: number, count: number) => `Étape ${index + 1} sur ${count}`;
 
-/** `resume` : étape où reprendre après une relance depuis la copie installée. */
-export interface OnboardingFile { version: 1; done: boolean; resume?: OnboardingStep }
+/** Accord « supprimer le fichier téléchargé », pour la copie relancée : chemin, empreinte, inode, échéance (ms). */
+export interface DeleteConsent { path: string; sha256: string; ino: number; expires: number }
+
+/** Validité de l'accord : la copie relancée démarre en quelques secondes. */
+export const DELETE_CONSENT_TTL_MS = 5 * 60_000;
+
+/**
+ * `resume` : étape où reprendre après une relance depuis la copie installée ; `deleteOriginal` : accord donné dans
+ * l'instance précédente (jamais par la ligne de commande), consommé une seule fois.
+ */
+export interface OnboardingFile { version: 1; done: boolean; resume?: OnboardingStep; deleteOriginal?: DeleteConsent }
+
+function parseConsent(x: unknown): DeleteConsent | null {
+  if (typeof x !== 'object' || x === null) return null;
+  const c = x as Record<string, unknown>;
+  if (typeof c.path !== 'string' || !c.path.startsWith('/') || /[\x00-\x1f\x7f]/.test(c.path)) return null;
+  if (typeof c.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(c.sha256)) return null;
+  if (!Number.isSafeInteger(c.ino) || (c.ino as number) <= 0) return null;
+  if (typeof c.expires !== 'number' || !Number.isFinite(c.expires)) return null;
+  return { path: c.path, sha256: c.sha256, ino: c.ino as number, expires: c.expires };
+}
+
+/**
+ * Prend l'accord (une seule fois) : `rest` est le fichier sans accord, à réécrire tout de suite, avant toute suppression.
+ * Accord expiré : refusé.
+ */
+export function takeDeleteConsent(f: OnboardingFile | null, now: number): { consent: DeleteConsent | null; error: string | null; rest: OnboardingFile | null } {
+  if (!f) return { consent: null, error: null, rest: null };
+  const { deleteOriginal, ...rest } = f;
+  if (!deleteOriginal) return { consent: null, error: null, rest };
+  if (now > deleteOriginal.expires) return { consent: null, error: 'accord expiré : fichier téléchargé non supprimé', rest };
+  return { consent: deleteOriginal, error: null, rest };
+}
 
 export function parseOnboardingFile(text: string | null): OnboardingFile | null {
   if (!text) return null;
@@ -33,7 +64,8 @@ export function parseOnboardingFile(text: string | null): OnboardingFile | null 
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
   const r = raw as Record<string, unknown>;
   if (r.version !== 1 || typeof r.done !== 'boolean') return null;
-  return isStep(r.resume) ? { version: 1, done: r.done, resume: r.resume } : { version: 1, done: r.done };
+  const consent = parseConsent(r.deleteOriginal);
+  return { version: 1, done: r.done, ...(isStep(r.resume) ? { resume: r.resume } : {}), ...(consent ? { deleteOriginal: consent } : {}) };
 }
 
 export const serializeOnboarding = (f: OnboardingFile) => JSON.stringify(f) + '\n';

@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import {
-  appPaths, autostartState, deleteOriginalArgs, installAppImage, parseDeleteOriginalArgs, verifyAndDeleteOriginal, launchTarget, rootsFrom, runUninstall, setAutostart, stopRecorderForUninstall,
+  appPaths, autostartState, installAppImage, verifyAndDeleteOriginal, launchTarget, rootsFrom, runUninstall, setAutostart, stopRecorderForUninstall,
   uninstallPlan, uninstallSummary, type Roots,
 } from './appInstall';
 
@@ -25,7 +25,9 @@ beforeEach(() => {
   mkdirSync(dl, { recursive: true });
 });
 
-const fakeAppImage = (name = 'proc-watch-1.0.0-x86_64.AppImage', body = 'ELF-appimage-v1') => {
+/** En-tête d'AppImage type 2 (ELF + « AI\x02 » à l'octet 8), suivi d'un corps. */
+const AI = (body: string) => Buffer.concat([Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0, 0x41, 0x49, 0x02]), Buffer.from(body)]);
+const fakeAppImage = (name = 'proc-watch-1.0.0-x86_64.AppImage', body: string | Buffer = AI('appimage-v1')) => {
   const p = join(dl, name);
   writeFileSync(p, body);
   chmodSync(p, 0o755);
@@ -53,7 +55,7 @@ describe('installer l’AppImage', () => {
     const r = await installAppImage({ source: src, roots });
     const p = appPaths(roots);
     expect(r).toMatchObject({ status: 'installed', dest: p.appImage, runningFromCopy: false, canDeleteSource: true });
-    expect(readFileSync(p.appImage, 'utf8')).toBe('ELF-appimage-v1');
+    expect(readFileSync(p.appImage)).toEqual(AI('appimage-v1'));
     expect(statSync(p.appImage).mode & 0o777).toBe(0o755);
     expect(readFileSync(p.desktop, 'utf8')).toContain(`Exec="${p.appImage}"`);
     expect(readdirSync(join(roots.home, 'Applications'))).toEqual(['proc-watch.AppImage']);
@@ -77,10 +79,10 @@ describe('installer l’AppImage', () => {
   });
 
   test('autre version : remplacée (mise à jour)', async () => {
-    await installAppImage({ source: fakeAppImage('a.AppImage', 'v1'), roots });
-    const r = await installAppImage({ source: fakeAppImage('b.AppImage', 'v2'), roots });
+    await installAppImage({ source: fakeAppImage('a.AppImage', AI('v1')), roots });
+    const r = await installAppImage({ source: fakeAppImage('b.AppImage', AI('v2')), roots });
     expect(r.status).toBe('updated');
-    expect(readFileSync(r.dest, 'utf8')).toBe('v2');
+    expect(readFileSync(r.dest)).toEqual(AI('v2'));
   });
 
   test('lien symbolique planté à la place de la copie : remplacé, sa cible intacte', async () => {
@@ -103,7 +105,7 @@ describe('installer l’AppImage', () => {
 
   test('copie : SHA-256 identique à l’original, exécutable', async () => {
     const r = await installAppImage({ source: fakeAppImage(), roots });
-    expect(r.sha256).toBe(createHash('sha256').update('ELF-appimage-v1').digest('hex'));
+    expect(r.sha256).toBe(createHash('sha256').update(AI('appimage-v1')).digest('hex'));
     expect(r.executable).toBe(true);
   });
 
@@ -144,50 +146,62 @@ describe('installer l’AppImage', () => {
   });
 });
 
-describe('supprimer le fichier téléchargé (consentement passé à la copie relancée)', () => {
-  const sha = (t: string) => createHash('sha256').update(t).digest('hex');
+describe('supprimer le fichier téléchargé (accord par onboarding.json, vérifié dans la copie relancée)', () => {
+  const sha = (t: string | Buffer) => createHash('sha256').update(t).digest('hex');
+  const ino = (p: string) => statSync(p).ino;
 
-  test('arguments : --delete-original=<chemin absolu> et --delete-original-sha256=<64 hex>, sinon rien', () => {
-    const h = sha('x');
-    expect(parseDeleteOriginalArgs(['/a', `--delete-original=/home/u/dl/p.AppImage`, `--delete-original-sha256=${h}`])).toEqual({ path: '/home/u/dl/p.AppImage', sha256: h });
-    expect(parseDeleteOriginalArgs(['/a', '--delete-original=rel/p', `--delete-original-sha256=${h}`])).toBeNull();
-    expect(parseDeleteOriginalArgs(['/a', '--delete-original=/p', '--delete-original-sha256=abc'])).toBeNull();
-    expect(parseDeleteOriginalArgs(['/a', '--delete-original=/p'])).toBeNull();
-    expect(deleteOriginalArgs({ path: '/p q', sha256: h })).toEqual(['--delete-original=/p q', `--delete-original-sha256=${h}`]);
+  test('l’API par ligne de commande n’existe plus (anciens arguments ignorés)', async () => {
+    const mod = await import('./appInstall');
+    expect('parseDeleteOriginalArgs' in mod).toBe(false);
+    expect('deleteOriginalArgs' in mod).toBe(false);
   });
 
-  test('supprime exactement le fichier d’origine : même SHA-256, fichier ordinaire, distinct de la copie', async () => {
+  test('supprime exactement le fichier d’origine : identique à la copie en cours, en-tête AppImage, même inode', async () => {
     const src = fakeAppImage();
-    const other = fakeAppImage('autre.AppImage', 'x');
+    const other = fakeAppImage('autre.AppImage', AI('x'));
     const r = await installAppImage({ source: src, roots });
-    await verifyAndDeleteOriginal({ path: src, sha256: r.sha256, copy: r.dest });
+    await verifyAndDeleteOriginal({ path: src, sha256: r.sha256, ino: ino(src), copy: r.dest });
     expect(existsSync(src)).toBe(false);
     expect(existsSync(other)).toBe(true);
     expect(existsSync(r.dest)).toBe(true);
   });
+  test('reproduction R1 : un document avec son vrai SHA-256 → refusé (pas une AppImage, pas identique à la copie)', async () => {
+    const r = await installAppImage({ source: fakeAppImage(), roots });
+    const doc = join(roots.home, 'thesis.pdf');
+    writeFileSync(doc, 'MY THESIS');
+    await expect(verifyAndDeleteOriginal({ path: doc, sha256: sha('MY THESIS'), ino: ino(doc), copy: r.dest })).rejects.toThrow(/pas une AppImage/);
+    expect(existsSync(doc)).toBe(true);
+  });
+  test('reproduction R1 bis : une autre AppImage avec son vrai SHA-256 → refusée (différente de la copie en cours)', async () => {
+    const r = await installAppImage({ source: fakeAppImage(), roots });
+    const otherApp = fakeAppImage('Editeur-1.2.3.AppImage', AI('autre application'));
+    await expect(verifyAndDeleteOriginal({ path: otherApp, sha256: sha(AI('autre application')), ino: ino(otherApp), copy: r.dest })).rejects.toThrow(/copie en cours/);
+    expect(existsSync(otherApp)).toBe(true);
+  });
   test('refuse la copie elle-même', async () => {
     const r = await installAppImage({ source: fakeAppImage(), roots });
-    await expect(verifyAndDeleteOriginal({ path: r.dest, sha256: r.sha256, copy: r.dest })).rejects.toThrow(/copie installée/);
+    await expect(verifyAndDeleteOriginal({ path: r.dest, sha256: r.sha256, ino: ino(r.dest), copy: r.dest })).rejects.toThrow(/copie installée/);
     expect(existsSync(r.dest)).toBe(true);
   });
-  test('refuse un fichier modifié depuis le consentement (SHA-256 différent)', async () => {
+  test('refuse un fichier modifié depuis l’accord, ou remplacé (autre inode)', async () => {
     const src = fakeAppImage();
     const r = await installAppImage({ source: src, roots });
-    writeFileSync(src, 'modifié');
-    await expect(verifyAndDeleteOriginal({ path: src, sha256: r.sha256, copy: r.dest })).rejects.toThrow(/a changé/);
+    const i = ino(src);
+    writeFileSync(src, AI('modifié'));
+    await expect(verifyAndDeleteOriginal({ path: src, sha256: r.sha256, ino: i, copy: r.dest })).rejects.toThrow();
     expect(existsSync(src)).toBe(true);
+    const src2 = fakeAppImage('p2.AppImage');
+    await expect(verifyAndDeleteOriginal({ path: src2, sha256: r.sha256, ino: i + 999_999, copy: r.dest })).rejects.toThrow(/remplacé/);
+    expect(existsSync(src2)).toBe(true);
   });
-  test('refuse un lien symbolique (jamais suivi)', async () => {
+  test('refuse un lien symbolique (jamais suivi) et un chemin relatif', async () => {
     const real = fakeAppImage();
     const r = await installAppImage({ source: real, roots });
     const link = join(dl, 'lien.AppImage');
     symlinkSync(real, link);
-    await expect(verifyAndDeleteOriginal({ path: link, sha256: r.sha256, copy: r.dest })).rejects.toThrow(/lien symbolique/);
+    await expect(verifyAndDeleteOriginal({ path: link, sha256: r.sha256, ino: ino(real), copy: r.dest })).rejects.toThrow(/lien symbolique/);
     expect(existsSync(real)).toBe(true);
-  });
-  test('reproduction I2 : un document (pas une AppImage) au même SHA est quand même refusé si ce n’est pas l’original consenti', async () => {
-    // le contrôle realAppImage de la copie se fait dans le main ; ici : un chemin relatif est refusé
-    await expect(verifyAndDeleteOriginal({ path: 'thesis.pdf', sha256: sha('x'), copy: '/x' })).rejects.toThrow();
+    await expect(verifyAndDeleteOriginal({ path: 'x.AppImage', sha256: r.sha256, ino: 1, copy: r.dest })).rejects.toThrow();
   });
 });
 
@@ -199,6 +213,14 @@ describe('démarrer avec la session', () => {
     expect(launchTarget({ roots, appImage: src, packaged: true, execPath: '/x' })).toBe(appPaths(roots).appImage);
     expect(launchTarget({ roots, packaged: true, execPath: '/opt/proc-watch/proc-watch' })).toBe('/opt/proc-watch/proc-watch');
     expect(launchTarget({ roots, packaged: false, execPath: '/node_modules/electron/dist/electron' })).toBeNull();
+  });
+  test('R2 : copie vide (laissée par une mise à jour ratée) ou sans en-tête AppImage → l’AppImage lancée', async () => {
+    const src = fakeAppImage();
+    mkdirSync(join(roots.home, 'Applications'), { recursive: true });
+    writeFileSync(appPaths(roots).appImage, '');
+    expect(launchTarget({ roots, appImage: src, packaged: true, execPath: '/x' })).toBe(src);
+    writeFileSync(appPaths(roots).appImage, 'pas une AppImage');
+    expect(launchTarget({ roots, appImage: src, packaged: true, execPath: '/x' })).toBe(src);
   });
   test('activer : ~/.config/autostart/proc-watch.desktop avec --hidden ; désactiver : retiré ; deux fois : idempotent', () => {
     setAutostart(true, '/home/u/Applications/proc-watch.AppImage', roots);

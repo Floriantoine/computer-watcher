@@ -40,8 +40,12 @@ const yml = () =>
 const releases = JSON.stringify([
   { tag_name: 'v9.9.9', html_url: 'https://github.com/Floriantoine/proc-watcher/releases/tag/v9.9.9', body: 'Notes de test (API).', draft: false, prerelease: false },
 ]);
+/** Jeton aléatoire exigé en tête du chemin du flux de test (testFeedFromEnv). */
+const TOKEN = randomBytes(24).toString('hex');
 const server = createServer((req, res) => {
-  const path = new URL(req.url, 'http://x').pathname; // electron-updater ajoute ?noCache=…
+  const full = new URL(req.url, 'http://x').pathname; // electron-updater ajoute ?noCache=…
+  if (!full.startsWith(`/${TOKEN}/`)) return void res.writeHead(404).end();
+  const path = full.slice(TOKEN.length + 1);
   hits.push(path);
   if (path === '/latest-linux.yml') res.writeHead(200, { 'content-type': 'text/yaml' }).end(yml());
   else if (path === `/${FILE}`) res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': payload.length }).end(payload);
@@ -49,7 +53,7 @@ const server = createServer((req, res) => {
   else res.writeHead(404).end();
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
-const feed = `http://127.0.0.1:${server.address().port}/`;
+const feed = `http://127.0.0.1:${server.address().port}/${TOKEN}/`;
 
 mkdirSync(join(homedir(), '.cache'), { recursive: true });
 const root = mkdtempSync(join(homedir(), '.cache', 'pw-update-e2e-'));

@@ -4,6 +4,7 @@ import { closeSync, constants as C, lstatSync, realpathSync } from 'node:fs';
 import { access, lstat, realpath, unlink } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join } from 'node:path';
 import { desktopEntryContent, installDesktopEntry, isManagedEntry } from './desktopEntry';
+import { isUsableAppImage } from './realAppImage';
 import {
   chmodSafe, copyFileSafe, fdPath, hashNoFollow, listDirSafe, openParent, readFileSafe, removeDirIfEmptySafe, removeFileSafe, writeFileSafe,
 } from './safeFs';
@@ -127,25 +128,13 @@ export async function installAppImage(o: { source: string; roots: Roots; iconPng
 
 // ---------------------------------------------------------------- suppression du fichier téléchargé (après relance)
 
-const DEL = '--delete-original=';
-const DEL_SHA = '--delete-original-sha256=';
-
-/** Consentement transmis à la copie relancée : chemin exact et SHA-256 du fichier téléchargé. */
-export const deleteOriginalArgs = (o: { path: string; sha256: string }) => [`${DEL}${o.path}`, `${DEL_SHA}${o.sha256}`];
-
-export function parseDeleteOriginalArgs(argv: readonly string[]): { path: string; sha256: string } | null {
-  const path = argv.find((a) => a.startsWith(DEL))?.slice(DEL.length);
-  const sha256 = argv.find((a) => a.startsWith(DEL_SHA))?.slice(DEL_SHA.length);
-  if (!path || !sha256 || !isAbsolute(path) || !/^[0-9a-f]{64}$/.test(sha256)) return null;
-  return { path, sha256 };
-}
-
 /**
- * Dans la copie relancée (le main vérifie d'abord realAppImage() === la copie) : supprime exactement `path` s'il est
- * toujours un fichier ordinaire (jamais un lien), distinct de la copie, au même SHA-256 que lors du consentement, et
- * toujours le même inode juste avant l'unlink.
+ * Dans la copie relancée (le main vérifie d'abord realAppImage() === la copie), avec l'accord lu une seule fois dans
+ * onboarding.json : supprime exactement `path` s'il est toujours un fichier ordinaire (jamais un lien), du même inode que
+ * lors de l'accord, distinct de la copie, avec l'en-tête AppImage, et d'empreinte égale à celle de l'accord ET à celle de
+ * la copie en cours d'exécution. Un accord falsifié ne peut donc désigner qu'un double exact de l'app : aucune perte.
  */
-export async function verifyAndDeleteOriginal(o: { path: string; sha256: string; copy: string }): Promise<void> {
+export async function verifyAndDeleteOriginal(o: { path: string; sha256: string; ino: number; copy: string }): Promise<void> {
   if (!isAbsolute(o.path)) throw new Error(`Chemin refusé : ${o.path}`);
   let l;
   try {
@@ -155,11 +144,14 @@ export async function verifyAndDeleteOriginal(o: { path: string; sha256: string;
   }
   if (l.isSymbolicLink()) throw new Error(`${o.path} est un lien symbolique : non supprimé`);
   if (!l.isFile()) throw new Error(`${o.path} n’est pas un fichier ordinaire : non supprimé`);
+  if (l.ino !== o.ino) throw new Error(`${o.path} a été remplacé depuis l’accord : non supprimé`);
   const [a, b] = await Promise.all([realOrNull(o.path), realOrNull(o.copy)]);
   if (a === b) throw new Error('C’est la copie installée : non supprimée');
-  const h = await hashNoFollow(o.path);
+  if (!isUsableAppImage(o.path)) throw new Error(`${o.path} n’est pas une AppImage : non supprimé`);
+  const [h, running] = await Promise.all([hashNoFollow(o.path), hashNoFollow(o.copy)]);
   if (h.sha256 !== o.sha256) throw new Error(`${o.path} a changé depuis l’accord (empreinte différente) : non supprimé`);
-  if ((await lstat(o.path)).ino !== h.ino) throw new Error(`${o.path} a été remplacé : non supprimé`);
+  if (h.sha256 !== running.sha256) throw new Error(`${o.path} n’est pas identique à la copie en cours d’exécution : non supprimé`);
+  if ((await lstat(o.path)).ino !== h.ino || h.ino !== o.ino) throw new Error(`${o.path} a été remplacé : non supprimé`);
   await unlink(o.path);
 }
 
@@ -172,12 +164,8 @@ export async function verifyAndDeleteOriginal(o: { path: string; sha256: string;
 export function launchTarget(o: { roots: Roots; appImage?: string; packaged: boolean; execPath: string }): string | null {
   if (o.appImage) {
     const copy = appPaths(o.roots).appImage;
-    try {
-      if (lstatSync(copy).isFile()) return copy;
-    } catch {
-      // pas installée
-    }
-    return o.appImage;
+    // R2 : seulement une copie utilisable (en-tête AppImage, non vide), jamais le fichier vide d'une mise à jour ratée
+    return isUsableAppImage(copy) ? copy : o.appImage;
   }
   return o.packaged ? o.execPath : null;
 }

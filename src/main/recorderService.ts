@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { isUsableAppImage } from './realAppImage';
 import { dirname, join } from 'node:path';
 
 export const UNIT_NAME = 'proc-watch-recorder.service';
@@ -9,22 +10,15 @@ export function systemdQuote(arg: string): string {
   return '"' + arg.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%').replace(/\$/g, '$$$$') + '"';
 }
 
-const isRegularFile = (p: string) => {
-  try {
-    return lstatSync(p).isFile();
-  } catch {
-    return false;
-  }
-};
-
 /**
- * AppImage que lance le service (N1) : la copie installée (~/Applications/proc-watch.AppImage) dès qu'elle existe, même si
+ * AppImage que lance le service (N1) : la copie installée (~/Applications/proc-watch.AppImage) dès qu'elle est utilisable
+ * (en-tête AppImage, non vide : R2), même si
  * l'app tourne depuis l'original téléchargé, qui peut être supprimé ; sinon l'AppImage lancée (vérifiée par realAppImage) ;
  * null hors AppImage (.deb, sources : binaire lancé).
  */
-export function recorderAppImage(own: string | null, copy: string, isFile: (p: string) => boolean = isRegularFile): string | null {
+export function recorderAppImage(own: string | null, copy: string, usable: (p: string) => boolean = isUsableAppImage): string | null {
   if (!own) return null;
-  return isFile(copy) ? copy : own;
+  return usable(copy) ? copy : own;
 }
 
 export function recorderExecArgs(p: { appImage?: string; execPath: string; appPath: string }): string[] {

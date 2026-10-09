@@ -49,6 +49,16 @@ function header(path: string): Buffer | null {
 }
 
 /**
+ * Fichier utilisable comme AppImage (copie installée choisie pour le service ou le démarrage automatique) : fichier
+ * ordinaire non vide, jamais un lien, avec l'en-tête AppImage. Le fichier vide qu'écrit l'updater pour réessayer une
+ * installation ratée, ou un fichier étranger, ne l'est pas.
+ */
+export function isUsableAppImage(path: string): boolean {
+  const h = header(path);
+  return !!h && isAppImageHeader(h);
+}
+
+/**
  * Chemin de l'AppImage lancée, ou null. Exige tout à la fois :
  * - realpath(APPDIR) est un point de montage FUSE (/proc/self/mountinfo) ;
  * - realpath(/proc/self/exe) est sous ce montage ;

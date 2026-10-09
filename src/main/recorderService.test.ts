@@ -165,3 +165,17 @@ describe('N1 : le service pointe vers la copie installée quand elle existe', ()
     expect(readFileSync(path, 'utf8')).not.toContain(dl);
   });
 });
+
+describe('R2 : copie installée inutilisable → l’AppImage lancée', () => {
+  test('fichier vide laissé par une mise à jour ratée, ou sans en-tête AppImage : jamais choisi', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pw-r2-'));
+    const copy = join(dir, 'proc-watch.AppImage');
+    const own = '/home/u/dl/proc-watch-1.0.0-x86_64.AppImage';
+    writeFileSync(copy, '');
+    expect(recorderAppImage(own, copy)).toBe(own);
+    writeFileSync(copy, 'texte');
+    expect(recorderAppImage(own, copy)).toBe(own);
+    writeFileSync(copy, Buffer.concat([Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1, 0, 0x41, 0x49, 0x02]), Buffer.from('ok')]));
+    expect(recorderAppImage(own, copy)).toBe(copy);
+  });
+});
