@@ -1,6 +1,7 @@
 // src/renderer/src/components/ReplayTree.tsx — arbre rejoué (lecture seule : aucun bouton de kill)
 import type { ReactElement } from 'react';
 import { formatCpu, formatKB } from '../format';
+import { nowDelta } from '../nowDelta';
 import type { ReplayNode } from '../replay';
 
 const p2 = (n: number) => String(n).padStart(2, '0');
@@ -13,20 +14,25 @@ function hhmm(ts: number, at: number): string {
 }
 
 /** `omitted` : processus au-delà de la taille maximale renvoyée (les plus petits), signalés en dernière ligne. */
-export function ReplayTree({ nodes, at, omitted = 0 }: { nodes: ReplayNode[]; at: number; omitted?: number }): ReactElement {
+/** `liveMem` : RSS actuel des processus encore vivants (écart « alors vs maintenant » sur la mémoire) ; absent : pas d'écart. */
+export function ReplayTree({ nodes, at, omitted = 0, liveMem }: { nodes: ReplayNode[]; at: number; omitted?: number; liveMem?: ReadonlyMap<string, number> }): ReactElement {
   const rows: ReactElement[] = [];
   const walk = (ns: ReplayNode[], depth: number) => {
     for (const n of ns) {
       const r = n.row;
+      const d = n.dead ? null : nowDelta(r.rssKB, liveMem?.get(`${r.pid}:${r.startTicks}`), 'kb');
       rows.push(
         <tr key={`${r.pid}:${r.startTicks}`} className={n.dead ? 'dead' : ''} data-testid="replay-row">
           <td className="pid mono" style={{ paddingLeft: 10 + depth * 18 }}>{r.pid}</td>
           <td className="name">{r.name}</td>
           <td className="num mono">{formatCpu(r.cpu)}</td>
-          <td className="num mono">{formatKB(Math.round(r.rssKB))}</td>
+          <td className="num mono">
+            {d && <span className={`row-delta delta-${d.tone}`} data-testid="row-delta" title={d.title}>{d.text}</span>}
+            {formatKB(Math.round(r.rssKB))}
+          </td>
           <td className="num mono">{r.swapKB === null ? '—' : formatKB(r.swapKB)}</td>
           <td className="state mono">
-            {n.dead && n.diedAt !== null ? <span data-testid="replay-dead">mort à {hhmm(n.diedAt, at)}</span> : 'toujours là'}
+            {n.dead && n.diedAt !== null ? <span data-testid="replay-dead">mort depuis {hhmm(n.diedAt, at)}</span> : 'toujours là'}
           </td>
         </tr>,
       );

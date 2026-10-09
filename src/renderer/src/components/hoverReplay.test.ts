@@ -1,7 +1,7 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, test } from 'vitest';
-import type { GroupSummary, InstanceSummary, ProcTreeAt, ProcTreeRow } from '../../../core/types';
+import type { GroupSummary, InstanceSummary, ProcNode, ProcTreeAt, ProcTreeRow } from '../../../core/types';
 import type { Replay } from '../useReplay';
 import { DetailTiles } from './DetailTiles';
 import { InstancesPanel } from './InstancesPanel';
@@ -42,6 +42,38 @@ describe('tuiles du détail', () => {
   test('instant sans valeurs (hors des séries, nombre de processus non enregistré) : —', () => {
     const html = renderToStaticMarkup(createElement(DetailTiles, { group, memMetric: 'pss', at: { ts: AT, values: null }, now: AT }));
     expect(html.match(/>—</g)?.length).toBe(5);
+  });
+});
+
+describe('écarts « alors vs maintenant »', () => {
+  const g = { ...group, procCount: 109, rssKB: 4000 * 1024, swapKB: 1024 * 1024, cpuPercent: 109 };
+  const at = { ts: AT, values: { procCount: 96, rssKB: 3660 * 1024, swapKB: 1024 * 1024, cpu: 50 } };
+  test('tuiles : écart sous la valeur passée, infobulle « par rapport à maintenant », rien si égal', () => {
+    const html = renderToStaticMarkup(createElement(DetailTiles, { group: g, memMetric: 'rss', at, now: AT }));
+    expect(count(html, 'tile-delta')).toBe(3); // swap égal : rien
+    expect(html).toContain('−13 · −12 %');
+    expect(html).toContain('−340 Mo · −9 %');
+    expect(html).toContain('−59 pt');
+    expect(html).toContain('title="par rapport à maintenant"');
+    expect(html).toContain('delta-lower');
+  });
+  test('mode PSS : pas d\'écart sur la RAM (historique en RSS, direct en PSS)', () => {
+    const html = renderToStaticMarkup(createElement(DetailTiles, { group: g, memMetric: 'pss', at, now: AT }));
+    expect(count(html, 'tile-delta')).toBe(2);
+    expect(html).not.toContain('−340 Mo');
+  });
+  test('arbre : écart mémoire des processus encore vivants ; morts « mort depuis »', () => {
+    const r = (pid: number, rssKB: number, lastSeenTs = AT): ProcTreeRow => ({ pid, startTicks: pid, ppid: null, name: `p${pid}`, rssKB, swapKB: 0, cpu: 0, sampleTs: AT, lastSeenTs });
+    const tree: ProcTreeAt = { ts: AT, source: 'detail', procs: [r(10, 800 * 1024), r(11, 100 * 1024), r(12, 50 * 1024, AT + 60_000)], recorded: true, omitted: 0 };
+    const liveRoots = [10, 11].map((pid) => ({ proc: { pid, startTicks: pid, rssKB: pid === 10 ? 500 * 1024 : 100 * 1024 }, children: [] })) as unknown as ProcNode[];
+    const replay = { instant: AT, pinned: null, playing: false, tree, tiles: null, pick: noop, play: noop, pause: noop, live: noop, hover: noop, setSeries: noop } as Replay;
+    const html = renderToStaticMarkup(createElement(ReplayPanel, { replay, liveRoots }));
+    expect(count(html, 'row-delta')).toBe(1);
+    expect(html).toContain('+300 Mo · +60 %');
+    expect(html).toContain('mort depuis');
+    expect(html).not.toContain('mort à');
+    const pss = renderToStaticMarkup(createElement(ReplayPanel, { replay, liveRoots, memMetric: 'pss' }));
+    expect(count(pss, 'row-delta')).toBe(0);
   });
 });
 

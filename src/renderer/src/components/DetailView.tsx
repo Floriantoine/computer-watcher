@@ -172,7 +172,7 @@ export function DetailView(props: Props) {
           ))}
         </div>
       ) : replay.instant !== null ? (
-        <ReplayPanel replay={replay} liveRoots={props.roots} />
+        <ReplayPanel replay={replay} liveRoots={props.roots} memMetric={memMetric} />
       ) : !props.roots ? (
         <div className="panel"><p className="empty">Chargement…</p></div>
       ) : (

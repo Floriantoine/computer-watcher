@@ -47,6 +47,17 @@ export function liveKeySet(roots: readonly ProcNode[] | null): Set<string> {
   return out;
 }
 
+/** RSS actuel des processus de l'arbre en direct, par `${pid}:${startTicks}`. */
+export function liveMemMap(roots: readonly ProcNode[] | null): Map<string, number> {
+  const out = new Map<string, number>();
+  const visit = (n: ProcNode): void => {
+    out.set(`${n.proc.pid}:${n.proc.startTicks}`, n.proc.rssKB);
+    n.children.forEach(visit);
+  };
+  roots?.forEach(visit);
+  return out;
+}
+
 /** Vitesse de lecture du rejeu : 1 min d'historique par seconde. */
 export const REPLAY_SPEED = 60;
 
