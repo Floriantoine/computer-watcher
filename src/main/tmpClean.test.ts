@@ -649,3 +649,110 @@ test('texte de la confirmation « Vider la quarantaine »', () => {
   expect(t.detail).toContain('/tmp/.proc-watch-trash-a/');
   expect(t.detail).toContain('la corbeille ne libérerait pas la RAM');
 });
+
+/** Quarantaine restée (0700) avec des entrées données. */
+function leftover(root: string, name = '.proc-watch-trash-Reste1', entries: Record<string, number> = { a: 1, b: 1 }) {
+  const q = join(root, name);
+  mkdirSync(q, { mode: 0o700 });
+  for (const [n, kb] of Object.entries(entries)) writeFileSync(join(q, n), Buffer.alloc(kb * 1024, 1));
+  return q;
+}
+
+test('p1 : quarantaine sur un autre système de fichiers (dev ≠ racine) : refusée, rien supprimé', async () => {
+  const { root } = setup();
+  const q = leftover(root);
+  const fsp = await import('node:fs/promises');
+  const c = cleaner(root, {
+    fs: {
+      ...fsp,
+      open: async (p: string, f: number) => {
+        const h = await fsp.open(p, f);
+        const stat = h.stat.bind(h);
+        return Object.assign(h, { stat: async (o: { bigint: true }) => {
+          const st = await stat(o);
+          return p === q ? Object.assign(Object.create(Object.getPrototypeOf(st)), st, { dev: st.dev + 1n }) : st;
+        } });
+      },
+    } as never,
+  });
+  await c.list();
+  const out = await c.emptyQuarantine();
+  expect(out.results[0]).toMatchObject({ ok: false });
+  expect(out.results[0].reason).toMatch(/autre système de fichiers/);
+  expect(existsSync(join(q, 'a'))).toBe(true);
+});
+
+test('p1 : appel au système de fichiers bloqué pendant « Vider la quarantaine » : délai, verrou relâché', async () => {
+  const { root } = setup();
+  const q = leftover(root);
+  const fsp = await import('node:fs/promises');
+  let block = true;
+  const c = cleaner(root, {
+    fsTimeoutMs: 200,
+    fs: { ...fsp, readdir: (p: string) => (block && p.startsWith('/proc/self/fd/') ? new Promise<string[]>(() => {}) : fsp.readdir(p)) } as never,
+  });
+  await c.list();
+  const t0 = Date.now();
+  const out = await c.emptyQuarantine();
+  expect(Date.now() - t0).toBeLessThan(3000);
+  expect(out.results[0].reason).toMatch(/délai dépassé/);
+  block = false;
+  const again = await c.emptyQuarantine(); // pas « déjà en cours »
+  expect(again.results).toEqual([{ name: '.proc-watch-trash-Reste1', ok: true }]);
+  expect(existsSync(q)).toBe(false);
+});
+
+test('p4 : « Vider la quarantaine » : budget de temps global et plafond d’entrées', async () => {
+  const { root } = setup();
+  const q = leftover(root, '.proc-watch-trash-Reste1', { a: 1, b: 1, c: 1 });
+  const capped = cleaner(root, { quarantineMaxEntries: 2 });
+  await capped.list();
+  const out = await capped.emptyQuarantine();
+  expect(out.partial).toBe(true);
+  expect(out.results[0].reason).toMatch(/1 entrée non traitée \(plafond de 2\)/);
+  expect(readdirSync(q)).toHaveLength(1);
+  let t = 0;
+  const q2 = leftover(root, '.proc-watch-trash-Reste2', { x: 1, y: 1 });
+  const slow = cleaner(root, { quarantineBudgetMs: 1000, now: () => (t += 600) });
+  await slow.list();
+  const out2 = await slow.emptyQuarantine();
+  expect(out2.results.find((r) => r.name === '.proc-watch-trash-Reste2')?.reason ?? out2.results[0].reason).toMatch(/temps écoulé/);
+  expect(existsSync(q2) || existsSync(q)).toBe(true);
+});
+
+test('p2 : confirmation « Vider » : entrées de chaque quarantaine avec tailles, objets mis à l’écart après un échange signalés', async () => {
+  const { base, root } = setup();
+  mkdirSync(join(root, 'item'));
+  const fsp = await import('node:fs/promises');
+  // échange pendant le déplacement : un autre objet est mis à l'écart dans la quarantaine (n2)
+  const swapping = cleaner(root, {
+    fs: {
+      ...fsp,
+      rename: async (from: string, to: string) => {
+        await fsp.rename(from, join(base, 'vrai-item'));
+        await fsp.mkdir(join(base, 'intrus'));
+        await fsp.writeFile(join(base, 'intrus', 'f'), Buffer.alloc(8192, 1));
+        await fsp.rename(join(base, 'intrus'), to);
+      },
+    } as never,
+  });
+  await swapping.list();
+  expect((await swapping.delete([item(root, 'item')])).results[0].reason).toMatch(/^un autre élément a pris sa place/);
+  const qname = readdirSync(root).find((n) => n.startsWith('.proc-watch-trash-'))!;
+  writeFileSync(join(root, qname, 'reste'), Buffer.alloc(4096, 1));
+  const c = cleaner(root);
+  await c.list();
+  await c.emptyQuarantine();
+  const s = c.asked.at(-1)!;
+  expect(s.purpose).toBe('quarantine');
+  expect(s.quarantines).toHaveLength(1);
+  const entries = Object.fromEntries(s.quarantines![0].entries.map((e) => [e.name, e]));
+  expect(entries.item).toMatchObject({ kind: 'dir', setAside: true });
+  expect(entries.item.sizeKB).toBeGreaterThanOrEqual(8);
+  expect(entries.reste).toMatchObject({ kind: 'file', setAside: false });
+  expect(entries.reste.sizeKB).toBeGreaterThanOrEqual(4);
+  expect(Object.keys(entries)).not.toContain('.proc-watch-mis-a-l-ecart');
+  const t = confirmText(s, (kb) => `${kb} Ko`);
+  expect(t.detail).toMatch(/item\/ — \d+ Ko — ⚠ mis à l’écart après un échange \(jamais choisi\)/);
+  expect(t.detail).toMatch(/reste — \d+ Ko/);
+});

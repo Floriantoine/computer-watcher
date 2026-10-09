@@ -68,6 +68,8 @@ export interface TmpConfirmSummary {
   items: { name: string; kind: TmpEntry['kind']; sizeKB: number; recent: boolean }[];
   totalKB: number;
   uninspectable: { pid: number; name: string }[];
+  /** « Vider la quarantaine » : entrées de premier niveau de chaque quarantaine (`setAside` : mis à l'écart après un échange). */
+  quarantines?: { name: string; entries: { name: string; kind: TmpEntry['kind']; sizeKB: number; setAside: boolean }[]; more: number }[];
 }
 
 /** Un seul composant de chemin : ni « / », ni NUL, ni « . » / « .. », ni vide, au plus 255 octets. */
@@ -93,8 +95,7 @@ const SYSTEM: RegExp[] = [
   /^dbus-/,
   /^sddm-/,
   /^claude-/,
-  /^\.proc-watch-trash-/,
-  /^\.proc-watch-test-root$/,
+  /^\.proc-watch-/, // quarantaines, fichier témoin, marques internes
   /^runtime-/,
   /^\.org\.chromium\./,
   /^snap-private-tmp$/,
