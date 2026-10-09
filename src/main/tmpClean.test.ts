@@ -997,8 +997,13 @@ test('dérive P : élagage sur preuve : même chemin, autre inode → oublié', 
   const { base, root } = setup();
   const q = leftover(root, '.proc-watch-trash-Recree', {});
   const { storePath, store } = storeWith(base, q);
-  rmSync(q, { recursive: true });
+  // L'ancien dossier est écarté avant la recréation puis supprimé : sinon le
+  // système de fichiers peut réutiliser le même numéro d'inode (vu en CI).
+  const old = join(base, 'ancien');
+  renameSync(q, old);
   leftover(root, '.proc-watch-trash-Recree', {}); // recréée : autre inode
+  expect(statSync(q).ino).not.toBe(statSync(old).ino);
+  rmSync(old, { recursive: true });
   await cleaner(root, { setAside: store }).list();
   expect(JSON.parse(readFileSync(storePath, 'utf8'))).toEqual([]);
 });
