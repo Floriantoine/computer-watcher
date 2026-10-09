@@ -30,6 +30,8 @@ interface Props {
    */
   onKillInstances?: (instances: InstanceSummary[], launchersOf?: string) => void;
   memMetric?: MemoryMetric;
+  /** Aperçu ou rejeu de l'historique en cours : section estompée, marquée « en direct » (ports et catégories ne sont pas enregistrés). */
+  liveOnly?: boolean;
 }
 
 /** Callbacks stables passés aux lignes (elles sont mémoïsées) : ils lisent les props du dernier rendu. */
@@ -61,9 +63,12 @@ export function InstancesPanel(props: Props) {
   const bulk = headerKillActions(group);
   const list = sortInstances(group.instances);
   return (
-    <section className="instances-panel" data-testid="instances-panel">
+    <section className={props.liveOnly ? 'instances-panel is-live-only' : 'instances-panel'} data-testid="instances-panel">
       <div className="chart-panel-head">
         <h3><Boxes size={14} strokeWidth={2} /> Instances <span className="inst-count">{list.length}</span></h3>
+        {props.liveOnly && (
+          <span className="live-note" data-testid="instances-live-note" title="Les instances ne sont pas enregistrées : elles restent en direct">en direct</span>
+        )}
         <span className="spacer" />
         {bulk.map((a) => (
           <button

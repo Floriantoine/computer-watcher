@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from 'vitest';
 import type { ProcInfo, ProcNode, ProcTreeAt, ProcTreeRow } from '../../core/types';
-import { ClickDelay, liveKeySet, nextReplayTs, REPLAY_SPEED, replayEmptyText, replayInstant, replayTree, type ReplayNode } from './replay';
+import { ClickDelay, liveKeySet, nextReplayTs, REPLAY_SPEED, replayEmptyText, replayInstant, replayTree, tilesAt, killAllowed, escapeUnpins, type ReplayNode } from './replay';
 import { replayReducer, type ReplayState } from './useReplay';
 
 const row = (pid: number, ppid: number | null, rssKB = 100, swapKB: number | null = 0, lastSeenTs = 1000): ProcTreeRow => ({
@@ -129,5 +129,39 @@ describe('gestes et textes du rejeu', () => {
     const at = (recorded: boolean): ProcTreeAt => ({ ts: 0, source: 'detail', procs: [], recorded, omitted: 0 });
     expect(replayEmptyText(at(false))).toMatch(/^Trou d'enregistrement/);
     expect(replayEmptyText(at(true))).toBe("Aucun processus au-dessus des seuils d'enregistrement à cet instant");
+  });
+});
+
+describe('tuiles du détail à l\'instant survolé (séries du graphe)', () => {
+  const h = { ts: [0, 5000, 10_000], rssKB: [100, 200, null], swapKB: [1, 2, 3], cpu: [5, 6, 7], procCount: [3, 4, 5] };
+  test('point le plus proche, aucune requête : valeurs des séries déjà chargées', () => {
+    expect(tilesAt(h, 4000)).toEqual({ procCount: 4, procRecorded: true, rssKB: 200, swapKB: 2, cpu: 6 });
+    expect(tilesAt(h, 0)).toEqual({ procCount: 3, procRecorded: true, rssKB: 100, swapKB: 1, cpu: 5 });
+    expect(tilesAt(h, 9000)).toMatchObject({ rssKB: null, swapKB: 3 }); // trou dans la série
+  });
+  test('sans nombre de processus (séries par minute) ou hors de la plage chargée : null', () => {
+    expect(tilesAt({ ...h, procCount: undefined }, 5000)).toMatchObject({ procCount: null, procRecorded: false });
+    expect(tilesAt(h, 60_000)).toBeNull();
+    expect(tilesAt(h, -20_000)).toBeNull();
+    expect(tilesAt(undefined, 0)).toBeNull();
+    expect(tilesAt({ ts: [], rssKB: [], swapKB: [], cpu: [] }, 0)).toBeNull();
+    expect(tilesAt({ ts: [7], rssKB: [1], swapKB: [0], cpu: [0] }, 7)).toMatchObject({ rssKB: 1 });
+  });
+});
+
+describe('garde-fous du retour au direct', () => {
+  test('kill ignoré pendant 300 ms après le retour du rejeu au direct', () => {
+    expect(killAllowed(null, 1000)).toBe(true);
+    expect(killAllowed(1000, 1000)).toBe(false);
+    expect(killAllowed(1000, 1299)).toBe(false);
+    expect(killAllowed(1000, 1300)).toBe(true);
+  });
+  test('Échap ne libère l\'instant que si aucun dialogue ou menu n\'est ouvert et qu\'on ne tape pas', () => {
+    const k = { key: 'Escape', defaultPrevented: false };
+    expect(escapeUnpins(k, { overlayOpen: false, editing: false })).toBe(true);
+    expect(escapeUnpins(k, { overlayOpen: true, editing: false })).toBe(false);
+    expect(escapeUnpins(k, { overlayOpen: false, editing: true })).toBe(false);
+    expect(escapeUnpins({ ...k, defaultPrevented: true }, { overlayOpen: false, editing: false })).toBe(false);
+    expect(escapeUnpins({ ...k, key: 'Enter' }, { overlayOpen: false, editing: false })).toBe(false);
   });
 });

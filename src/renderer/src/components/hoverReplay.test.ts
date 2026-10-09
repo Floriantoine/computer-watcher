@@ -1,0 +1,113 @@
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { describe, expect, test } from 'vitest';
+import type { GroupSummary, InstanceSummary, ProcNode, ProcTreeAt, ProcTreeRow } from '../../../core/types';
+import { DetailTiles } from './DetailTiles';
+import { InstancesPanel } from './InstancesPanel';
+import { ReplayPanel } from './ReplayPanel';
+
+const inst = (extra: Partial<InstanceSummary> = {}): InstanceSummary => ({
+  key: 'project:/acme#10:100', groupId: 'project:/acme', project: '/home/u/acme', category: 'back', source: 'name', signature: 'x', label: 'nest start',
+  rootPid: 10, rootStartTicks: 100, pids: [10], ports: [], ageSec: 100, rssKB: 1000, swapKB: 0, cpuPercent: 0, duplicate: false, protected: false, ...extra,
+});
+const group: GroupSummary = {
+  id: 'project:/acme', kind: 'project', label: 'acme', tags: [], rootName: 'node', pids: [10, 11], procCount: 2, cpuPercent: 12, rssKB: 2048, swapKB: 0,
+  oldestAgeSec: 3600, protected: false, killable: true, subgroups: [], categories: ['back'], instances: [inst()],
+};
+const AT = new Date(2026, 9, 9, 10, 54, 35).getTime();
+const count = (html: string, testid: string) => html.split(`data-testid="${testid}"`).length - 1;
+const noop = () => {};
+
+describe('tuiles du détail', () => {
+  test('en direct : valeurs du groupe, pas de badge', () => {
+    const html = renderToStaticMarkup(createElement(DetailTiles, { group, memMetric: 'rss', at: null, now: AT }));
+    expect(count(html, 'tile-at')).toBe(0);
+    expect(html).toContain('>2<'); // Processus
+    expect(html).toContain('12 %'); // CPU
+  });
+
+  test('aperçu ou instant figé : valeurs de l\'instant, badge « au HH:MM:SS », « Plus ancien » en —', () => {
+    const at = { ts: AT, values: { procCount: 7, procRecorded: true, rssKB: 3 * 1024 * 1024, swapKB: 512, cpu: 41.6 } };
+    const html = renderToStaticMarkup(createElement(DetailTiles, { group, memMetric: 'rss', at, now: AT }));
+    expect(count(html, 'tile-at')).toBe(4);
+    expect(html).toContain('au 10:54:35');
+    expect(html).toContain('>7<');
+    expect(html).toContain('3,0 Go');
+    expect(html).toContain('512 Ko');
+    expect(html).toContain('42 %');
+    expect(html).toMatch(/data-testid="tile-oldest"[^>]*>—</);
+  });
+
+  test('plage par minute ou par heure : Processus « — » avec « non enregistré pour cette plage »', () => {
+    const at = { ts: AT, values: { procCount: null, procRecorded: false, rssKB: 1024, swapKB: 0, cpu: 1 } };
+    const html = renderToStaticMarkup(createElement(DetailTiles, { group, memMetric: 'rss', at, now: AT }));
+    expect(html).toMatch(/title="non enregistré pour cette plage"[^]*?>—</);
+  });
+
+  test('instant sans valeurs (hors des séries, nombre de processus non enregistré) : —', () => {
+    const html = renderToStaticMarkup(createElement(DetailTiles, { group, memMetric: 'pss', at: { ts: AT, values: null }, now: AT }));
+    expect(html.match(/>—</g)?.length).toBe(5);
+  });
+});
+
+describe('écarts « alors vs maintenant »', () => {
+  const g = { ...group, procCount: 109, rssKB: 4000 * 1024, swapKB: 1024 * 1024, cpuPercent: 109 };
+  const at = { ts: AT, values: { procCount: 96, procRecorded: true, rssKB: 3660 * 1024, swapKB: 1024 * 1024, cpu: 50 } };
+  test('tuiles : écart sous la valeur passée, infobulle « par rapport à maintenant », rien si égal', () => {
+    const html = renderToStaticMarkup(createElement(DetailTiles, { group: g, memMetric: 'rss', at, now: AT }));
+    expect(count(html, 'tile-delta')).toBe(3); // swap égal : rien
+    expect(html).toContain('−13 · −12 %');
+    expect(html).toContain('−340 Mo · −9 %');
+    expect(html).toContain('−59 pt');
+    expect(html).toContain('title="par rapport à maintenant"');
+    // Couleur neutre : le signe seul, sans jugement (ni vert ni ambre).
+    expect(html).not.toMatch(/delta-(lower|higher)/);
+    expect(html).not.toContain('seuils'); // l'historique des groupes contient leur total complet
+  });
+  test('mode PSS : pas d\'écart sur la RAM (historique en RSS, direct en PSS)', () => {
+    const html = renderToStaticMarkup(createElement(DetailTiles, { group: g, memMetric: 'pss', at, now: AT }));
+    expect(count(html, 'tile-delta')).toBe(2);
+    expect(html).not.toContain('−340 Mo');
+  });
+  test('arbre : écart mémoire des processus encore vivants ; morts « mort depuis »', () => {
+    const r = (pid: number, rssKB: number, lastSeenTs = AT): ProcTreeRow => ({ pid, startTicks: pid, ppid: null, name: `p${pid}`, rssKB, swapKB: 0, cpu: 0, sampleTs: AT, lastSeenTs });
+    const tree: ProcTreeAt = { ts: AT, source: 'detail', procs: [r(10, 800 * 1024), r(11, 100 * 1024), r(12, 50 * 1024, AT + 60_000)], recorded: true, omitted: 0 };
+    const liveRoots = [10, 11].map((pid) => ({ proc: { pid, startTicks: pid, rssKB: pid === 10 ? 500 * 1024 : 100 * 1024 }, children: [] })) as unknown as ProcNode[];
+    const html = renderToStaticMarkup(createElement(ReplayPanel, { tree, instant: AT, onLive: noop, liveRoots }));
+    expect(count(html, 'row-delta')).toBe(1);
+    expect(html).toContain('+300 Mo · +60 %');
+    expect(html).toContain('mort depuis');
+    expect(html).not.toMatch(/delta-(lower|higher)/);
+    expect(html).not.toContain('mort à');
+    const pss = renderToStaticMarkup(createElement(ReplayPanel, { tree, instant: AT, onLive: noop, liveRoots, memMetric: 'pss' }));
+    expect(count(pss, 'row-delta')).toBe(0);
+  });
+});
+
+describe('arbre rejoué pendant l\'aperçu', () => {
+  const row = (pid: number, ppid: number | null): ProcTreeRow => ({ pid, startTicks: pid, ppid, name: `p${pid}`, rssKB: 100, swapKB: 0, cpu: 1, sampleTs: AT, lastSeenTs: AT });
+  const tree: ProcTreeAt = { ts: AT, source: 'detail', procs: [row(10, null), row(11, 10), row(12, 10)], recorded: true, omitted: 0 };
+  test('aucun bouton de kill : seul « Revenir au direct »', () => {
+    const html = renderToStaticMarkup(createElement(ReplayPanel, { tree, instant: AT, onLive: noop, liveRoots: null }));
+    expect(count(html, 'replay-row')).toBe(3);
+    expect(html.match(/<button/g)?.length).toBe(1);
+    expect(count(html, 'replay-live')).toBe(1);
+    expect(html).not.toMatch(/Tuer|kill/i);
+    expect(html).toContain('Arbre au');
+  });
+});
+
+describe('section Instances pendant l\'aperçu', () => {
+  const props = {
+    group, sparks: new Map(), ticksOf: new Map(), stuckPids: new Set<number>(), pendingPids: new Set<number>(),
+    onReclassify: noop, onKillInstance: noop, onForce: noop,
+  };
+  test('estompée avec « en direct » ; rien en direct', () => {
+    const dim = renderToStaticMarkup(createElement(InstancesPanel, { ...props, liveOnly: true }));
+    expect(dim).toMatch(/class="instances-panel is-live-only"/);
+    expect(count(dim, 'instances-live-note')).toBe(1);
+    expect(dim).toContain('en direct');
+    const live = renderToStaticMarkup(createElement(InstancesPanel, props));
+    expect(count(live, 'instances-live-note')).toBe(0);
+  });
+});
