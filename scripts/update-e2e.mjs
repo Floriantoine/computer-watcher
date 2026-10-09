@@ -69,7 +69,7 @@ const electronDir = dirname(realpathSync(createRequire(import.meta.url)('electro
 async function launch(name, extra, o = {}) {
   const dir = join(root, name);
   mkdirSync(dir, { recursive: true });
-  const env = { ...process.env, XDG_CONFIG_HOME: join(dir, 'config'), XDG_CACHE_HOME: join(dir, 'cache'), PROC_WATCH_NO_RECORDER_SYNC: '1' };
+  const env = { ...process.env, XDG_CONFIG_HOME: join(dir, 'config'), XDG_DATA_HOME: join(dir, 'data'), XDG_CACHE_HOME: join(dir, 'cache'), PROC_WATCH_NO_RECORDER_SYNC: '1' };
   for (const k of ['APPIMAGE', 'APPDIR', 'PROC_WATCH_UPDATE_FEED', 'APPIMAGE_SILENT_INSTALL']) delete env[k];
   Object.assign(env, extra);
   if (o.appImage) {

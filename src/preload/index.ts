@@ -3,6 +3,7 @@ import type { AlertEvent } from '../core/alerts';
 import type { EarlyoomSettings } from '../core/earlyoom';
 import type { EarlyoomSetupMode } from '../core/earlyoomSetup';
 import type { AboutInfo, AutostartInfo, InstallOutcome, OnboardingInfo, UninstallItem, UninstallOptions, UninstallResult } from '../core/onboarding';
+import type { MigrationReport } from '../core/nameMigration';
 import type { RuleStats } from '../core/rules/types';
 import type { SwapView } from '../core/swap';
 import type { TmpDeleteItem, TmpDeleteOutcome, TmpListing } from '../core/tmpClean';
@@ -152,6 +153,12 @@ const api = {
   },
   about: {
     info: (): Promise<AboutInfo> => ipcRenderer.invoke('about:info'),
+  },
+  /** Migration depuis proc-watch (Réglages › À propos). */
+  migration: {
+    state: (): Promise<MigrationReport> => ipcRenderer.invoke('migration:state'),
+    /** Refait les étapes restantes ; celles d'avant l'ouverture des dossiers (service, déplacement) relancent l'app. */
+    retry: (): Promise<{ report: MigrationReport; relaunching: boolean }> => ipcRenderer.invoke('migration:retry'),
   },
   uninstall: {
     /** Aperçu : exactement ce qui sera retiré, et le texte de la confirmation native. */

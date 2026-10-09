@@ -227,7 +227,7 @@ const DATA_FILES = [
   'forecast-snooze.json', 'rules-simulation.json', 'app-focus.json', 'tmp-set-aside.json',
 ];
 /** `.updaterId` : identifiant écrit par electron-updater dans le dossier de l'app. */
-const CONFIG_FILES = ['config.json', 'config.json.bak', 'onboarding.json', 'updater.json', 'test-app-update.yml', '.updaterId'];
+const CONFIG_FILES = ['config.json', 'config.json.bak', 'onboarding.json', 'updater.json', 'test-app-update.yml', '.updaterId', 'migration.json'];
 /**
  * Profil Chromium de l'app (le dossier de config est aussi son `userData`) : noms connus seulement, retirés en
  * arborescence sans suivre de lien. Tout autre nom reste.

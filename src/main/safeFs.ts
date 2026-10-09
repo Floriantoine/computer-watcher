@@ -429,3 +429,84 @@ export function removeTreeSafe(roots: readonly string[], path: string, o: { allo
     closeSync(parent.fd);
   }
 }
+
+/**
+ * Retire un lien symbolique lui-même (jamais sa cible), relativement à son dossier ouvert sans suivre de lien ; absent →
+ * 'absent' ; autre type : refusé (laissé en place).
+ */
+export function removeLinkSafe(roots: readonly string[], path: string): 'removed' | 'absent' {
+  const parent = openParent(roots, path, false);
+  if (!parent) return 'absent';
+  try {
+    let st;
+    try {
+      st = lstatSync(fdPath(parent.fd, parent.name));
+    } catch (e) {
+      if (code(e) === 'ENOENT') return 'absent';
+      throw e;
+    }
+    if (!st.isSymbolicLink()) throw new Error(`${path} : pas un lien symbolique, laissé en place`);
+    unlinkSync(fdPath(parent.fd, parent.name));
+    return 'removed';
+  } finally {
+    closeSync(parent.fd);
+  }
+}
+
+/**
+ * Renommage proc-watch → computer-watcher : rename(2) d'un dossier de l'app vers un nom voisin (même dossier parent), relatif
+ * au parent ouvert sans suivre de lien : atomique, le contenu suit (metrics.db et ses -wal/-shm compris). Refus (erreur, rien
+ * touché) : ancien qui est un lien, pas un dossier, un point de montage (autre `dev` que son parent, ou listé dans
+ * mountinfo) ou qui contient un point de montage ; nouveau qui est un lien, pas un dossier, ou un dossier non vide (jamais de
+ * fusion). Un nouveau dossier vide est remplacé atomiquement par rename(2). Ancien absent : 'absent'.
+ */
+export function moveDirSafe(roots: readonly string[], from: string, to: string, o: { mountinfo: string }): 'moved' | 'absent' {
+  const a = placeUnder(roots, from);
+  const b = placeUnder(roots, to);
+  if (a.root !== b.root || a.dirs.join(sep) !== b.dirs.join(sep)) throw new Error(`${from} → ${to} : pas dans le même dossier, refusé`);
+  const parent = openParent(roots, from, false);
+  if (!parent) return 'absent';
+  try {
+    let st;
+    try {
+      st = lstatSync(fdPath(parent.fd, a.name));
+    } catch (e) {
+      if (code(e) === 'ENOENT') return 'absent';
+      throw e;
+    }
+    if (st.isSymbolicLink()) throw linkError(from);
+    if (!st.isDirectory()) throw new Error(`${from} : pas un dossier, laissé en place`);
+    if (st.dev !== fstatSync(parent.fd).dev) throw new Error(`${from} est un point de montage : laissé en place`);
+    const real = `${readlinkSync(`/proc/self/fd/${parent.fd}`).replace(/\/+$/, '')}/${a.name}`;
+    if (mountPointsOf(o.mountinfo).some((m) => m === real || isUnder(m, real))) throw new Error(`${from} est ou contient un point de montage : laissé en place`);
+    let next = null;
+    try {
+      next = lstatSync(fdPath(parent.fd, b.name));
+    } catch (e) {
+      if (code(e) !== 'ENOENT') throw e;
+    }
+    if (next) {
+      if (next.isSymbolicLink()) throw linkError(to);
+      if (!next.isDirectory()) throw new Error(`${to} existe et n’est pas un dossier : rien déplacé`);
+      const fd = openSync(fdPath(parent.fd, b.name), DIR_NOFOLLOW);
+      try {
+        if (readdirSync(`/proc/self/fd/${fd}`).length) throw new Error(`${to} existe déjà, non vide : rien déplacé (jamais de fusion)`);
+      } finally {
+        closeSync(fd);
+      }
+    }
+    try {
+      renameSync(fdPath(parent.fd, a.name), fdPath(parent.fd, b.name));
+    } catch (e) {
+      const c = code(e);
+      if (c === 'ENOTEMPTY' || c === 'EEXIST') throw new Error(`${to} existe déjà, non vide : rien déplacé (jamais de fusion)`);
+      if (c === 'ENOTDIR') throw new Error(`${to} a été remplacé (pas un dossier) : rien déplacé`);
+      if (c === 'EBUSY') throw new Error(`${from} est occupé (point de montage ?) : laissé en place`);
+      throw e;
+    }
+    fsyncDir(parent.fd);
+    return 'moved';
+  } finally {
+    closeSync(parent.fd);
+  }
+}

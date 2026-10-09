@@ -77,11 +77,20 @@ export function installDesktopEntry(target: string, env: NodeJS.ProcessEnv = pro
 
 /** Inverse de quoteExecArg pour la ligne `Exec="…"` d'une entrée de menu (sans argument) ; autre forme → null. */
 export function execPathFromEntry(text: string): string | null {
-  const m = /^Exec="(.*)"$/m.exec(text);
+  const e = execFromEntry(text);
+  return e && e.args.length === 0 ? e.path : null;
+}
+
+/**
+ * Ligne `Exec="…" [arguments simples]` écrite par desktopEntryContent : chemin (inverse de quoteExecArg) et arguments
+ * (seulement ceux de SAFE_ARG, comme `--hidden`) ; autre forme → null.
+ */
+export function execFromEntry(text: string): { path: string; args: string[] } | null {
+  const m = /^Exec="(.*)"((?: [A-Za-z0-9_\-=./]+)*)$/m.exec(text);
   if (!m) return null;
   // règle des chaînes (\\ → \, \n, \t, \r, \s), puis règle des guillemets (\X → X), et %% → %
   const str = m[1]!.replace(/%%/g, '%').replace(/\\([\\nrts])/g, (_, c: string) => ({ '\\': '\\', n: '\n', r: '\r', t: '\t', s: ' ' })[c]!);
-  return str.replace(/\\(.)/g, '$1');
+  return { path: str.replace(/\\(.)/g, '$1'), args: m[2]!.split(' ').filter(Boolean) };
 }
 
 /**

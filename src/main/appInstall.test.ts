@@ -333,13 +333,14 @@ describe('désinstaller', () => {
     const p = await fullInstall();
     writeFileSync(join(p.configDir, 'updater.json'), '{}');
     writeFileSync(join(p.configDir, '.updaterId'), 'id');
+    writeFileSync(join(p.configDir, 'migration.json'), '{}');
     mkdirSync(join(p.configDir, 'GPUCache/sub'), { recursive: true });
     writeFileSync(join(p.configDir, 'GPUCache/sub/data_0'), 'x');
     mkdirSync(join(p.configDir, 'Local Storage/leveldb'), { recursive: true });
     writeFileSync(join(p.configDir, 'Preferences'), '{}');
     symlinkSync('host-123', join(p.configDir, 'SingletonLock'));
     const plan = uninstallPlan(roots, { history: false, config: true });
-    for (const n of ['updater.json', '.updaterId', 'GPUCache', 'Local Storage', 'Preferences', 'SingletonLock']) expect(plan.map((i) => i.path)).toContain(join(p.configDir, n));
+    for (const n of ['updater.json', '.updaterId', 'migration.json', 'GPUCache', 'Local Storage', 'Preferences', 'SingletonLock']) expect(plan.map((i) => i.path)).toContain(join(p.configDir, n));
     const r = await runUninstall(plan, roots, { service: okService() });
     expect(r.failed).toEqual([]);
     expect(existsSync(p.configDir)).toBe(false);

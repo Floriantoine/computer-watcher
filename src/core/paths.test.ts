@@ -1,4 +1,8 @@
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { expect, test } from 'vitest';
+import { configDir } from './config';
 import { appEventsPath, clearRequestPath, dataDir, dbPath, focusStatePath, statusPath } from './paths';
 
 test('dataDir suit XDG_DATA_HOME, sinon ~/.local/share', () => {
@@ -22,4 +26,21 @@ test('état de focus : $XDG_RUNTIME_DIR/computer-watcher/focus-<empreinte du dos
   expect(focusStatePath('/home/u/.cache/pw-measure-data-x/computer-watcher', { XDG_RUNTIME_DIR: '/run/user/1000' })).not.toBe(real);
   expect(focusStatePath('/home/u/.local/share/computer-watcher', {})).toBe('/home/u/.local/share/computer-watcher/app-focus.json');
   expect(focusStatePath('/d', { XDG_RUNTIME_DIR: 'relatif' })).toBe('/d/app-focus.json');
+});
+
+test('renommage : app et service résolvent les mêmes dossiers, nouveau sinon ancien (migration pas faite ou échouée)', () => {
+  const base = mkdtempSync(join(homedir(), '.cache', 'pw-paths-'));
+  try {
+    const env = { XDG_DATA_HOME: join(base, 'data'), XDG_CONFIG_HOME: join(base, 'config') };
+    mkdirSync(join(base, 'data', 'proc-watch'), { recursive: true });
+    mkdirSync(join(base, 'config', 'proc-watch'), { recursive: true });
+    expect(dataDir(env, '/home/u')).toBe(join(base, 'data', 'proc-watch'));
+    expect(configDir(env, '/home/u')).toBe(join(base, 'config', 'proc-watch'));
+    mkdirSync(join(base, 'data', 'computer-watcher'));
+    mkdirSync(join(base, 'config', 'computer-watcher'));
+    expect(dataDir(env, '/home/u')).toBe(join(base, 'data', 'computer-watcher'));
+    expect(configDir(env, '/home/u')).toBe(join(base, 'config', 'computer-watcher'));
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
 });

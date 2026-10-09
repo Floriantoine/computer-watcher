@@ -2,7 +2,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'vitest';
-import { desktopEntryContent, execPathFromEntry, installDesktopEntry, refreshDesktopEntry } from './desktopEntry';
+import { desktopEntryContent, execFromEntry, execPathFromEntry, installDesktopEntry, refreshDesktopEntry } from './desktopEntry';
 
 test('contenu .desktop', () => {
   const c = desktopEntryContent('/home/u/Apps/computer-watcher.AppImage');
@@ -192,4 +192,14 @@ test('renommage : une entrée proc-watch.desktop (ancien nom) n’est jamais tou
   installDesktopEntry('/x/app', {}, home);
   expect(readFileSync(join(apps, 'proc-watch.desktop'), 'utf8')).toContain('Name=à moi');
   expect(readdirSync(apps).sort()).toEqual(['computer-watcher.desktop', 'proc-watch.desktop']);
+});
+
+test('renommage : execFromEntry relit le chemin et les arguments (démarrage automatique avec --hidden)', () => {
+  for (const p of ['/home/u/Applications/proc-watch.AppImage', '/a/b"c$d%e`f\\g', '/home/u/Mes Apps/x\ny.AppImage']) {
+    expect(execFromEntry(desktopEntryContent(p, { args: ['--hidden'], autostart: true }))).toEqual({ path: p, args: ['--hidden'] });
+    expect(execFromEntry(desktopEntryContent(p))).toEqual({ path: p, args: [] });
+  }
+  expect(execFromEntry('[Desktop Entry]\nExec=/usr/bin/x --flag\n')).toBeNull();
+  expect(execFromEntry('[Desktop Entry]\nExec="/x" $(id)\n')).toBeNull();
+  expect(execPathFromEntry(desktopEntryContent('/x', { args: ['--hidden'] }))).toBeNull();
 });
