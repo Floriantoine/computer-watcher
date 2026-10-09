@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
-import { isAppImageHeader, fuseMountPoints, realAppImage } from './realAppImage';
+import { isAppImageHeader, fuseMountPoints, realAppImage, testFeedTrust } from './realAppImage';
 
 const cache = join(homedir(), '.cache');
 mkdirSync(cache, { recursive: true });
@@ -66,6 +66,15 @@ describe('realAppImage : vraie AppImage seulement', () => {
     expect(realAppImage({ APPIMAGE: elf, APPDIR: MOUNT }, deps)).toBeNull();
   });
 
+  test('APPIMAGE avec caractère de contrôle, ou à l’intérieur du montage : refusé', () => {
+    const { deps } = ok();
+    const bad = `${img}\nExecStartPre=x`;
+    writeFileSync(bad, HEADER);
+    expect(realAppImage({ APPIMAGE: bad, APPDIR: MOUNT }, deps)).toBeNull();
+    const inMount = { ...deps, realpath: (p: string) => (p === '/proc/self/exe' ? `${MOUNT}/proc-watch` : p === img ? `${MOUNT}/usr/x` : p) };
+    expect(realAppImage({ APPIMAGE: img, APPDIR: MOUNT }, inMount)).toBeNull();
+  });
+
   test('variables absentes : null', () => {
     const { deps } = ok();
     expect(realAppImage({ APPDIR: MOUNT }, deps)).toBeNull();
@@ -80,5 +89,23 @@ describe('realAppImage : vraie AppImage seulement', () => {
     expect(isAppImageHeader(HEADER)).toBe(true);
     expect(isAppImageHeader(Buffer.from('%PDF-1.7 AI\x02'))).toBe(false);
     expect(isAppImageHeader(Buffer.alloc(4))).toBe(false);
+  });
+});
+
+describe('flux de test des mises à jour (sources seulement, option --update-feed-test)', () => {
+  test('seul cas où APPDIR est tenu pour un montage : non empaqueté ET flux de test actif ; le reste des contrôles demeure', () => {
+    const dir = join(base, 'fake-appdir');
+    mkdirSync(dir, { recursive: true });
+    expect(testFeedTrust({ APPDIR: dir }, null, false)).toEqual({});
+    expect(testFeedTrust({ APPDIR: dir }, 'http://127.0.0.1:9/', true)).toEqual({});
+    const deps = testFeedTrust({ APPDIR: dir }, 'http://127.0.0.1:9/', false);
+    expect(fuseMountPoints(deps.mountinfo!)).toContain(dir);
+    // binaire hors d'APPDIR (environnement hérité) : toujours refusé
+    expect(realAppImage({ APPIMAGE: img, APPDIR: dir }, { ...deps, realpath: (p) => (p === '/proc/self/exe' ? '/usr/bin/x' : p) })).toBeNull();
+    // fichier sans en-tête AppImage : toujours refusé
+    const doc = join(base, `doc-${n}.pdf`);
+    writeFileSync(doc, 'PDF');
+    expect(realAppImage({ APPIMAGE: doc, APPDIR: dir }, { ...deps, realpath: (p) => (p === '/proc/self/exe' ? `${dir}/electron` : p) })).toBeNull();
+    expect(realAppImage({ APPIMAGE: img, APPDIR: dir }, { ...deps, realpath: (p) => (p === '/proc/self/exe' ? `${dir}/electron` : p) })).toBe(img);
   });
 });

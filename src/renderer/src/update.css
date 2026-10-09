@@ -1,0 +1,12 @@
+/* Pop-up « Mise à jour disponible » et Réglages › À propos : fichier à part, mêmes jetons que les pop-ups d'alerte. */
+.upd-popup { --alert: var(--accent); }
+.upd-popup .alert-popup-head strong { white-space: normal; }
+.upd-actions { flex-wrap: wrap; }
+.upd-actions button { display: inline-flex; align-items: center; gap: 5px; }
+.upd-progress { height: 4px; margin-top: 6px; border-radius: 99px; background: var(--surface-hover); overflow: hidden; }
+.upd-progress span { display: block; height: 100%; border-radius: inherit; background: var(--alert); transition: width 0.2s ease; }
+.upd-version { margin: 0 0 4px; color: var(--text); font-weight: 600; }
+.upd-version .mono { font: 12px var(--font-mono); color: var(--text-2); margin-left: 4px; }
+.upd-line { margin: 0 0 8px; }
+.upd-check { display: inline-flex; align-items: center; gap: 5px; }
+.upd-command { display: block; margin-top: 4px; padding: 5px 7px; border-radius: 6px; background: var(--surface-hover); font: 11px var(--font-mono); color: var(--text); white-space: pre-wrap; word-break: break-all; user-select: all; }

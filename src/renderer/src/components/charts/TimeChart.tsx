@@ -22,6 +22,8 @@ interface Props {
   markers?: ChartMarker[];
   /** Clic sur un instant du graphe : instant du point sous le curseur, et instant exact sous la souris. */
   onCursor?: (ts: number, exact: number) => void;
+  /** Survol : instant du point sous le curseur et instant exact sous la souris ; null quand la souris quitte le graphe. */
+  onHover?: (h: { ts: number; exact: number } | null) => void;
   /** Glisser : plage sélectionnée ; double-clic : `null` (retour à la plage complète). */
   onSelectRange?: (r: { from: number; to: number } | null) => void;
   /** Courbe mise en avant (index dans `series`) : les autres sont estompées. */
@@ -61,15 +63,15 @@ function zeroBased(_u: uPlot, _min: number, max: number): uPlot.Range.MinMax {
   return [0, max > 0 ? max * 1.08 : 1];
 }
 
-export function TimeChart({ ts, series, height, format, markers, onCursor, onSelectRange, focusSeries = null, focusMarker = null, xRange = null, onWheel, onDragPan, markerLabels = true }: Props) {
+export function TimeChart({ ts, series, height, format, markers, onCursor, onHover, onSelectRange, focusSeries = null, focusMarker = null, xRange = null, onWheel, onDragPan, markerLabels = true }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const plot = useRef<uPlot | null>(null);
   const reduce = !!useReducedMotionConfig();
   const [tip, setTip] = useState<Tip | null>(null);
 
   // Valeurs lues par les hooks uPlot sans recréer l'instance.
-  const live = useRef({ ts, series, format, markers, onCursor, onSelectRange, focusMarker, onWheel, onDragPan, markerLabels });
-  live.current = { ts, series, format, markers, onCursor, onSelectRange, focusMarker, onWheel, onDragPan, markerLabels };
+  const live = useRef({ ts, series, format, markers, onCursor, onHover, onSelectRange, focusMarker, onWheel, onDragPan, markerLabels });
+  live.current = { ts, series, format, markers, onCursor, onHover, onSelectRange, focusMarker, onWheel, onDragPan, markerLabels };
 
   const key = structureKey(series);
   const data = useMemo(() => toAligned(ts, series), [ts, series]);
@@ -159,8 +161,11 @@ export function TimeChart({ ts, series, height, format, markers, onCursor, onSel
             const { idx, left, top } = u.cursor;
             if (idx == null || left == null || left < 0 || top == null) {
               setTip(null);
+              live.current.onHover?.(null);
               return;
             }
+            const t = live.current.ts[idx];
+            if (t !== undefined) live.current.onHover?.({ ts: t, exact: u.posToVal(left, 'x') });
             const x = u.valToPos(live.current.ts[idx] ?? 0, 'x');
             setTip({ idx, left: x, top, flip: x > u.over.clientWidth / 2 });
           },
@@ -186,7 +191,10 @@ export function TimeChart({ ts, series, height, format, markers, onCursor, onSel
               live.current.onCursor?.(t ?? exact, exact);
             });
             u.over.addEventListener('dblclick', () => live.current.onSelectRange?.(null));
-            u.over.addEventListener('mouseleave', () => setTip(null));
+            u.over.addEventListener('mouseleave', () => {
+              setTip(null);
+              live.current.onHover?.(null);
+            });
             // Ctrl + molette : zoom (et pas le zoom de page d'Electron) ; Maj + molette : déplacement. Molette seule : la page défile.
             u.over.addEventListener(
               'wheel',
@@ -234,6 +242,8 @@ export function TimeChart({ ts, series, height, format, markers, onCursor, onSel
     ro.observe(el);
     return () => {
       ro.disconnect();
+      // Graphe détruit sous la souris : plus de survol.
+      live.current.onHover?.(null);
       u.destroy();
       plot.current = null;
       setTip(null);

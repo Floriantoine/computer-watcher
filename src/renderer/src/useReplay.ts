@@ -1,40 +1,61 @@
-// src/renderer/src/useReplay.ts — rejeu « voyage dans le temps » du détail : adaptateur React du ReplayController
-import { useEffect, useMemo, useReducer, useRef } from 'react';
-import type { ProcTreeAt, TimeRange } from '../../core/types';
-import { isLive } from './history';
+// src/renderer/src/useReplay.ts — rejeu « voyage dans le temps » du détail (survol, instant figé, lecture ×60) : adaptateur React du ReplayController
+import { useEffect, useRef, useSyncExternalStore } from 'react';
+import { isLive, onLiveResume } from './history';
 import { ReplayController } from './replayController';
 
 export { replayReducer, type ReplayAction, type ReplayState } from './replayController';
 
-export interface Replay {
-  /** null = direct */
-  instant: number | null;
-  playing: boolean;
-  /** undefined = chargement, null = pas de base */
-  tree: ProcTreeAt | null | undefined;
-  /** Fige l'instant (met la lecture en pause). */
-  pick: (ts: number) => void;
-  /** Avance de ×60 chaque seconde jusqu'à range.to ; une requête à la fois ; arrêtée tant que la fenêtre est réduite. */
-  play: (range: TimeRange) => void;
-  pause: () => void;
-  /** Revient au direct. */
-  live: () => void;
+/**
+ * Contrôleur du rejeu et abonnement à ses changements (au plus une notification par image). Chaque composant lit
+ * seulement ce qu'il affiche (`useReplaySelect`) : un survol re-rend les tuiles, pas tout le détail.
+ */
+export interface ReplayStore {
+  c: ReplayController;
+  subscribe: (cb: () => void) => () => void;
 }
 
 /** Rejeu du groupe ; changer de groupe remet au direct dès ce rendu (aucune image de l'ancien groupe). */
-export function useReplay(groupId: string): Replay {
-  const [version, bump] = useReducer((n: number) => n + 1, 0);
-  const ref = useRef<ReplayController | null>(null);
-  ref.current ??= new ReplayController(groupId, {
-    fetch: (key, ts) => window.procWatch.history.procTree(key, ts),
-    isLive,
-    onChange: bump,
-  });
-  const c = ref.current;
-  c.setGroup(groupId);
-  useEffect(() => () => c.dispose(), [c]);
-  const { instant, playing } = c.state;
-  const tree = c.tree;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  return useMemo(() => ({ instant, playing, tree, pick: c.pick, play: c.play, pause: c.pause, live: c.live }), [instant, playing, tree, c, version]);
+export function useReplayStore(groupId: string): ReplayStore {
+  const ref = useRef<(ReplayStore & { frame: number; listeners: Set<() => void> }) | null>(null);
+  if (!ref.current) {
+    const listeners = new Set<() => void>();
+    const s = {
+      frame: 0,
+      listeners,
+      subscribe: (cb: () => void) => {
+        listeners.add(cb);
+        return () => void listeners.delete(cb);
+      },
+    } as ReplayStore & { frame: number; listeners: Set<() => void> };
+    s.c = new ReplayController(groupId, {
+      fetch: (key, ts) => window.procWatch.history.procTree(key, ts),
+      isLive,
+      onLiveResume,
+      // Une notification par image au plus, même si la souris envoie plus d'événements que l'écran n'affiche d'images.
+      onChange: () => {
+        if (!s.frame)
+          s.frame = requestAnimationFrame(() => {
+            s.frame = 0;
+            for (const f of listeners) f();
+          });
+      },
+    });
+    ref.current = s;
+  }
+  const s = ref.current;
+  s.c.setGroup(groupId);
+  useEffect(
+    () => () => {
+      s.c.dispose();
+      cancelAnimationFrame(s.frame);
+      s.frame = 0;
+    },
+    [s],
+  );
+  return s;
+}
+
+/** Valeur lue dans le contrôleur ; `sel` doit renvoyer une valeur primitive ou une référence stable. */
+export function useReplaySelect<T>(s: ReplayStore, sel: (c: ReplayController) => T): T {
+  return useSyncExternalStore(s.subscribe, () => sel(s.c));
 }

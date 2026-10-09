@@ -81,9 +81,8 @@ export function AboutSetup({ onToast, onReopenOnboarding }: { onToast: ToastFn; 
 
   return (
     <div className="about-setup">
-      <Card title="proc-watch" icon={<Info size={14} strokeWidth={2} />} testid="about-version">
+      <Card title="Installation" icon={<Info size={14} strokeWidth={2} />} testid="about-install">
         <div className="about-row">
-          <span className="about-version">Version {info?.version ?? '…'}</span>
           <span className="hint" style={{ margin: 0 }}>
             {!info ? '' : info.installedCopy ? <>Installée : <code>{info.installedCopy}</code></> : info.appImage ? 'AppImage non installée' : info.packaged ? 'Paquet .deb' : 'Version de développement'}
           </span>

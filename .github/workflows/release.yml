@@ -2,20 +2,98 @@ name: release
 on:
   push:
     tags: ['v*']
-permissions:
-  contents: write
+# Aucun droit par défaut : chaque job déclare les siens.
+permissions: {}
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
-  release:
+  # Lecture seule : tout le code npm (dépendances, scripts d'installation, tests, electron-builder) tourne ici, sans jeton
+  # d'écriture ni identifiants git gardés sur le disque.
+  build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      # actions/checkout ne garde pas le message des étiquettes annotées : on refetch l'étiquette (dépôt public, sans jeton).
+      - name: Étiquette annotée et main
+        run: |
+          git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
+      - name: Le commit étiqueté est sur main
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Le commit de $GITHUB_REF_NAME n'est pas sur main : rien n'est publié"
+            exit 1
+          fi
+      - name: L'étiquette correspond à package.json
+        run: |
+          version="v$(node -p "require('./package.json').version")"
+          if [ "$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Étiquette $GITHUB_REF_NAME, mais package.json est en $version"
+            exit 1
+          fi
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: npm
       - run: npm ci
+      # Tout échec ici arrête le workflow avant la moindre publication (publish dépend de build).
       - run: npm run typecheck
       - run: npm test
-      - run: npx electron-vite build && npx electron-builder --linux --publish always
+      - run: npx electron-vite build
+      # Notes de version : corps du message de l'étiquette annotée (préparé par `npm run release`).
+      - name: Notes de version
+        run: |
+          git tag -l --format='%(contents:body)' "$GITHUB_REF_NAME" > release-notes.md
+          if [ ! -s release-notes.md ]; then echo "proc-watch $GITHUB_REF_NAME" > release-notes.md; fi
+          cat release-notes.md
+      # AppImage, .deb et latest-linux.yml (lu par electron-updater, notes comprises), sans publier.
+      - run: npx electron-builder --linux --publish never -c.releaseInfo.releaseNotesFile=release-notes.md
+      - name: Fichiers à publier
+        run: |
+          mkdir dist-publish
+          cp release/*.AppImage release/*.deb release/latest-linux.yml release-notes.md dist-publish/
+          cp release/*.blockmap dist-publish/ 2>/dev/null || true
+          ls -l dist-publish
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-files
+          path: dist-publish/
+          if-no-files-found: error
+          retention-days: 3
+
+  # Écriture : ne lance aucun code du dépôt ni de npm ; télécharge les fichiers construits et crée la version avec gh.
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-files
+          path: dist-publish
+      - name: Publier la version GitHub
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd dist-publish
+          files=()
+          for f in *; do
+            [ "$f" = release-notes.md ] || files+=("$f")
+          done
+          # vX.Y.Z-beta.1… : préversion (electron-updater ne la propose que si le réglage « préversions » est activé)
+          pre=()
+          case "$GITHUB_REF_NAME" in *-*) pre=(--prerelease) ;; esac
+          gh release create "${pre[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "proc-watch $GITHUB_REF_NAME" \
+            --notes-file release-notes.md \
+            -- "$GITHUB_REF_NAME" "${files[@]}"

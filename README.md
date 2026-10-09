@@ -99,6 +99,17 @@ Chaque étape affiche le résultat exact (chemins écrits) ou l'erreur. L'assist
 
 Réglages › À propos › **Désinstaller proc-watch…** : deux cases (supprimer aussi l'historique, la configuration) et la liste exacte de ce qui sera retiré, reprise dans une confirmation native. Sont retirés : le démarrage automatique, l'entrée de menu et l'icône (seulement celles écrites par proc-watch, marquées `X-ProcWatch-Managed=1`), le service d'enregistrement (arrêté, désactivé, unité supprimée), puis `~/Applications/proc-watch.AppImage` en dernier, et proc-watch quitte. Seuls les fichiers que proc-watch crée sont touchés (liste exacte, liens symboliques jamais suivis) ; earlyoom n'est jamais modifié. Si un élément ne peut pas être retiré (par exemple `systemctl --user` injoignable : le service et son unité restent), il est signalé et la copie de l'AppImage reste, pour réessayer. Avec le `.deb`, retirer ensuite le paquet avec `sudo apt remove proc-watch`.
 
+### Mises à jour
+
+- **AppImage** (copie installée `~/Applications/proc-watch.AppImage`, ou AppImage lancée directement s'il n'y a pas de copie) : proc-watch vérifie les versions publiées 30 s après le lancement puis toutes les 6 h. Une nouvelle version s'annonce dans un pop-up (« Mettre à jour », « Plus tard », « Ignorer cette version ») ; rien n'est téléchargé sans accord. Le fichier est vérifié (sha512) puis installé au redémarrage : l'AppImage est remplacée dans son dossier, le service d'enregistrement et le raccourci du menu suivent le nouveau fichier.
+- AppImage lancée hors de la copie installée : le pop-up invite à lancer proc-watch depuis le menu (l'original téléchargé n'est pas mis à jour).
+- Fichier remplacé : electron-updater remplace le fichier désigné par `APPIMAGE`, que le runtime AppImage pose sur l'AppImage réellement lancée, donc la copie `~/Applications/proc-watch.AppImage` quand proc-watch tourne depuis elle. Son nom n'ayant pas de numéro de version, elle est écrasée sur place (même chemin pour le menu, le démarrage automatique et le service). proc-watch refuse l'installation si `APPIMAGE` n'est pas l'AppImage qu'il a vérifiée (montage FUSE, en-tête AppImage).
+- Service d'enregistrement : dès que la copie installée existe, son unité pointe vers elle, jamais vers l'original téléchargé (qui peut être supprimé), y compris quand l'original est relancé.
+- **.deb** : le pop-up signale la nouvelle version et ouvre sa page ; la mise à jour se fait avec `apt`.
+- **Depuis les sources** : aucune vérification.
+
+Réglages › À propos : version, vérification automatique (activée par défaut), préversions (désactivées), « Vérifier maintenant ».
+
 ### Depuis les sources
 
 ```bash
@@ -120,6 +131,12 @@ Avec npm 11.10+ (dont npm 12), les scripts d'installation des dépendances sont 
 | `npm run test:recorder` | build, test de performance du service d'enregistrement et test de bout en bout (base, événements, reprise) |
 | `npm run smoke` | build + lancement réel de l'app via Playwright |
 | `npm run dist` | produit l'AppImage et le .deb dans `release/` |
+| `npm run test:update` | build + mises à jour de bout en bout contre un flux local (rien n'est installé) |
+| `npm run release -- patch\|minor\|major [--dry-run]` | prépare une version : vérifications, tests, commit `chore(release): vX.Y.Z` et étiquette annotée, sans pousser |
+
+Publier : `npm run release -- patch`, relire, puis `git push --atomic origin main vX.Y.Z`. Le workflow `release` a deux jobs. `build`, en lecture seule, vérifie que le commit étiqueté est sur `main` et que l'étiquette correspond à `package.json`, relance les types et les tests, puis construit l'AppImage, le .deb et `latest-linux.yml` (lu par les mises à jour). `publish`, seul à pouvoir écrire, n'exécute aucun code npm : il crée la version GitHub avec ces fichiers.
+
+Notes de version : le corps du message de l'étiquette annotée (tout sauf la première ligne) devient les notes de la version GitHub et de `latest-linux.yml`, affichées dans le pop-up de mise à jour. `npm run release` l'écrit : un texte rédigé pour la première version, puis les sujets des commits `feat` / `fix` depuis la version précédente, sans les commits internes ni les références de revue. Pour le modifier avant de pousser : `git tag -f -a vX.Y.Z -F notes.txt` (première ligne `proc-watch vX.Y.Z`, ligne vide, puis les notes).
 
 La logique (lecture de `/proc`, regroupement, protection, kill) vit dans `src/core/`, sans dépendance à Electron, et se teste sur de faux répertoires `/proc`. Pour reconnaître une nouvelle appli multi-processus, modifier `src/core/grouping/rules.ts` ; pour classer un nouvel outil de dev (front, back…), `src/core/classify/rules.ts`.
 

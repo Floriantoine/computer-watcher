@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -9,12 +9,32 @@ export function systemdQuote(arg: string): string {
   return '"' + arg.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/%/g, '%%').replace(/\$/g, '$$$$') + '"';
 }
 
+const isRegularFile = (p: string) => {
+  try {
+    return lstatSync(p).isFile();
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * AppImage que lance le service (N1) : la copie installée (~/Applications/proc-watch.AppImage) dès qu'elle existe, même si
+ * l'app tourne depuis l'original téléchargé, qui peut être supprimé ; sinon l'AppImage lancée (vérifiée par realAppImage) ;
+ * null hors AppImage (.deb, sources : binaire lancé).
+ */
+export function recorderAppImage(own: string | null, copy: string, isFile: (p: string) => boolean = isRegularFile): string | null {
+  if (!own) return null;
+  return isFile(copy) ? copy : own;
+}
+
 export function recorderExecArgs(p: { appImage?: string; execPath: string; appPath: string }): string[] {
   if (p.appImage) return [p.appImage, '-e', "require(process.env.APPDIR + '/resources/app.asar/out/main/recorder.js')"];
   return [p.execPath, join(p.appPath, 'out/main/recorder.js')];
 }
 
 export function recorderUnit(args: string[]): string {
+  // une fin de ligne dans un chemin injecterait une directive (ExecStartPre=…) : refusé
+  if (args.some((a) => /[\x00-\x1f\x7f]/.test(a))) throw new Error('Argument refusé (caractère de contrôle)');
   return [
     '[Unit]',
     'Description=proc-watch recorder (historique des processus)',
@@ -71,7 +91,9 @@ export async function ensureRecorderService(o: {
   run: Systemctl;
   /** Faux : ne crée jamais l'unité (mode dev) ; une unité existante est mise à jour ou retirée. */
   allowCreate?: boolean;
-}): Promise<'installed' | 'updated' | 'unchanged' | 'removed' | 'absent'> {
+  /** Unité inchangée mais l'app a changé de version (mise à jour sur place) : relance le service sur le nouveau code. */
+  restart?: boolean;
+}): Promise<'installed' | 'updated' | 'unchanged' | 'restarted' | 'removed' | 'absent'> {
   const exists = existsSync(o.path);
   if (!o.enabled) {
     if (!exists) return 'absent';
@@ -80,11 +102,13 @@ export async function ensureRecorderService(o: {
     await o.run(['daemon-reload']);
     return 'removed';
   }
-  if (!exists && o.allowCreate === false) return 'absent';
   const content = recorderUnit(o.args);
+  if (!exists && o.allowCreate === false) return 'absent';
   if (exists && readFileSync(o.path, 'utf8') === content) {
     await o.run(['enable', '--now', UNIT_NAME]);
-    return 'unchanged';
+    if (!o.restart) return 'unchanged';
+    await o.run(['restart', UNIT_NAME]);
+    return 'restarted';
   }
   mkdirSync(dirname(o.path), { recursive: true });
   writeFileSync(o.path, content);

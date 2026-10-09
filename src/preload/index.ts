@@ -6,6 +6,7 @@ import type { AboutInfo, AutostartInfo, InstallOutcome, OnboardingInfo, Uninstal
 import type { RuleStats } from '../core/rules/types';
 import type { SwapView } from '../core/swap';
 import type { TmpDeleteItem, TmpDeleteOutcome, TmpListing } from '../core/tmpClean';
+import type { UpdateView } from '../core/update';
 import type {
   ApplyResult, Category, EarlyoomStatus, Config, ConfigState, Culprit, InstanceTargets, ProcInfo, Watch, GroupHistory, GroupsHistory, HistoryEvent, KillResult, KillTarget, KillSignal, ProcsHistory, ProcTreeAt, RangePreset,
   RecorderState, Snapshot, SystemSeries, TimeRange, TmpUsage, TopOptions, TopResult,
@@ -155,6 +156,30 @@ const api = {
     plan: (o: UninstallOptions): Promise<{ items: UninstallItem[]; message: string; detail: string }> => ipcRenderer.invoke('uninstall:plan', o),
     /** Confirmation native puis désinstallation ; tout retiré → l'app quitte. */
     run: (o: UninstallOptions): Promise<{ cancelled: true } | { cancelled: false; result: UninstallResult }> => ipcRenderer.invoke('uninstall:run', o),
+  },
+  update: {
+    /** État des mises à jour (version, mode, dernière vérification, version proposée) et réglages. */
+    get: (): Promise<UpdateView> => ipcRenderer.invoke('update:get'),
+    /** « Vérifier maintenant » (même si la vérification automatique est désactivée). */
+    check: (): Promise<UpdateView> => ipcRenderer.invoke('update:check'),
+    /** AppImage seulement : téléchargement (sha512 vérifié), progression dans onView. */
+    download: (): Promise<UpdateView> => ipcRenderer.invoke('update:download'),
+    /** Version téléchargée et vérifiée : remplace l'AppImage et redémarre l'app. */
+    install: (): Promise<void> => ipcRenderer.invoke('update:install'),
+    /** « Réessayer » : réinstalle depuis le fichier vérifié en cache (installation échouée), sinon retélécharge. */
+    retry: (): Promise<UpdateView> => ipcRenderer.invoke('update:retry'),
+    later: (): Promise<UpdateView> => ipcRenderer.invoke('update:later'),
+    ignore: (): Promise<UpdateView> => ipcRenderer.invoke('update:ignore'),
+    setPrefs: (p: { enabled?: boolean; prerelease?: boolean }): Promise<UpdateView> => ipcRenderer.invoke('update:setPrefs', p),
+    /** Page des versions du dépôt dans le navigateur (adresse vérifiée par le main). */
+    openRelease: (url: string): Promise<void> => ipcRenderer.invoke('update:openRelease', url),
+    onView(cb: (v: UpdateView) => void): () => void {
+      const handler = (_e: IpcRendererEvent, v: UpdateView) => cb(v);
+      ipcRenderer.on('update:view', handler);
+      return () => {
+        ipcRenderer.removeListener('update:view', handler);
+      };
+    },
   },
   recorder: {
     status: (): Promise<RecorderState> => ipcRenderer.invoke('recorder:status'),

@@ -18,7 +18,9 @@
     "typecheck": "tsc --noEmit",
     "test:recorder": "electron-vite build && PROC_WATCH_PERF=1 vitest run src/recorder/perf.test.ts src/core/history/queries.perf.test.ts src/core/history/queryInactive.perf.test.ts src/core/history/queries.realistic.perf.test.ts src/core/history/migration.rehearsal.test.ts --disableConsoleIntercept && node scripts/recorder-e2e.mjs",
     "smoke": "electron-vite build && node scripts/smoke.mjs",
-    "dist": "electron-vite build && electron-builder --linux"
+    "test:update": "electron-vite build && node scripts/update-e2e.mjs",
+    "dist": "electron-vite build && electron-builder --linux",
+    "release": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/release.mjs"
   },
   "devDependencies": {
     "@fontsource/inter": "^5.3.0",
@@ -44,5 +46,8 @@
     "electron": true,
     "esbuild": true,
     "electron-winstaller": false
+  },
+  "dependencies": {
+    "electron-updater": "6.8.9"
   }
 }

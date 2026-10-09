@@ -1,7 +1,8 @@
 import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { readFileSync } from 'node:fs';
-import { writeFileSafe } from './safeFs';
+import { dirname, join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { hasControlChars } from './appImageTrust';
+import { readFileSafe, writeFileSafe } from './safeFs';
 
 /**
  * Argument de Exec entre guillemets, selon la spécification Desktop Entry : d'abord la règle des guillemets (`"`, `` ` ``,
@@ -17,6 +18,8 @@ export function quoteExecArg(arg: string): string {
 
 /** Marque des entrées écrites par proc-watch (menu, démarrage automatique) : seules celles-ci sont repointées ou retirées. */
 export const MANAGED_LINE = 'X-ProcWatch-Managed=1';
+/** Nom gardé pour le code des mises à jour. */
+export const MANAGED_KEY = MANAGED_LINE;
 export const isManagedEntry = (text: string): boolean => text.split('\n').some((l) => l.trim() === MANAGED_LINE);
 
 const SAFE_ARG = /^[A-Za-z0-9_\-=./]+$/;
@@ -51,6 +54,7 @@ export function desktopEntryContent(execPath: string, o: EntryOptions = {}): str
  * X-ProcWatch-Managed=1 n'est jamais écrasée (erreur).
  */
 export function installDesktopEntry(target: string, env: NodeJS.ProcessEnv = process.env, home: string = homedir(), iconPng?: string): string {
+  if (hasControlChars(target)) throw new Error('Chemin refusé (caractère de contrôle)');
   const data = env.XDG_DATA_HOME || join(home, '.local/share');
   const roots = [home, data];
   const content = desktopEntryContent(target);
@@ -66,4 +70,40 @@ export function installDesktopEntry(target: string, env: NodeJS.ProcessEnv = pro
   }
   writeFileSafe(roots, file, content, 0o644, { guard });
   return file;
+}
+
+/** Inverse de quoteExecArg pour la ligne `Exec="…"` d'une entrée de menu (sans argument) ; autre forme → null. */
+export function execPathFromEntry(text: string): string | null {
+  const m = /^Exec="(.*)"$/m.exec(text);
+  if (!m) return null;
+  // règle des chaînes (\\ → \, \n, \t, \r, \s), puis règle des guillemets (\X → X), et %% → %
+  const str = m[1]!.replace(/%%/g, '%').replace(/\\([\\nrts])/g, (_, c: string) => ({ '\\': '\\', n: '\n', r: '\r', t: '\t', s: ' ' })[c]!);
+  return str.replace(/\\(.)/g, '$1');
+}
+
+/**
+ * Après une mise à jour de l'AppImage sous un nouveau nom (electron-updater supprime l'ancienne et place la nouvelle dans le
+ * même dossier) : le raccourci écrit par proc-watch (clé X-ProcWatch-Managed) est repointé sur `appImage`, seulement si
+ * son ancienne cible n'existe plus et que `appImage` est dans le même dossier. Lancer une autre copie ne le détourne jamais.
+ * Lecture et écriture sans suivre de lien (dossiers compris).
+ */
+export function refreshDesktopEntry(
+  appImage: string,
+  env: NodeJS.ProcessEnv = process.env,
+  home: string = homedir(),
+): 'absent' | 'unchanged' | 'updated' | 'kept' | 'foreign' | 'refused' {
+  if (hasControlChars(appImage)) return 'refused';
+  const data = env.XDG_DATA_HOME || join(home, '.local/share');
+  const roots = [home, data];
+  const file = join(data, 'applications', 'proc-watch.desktop');
+  const text = readFileSafe(roots, file);
+  if (text === null) return 'absent';
+  const want = desktopEntryContent(appImage);
+  if (text === want) return 'unchanged';
+  if (!isManagedEntry(text)) return 'foreign';
+  const old = execPathFromEntry(text);
+  if (old === null) return 'foreign';
+  if (existsSync(old) || dirname(old) !== dirname(appImage)) return 'kept';
+  writeFileSafe(roots, file, want, 0o644, { guard: (cur) => (cur !== null && !isManagedEntry(cur) ? 'foreign' : null) });
+  return 'updated';
 }

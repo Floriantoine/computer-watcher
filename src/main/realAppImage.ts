@@ -3,6 +3,7 @@
 // les poser hors AppImage.
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync } from 'node:fs';
 import { isAbsolute, sep } from 'node:path';
+import { hasControlChars } from './appImageTrust';
 
 /** ELF (`\x7fELF`) puis la marque AppImage type 2 (`AI\x02`) à l'octet 8. */
 export function isAppImageHeader(b: Buffer): boolean {
@@ -51,13 +52,13 @@ function header(path: string): Buffer | null {
  * Chemin de l'AppImage lancée, ou null. Exige tout à la fois :
  * - realpath(APPDIR) est un point de montage FUSE (/proc/self/mountinfo) ;
  * - realpath(/proc/self/exe) est sous ce montage ;
- * - APPIMAGE est un chemin absolu vers un fichier ordinaire (lstat : pas un lien) ;
+ * - APPIMAGE est un chemin absolu, sans caractère de contrôle, vers un fichier ordinaire (lstat : pas un lien) hors du montage ;
  * - son en-tête est celui d'une AppImage (ELF + `AI\x02` à l'octet 8).
  */
 export function realAppImage(env: NodeJS.ProcessEnv = process.env, deps: RealAppImageDeps = {}): string | null {
   const img = env.APPIMAGE;
   const dir = env.APPDIR;
-  if (!img || !dir || !isAbsolute(img) || !isAbsolute(dir)) return null;
+  if (!img || !dir || !isAbsolute(img) || !isAbsolute(dir) || hasControlChars(img)) return null;
   const realpath = deps.realpath ?? ((p: string) => realpathSync(p));
   try {
     const mount = realpath(dir);
@@ -66,9 +67,28 @@ export function realAppImage(env: NodeJS.ProcessEnv = process.env, deps: RealApp
     const exe = realpath('/proc/self/exe');
     if (!exe.startsWith(mount.endsWith(sep) ? mount : mount + sep)) return null;
     if (!lstatSync(img).isFile()) return null;
+    const realImg = realpath(img);
+    if (hasControlChars(realImg) || realImg === mount || realImg.startsWith(mount.endsWith(sep) ? mount : mount + sep)) return null;
     const h = header(img);
     return h && isAppImageHeader(h) ? img : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Test de bout en bout des mises à jour (`npm run test:update`) : version non empaquetée, lancée avec --update-feed-test et
+ * un flux local (voir testFeedFromEnv). Seul cas où APPDIR est tenu pour un montage FUSE ; tous les autres contrôles de
+ * realAppImage restent (binaire dessous, fichier ordinaire, en-tête AppImage). Empaquetée ou sans flux de test : rien.
+ */
+export function testFeedTrust(env: NodeJS.ProcessEnv, testFeed: string | null, isPackaged: boolean): RealAppImageDeps {
+  const dir = env.APPDIR;
+  if (isPackaged || !testFeed || !dir || !isAbsolute(dir)) return {};
+  try {
+    const real = realpathSync(dir);
+    const mountinfo = readFileSync('/proc/self/mountinfo', 'utf8');
+    return { mountinfo: `${mountinfo}\n0 0 0:0 / ${real.replace(/ /g, '\\040')} ro - fuse.update-test update-test ro\n` };
+  } catch {
+    return {};
   }
 }

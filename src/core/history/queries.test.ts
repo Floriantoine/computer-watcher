@@ -78,6 +78,9 @@ test('queryGroup et queryProcs', () => {
   const g = queryGroup(db, 'app:chrome', { from: 0, to: 10 * M }, opts(10 * M));
   expect(g.ts.length).toBe(120);
   expect(g.cpu[0]).toBe(5);
+  expect(g.procCount?.[0]).toBe(3); // détail : nombre de processus de l'échantillon (tuile « Processus » au survol)
+  // par minute : non enregistré
+  expect(queryGroup(db, 'app:chrome', { from: 0, to: 10 * M }, opts(48 * H)).procCount).toBeUndefined();
   const p = queryProcs(db, 'app:chrome', { from: 0, to: 10 * M }, opts(10 * M));
   expect(p.series).toHaveLength(1);
   expect(p.series[0]).toMatchObject({ pid: 10, startTicks: 100 });

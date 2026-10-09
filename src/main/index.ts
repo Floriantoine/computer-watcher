@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Tray } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } from 'electron';
 import appIcon from '../../resources/icon.png?asset';
 import { appendFileSync, constants as fsConstants, existsSync, lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { access, realpath } from 'node:fs/promises';
@@ -31,7 +31,7 @@ import {
   appPaths, autostartState, deleteOriginalArgs, installAppImage, launchTarget, parseDeleteOriginalArgs, rootsFrom, runUninstall, setAutostart, stopRecorderForUninstall,
   uninstallPlan, uninstallSummary, verifyAndDeleteOriginal,
 } from './appInstall';
-import { realAppImage } from './realAppImage';
+import { realAppImage, testFeedTrust } from './realAppImage';
 import { hashNoFollow, writeFileSafe } from './safeFs';
 import {
   isUninstallOptions, onboardingSteps, parseOnboardingFile, serializeOnboarding, shouldOpenOnboarding, startIndex,
@@ -40,7 +40,12 @@ import {
 import { SNOOZE_MS } from '../core/forecast/forecast';
 import { writeSnooze } from '../core/forecast/snooze';
 import { createAlertOpener, createFocusWriter, initSeenUpTo, keepSeenUpTo, markSeen, unseenFilter } from './alerts';
-import { installDesktopEntry } from './desktopEntry';
+import { installDesktopEntry, refreshDesktopEntry } from './desktopEntry';
+import { installedAppImage, installedElsewhere } from './appImageTrust';
+import { acquireLock, blockingSleep } from './singleInstance';
+import { createAppImageBackend } from './appImageUpdate';
+import { createPrefsStore, createReleasesApiBackend, createUpdateController, type UpdateBackend } from './updater';
+import { isReleaseUrl, RELEASES_API_URL, testFeedFromEnv, updateMode } from '../core/update';
 import { createEarlyoomApplier, earlyoomStatus, type EarlyoomLock } from './earlyoom';
 import { createEarlyoomSetup, keepEarlyoomReminder, setupConfirmation, snoozeReminder } from './earlyoomSetup';
 import { OS_RELEASE, reminderMode } from '../core/earlyoomSetup';
@@ -56,13 +61,14 @@ import { closeAction, confirmTray, createTrayController, defaultRun, statusNotif
 import {
   applyOverride, checkConfigSet, classifySetKey, swapSettingsChanged, isGroupKeys, noKill, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState as computeRecorderState,
 } from './historyIpc';
-import { autoManageService, defaultSystemctl, recorderSyncDisabled, ensureRecorderService, recorderExecArgs, systemctlAvailable, unitPath } from './recorderService';
+import { autoManageService, defaultSystemctl, recorderSyncDisabled, ensureRecorderService, recorderAppImage, recorderExecArgs, systemctlAvailable, unitPath } from './recorderService';
 
 // Service réseau dans le processus main : l'app ne charge que des fichiers locaux, un processus de moins (~20 Mo).
 app.commandLine.appendSwitch('enable-features', 'NetworkServiceInProcess2');
 
 // Instance unique : un second lancement (bouton « Ouvrir » d'une notification, menu) réveille la fenêtre existante.
-const primary = app.requestSingleInstanceLock();
+// Relance après une mise à jour : la version précédente peut tenir encore le verrou quelques instants (voir acquireLock).
+const primary = acquireLock({ tryLock: () => app.requestSingleInstanceLock(), env: process.env, sleep: blockingSleep });
 if (!primary) {
   // `npm run dev` / `npm start` pendant que l'app de l'utilisateur tourne avec la même config : pas un plantage.
   console.error(
@@ -124,29 +130,44 @@ let systemdOk = false;
 
 /** Désinstallation lancée : plus aucune synchronisation du service (il ne doit pas être recréé). */
 let uninstalling = false;
+/**
+ * AppImage de ce processus, vérifiée par realAppImage() — seule source de vérité (accueil, menu, service, mises à jour) :
+ * APPDIR est un montage FUSE, le binaire en cours est dessous, APPIMAGE est un fichier ordinaire à en-tête AppImage.
+ * Un APPIMAGE hérité d'une autre application, ou posé à la main, n'est jamais utilisé.
+ */
+// Flux de test des mises à jour (sources + --update-feed-test + flux local) : seul cas où APPDIR est tenu pour un montage.
+const updateFeed = testFeedFromEnv(process.env, app.isPackaged, process.argv);
+const ownImage = realAppImage(process.env, testFeedTrust(process.env, updateFeed, app.isPackaged));
+/** N1 : copie installée (~/Applications/proc-watch.AppImage) présente → le service pointe vers elle, jamais vers l'original. */
+const execArgs = () =>
+  recorderExecArgs({ appImage: recorderAppImage(ownImage, installedAppImage(homedir())) ?? undefined, execPath: process.execPath, appPath: app.getAppPath() });
 
-const execArgs = () => recorderExecArgs({ appImage: process.env.APPIMAGE, execPath: process.execPath, appPath: app.getAppPath() });
-
-/** `explicit` : action de l'utilisateur (réglage) ; sinon synchronisation au démarrage (création réservée à autoManageService). */
-async function doSync(explicit: boolean): Promise<void> {
+/**
+ * `explicit` : action de l'utilisateur (réglage) ; sinon synchronisation au démarrage (création réservée à autoManageService).
+ * `restart` : nouvelle version de l'app (mise à jour) : le service est relancé même si son unité n'a pas changé.
+ */
+async function doSync(explicit: boolean, restart = false): Promise<boolean> {
   systemdOk = await systemctlAvailable(defaultSystemctl);
-  if (!systemdOk || recorderSyncDisabled() || uninstalling) return;
+  if (!systemdOk || recorderSyncDisabled() || uninstalling) return false;
   // Au démarrage en dev (non empaqueté, sans PROC_WATCH_RECORDER_DEV) : jamais de création d'unité, mais une unité
   // existante est tenue à jour (ou retirée si l'historique est désactivé), comme en mode empaqueté.
   const allowCreate = explicit || autoManageService(app.isPackaged);
   try {
-    await ensureRecorderService({ enabled: config.recorder.enabled, args: execArgs(), path: unitPath(), run: defaultSystemctl, allowCreate });
+    await ensureRecorderService({ enabled: config.recorder.enabled, args: execArgs(), path: unitPath(), run: defaultSystemctl, allowCreate, restart });
+    return true;
   } catch (e) {
     console.error('recorder service:', e);
+    return false;
   }
 }
 
-let syncing: Promise<void> = Promise.resolve();
-/** Sérialise les synchronisations pour éviter des appels systemctl concurrents. */
-function syncRecorder(explicit: boolean): Promise<void> {
-  const run = () => doSync(explicit);
-  syncing = syncing.then(run, run);
-  return syncing;
+let syncing: Promise<unknown> = Promise.resolve();
+/** Sérialise les synchronisations pour éviter des appels systemctl concurrents ; vrai si la synchronisation a abouti. */
+function syncRecorder(explicit: boolean, restart = false): Promise<boolean> {
+  const run = () => doSync(explicit, restart);
+  const next = syncing.then(run, run);
+  syncing = next;
+  return next;
 }
 
 const recorderState = (): RecorderState =>
@@ -716,15 +737,15 @@ ipcMain.handle('earlyoom:setup', async (_e, mode: unknown) => {
 
 ipcMain.handle('desktop:install', () => {
   if (!app.isPackaged) throw new Error('Disponible uniquement dans la version installée (AppImage ou .deb)');
-  return installDesktopEntry(realAppImage() ?? process.execPath, process.env, undefined, appIcon);
+  return installDesktopEntry(ownImage ?? process.execPath, process.env, undefined, appIcon);
 });
 
 // ---------------------------------------------------------------- installation comme une app, accueil, désinstallation
 // Racines injectables (HOME, XDG_CONFIG_HOME, XDG_DATA_HOME) : une app de test aux dossiers temporaires ne touche rien d'autre.
 const roots = rootsFrom(process.env, homedir());
 const paths = appPaths(roots);
-/** AppImage réellement lancée (montage FUSE, binaire dessous, en-tête AppImage : voir realAppImage), sinon null. */
-const appImage = realAppImage();
+/** AppImage réellement lancée (voir ownImage / realAppImage), sinon null. */
+const appImage = ownImage;
 const onboardingFile = join(dir, 'onboarding.json');
 const readOnboarding = (): OnboardingFile | null => {
   try {
@@ -863,9 +884,10 @@ ipcMain.handle('uninstall:run', async (_e, o: unknown) => {
   const result = await runUninstall(plan, roots, {
     service: {
       stop: async (unitPath) => {
+        // échoue fermé : erreur ou `keep` (PROC_WATCH_NO_RECORDER_SYNC) → unité et AppImage gardées
         const r = await stopRecorderForUninstall({ unitPath, run: defaultSystemctl, disabled: recorderSyncDisabled() });
         stopped = r.stopped;
-        return r.error;
+        return r;
       },
       reload: async () => {
         if (stopped) await defaultSystemctl(['daemon-reload']);
@@ -983,6 +1005,8 @@ ipcMain.handle('tray:available', async () => {
 });
 
 app.on('second-instance', (_e, argv) => {
+  // Pendant une installation de mise à jour, la nouvelle version peut démarrer avant que celle-ci ait fini de quitter.
+  if (quitting) return;
   const action = secondInstanceAction(argv);
   if (action === 'free') openFree();
   else if (action === 'show') showWindow();
@@ -990,14 +1014,115 @@ app.on('second-instance', (_e, argv) => {
   if (id !== null) alertOpener.open(id);
 });
 
+// Mises à jour : AppImage empaquetée → proposition puis installation sur demande ; .deb → notification seulement ;
+// sources → rien (sauf PROC_WATCH_UPDATE_FEED vers un flux de test local). Réglages dans updater.json.
+const updatePrefs = createPrefsStore(join(dir, 'updater.json'));
+// Copie installée (~/Applications/proc-watch.AppImage) présente mais pas lancée : l'original n'est pas mis à jour.
+const updMode = updateMode({ isPackaged: app.isPackaged, appImage: ownImage, testFeed: updateFeed, installedElsewhere: !!ownImage && installedElsewhere(ownImage, homedir()) });
+let updateBackend: Promise<UpdateBackend> | null = null;
+const loadUpdateBackend = (): Promise<UpdateBackend> =>
+  (updateBackend ??=
+    updMode === 'install'
+      ? createAppImageBackend({ testFeed: updateFeed, testConfigPath: join(app.getPath('userData'), 'test-app-update.yml'), appImage: ownImage! })
+      : Promise.resolve(createReleasesApiBackend({ url: updateFeed ? `${updateFeed}releases.json` : RELEASES_API_URL, fetch })));
+let installBackend: UpdateBackend | null = null;
+const updater = createUpdateController({
+  mode: updMode,
+  current: app.getVersion(),
+  backend:
+    updMode === 'off'
+      ? null
+      : {
+          check: async (pre) => (await loadUpdateBackend()).check(pre),
+          download: async (onProgress) => {
+            const b = await loadUpdateBackend();
+            if (!b.download) throw new Error('Téléchargement indisponible');
+            installBackend = b;
+            await b.download(onProgress);
+          },
+          pendingFile: () => installBackend?.pendingFile?.() ?? null,
+          install: () => {
+            if (!installBackend?.install) throw new Error('Installation indisponible');
+            quitting = true;
+            try {
+              installBackend.install();
+            } catch (e) {
+              quitting = false; // installation échouée : l'app reste ouverte et fonctionne normalement
+              throw e;
+            }
+          },
+        },
+  loadPrefs: () => updatePrefs.load(),
+  savePrefs: (p) => updatePrefs.save(p),
+  send: (v) => {
+    if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send('update:view', v);
+  },
+  now: () => Date.now(),
+  setTimeout: (fn, ms) => setTimeout(fn, ms),
+  setInterval: (fn, ms) => setInterval(fn, ms),
+});
+ipcMain.handle('update:get', () => updater.view());
+ipcMain.handle('update:check', async () => {
+  await updater.check(true);
+  return updater.view();
+});
+ipcMain.handle('update:download', () => {
+  void updater.download();
+  return updater.view();
+});
+ipcMain.handle('update:install', () => updater.install());
+ipcMain.handle('update:retry', () => {
+  void updater.retry();
+  return updater.view();
+});
+ipcMain.handle('update:later', () => {
+  updater.later();
+  return updater.view();
+});
+ipcMain.handle('update:ignore', () => {
+  updater.ignore();
+  return updater.view();
+});
+ipcMain.handle('update:setPrefs', (_e, raw: unknown) => updater.setPrefs(raw));
+ipcMain.handle('update:openRelease', (_e, url: unknown) => {
+  if (!isReleaseUrl(url)) throw new Error('Adresse refusée');
+  return shell.openExternal(url);
+});
+
+/**
+ * Nouvelle version depuis le lancement précédent (mise à jour) : le service est relancé (nouveau code), puis la version est
+ * mémorisée, seulement si la synchronisation a abouti (sinon nouvel essai au prochain lancement). Sources : jamais.
+ */
+async function syncAfterUpdate(): Promise<void> {
+  const version = app.getVersion();
+  const changed = app.isPackaged && updatePrefs.load().lastRunVersion !== version;
+  const ok = await syncRecorder(false, changed);
+  if (!changed || !ok) return;
+  try {
+    updatePrefs.save({ ...updatePrefs.load(), lastRunVersion: version });
+  } catch (e) {
+    console.error('updater:', e);
+  }
+}
+
 app.whenReady().then(async () => {
   if (!primary) return;
   // `--hidden` (démarrage avec la session) : fenêtre cachée, puis dans la barre des tâches si l'icône existe, sinon réduite.
   const shown = startWindowShown(process.argv);
   await deletePendingOriginal(); // avant la fenêtre : l'accueil repris montre le résultat
   createWindow(shown);
-  void syncRecorder(false);
+  // Après une mise à jour de l'AppImage, le fichier a souvent un nouveau nom : l'unité du service (ExecStart) est réécrite
+  // par la synchronisation (copie installée, sinon AppImage vérifiée), et relancée même si elle est identique (nouveau code).
+  void syncAfterUpdate();
+  if (app.isPackaged && ownImage) {
+    try {
+      refreshDesktopEntry(ownImage);
+    } catch (e) {
+      console.error('desktop entry:', e);
+    }
+  }
   const tray = syncTray();
+  updater.start();
   if (shown) return;
   await tray;
   if (mainWin && !mainWin.isDestroyed() && !mainWin.isVisible() && hiddenPlacement(trayCtl?.active() === true) === 'minimized') {

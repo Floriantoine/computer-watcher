@@ -5,6 +5,7 @@ import type { Category, Config, ConfigState, Culprit, GroupSummary, InstanceSumm
 import { bulkDialogTitle, chunkTargets, freeBlockedReason, freeCandidates, runBulkKill, type BulkRequest, type Preset } from './bulkKill';
 import { AlertPopups, useAlertPopups } from './components/AlertPopups';
 import { EarlyoomSetupPopup, useEarlyoomReminder } from './components/EarlyoomSetupPopup';
+import { UpdatePopup, useUpdateActions, useUpdateView } from './components/UpdatePopup';
 import { BulkKillDialog } from './components/BulkKillDialog';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { DetailView } from './components/DetailView';
@@ -200,6 +201,13 @@ export function App() {
       <EarlyoomSetupPopup key="earlyoom-setup" mode={eoReminder.mode} busy={eoReminder.busy} onSetup={eoReminder.setup} onLater={eoReminder.remindLater} />
     ),
     [onboardingAtLaunch, eoReminder.mode, eoReminder.busy, eoReminder.setup, eoReminder.remindLater],
+  );
+  // Mise à jour disponible : pop-up en tête de pile, après celui d'earlyoom.
+  const [updateView, setUpdateView] = useUpdateView();
+  const onUpdateAction = useUpdateActions(setUpdateView, (m, kind) => pushToast(m, kind));
+  const leads = useMemo(
+    () => [eoLead, updateView?.popup && <UpdatePopup key="update" view={updateView} onAction={onUpdateAction} />],
+    [eoLead, updateView, onUpdateAction],
   );
 
   /** Mémorise les SIGTERM envoyés (boutons qui pulsent, puis « Forcer » avec le même startTicks). */
@@ -588,7 +596,7 @@ export function App() {
           onNavigate={setRoute}
           onFree={requestFree}
           onSnooze={snoozeForecast}
-          lead={eoLead}
+          lead={leads}
         />
       </div>
     </MotionConfig>

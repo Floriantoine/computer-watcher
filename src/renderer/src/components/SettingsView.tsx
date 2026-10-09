@@ -29,6 +29,7 @@ import { EarlyoomPanel, type EarlyoomAttention } from './EarlyoomPanel';
 import { RulesPanel } from './RulesPanel';
 import { SettingsConfirm } from './SettingsConfirm';
 import { AboutSetup, AutostartRow } from './AppSetup';
+import { AboutPanel } from './UpdatePopup';
 import { Card, NumberField, Row, SaveBar, Switch } from './settingsUi';
 import { recorderToForm, validateRecorderForm, type RecorderErrors, type RecorderForm } from '../recorderForm';
 import {
@@ -618,7 +619,14 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
             </Card>,
           )}
 
-          {panel('about', 'about-panel', <AboutSetup onToast={onToast} onReopenOnboarding={onReopenOnboarding} />)}
+          {panel(
+            'about',
+            'about-panel',
+            <>
+              <AboutPanel onToast={onToast} />
+              <AboutSetup onToast={onToast} onReopenOnboarding={onReopenOnboarding} />
+            </>,
+          )}
         </div>
       </div>
     </>

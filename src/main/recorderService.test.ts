@@ -1,8 +1,8 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { expect, test } from 'vitest';
-import { autoManageService, recorderSyncDisabled, ensureRecorderService, recorderExecArgs, recorderUnit, systemdQuote, unitPath, type Systemctl } from './recorderService';
+import { describe, expect, test } from 'vitest';
+import { autoManageService, recorderSyncDisabled, ensureRecorderService, recorderAppImage, recorderExecArgs, recorderUnit, systemdQuote, unitPath, type Systemctl } from './recorderService';
 
 test('systemdQuote échappe \\ " $ % et entoure de guillemets', () => {
   expect(systemdQuote('/opt/My App/p%w$x"y\\z')).toBe('"/opt/My App/p%%w$$x\\"y\\\\z"');
@@ -107,4 +107,61 @@ test('PROC_WATCH_NO_RECORDER_SYNC=1 : l\'app ne touche jamais au service (mesure
   expect(recorderSyncDisabled({ PROC_WATCH_NO_RECORDER_SYNC: '1' })).toBe(true);
   expect(recorderSyncDisabled({})).toBe(false);
   expect(recorderSyncDisabled({ PROC_WATCH_NO_RECORDER_SYNC: '0' })).toBe(false);
+});
+
+test('restart : unité inchangée mais nouvelle version de l’app → le service est relancé (nouveau code)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'procwatch-unit-restart-'));
+  const path = join(dir, 'proc-watch-recorder.service');
+  const calls: string[][] = [];
+  const run = async (a: string[]) => {
+    calls.push(a);
+    return { ok: true, stdout: '' };
+  };
+  await ensureRecorderService({ enabled: true, args: ['/a'], path, run });
+  calls.length = 0;
+  expect(await ensureRecorderService({ enabled: true, args: ['/a'], path, run, restart: true })).toBe('restarted');
+  expect(calls).toEqual([['enable', '--now', 'proc-watch-recorder.service'], ['restart', 'proc-watch-recorder.service']]);
+  // unité absente en mode dev : restart ne crée rien
+  rmSync(path);
+  calls.length = 0;
+  expect(await ensureRecorderService({ enabled: true, args: ['/a'], path, run, restart: true, allowCreate: false })).toBe('absent');
+  expect(calls).toEqual([]);
+});
+
+test('caractère de contrôle dans un argument (chemin d’AppImage) : refusé, unité jamais écrite', async () => {
+  const path = join(mkdtempSync(join(tmpdir(), 'pw-ctl-')), 'proc-watch-recorder.service');
+  const f = fake();
+  expect(() => recorderUnit(['/home/u/a\nExecStartPre=/bin/x.AppImage'])).toThrow();
+  await expect(ensureRecorderService({ enabled: true, args: ['/home/u/a\rb'], path, run: f.run })).rejects.toThrow();
+  expect(existsSync(path)).toBe(false);
+  expect(f.calls).toEqual([]);
+});
+
+describe('N1 : le service pointe vers la copie installée quand elle existe', () => {
+  const copy = '/home/u/Applications/proc-watch.AppImage';
+  const dl = '/home/u/Téléchargements/proc-watch-1.0.0-x86_64.AppImage';
+  test('lancée depuis l’original téléchargé, copie présente → la copie, jamais l’original', () => {
+    expect(recorderAppImage(dl, copy, (p) => p === copy)).toBe(copy);
+    const args = recorderExecArgs({ appImage: recorderAppImage(dl, copy, (p) => p === copy) ?? undefined, execPath: '/x', appPath: '/y' });
+    expect(args[0]).toBe(copy);
+    expect(recorderUnit(args)).toContain(`ExecStart="${copy}"`);
+    expect(recorderUnit(args)).not.toContain(dl);
+  });
+  test('lancée depuis la copie → la copie', () => {
+    expect(recorderAppImage(copy, copy, () => true)).toBe(copy);
+  });
+  test('pas de copie → l’AppImage lancée ; pas une AppImage (.deb, dev) → null (binaire lancé)', () => {
+    expect(recorderAppImage(dl, copy, () => false)).toBe(dl);
+    expect(recorderAppImage(null, copy, () => true)).toBeNull();
+  });
+  test('resynchro au démarrage depuis l’original : l’unité qui vise la copie n’est jamais réécrite vers l’original', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pw-n1-'));
+    const path = join(dir, 'proc-watch-recorder.service');
+    const run: Systemctl = async () => ({ ok: true, stdout: '' });
+    const args = () => recorderExecArgs({ appImage: recorderAppImage(dl, copy, (p) => p === copy) ?? undefined, execPath: '/x', appPath: '/y' });
+    expect(await ensureRecorderService({ enabled: true, args: args(), path, run })).toBe('installed');
+    expect(await ensureRecorderService({ enabled: true, args: args(), path, run })).toBe('unchanged');
+    expect(readFileSync(path, 'utf8')).toContain(copy);
+    expect(readFileSync(path, 'utf8')).not.toContain(dl);
+  });
 });
