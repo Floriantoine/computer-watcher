@@ -1,6 +1,6 @@
 // src/recorder/recorder.ts
 import { APP_DISPLAY_NAME } from '../core/appName';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, statfsSync, writeFileSync } from 'node:fs';
 import { cpus, homedir } from 'node:os';
 import type { DatabaseSync } from 'node:sqlite';
 import { appFocused, desktopMessage, desktopAllowed, parseFocusState, type AlertEvent, type AlertsConfig } from '../core/alerts';
@@ -16,11 +16,13 @@ import { claudeDirs } from '../core/grouping/claudeDirs';
 import { createProjectRootCache } from '../core/grouping/projectRootCache';
 import { DEV_TOOL } from '../core/grouping/rules';
 import { readEarlyoomThresholds } from '../core/forecast/earlyoom';
+import { diskThresholdKB, initialDiskAlertState, shouldRecordDiskLow, type DiskAlertState } from '../core/disk/alert';
+import { watchedPartitions, type Partition } from '../core/disk/partitions';
 import { MarginBuffer, SNOOZE_MS, alertText, conditionHeld, forecast, stepAlert, type AlertState, type Forecast } from '../core/forecast/forecast';
 import { readSnooze, writeSnooze } from '../core/forecast/snooze';
 import { historyBackups, openHistoryDb } from '../core/history/db';
 import {
-  detectGap, insertEvent, lastEventTs, lastSampleTs, parseEarlyoom, parseJournalLine, ruleEventsSince, shouldRecordPressure, shouldRecordTmpfs, takeAppEvents,
+  detectGap, insertEvent, lastDiskLowByMount, lastEventTs, lastSampleTs, parseEarlyoom, parseJournalLine, ruleEventsSince, shouldRecordPressure, shouldRecordTmpfs, takeAppEvents,
   type TmpfsAlertState,
 } from '../core/history/events';
 import { historyCovers, queryCulprits, queryInactive } from '../core/history/queries';
@@ -74,6 +76,16 @@ export interface RecorderDeps {
    * jamais). L'horloge murale (`now`) ne sert qu'à l'historique.
    */
   monoNow?: () => number;
+  /** Taille et libre d'un point de montage, en Ko (défaut : statfs(2)). */
+  statfs?: (mount: string) => { sizeKB: number; availKB: number };
+  /** Contenu de /proc/self/mountinfo (défaut : lu à chaque relecture des partitions). */
+  mountinfo?: () => string;
+}
+
+/** statfs(2) en Ko : taille totale et place disponible pour un utilisateur ordinaire (f_bavail). */
+export function readStatfs(mount: string): { sizeKB: number; availKB: number } {
+  const s = statfsSync(mount);
+  return { sizeKB: Math.round((s.blocks * s.bsize) / 1024), availKB: Math.round((s.bavail * s.bsize) / 1024) };
 }
 
 /** Seuil d'activité de « inactive depuis T » : un processus sous procMinCpuPercent n'est pas enregistré, donc pas « actif ». */
@@ -116,6 +128,10 @@ const RETRY_FIRST_MS = 10_000;
 const RETRY_MAX_MS = 5 * M;
 /** Sans prévision plus de 6 min après le démarrage : « indisponible » (moins de 5 échantillons en 5 min). */
 const FORECAST_WARMUP_MS = 6 * M;
+/** Partitions surveillées (mountinfo) relues au plus toutes les 60 s. */
+const PARTITIONS_EVERY_MS = 60_000;
+/** Au redémarrage, les alertes disk_low des dernières 24 h retiennent la suivante (pas de doublon). */
+const DISK_LOW_MEMORY_MS = 24 * H;
 /** Règles : ports en écoute relus au plus toutes les 60 s (classement des instances). */
 const RULE_PORTS_EVERY_MS = 60_000;
 /** Règles : cache des décisions de classement vidé toutes les 60 s (durée du cache de package.json). */
@@ -180,6 +196,19 @@ export function createRecorder(deps: RecorderDeps): Recorder {
   let retryMs = 0;
   let retryAt = 0;
   const snoozeFile = () => forecastSnoozePath(deps.dataDir);
+  // Disque : partitions surveillées, état de l'alerte par point de montage, dernière erreur journalisée (une ligne par changement).
+  const statfs = deps.statfs ?? readStatfs;
+  const readMountinfo = deps.mountinfo ?? (() => readFileSync('/proc/self/mountinfo', 'utf8'));
+  let partitions: Partition[] = [];
+  let partitionsAt: number | null = null;
+  let diskAlerts = new Map<string, DiskAlertState>();
+  let diskLastLow = new Map<string, number>();
+  let diskError = '';
+  const diskLog = (msg: string) => {
+    if (msg === diskError) return;
+    diskError = msg;
+    if (msg) log(msg);
+  };
 
   const writeStatus = () => {
     try {
@@ -236,7 +265,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       // Prévision : « Libérer… » ouvre l'app sur l'alerte (kill groupé pré-rempli, rien sans confirmation) ; « Ignorer 30 min ».
       const actions = e.type === 'forecast'
         ? [...(launch ? [{ id: 'free', label: 'Libérer…' }] : []), { id: 'snooze', label: 'Ignorer 30 min' }]
-        : launch ? [{ id: 'open', label: 'Ouvrir' }] : [];
+        : launch ? [{ id: 'open', label: e.type === 'disk_low' ? 'Voir le disque' : 'Ouvrir' }] : [];
       notifier
         .notify({ title, body, urgency: 'critical', actions })
         .then(
@@ -416,6 +445,58 @@ export function createRecorder(deps: RecorderDeps): Recorder {
     return classifyGroups(groups, { overrides, ports: rulePorts, pkg: (root) => readPackageHints(root), isProtected: protection.isProtected, memo: decisions });
   };
 
+  /**
+   * Espace libre de chaque partition surveillée (une ligne par disque réel et par tick) et alerte disk_low. Dans son propre
+   * try : une erreur ici ne casse jamais l'échantillonnage de la mémoire.
+   */
+  const runDisk = (d: DatabaseSync, ts: number) => {
+    try {
+      if (partitionsAt === null || !(ts - partitionsAt >= 0 && ts - partitionsAt < PARTITIONS_EVERY_MS)) {
+        partitions = watchedPartitions(readMountinfo(), (m) => {
+          try {
+            return statfs(m).sizeKB;
+          } catch {
+            return null;
+          }
+        });
+        partitionsAt = ts;
+      }
+      const ins = d.prepare('INSERT OR REPLACE INTO disk_samples(ts, mount, size_kb, avail_kb) VALUES (?, ?, ?, ?)');
+      const errors: string[] = [];
+      for (const p of partitions) {
+        let s: { sizeKB: number; availKB: number };
+        try {
+          s = statfs(p.mount);
+        } catch (e) {
+          errors.push(`${p.mount} : ${(e as Error).message}`);
+          continue;
+        }
+        const sizeKB = Math.round(s.sizeKB);
+        const availKB = Math.round(s.availKB);
+        if (!(sizeKB > 0) || !(availKB >= 0)) continue;
+        ins.run(ts, p.mount, sizeKB, availKB);
+        const thresholdKB = Math.round(diskThresholdKB(sizeKB, cfg.diskAlertPercent, cfg.diskAlertGB));
+        const prev = diskAlerts.get(p.mount) ?? initialDiskAlertState(diskLastLow.get(p.mount) ?? null, ts);
+        const r = shouldRecordDiskLow({ mount: p.mount, sizeKB, availKB }, thresholdKB, prev, ts);
+        if (r.record) {
+          const detail = { mount: p.mount, availKB, sizeKB, thresholdKB };
+          // état retenu seulement après l'écriture : un échec est retenté au tick suivant
+          try {
+            alert(insertEvent(d, ts, 'disk_low', null, detail), ts, 'disk_low', null, null, detail);
+          } catch (e) {
+            errors.push(`alerte ${p.mount} non enregistrée : ${(e as Error).message}`);
+            diskAlerts.set(p.mount, prev);
+            continue;
+          }
+        }
+        diskAlerts.set(p.mount, r.state);
+      }
+      diskLog(errors.length ? `disque: ${errors.join(' ; ')}` : '');
+    } catch (e) {
+      diskLog(`disque: ${(e as Error).message}`);
+    }
+  };
+
   /** Règles après l'écriture du tick, dans leur propre try : une erreur ici ne casse jamais l'échantillonnage. */
   const runRules = (d: DatabaseSync, ts: number, groups: Group[], procs: readonly ProcInfo[]) => {
     // interrupteur général éteint, ou aucune règle activée : rien (pas même de classement ni de simulation, ni de crédit)
@@ -501,6 +582,9 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       lastHour = Math.floor(lastMinute / H) * H;
       lastPressureTs = lastEventTs(db, 'pressure');
       tmpfs = { lastTs: lastEventTs(db, 'tmpfs'), armed: false, belowSince: null };
+      diskAlerts = new Map();
+      diskLastLow = lastDiskLowByMount(db, now() - DISK_LOW_MEMORY_MS);
+      partitionsAt = null;
       // pas de nouvelle alerte de prévision juste après un redémarrage du service
       forecastState = { lastAlertAt: lastEventTs(db, 'forecast'), snoozedUntil: readSnooze(snoozeFile(), now()), holdingSince: null };
       // quotas et pauses des règles : survivent à un redémarrage du service
@@ -545,6 +629,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
           alert(insertEvent(db, ts, 'tmpfs', null, detail), ts, 'tmpfs', null, null, detail);
         }
         tmpfs = r.state;
+        runDisk(db, ts);
         runForecast(db, ts, system);
         runRules(db, ts, groups, procs);
         st.lastSampleAt = ts;

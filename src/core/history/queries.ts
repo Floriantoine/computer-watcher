@@ -2,7 +2,7 @@
 import type { RuleStats } from '../rules/types';
 import type { DatabaseSync } from 'node:sqlite';
 import type {
-  Culprit, GroupHistory, GroupKind, GroupsHistory, HistoryEvent, ProcsHistory, ProcTreeAt, ProcTreeRow, RangePreset, SystemSeries, TimeRange, TopConsumer, TopOptions, TopResult,
+  Culprit, DiskHistory, GroupHistory, GroupKind, GroupsHistory, HistoryEvent, ProcsHistory, ProcTreeAt, ProcTreeRow, RangePreset, SystemSeries, TimeRange, TopConsumer, TopOptions, TopResult,
 } from '../types';
 import { hasColumn } from './db';
 import { alignSeries } from './series';
@@ -82,6 +82,29 @@ export function querySystem(db: DatabaseSync, range: TimeRange, o: QueryOpts): S
     shmemKB: rows.map((r) => r.shmem),
     groupsKB: rows.map((r) => groups.get(r.t) ?? null),
   };
+}
+
+const DISK_TABLE: Record<Source, string> = { detail: 'disk_samples', minute: 'disk_minute', hour: 'disk_hour' };
+
+/**
+ * Espace libre par partition (v6) : une série par point de montage, libre au plus bas du bucket. Base pas encore migrée
+ * (lecture seule, sans tables disque) : vide.
+ */
+export function queryDisk(db: DatabaseSync, range: TimeRange, o: QueryOpts): DiskHistory {
+  const { source, bucket } = plan(db, range, o);
+  const table = DISK_TABLE[source];
+  if (!hasTable(db, table)) return { ts: [], series: [] };
+  const avail = source === 'detail' ? 'MIN(avail_kb)' : 'MIN(avail_kb_min)';
+  const rows = db
+    .prepare(
+      `SELECT (${I} + ((ts - ${I}) / ${I}) * ${I}) AS t, mount, ${avail} AS v, MAX(size_kb) AS size
+       FROM ${table} WHERE ts >= ? AND ts < ? GROUP BY mount, t ORDER BY mount, t`,
+    )
+    .all(range.from, range.from, bucket, bucket, range.from, range.to) as { t: number; mount: string; v: number; size: number }[];
+  const { ts, byKey } = alignSeries(rows.map((r) => ({ t: r.t, key: r.mount, v: r.v })));
+  const size = new Map<string, number>();
+  for (const r of rows) size.set(r.mount, r.size); // ORDER BY t : la dernière taille gagne
+  return { ts, series: [...byKey].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([mount, availKB]) => ({ mount, sizeKB: size.get(mount) ?? 0, availKB })) };
 }
 
 /** Pas natif des tables agrégées : un bucket au moins aussi long contient au plus une ligne par groupe et par pas. */

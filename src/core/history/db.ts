@@ -4,7 +4,7 @@ import { basename, dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { rollupHours } from './maintenance';
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 /** Tables horaires (v3) : sources des plages > 48 h, alimentées depuis les tables minute. Colonnes shmem : v4. */
 const HOUR_SCHEMA = `
@@ -21,6 +21,28 @@ CREATE TABLE IF NOT EXISTS group_hour (
   PRIMARY KEY (group_id, ts)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS group_hour_ts ON group_hour(ts);
+`;
+
+/**
+ * Espace libre par partition surveillée (v6) : échantillons à chaque tick, agrégats par minute et par heure (libre au plus
+ * bas et moyen). Clé (mount, ts) : séries par partition sans tri ; index ts pour la purge.
+ */
+const DISK_SCHEMA = `
+CREATE TABLE IF NOT EXISTS disk_samples (
+  ts INTEGER NOT NULL, mount TEXT NOT NULL, size_kb INTEGER NOT NULL, avail_kb INTEGER NOT NULL,
+  PRIMARY KEY (mount, ts)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS disk_samples_ts ON disk_samples(ts);
+CREATE TABLE IF NOT EXISTS disk_minute (
+  ts INTEGER NOT NULL, mount TEXT NOT NULL, size_kb INTEGER NOT NULL, avail_kb_min INTEGER NOT NULL, avail_kb_avg REAL NOT NULL,
+  PRIMARY KEY (mount, ts)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS disk_minute_ts ON disk_minute(ts);
+CREATE TABLE IF NOT EXISTS disk_hour (
+  ts INTEGER NOT NULL, mount TEXT NOT NULL, size_kb INTEGER NOT NULL, avail_kb_min INTEGER NOT NULL, avail_kb_avg REAL NOT NULL,
+  PRIMARY KEY (mount, ts)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS disk_hour_ts ON disk_hour(ts);
 `;
 
 /**
@@ -107,7 +129,8 @@ CREATE TABLE proc_minute (
 CREATE INDEX proc_minute_ts ON proc_minute(ts);
 CREATE TABLE events (id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, type TEXT NOT NULL, group_id INTEGER, detail TEXT NOT NULL DEFAULT '{}');
 CREATE INDEX events_ts ON events(ts);
-${HOUR_SCHEMA}`;
+${HOUR_SCHEMA}
+${DISK_SCHEMA}`;
 
 /** Connexion d'écriture : WAL, et journal WAL ramené à 64 Mo au plus après chaque checkpoint. */
 const WRITER_PRAGMAS = 'PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA journal_size_limit = 67108864;';
@@ -216,7 +239,7 @@ function dedupCmdlines(db: DatabaseSync): void {
 /**
  * v1 -> v2 : procs.ppid (NULL pour l'historique existant) ; v2 -> v3 : tables horaires remplies depuis les minutes ;
  * v3 -> v4 : colonnes shmem (ALTER TABLE ADD COLUMN, sans réécriture des tables) ; v4 -> v5 : table cmdlines, procs.cmdline_id
- * et index procs_cmdline, procs_pid. Idempotent, atomique : en cas d'échec, la base reste à sa version d'origine.
+ * et index procs_cmdline, procs_pid ; v5 -> v6 : tables disque (vides). Idempotent, atomique : en cas d'échec, la base reste à sa version d'origine.
  */
 function migrate(db: DatabaseSync): void {
   db.exec('BEGIN IMMEDIATE');
@@ -224,6 +247,7 @@ function migrate(db: DatabaseSync): void {
     if (!hasColumn(db, 'procs', 'ppid')) db.exec('ALTER TABLE procs ADD COLUMN ppid INTEGER');
     const hadHours = tableExists(db, 'system_hour') && tableExists(db, 'group_hour');
     db.exec(HOUR_SCHEMA);
+    db.exec(DISK_SCHEMA);
     for (const [t, c, type] of SHMEM_COLUMNS) {
       if (!hasColumn(db, t, c)) db.exec(`ALTER TABLE ${t} ADD COLUMN ${c} ${type}`);
     }
@@ -238,7 +262,7 @@ function migrate(db: DatabaseSync): void {
   }
   // rend la place de l'ancienne table procs, puis vide le journal WAL (un lecteur ouvert peut empêcher la troncature :
   // ce n'est pas une erreur, le journal sera recyclé plus tard)
-  // Après la validation, la base est déjà une v5 valide : un échec ici ne doit pas faire planter le démarrage.
+  // Après la validation, la base est déjà une v6 valide : un échec ici ne doit pas faire planter le démarrage.
   try {
     db.exec('PRAGMA incremental_vacuum;');
     db.exec('PRAGMA busy_timeout = 0;'); // sans attendre le lecteur : busy = 1 dans le résultat, pas une erreur
@@ -286,7 +310,7 @@ export function openHistoryDb(
       // base créée par une version plus récente : jamais écartée ni modifiée (retour arrière possible)
       throw Object.assign(new Error('HISTORY_DB_NEWER'), { code: 'HISTORY_DB_NEWER', version: v });
     }
-    // v1 à v4 reconnues (table procs présente) : migration en place ; sinon traitée comme inconnue (.bak)
+    // v1 à v5 reconnues (table procs présente) : migration en place ; sinon traitée comme inconnue (.bak)
     const migratable = v >= 1 && v < SCHEMA_VERSION && hasColumn(db, 'procs', 'id');
     let warning: string | null = null;
     if (migratable) {

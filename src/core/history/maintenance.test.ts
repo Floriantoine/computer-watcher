@@ -205,3 +205,29 @@ test('Shmem : minute = moyenne/max des échantillons, heure depuis les minutes, 
     { ts: H, shmem_kb_avg: 3500, shmem_kb_max: 5000 },
   ]);
 });
+
+test('disque : minute (min et moyenne du libre, taille), heure depuis les minutes, purge et effacement', () => {
+  const db = open();
+  const ins = db.prepare('INSERT INTO disk_samples(ts, mount, size_kb, avail_kb) VALUES (?,?,?,?)');
+  for (const [ts, avail] of [[0, 1000], [5000, 800], [61_000, 500]]) {
+    ins.run(ts, '/', 10_000, avail);
+    ins.run(ts, '/home', 20_000, avail * 2);
+  }
+  aggregateMinute(db, 0);
+  expect(db.prepare('SELECT * FROM disk_minute ORDER BY mount').all()).toEqual([
+    { ts: 0, mount: '/', size_kb: 10_000, avail_kb_min: 800, avail_kb_avg: 900 },
+    { ts: 0, mount: '/home', size_kb: 20_000, avail_kb_min: 1600, avail_kb_avg: 1800 },
+  ]);
+  aggregateMinute(db, M);
+  aggregateHour(db, 0);
+  expect(db.prepare("SELECT * FROM disk_hour WHERE mount = '/'").all()).toEqual([{ ts: 0, mount: '/', size_kb: 10_000, avail_kb_min: 500, avail_kb_avg: 700 }]);
+  // détail au-delà de detailHours, minutes et heures au-delà de summaryDays
+  purge(db, 2 * 3600_000 + 30_000, 2, 30);
+  expect(db.prepare('SELECT ts FROM disk_samples ORDER BY ts').all()).toEqual([{ ts: 61_000 }, { ts: 61_000 }]);
+  purge(db, 31 * 86400_000 + 2 * 3600_000, 1, 30);
+  expect(db.prepare('SELECT COUNT(*) n FROM disk_minute').get()).toEqual({ n: 0 });
+  expect(db.prepare('SELECT COUNT(*) n FROM disk_hour').get()).toEqual({ n: 0 });
+  ins.run(5, '/', 1, 1);
+  clearAll(db);
+  expect(db.prepare('SELECT COUNT(*) n FROM disk_samples').get()).toEqual({ n: 0 });
+});

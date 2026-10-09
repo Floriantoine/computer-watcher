@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
 
-export type EventType = 'earlyoom_kill' | 'pressure' | 'gap' | 'app_kill' | 'leak' | 'tmpfs' | 'forecast' | 'rule_action' | 'rule_dry_run' | 'earlyoom_setup' | 'tmp_clean';
+export type EventType = 'earlyoom_kill' | 'pressure' | 'gap' | 'app_kill' | 'leak' | 'tmpfs' | 'forecast' | 'rule_action' | 'rule_dry_run' | 'earlyoom_setup' | 'tmp_clean' | 'disk_low' | 'disk_clean';
 
 const EARLYOOM = /sending (SIGTERM|SIGKILL) to process (\d+)(?: uid (\d+))? "([^"]*)"/;
 
@@ -226,6 +226,20 @@ export function lastSampleTs(db: DatabaseSync): number | null {
 
 export function lastEventTs(db: DatabaseSync, type: EventType): number | null {
   return (db.prepare('SELECT MAX(ts) AS ts FROM events WHERE type = ?').get(type) as { ts: number | null }).ts;
+}
+
+/** Dernière alerte disk_low par point de montage depuis `since` (détail illisible ignoré). */
+export function lastDiskLowByMount(db: DatabaseSync, since: number): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const r of db.prepare("SELECT ts, detail FROM events WHERE type = 'disk_low' AND ts >= ? ORDER BY ts").all(since) as { ts: number; detail: string }[]) {
+    try {
+      const m = (JSON.parse(r.detail) as { mount?: unknown }).mount;
+      if (typeof m === 'string') out.set(m, r.ts);
+    } catch {
+      // détail illisible
+    }
+  }
+  return out;
 }
 
 /** Événements de règles depuis `since` (ordre chronologique) ; détail sans `ruleId` ou `result` texte ignoré. */

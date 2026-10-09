@@ -290,3 +290,73 @@ test('meminfo sans ligne Shmem : shmem_kb NULL (trou dans la courbe), aucune ale
   expect(db().prepare("SELECT COUNT(*) n FROM events WHERE type = 'tmpfs'").get()).toEqual({ n: 0 });
   rec.stop();
 });
+
+test('disque : une ligne disk_samples par disque réel et par tick ; libre sous le seuil 60 s → un seul disk_low, même après redémarrage', () => {
+  const base = mkdtempSync(join(tmpdir(), 'pw-r-'));
+  const procRoot = makeProcRoot(1000);
+  writeFileSync(join(procRoot, 'meminfo'), 'MemTotal: 32000000 kB\nMemAvailable: 16000000 kB\nSwapTotal: 2000000 kB\nSwapFree: 1000000 kB\n');
+  writeFileSync(join(procRoot, 'loadavg'), '1.00 1.00 1.00 1/100 999\n');
+  const GB = 1024 * 1024;
+  // btrfs : / et /home sont deux sous-volumes du même disque ; tmpfs ignoré
+  const mountinfo = [
+    '30 1 0:28 /@ / rw,relatime shared:1 - btrfs /dev/nvme0n1p2 rw',
+    '31 1 0:28 /@home /home rw,relatime shared:2 - btrfs /dev/nvme0n1p2 rw',
+    '32 1 0:40 / /tmp rw shared:3 - tmpfs tmpfs rw',
+  ].join('\n');
+  const asked: string[] = [];
+  const statfs = (m: string) => {
+    asked.push(m);
+    return { sizeKB: 477 * GB, availKB: 15 * GB };
+  };
+  let t = 1_000_000;
+  const mk = () => createRecorder({ dataDir: join(base, 'data'), configDir: join(base, 'cfg'), procRoot, now: () => t, cpuCount: 4, log: () => {}, statfs, mountinfo: () => mountinfo });
+  const db = () => new DatabaseSync(join(base, 'data', 'metrics.db'), { readOnly: true });
+  const lows = () => db().prepare("SELECT ts, detail FROM events WHERE type = 'disk_low'").all();
+  let rec = mk();
+  rec.start();
+  rec.tick();
+  t += 30_000;
+  rec.tick();
+  expect(lows()).toEqual([]);
+  t += 30_000;
+  rec.tick();
+  const threshold = Math.round(Math.max(0.1 * 477 * GB, 20 * GB));
+  expect(lows()).toEqual([{ ts: 1_060_000, detail: JSON.stringify({ mount: '/', availKB: 15 * GB, sizeKB: 477 * GB, thresholdKB: threshold }) }]);
+  t += 30_000;
+  rec.tick();
+  expect(lows()).toHaveLength(1);
+  expect(db().prepare('SELECT ts, mount, size_kb, avail_kb FROM disk_samples ORDER BY ts').all()).toEqual(
+    [1_000_000, 1_030_000, 1_060_000, 1_090_000].map((ts) => ({ ts, mount: '/', size_kb: 477 * GB, avail_kb: 15 * GB })),
+  );
+  expect(new Set(asked)).toEqual(new Set(['/']));
+  rec.stop();
+  // redémarrage du service, disque toujours plein : pas de doublon
+  rec = mk();
+  rec.start();
+  for (let i = 0; i < 4; i++) {
+    t += 30_000;
+    rec.tick();
+  }
+  expect(lows()).toHaveLength(1);
+  rec.stop();
+});
+
+test('disque : statfs en échec → tick normal (échantillonnage mémoire intact), erreur journalisée', () => {
+  const base = mkdtempSync(join(tmpdir(), 'pw-r-'));
+  const procRoot = makeProcRoot(1000);
+  writeFileSync(join(procRoot, 'meminfo'), 'MemTotal: 32000000 kB\nMemAvailable: 16000000 kB\nSwapTotal: 2000000 kB\nSwapFree: 1000000 kB\n');
+  writeFileSync(join(procRoot, 'loadavg'), '1.00 1.00 1.00 1/100 999\n');
+  const logs: string[] = [];
+  const rec = createRecorder({
+    dataDir: join(base, 'data'), configDir: join(base, 'cfg'), procRoot, now: () => 1_000_000, cpuCount: 4, log: (m) => logs.push(m),
+    statfs: () => { throw new Error('EIO'); }, mountinfo: () => '30 1 8:2 / / rw - ext4 /dev/sda2 rw',
+  });
+  rec.start();
+  rec.tick();
+  const d = new DatabaseSync(join(base, 'data', 'metrics.db'), { readOnly: true });
+  expect(d.prepare('SELECT COUNT(*) n FROM system_samples').get()).toEqual({ n: 1 });
+  expect(d.prepare('SELECT COUNT(*) n FROM disk_samples').get()).toEqual({ n: 0 });
+  expect(rec.status().lastError).toBeNull();
+  expect(logs.some((l) => l.includes('disque') && l.includes('EIO'))).toBe(true);
+  rec.stop();
+});

@@ -58,3 +58,11 @@ test('tmpfsAlertMB : dans le formulaire (4000 par défaut), entier entre 100 et 
   expect(validateRecorderForm({ ...base, tmpfsAlertMB: '2.5' }, true).errors.tmpfsAlertMB).toBeTruthy();
   expect(validateRecorderForm({ ...base, tmpfsAlertMB: '4096' }, true).value?.tmpfsAlertMB).toBe(4096);
 });
+
+test('alerte disque : pourcentage (10, entier 1–50) et Go (20, entier 1–10000) dans le formulaire', () => {
+  expect(base.diskAlertPercent).toBe('10');
+  expect(base.diskAlertGB).toBe('20');
+  expect(validateRecorderForm({ ...base, diskAlertPercent: '51' }, true).errors.diskAlertPercent).toBe('Un entier entre 1 et 50 est attendu');
+  expect(validateRecorderForm({ ...base, diskAlertGB: '0' }, true).errors.diskAlertGB).toBe('Un entier entre 1 et 10000 est attendu');
+  expect(validateRecorderForm({ ...base, diskAlertPercent: '15', diskAlertGB: '50' }, true).value).toMatchObject({ diskAlertPercent: 15, diskAlertGB: 50 });
+});

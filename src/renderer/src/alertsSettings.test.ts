@@ -4,7 +4,7 @@ import { forecastNote, parseIntervalInput, SETTINGS_ALERT_TYPES, withChannel, wi
 import type { RecorderState } from '../../core/types';
 
 test('types réglables : ceux qui existent aujourd’hui, prévision ② comprise', () => {
-  expect(SETTINGS_ALERT_TYPES.map((t) => t.type)).toEqual(['earlyoom_kill', 'leak', 'tmpfs', 'pressure', 'forecast', 'rule_action', 'rule_dry_run']);
+  expect(SETTINGS_ALERT_TYPES.map((t) => t.type)).toEqual(['earlyoom_kill', 'leak', 'tmpfs', 'pressure', 'forecast', 'rule_action', 'rule_dry_run', 'disk_low']);
 });
 
 test('withChannel : change un seul type, config toujours valide', () => {

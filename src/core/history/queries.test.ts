@@ -6,7 +6,7 @@ import { describe, expect, test } from 'vitest';
 import type { DatabaseSync } from 'node:sqlite';
 import { createV3Db, openTestDb } from './testDb';
 import { aggregateMinute } from './maintenance';
-import { bucketMs, historyCovers, queryRuleStats, pickSource, queryInactive, queryCulprits, queryEvents, queryGroup, queryGroups, PROC_TREE_MAX, queryProcs, queryProcsAt, queryProcTree, querySystem, queryTop, rangeFromPreset, historyCoverage, historyFrom, pruneLastActiveCache, queryLastActive } from './queries';
+import { bucketMs, historyCovers, queryRuleStats, pickSource, queryInactive, queryCulprits, queryEvents, queryGroup, queryGroups, PROC_TREE_MAX, queryProcs, queryProcsAt, queryProcTree, querySystem, queryTop, rangeFromPreset, historyCoverage, historyFrom, pruneLastActiveCache, queryLastActive, queryDisk } from './queries';
 
 const H = 3600_000;
 const M = 60_000;
@@ -789,4 +789,26 @@ describe('historyCoverage (vue swap : trous de l\'historique)', () => {
     const db = coverageDb(range(now - 3 * D, now - 2 * H + M), now - 2 * H + 5000);
     expect(historyCoverage(db, now - 7 * D, now).latestTs).toBe(now - 2 * H + 5000);
   });
+});
+
+test('queryDisk : une série par partition (libre au plus bas du bucket, taille), détail puis minutes ; base sans tables disque → vide', () => {
+  const { db } = seeded();
+  const ins = db.prepare('INSERT INTO disk_samples(ts, mount, size_kb, avail_kb) VALUES (?,?,?,?)');
+  for (let ts = 0; ts < 10 * M; ts += 5000) {
+    ins.run(ts, '/', 1000, 900 - ts / 5000);
+    if (ts >= 5 * M) ins.run(ts, '/home', 5000, 4000);
+  }
+  for (let m = 0; m < 10; m++) aggregateMinute(db, m * M);
+  const d = queryDisk(db, { from: 0, to: 10 * M }, opts(10 * M));
+  expect(d.ts.length).toBe(120);
+  expect(d.series.map((s) => [s.mount, s.sizeKB])).toEqual([['/', 1000], ['/home', 5000]]);
+  expect(d.series[0].availKB[0]).toBe(900);
+  expect(d.series[0].availKB[119]).toBe(781);
+  expect(d.series[1].availKB[0]).toBeNull();
+  expect(d.series[1].availKB[119]).toBe(4000);
+  const old = queryDisk(db, { from: 0, to: 10 * M }, opts(30 * H)); // au-delà de la rétention détaillée : minutes
+  expect(old.ts).toEqual(Array.from({ length: 10 }, (_, i) => i * M));
+  expect(old.series[0].availKB[0]).toBe(889); // minimum de la minute
+  db.exec('DROP TABLE disk_samples; DROP TABLE disk_minute; DROP TABLE disk_hour;');
+  expect(queryDisk(db, { from: 0, to: 10 * M }, opts(10 * M))).toEqual({ ts: [], series: [] });
 });

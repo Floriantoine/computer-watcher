@@ -94,6 +94,8 @@ const REC_GROUPS: { title: string; icon: LucideIcon; help?: string; fields: RecF
       { f: 'procMinCpuPercent', label: 'Seuil CPU processus', short: 'CPU d’un processus', unit: '%', step: '0.5' },
       { f: 'groupMinMemMB', label: 'Seuil mémoire groupe', short: 'Mémoire d’un groupe', unit: 'Mo', help: 'Groupes plus petits cumulés dans «\u00a0Petits groupes\u00a0».' },
       { f: 'tmpfsAlertMB', label: 'Alerte fichiers en mémoire (/tmp, shm)', short: 'Alerte /tmp, shm', unit: 'Mo', help: 'Fichiers en mémoire (Shmem) au-delà de ce seuil.' },
+      { f: 'diskAlertPercent', label: 'Alerte disque : part libre', short: 'Disque : part libre', unit: '%', help: 'Alerte quand l’espace libre d’une partition passe sous ce pourcentage…' },
+      { f: 'diskAlertGB', label: 'Alerte disque : Go libres', short: 'Disque : Go libres', unit: 'Go', help: '…ou sous ce nombre de Go (le premier atteint).' },
     ],
   },
   {

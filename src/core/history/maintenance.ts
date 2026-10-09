@@ -25,6 +25,11 @@ export function rollupHours(db: DatabaseSync, range?: { from: number; to: number
      SELECT (ts / ${H}) * ${H} AS h, group_id, AVG(rss_kb_avg), AVG(swap_kb_avg), MAX(mem_kb_max), AVG(cpu_avg)
      FROM group_minute ${where} GROUP BY group_id, h`,
   ).run(...args);
+  db.prepare(
+    `INSERT OR REPLACE INTO disk_hour (ts, mount, size_kb, avail_kb_min, avail_kb_avg)
+     SELECT (ts / ${H}) * ${H} AS h, mount, MAX(size_kb), MIN(avail_kb_min), AVG(avail_kb_avg)
+     FROM disk_minute ${where} GROUP BY mount, h`,
+  ).run(...args);
 }
 
 /** Agrège l'heure commençant à `hourStart` (finie ou en cours). */
@@ -63,6 +68,11 @@ export function aggregateMinute(db: DatabaseSync, minuteStart: number): void {
        SELECT ?, proc_id, AVG(rss_kb + swap_kb), MAX(rss_kb + swap_kb), AVG(cpu_percent)
        FROM proc_samples WHERE ts >= ? AND ts < ? GROUP BY proc_id`,
     ).run(minuteStart, minuteStart, end);
+    db.prepare(
+      `INSERT OR REPLACE INTO disk_minute (ts, mount, size_kb, avail_kb_min, avail_kb_avg)
+       SELECT ?, mount, MAX(size_kb), MIN(avail_kb), AVG(avail_kb)
+       FROM disk_samples WHERE ts >= ? AND ts < ? GROUP BY mount`,
+    ).run(minuteStart, minuteStart, end);
     db.exec('COMMIT');
   } catch (e) {
     db.exec('ROLLBACK');
@@ -79,8 +89,8 @@ export function purge(db: DatabaseSync, now: number, detailHours: number, summar
   const summaryCut = now - summaryDays * 86400_000;
   db.exec('BEGIN');
   try {
-    for (const t of ['system_samples', 'group_samples', 'proc_samples']) db.prepare(`DELETE FROM ${t} WHERE ts < ?`).run(detailCut);
-    for (const t of ['system_minute', 'group_minute', 'proc_minute', 'system_hour', 'group_hour', 'events']) {
+    for (const t of ['system_samples', 'group_samples', 'proc_samples', 'disk_samples']) db.prepare(`DELETE FROM ${t} WHERE ts < ?`).run(detailCut);
+    for (const t of ['system_minute', 'group_minute', 'proc_minute', 'system_hour', 'group_hour', 'disk_minute', 'disk_hour', 'events']) {
       db.prepare(`DELETE FROM ${t} WHERE ts < ?`).run(summaryCut);
     }
     if (orphans) {
@@ -103,6 +113,7 @@ export function purge(db: DatabaseSync, now: number, detailHours: number, summar
 
 const ALL_TABLES = [
   'system_samples', 'group_samples', 'proc_samples', 'system_minute', 'group_minute', 'proc_minute', 'system_hour', 'group_hour', 'events', 'procs', 'cmdlines', 'groups',
+  'disk_samples', 'disk_minute', 'disk_hour',
 ];
 
 export function clearAll(db: DatabaseSync): void {

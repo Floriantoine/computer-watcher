@@ -32,7 +32,7 @@ import type { SettingsSection } from './settingsNav';
 import { leakTimes } from './recorderForm';
 import { findGroup, sortForTile, tileForSort, visibleGroups, ipcErrorMessage, killResultMessages, killRequestForGroup, killRequestForProc, trackKills, type KillRequest, type ViewFilter } from './viewModel';
 
-export type Route = { view: 'main' } | { view: 'detail'; groupId: string } | { view: 'settings'; section?: SettingsSection } | { view: 'metrics'; at?: number } | { view: 'tmp' };
+export type Route = { view: 'main' } | { view: 'detail'; groupId: string } | { view: 'settings'; section?: SettingsSection } | { view: 'metrics'; at?: number } | { view: 'tmp' } | { view: 'disk' };
 
 export function App() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);

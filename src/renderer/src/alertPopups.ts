@@ -49,12 +49,14 @@ export function sameUnseen(a: Unseen | undefined, b: Unseen): boolean {
 
 export type PopupAction =
   | { kind: 'tmp'; label: string }
+  | { kind: 'disk'; label: string }
   | { kind: 'group'; label: string; groupKey: string }
   | { kind: 'instant'; label: string; ts: number }
   | { kind: 'free'; label: string };
 
 export function popupAction(e: AlertEvent, groupPresent: (key: string) => boolean): PopupAction {
   if (e.type === 'tmpfs') return { kind: 'tmp', label: 'Voir /tmp' };
+  if (e.type === 'disk_low') return { kind: 'disk', label: 'Voir le disque' };
   if (e.type === 'forecast') return { kind: 'free', label: 'Libérer…' };
   if (e.groupKey && groupPresent(e.groupKey)) return { kind: 'group', label: 'Voir le groupe', groupKey: e.groupKey };
   return { kind: 'instant', label: 'Voir l’instant', ts: e.ts };
@@ -72,13 +74,15 @@ export function popupSnooze(e: AlertEvent): string | null {
 export function clickTarget(e: AlertEvent, groupPresent: (key: string) => boolean): Route | 'free' {
   const a = popupAction(e, groupPresent);
   if (a.kind === 'tmp') return { view: 'tmp' };
+  if (a.kind === 'disk') return { view: 'disk' };
   if (a.kind === 'free') return 'free';
   return a.kind === 'group' ? { view: 'detail', groupId: a.groupKey } : { view: 'metrics', at: e.ts };
 }
 
-/** Notification du bureau « Ouvrir » : page /tmp (tmpfs), « Libérer… » (prévision), sinon Métriques à l'instant de l'alerte. */
+/** Notification du bureau « Ouvrir » : page /tmp (tmpfs), page Disque (disk_low), « Libérer… » (prévision), sinon Métriques à l'instant de l'alerte. */
 export function notificationTarget(e: AlertEvent): Route | 'free' {
   if (e.type === 'forecast') return 'free';
   if (e.type === 'tmpfs') return { view: 'tmp' };
+  if (e.type === 'disk_low') return { view: 'disk' };
   return { view: 'metrics', at: e.ts };
 }

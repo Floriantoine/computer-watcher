@@ -27,6 +27,8 @@ function validateRecorder(raw: unknown): RecorderConfig | null {
   const r: Record<string, unknown> = {
     groupMinMemMB: DEFAULT_RECORDER.groupMinMemMB,
     tmpfsAlertMB: DEFAULT_RECORDER.tmpfsAlertMB,
+    diskAlertPercent: DEFAULT_RECORDER.diskAlertPercent,
+    diskAlertGB: DEFAULT_RECORDER.diskAlertGB,
     ...(raw as Record<string, unknown>),
   };
   if (typeof r.enabled !== 'boolean') return null;
@@ -42,6 +44,8 @@ function validateRecorder(raw: unknown): RecorderConfig | null {
     leakMinMinutes: r.leakMinMinutes as number,
     leakMinGrowthMB: r.leakMinGrowthMB as number,
     tmpfsAlertMB: r.tmpfsAlertMB as number,
+    diskAlertPercent: r.diskAlertPercent as number,
+    diskAlertGB: r.diskAlertGB as number,
   };
 }
 

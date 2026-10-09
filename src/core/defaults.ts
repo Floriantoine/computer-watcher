@@ -13,6 +13,8 @@ export const DEFAULT_RECORDER: RecorderConfig = {
   leakMinMinutes: 60,
   leakMinGrowthMB: 300,
   tmpfsAlertMB: 4000,
+  diskAlertPercent: 10,
+  diskAlertGB: 20,
 };
 
 export const DEFAULT_UI: UiConfig = { reducedEffects: false, memoryMetric: 'rss', trayIcon: true, closeToTray: true, swapSleepMinMB: 100 };

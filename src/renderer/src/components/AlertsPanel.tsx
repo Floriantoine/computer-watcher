@@ -1,10 +1,10 @@
 import { useMemo } from 'react';
-import { BellRing, Bot, FlaskConical, FolderOpen, Gauge, Hourglass, Settings2, Skull, TrendingUp, Unplug, type LucideIcon } from 'lucide-react';
+import { BellRing, Bot, FlaskConical, FolderOpen, Gauge, HardDrive, Hourglass, Settings2, Skull, TrendingUp, Unplug, type LucideIcon } from 'lucide-react';
 import type { HistoryEvent } from '../../../core/types';
 import { alertsFrom, eventMarkers, formatInstant } from '../metrics';
 
 const ICONS: Record<string, LucideIcon> = {
-  leak: TrendingUp, earlyoom_kill: Skull, pressure: Gauge, gap: Unplug, tmpfs: FolderOpen, forecast: Hourglass, rule_action: Bot, rule_dry_run: FlaskConical,
+  leak: TrendingUp, earlyoom_kill: Skull, pressure: Gauge, gap: Unplug, tmpfs: FolderOpen, forecast: Hourglass, rule_action: Bot, rule_dry_run: FlaskConical, disk_low: HardDrive,
 };
 
 interface Props {
