@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, w
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, test } from 'vitest';
-import { requestFromFamilies, type DiskCleanRequest, type WorktreeCandidate } from '../core/disk/extras';
+import { NothingRemovedError, requestFromFamilies, type DiskCleanRequest, type WorktreeCandidate } from '../core/disk/extras';
 import type { FamilyRoots } from '../core/disk/families';
 import { buildUnits, cleanDisk, diskCleanAllEvent, EMPTY_EXTRAS, type CleanUnit, type UnitDeps } from './diskCleanAll';
 import type { CleanDeps } from './diskClean';
@@ -94,6 +94,13 @@ describe('cleanDisk', () => {
     expect(r.refused[0].reason).toBe('git a refusé de supprimer le worktree : x (arrêté ; une partie a pu être supprimée)');
     expect(r.done).toEqual(['worktree:/p/b']);
     expect(r.notes).toEqual([{ id: 'worktree:/p/b', label: 'élément worktree:/p/b', note: 'worktree supprimé ; branche b gardée : y' }]);
+  });
+  test('refus juste avant d’agir (rien supprimé) : raison telle quelle, sans « une partie a pu être supprimée »', async () => {
+    const { roots } = fakeHome();
+    const a = unit('worktree:/p/a', { run: async () => { throw new NothingRemovedError('fichiers ignorés qui seraient perdus : dist/.env'); } });
+    const r = await cleanDisk({ ...empty, worktrees: ['/p/a'] }, { fam: famDeps(roots).d, units: [a.u] });
+    expect(r.refused).toEqual([{ id: 'worktree:/p/a', label: 'élément worktree:/p/a', reason: 'fichiers ignorés qui seraient perdus : dist/.env' }]);
+    expect(r.done).toEqual([]);
   });
   test('annulé : rien exécuté ; tout refusé d’avance : pas de confirmation', async () => {
     const { roots } = fakeHome();

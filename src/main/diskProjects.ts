@@ -9,7 +9,7 @@ import { existsSync, lstatSync, realpathSync, type Dirent } from 'node:fs';
 import { lstat, readdir } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { usedByText } from '../core/disk/families';
-import type { NodeModulesCandidate, WorktreeCandidate } from '../core/disk/extras';
+import { NothingRemovedError, type NodeModulesCandidate, type WorktreeCandidate } from '../core/disk/extras';
 import type { DuFn } from '../core/disk/measure';
 import { DAY_MS, lastSeenFor, nodeModulesVerdict, SOURCE_SKIP_DIRS } from '../core/disk/projects';
 import { defaultBranchFrom, ignoredDirsToInspect, isSensitiveName, lostFilesText, parseStatusZ, parseWorktreeList, statusRefusal, worktreeExclusion } from '../core/disk/worktrees';
@@ -435,7 +435,7 @@ export async function checkWorktree(c: WorktreeCandidate, d: WorktreeCheckDeps):
  */
 export async function removeWorktree(c: WorktreeCandidate, git: GitRun): Promise<string | null> {
   const why = realDirRefusal(c.path) ?? (await riskyGitConfig(git, c.repo)) ?? (await ignoredRefusal(git, c.path));
-  if (why) throw new Error(why);
+  if (why) throw new NothingRemovedError(why);
   const r1 = await git(['worktree', 'remove', c.path], { cwd: c.repo, timeoutMs: 10 * 60_000 });
   if (r1.code !== 0) throw new Error(`git a refusé de supprimer le worktree : ${lastLine(r1.stderr)}`);
   const r2 = await git(['branch', '-d', '--', c.branch], { cwd: c.repo });

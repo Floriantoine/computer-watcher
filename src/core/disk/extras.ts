@@ -51,6 +51,11 @@ export function isDiskCleanRequest(v: unknown): v is DiskCleanRequest {
   return fams.length + (r.nodeModules as unknown[]).length + (r.worktrees as unknown[]).length + (r.cacheDirs as unknown[]).length + dock.length > 0;
 }
 
+/** Refus levé par une action juste avant d'agir : rien n'a été supprimé (le ménage n'ajoute pas « une partie a pu être supprimée »). */
+export class NothingRemovedError extends Error {
+  override name = 'NothingRemovedError';
+}
+
 export const requestFromFamilies = (ids: FamilyId[]): DiskCleanRequest => ({ families: ids, nodeModules: [], worktrees: [], cacheDirs: [], docker: [] });
 
 /** Résultat d'un ménage : `id` = id de famille, ou clé `node_modules:<chemin>`, `worktree:<chemin>`, `cache:<nom>`, `docker:<action>`. */

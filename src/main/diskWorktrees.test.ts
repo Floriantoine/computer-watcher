@@ -3,6 +3,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSyn
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, test } from 'vitest';
+import { NothingRemovedError } from '../core/disk/extras';
 import { checkWorktree, removeWorktree, scanWorktrees } from './diskProjects';
 import { createGitRun } from './gitRun';
 
@@ -195,6 +196,8 @@ describe('fichiers sensibles dans un dossier ignoré « reconstructible » (I-1,
     mkdirSync(join(fini, 'dist'), { recursive: true });
     writeFileSync(join(fini, 'dist/.env.local'), 'JETON=x');
     await expect(removeWorktree(c, git)).rejects.toThrow('fichiers ignorés qui seraient perdus : dist/.env.local');
+    // refus avant tout appel à git worktree remove : rien n'a été supprimé (pas de « une partie a pu être supprimée »)
+    await expect(removeWorktree(c, git)).rejects.toBeInstanceOf(NothingRemovedError);
     expect(existsSync(join(fini, 'dist/.env.local'))).toBe(true);
   });
 });

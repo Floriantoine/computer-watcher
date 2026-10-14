@@ -3,7 +3,7 @@
 // avant d'agir ; un élément absent de la dernière analyse du main est refusé (le renderer n'apporte jamais de chemin).
 import { existsSync, lstatSync } from 'node:fs';
 import { DOCKER_LABELS, DOCKER_TOO_OLD, dockerPruneArgs, type DockerActionView, type DockerView } from '../core/disk/docker';
-import type { CacheDirCandidate, DiskCleanAllResult, DiskCleanRequest, NodeModulesCandidate, WorktreeCandidate } from '../core/disk/extras';
+import { NothingRemovedError, type CacheDirCandidate, type DiskCleanAllResult, type DiskCleanRequest, type NodeModulesCandidate, type WorktreeCandidate } from '../core/disk/extras';
 import { familyDef, isFamilyId, type FamilyRoots } from '../core/disk/families';
 import type { DiskCleanEvent } from '../core/history/events';
 import { checkCacheDir, removeCacheDir } from './diskCacheDirs';
@@ -225,7 +225,8 @@ export async function cleanDisk(req: DiskCleanRequest, d: { fam: CleanDeps; unit
       done.push(u.id);
       if (note) notes.push({ id: u.id, label: u.label, note });
     } catch (e) {
-      refused.push({ id: u.id, label: u.label, reason: `${(e as Error).message} (arrêté ; une partie a pu être supprimée)` });
+      const msg = (e as Error).message;
+      refused.push({ id: u.id, label: u.label, reason: e instanceof NothingRemovedError ? msg : `${msg} (arrêté ; une partie a pu être supprimée)` });
     }
   }
   const after = avail();
