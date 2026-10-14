@@ -24,3 +24,6 @@ export interface WorktreeCandidate {
   sizeKB: number | null;
   refusal: string | null;
 }
+
+/** Dossier inconnu de ~/.cache : seule sa clé `name` revient du renderer. */
+export interface CacheDirCandidate { name: string; path: string; sizeKB: number | null; refusal: string | null }
