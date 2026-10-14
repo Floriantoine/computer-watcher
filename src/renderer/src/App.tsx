@@ -537,7 +537,7 @@ export function App() {
               />
             )}
             {route.view === 'tmp' && <TmpPage onToast={pushToast} />}
-            {route.view === 'disk' && <DiskPage onToast={pushToast} />}
+            {route.view === 'disk' && <DiskPage onToast={pushToast} onOpenSettings={() => openSettings('disk')} />}
             {route.view === 'settings' && (
               <SettingsView
                 request={route}

@@ -1212,6 +1212,9 @@ button.primary:hover:not(:disabled) { background: rgba(124, 92, 255, 0.32); bord
 .disk-badge.keep-latest { color: #9fd0ff; background: rgba(92, 200, 255, 0.1); border-color: rgba(92, 200, 255, 0.3); }
 .disk-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; }
 .disk-foot button.danger { font-weight: 600; }
+.disk-sub { display: flex; align-items: center; gap: 6px; margin: 14px 0 4px; font-size: 12px; font-weight: 600; color: var(--text-2); }
+.disk-extras > .sub { margin-top: 10px; }
+.disk-warning { margin: 2px 0 4px; font-size: 11px; color: var(--amber); }
 @media (max-width: 900px) {
   .disk-main { grid-template-columns: minmax(0, 1fr); }
 }

@@ -7,6 +7,7 @@ import {
   BellRing,
   Bot,
   Clock,
+  FolderSearch,
   HardDrive,
   Info,
   Layers,
@@ -26,6 +27,7 @@ import { overrideRows, withDetectPorts, withoutOverride } from '../classifySetti
 import { AlertsSettings } from './AlertsSettings';
 import { formatKB } from '../format';
 import { pollWhileLive } from '../history';
+import { DiskSettingsCard } from './DiskSettings';
 import { EarlyoomPanel, type EarlyoomAttention } from './EarlyoomPanel';
 import { RulesPanel } from './RulesPanel';
 import { SettingsConfirm } from './SettingsConfirm';
@@ -70,6 +72,7 @@ const ICONS: Record<SettingsSection, LucideIcon> = {
   alerts: BellRing,
   rules: Bot,
   recorder: HardDrive,
+  disk: FolderSearch,
   earlyoom: Wrench,
   desktop: AppWindow,
   about: Info,
@@ -608,6 +611,8 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
               </AnimatePresence>
             </>,
           )}
+
+          {panel('disk', 'disk-panel', <DiskSettingsCard config={config} onSave={onSave} />)}
 
           {panel('earlyoom', undefined, <EarlyoomPanel protectedList={config.protected} onToast={onToast} onAttention={setEo} />)}
 
