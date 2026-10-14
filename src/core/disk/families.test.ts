@@ -1,10 +1,17 @@
 import { describe, expect, test } from 'vitest';
-import { browserVersionsToDrop, FAMILIES, familyPaths, familyRoots, isFamilyRequest, pacmanReclaimKB, vercmp, type FamilyId } from './families';
+import {
+  APP_CACHE_IDS, appProfileDirs, browserVersionsToDrop, cacheSignature, FAMILIES, familyPaths, familyRootRefusal, familyRoots, isFamilyRequest, pacmanReclaimKB, vercmp,
+  type FamilyId, type FamilyRoots,
+} from './families';
 
 const r = { home: '/h', configHome: '/h/.config', dataHome: '/h/.local/share', cacheHome: '/h/.cache' };
 
-test('liste fermée : 12 familles, deux en root, badges', () => {
-  expect(FAMILIES.map((f) => f.id)).toEqual(['npm', 'pnpm', 'yarn', 'uv', 'pip', 'cargo', 'paru', 'yay', 'test-browsers', 'trash', 'pkg-cache', 'journal']);
+test('liste fermée : 12 familles du lot 1 et 8 caches d’applis, deux en root, badges', () => {
+  expect(FAMILIES.map((f) => f.id)).toEqual([
+    'npm', 'pnpm', 'yarn', 'uv', 'pip', 'cargo', 'paru', 'yay', 'test-browsers', 'trash', 'pkg-cache', 'journal',
+    'app-spotify', 'app-chrome', 'app-chromium', 'app-firefox', 'app-brave', 'app-vscode', 'app-discord', 'app-slack',
+  ]);
+  expect(APP_CACHE_IDS).toEqual(FAMILIES.slice(12).map((f) => f.id));
   expect(FAMILIES.filter((f) => f.root).map((f) => f.id)).toEqual(['pkg-cache', 'journal']);
   expect(FAMILIES.find((f) => f.id === 'test-browsers')!.badge).toBe('keep-latest');
   expect(FAMILIES.find((f) => f.id === 'npm')!.badge).toBe('rebuild');
@@ -230,5 +237,64 @@ describe('revue n-1 / n-2 : racine XDG comparée en chemin réel, et qui doit re
     expect(cacheSignature('pnpm', '/p1', l)).toBe(true);
     expect(cacheSignature('pnpm', '/p2', l)).toBe(true);
     expect(cacheSignature('pnpm', '/p3', l)).toBe(false);
+  });
+});
+
+describe('caches d’applis', () => {
+  const r: FamilyRoots = { home: '/h', configHome: '/h/.config', dataHome: '/h/.local/share', cacheHome: '/h/.cache' };
+
+  test('chemins de cache seulement, jamais un profil ni un parent de profil', () => {
+    expect(familyPaths('app-chrome', r)).toEqual(['/h/.cache/google-chrome']);
+    expect(familyPaths('app-chromium', r)).toEqual(['/h/.cache/chromium']);
+    expect(familyPaths('app-brave', r)).toEqual(['/h/.cache/BraveSoftware/Brave-Browser']);
+    expect(familyPaths('app-firefox', r)).toEqual(['/h/.cache/mozilla/firefox']);
+    expect(familyPaths('app-spotify', r)).toEqual(['/h/.cache/spotify']);
+    expect(familyPaths('app-vscode', r)).toEqual(['Cache', 'CachedData', 'CachedExtensionVSIXs', 'Code Cache', 'GPUCache'].map((n) => `/h/.config/Code/${n}`));
+    expect(familyPaths('app-discord', r)).toEqual(['Cache', 'Code Cache', 'GPUCache'].map((n) => `/h/.config/discord/${n}`));
+    expect(familyPaths('app-slack', r)).toEqual(['Cache', 'Code Cache', 'GPUCache', 'Service Worker/CacheStorage'].map((n) => `/h/.config/Slack/${n}`));
+    const caches = APP_CACHE_IDS.flatMap((id) => familyPaths(id, r));
+    for (const p of APP_CACHE_IDS.flatMap((id) => appProfileDirs(id, r))) {
+      expect(caches.some((c) => c === p || p.startsWith(`${c}/`)), `${p} sous un cache`).toBe(false);
+    }
+  });
+
+  test('profils (leur usage veut dire « appli ouverte »)', () => {
+    expect(appProfileDirs('app-chrome', r)).toEqual(['/h/.config/google-chrome']);
+    expect(appProfileDirs('app-firefox', r)).toEqual(['/h/.mozilla/firefox', '/h/.config/mozilla/firefox']);
+    expect(appProfileDirs('app-vscode', r)).toEqual(['/h/.config/Code']);
+    expect(appProfileDirs('npm', r)).toEqual([]);
+  });
+
+  test('signatures des caches d’applis ; un dossier quelconque ne passe jamais', () => {
+    const tree: Record<string, string[]> = {
+      '/h/.cache/google-chrome': ['Default', 'Profile 1'],
+      '/h/.cache/BraveSoftware/Brave-Browser': ['Default'],
+      '/h/.cache/mozilla/firefox': ['ab12cd.default-release'],
+      '/h/.cache/mozilla/firefox/ab12cd.default-release': ['cache2', 'startupCache'],
+      '/h/.cache/spotify': ['Data', 'Storage'],
+      '/h/.config/Code/Cache': ['Cache_Data'],
+      '/h/.config/Code/Code Cache': ['js', 'wasm'],
+      '/h/.config/Code/GPUCache': ['index', 'data_0'],
+      '/h/.config/Code/CachedData': ['0123456789abcdef0123456789abcdef01234567'],
+      '/h/.config/Code/CachedExtensionVSIXs': ['editeur.extension-1.2.3'],
+      '/h/.config/Slack/Service Worker/CacheStorage': ['0123456789abcdef0123456789abcdef01234567'],
+      '/h/.cache/faux': ['photos', 'notes.txt'],
+    };
+    const ls = (p: string) => tree[p] ?? null;
+    expect(cacheSignature('app-chrome', '/h/.cache/google-chrome', ls)).toBe(true);
+    expect(cacheSignature('app-brave', '/h/.cache/BraveSoftware/Brave-Browser', ls)).toBe(true);
+    expect(cacheSignature('app-firefox', '/h/.cache/mozilla/firefox', ls)).toBe(true);
+    expect(cacheSignature('app-spotify', '/h/.cache/spotify', ls)).toBe(true);
+    for (const n of ['Cache', 'Code Cache', 'GPUCache', 'CachedData', 'CachedExtensionVSIXs']) expect(cacheSignature('app-vscode', `/h/.config/Code/${n}`, ls), n).toBe(true);
+    expect(cacheSignature('app-slack', '/h/.config/Slack/Service Worker/CacheStorage', ls)).toBe(true);
+    for (const id of APP_CACHE_IDS) expect(cacheSignature(id, '/h/.cache/faux', ls), id).toBe(false);
+  });
+
+  test('racines XDG inhabituelles : caches de config (VS Code, Discord, Slack) et de ~/.cache refusés', () => {
+    const odd = { ...r, configHome: '/h/Documents' };
+    for (const id of ['app-vscode', 'app-discord', 'app-slack'] as FamilyId[]) expect(familyRootRefusal(id, odd, { ls: () => ['rapport.odt'] }), id).toMatch(/XDG_CONFIG_HOME/);
+    expect(familyRootRefusal('app-vscode', { ...r, configHome: '/h/cfg' }, { ls: () => ['autostart', 'Code', 'dconf'] })).toBeNull();
+    expect(familyRootRefusal('app-chrome', { ...r, cacheHome: '/h/Documents' }, { ls: () => [] })).toMatch(/XDG_CACHE_HOME/);
+    expect(familyRootRefusal('app-vscode', r)).toBeNull();
   });
 });

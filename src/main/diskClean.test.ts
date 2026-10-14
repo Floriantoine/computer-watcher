@@ -196,6 +196,46 @@ describe('cleanFamilies', () => {
     expect(r.refused).toEqual([{ id: 'pkg-cache', reason: 'utilisé par pacman (pid 5)' }]);
     expect(calls).toEqual([]);
   });
+
+  test('appli ouverte (profil utilisé) : cache refusé, rien supprimé', async () => {
+    const { home, roots } = fakeHome();
+    const put = (p: string) => {
+      mkdirSync(join(p, '..'), { recursive: true });
+      writeFileSync(p, 'x');
+    };
+    put(join(home, '.cache/google-chrome/Default/Cache/Cache_Data/f_000001'));
+    put(join(home, '.config/google-chrome/Default/Preferences'));
+    const { d } = deps(roots, { dirUser: (dir) => (dir === join(home, '.config/google-chrome') ? { pid: 4242, name: 'chrome' } : null) });
+    const r = await cleanFamilies(['app-chrome'], d);
+    expect(r.refused).toEqual([{ id: 'app-chrome', reason: 'Chrome est ouvert : utilisé par chrome (pid 4242)' }]);
+    expect(existsSync(join(home, '.cache/google-chrome/Default/Cache/Cache_Data/f_000001'))).toBe(true);
+  });
+
+  test('appli fermée : seul le cache part, le profil reste', async () => {
+    const { home, roots } = fakeHome();
+    const put = (p: string) => {
+      mkdirSync(join(p, '..'), { recursive: true });
+      writeFileSync(p, 'x');
+    };
+    put(join(home, '.config/Code/Cache/Cache_Data/f_000001'));
+    put(join(home, '.config/Code/GPUCache/data_0'));
+    put(join(home, '.config/Code/User/settings.json'));
+    const { d } = deps(roots);
+    const r = await cleanFamilies(['app-vscode'], d);
+    expect(r.done).toEqual(['app-vscode']);
+    expect(existsSync(join(home, '.config/Code/Cache'))).toBe(false);
+    expect(existsSync(join(home, '.config/Code/GPUCache'))).toBe(false);
+    expect(existsSync(join(home, '.config/Code/User/settings.json'))).toBe(true);
+  });
+
+  test('cache d’appli qui ne ressemble pas à un cache : refusé', async () => {
+    const { home, roots } = fakeHome();
+    mkdirSync(join(home, '.cache/spotify/photos'), { recursive: true });
+    const { d } = deps(roots);
+    const r = await cleanFamilies(['app-spotify'], d);
+    expect(r.refused[0]?.reason).toMatch(/ne ressemble pas à un cache de Spotify/);
+    expect(existsSync(join(home, '.cache/spotify/photos'))).toBe(true);
+  });
 });
 
 test('événement disk_clean : libéré, familles, refus (rien si aucune action)', () => {

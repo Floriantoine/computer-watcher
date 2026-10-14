@@ -5,7 +5,7 @@
 // (safeFs : O_NOFOLLOW, jamais de lien suivi ni de montage traversé). Familles root : script figé via pkexec (diskRoot.ts).
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
-import { cacheSignature, familyDef, familyPaths, familyRootRefusal, isFamilyRequest, toolName, JOURNAL_DIR, PKG_CACHE_DIRS, usedByText, type FamilyId, type FamilyRoots } from '../core/disk/families';
+import { appProfileDirs, cacheSignature, familyDef, familyPaths, familyRootRefusal, isFamilyRequest, toolName, JOURNAL_DIR, PKG_CACHE_DIRS, usedByText, type FamilyId, type FamilyRoots } from '../core/disk/families';
 import { browserDropPaths } from '../core/disk/measure';
 import type { DiskCleanEvent } from '../core/history/events';
 import { rootUnavailable, type RootAction } from './diskRoot';
@@ -152,6 +152,12 @@ function checkFamily(id: FamilyId, homeDev: number, d: CleanDeps): string | null
       if (why) return why;
       // signature de l'outil (lecture des noms seulement ; checkPath a écarté liens et autres disques)
       if (exists(p) && !cacheSignature(id, p, lsReal)) return `ne ressemble pas à un cache de ${toolName[id]}`;
+    }
+    // caches d'applis : l'appli tourne si un processus utilise son profil (cwd, fichier ouvert, bibliothèque projetée)
+    for (const dir of appProfileDirs(id, d.roots)) {
+      if (!exists(dir)) continue;
+      const h = d.dirUser(dir);
+      if (h) return `${toolName[id]} est ouvert : ${usedByText(h)}`;
     }
   }
   const busy = def.processNames.length ? d.procByName(def.processNames) : null;

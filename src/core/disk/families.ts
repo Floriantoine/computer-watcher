@@ -5,7 +5,9 @@
 const join = (a: string, b: string) => `${a.replace(/\/+$/, '')}/${b}`;
 const isAbsolute = (p: string) => p.startsWith('/');
 
-export type FamilyId = 'npm' | 'pnpm' | 'yarn' | 'uv' | 'pip' | 'cargo' | 'paru' | 'yay' | 'test-browsers' | 'trash' | 'pkg-cache' | 'journal';
+export type FamilyId =
+  | 'npm' | 'pnpm' | 'yarn' | 'uv' | 'pip' | 'cargo' | 'paru' | 'yay' | 'test-browsers' | 'trash' | 'pkg-cache' | 'journal'
+  | 'app-spotify' | 'app-chrome' | 'app-chromium' | 'app-firefox' | 'app-brave' | 'app-vscode' | 'app-discord' | 'app-slack';
 
 export interface FamilyDef {
   id: FamilyId;
@@ -17,6 +19,8 @@ export interface FamilyDef {
    * généraux (node, python, navigateurs) ne comptent que s'ils ont un cwd, un fd ou un mmap dans les chemins.
    */
   processNames: readonly string[];
+  /** Cache d'une appli de bureau (section « Caches d'applis ») : refusé si l'appli tourne (son profil est utilisé). */
+  app?: true;
 }
 
 export const FAMILIES: readonly FamilyDef[] = [
@@ -32,11 +36,20 @@ export const FAMILIES: readonly FamilyDef[] = [
   { id: 'trash', label: 'Corbeille', badge: 'rebuild', root: false, processNames: [] },
   { id: 'pkg-cache', label: 'Cache de paquets', badge: 'root', root: true, processNames: ['pacman', 'paru', 'yay', 'makepkg', 'apt', 'apt-get', 'dpkg'] },
   { id: 'journal', label: 'Journaux systemd', badge: 'root', root: true, processNames: [] },
+  { id: 'app-spotify', label: 'Cache de Spotify', badge: 'rebuild', root: false, processNames: ['spotify'], app: true },
+  { id: 'app-chrome', label: 'Cache de Chrome', badge: 'rebuild', root: false, processNames: ['chrome', 'google-chrome'], app: true },
+  { id: 'app-chromium', label: 'Cache de Chromium', badge: 'rebuild', root: false, processNames: ['chromium', 'chrome'], app: true },
+  { id: 'app-firefox', label: 'Cache de Firefox', badge: 'rebuild', root: false, processNames: ['firefox', 'firefox-bin'], app: true },
+  { id: 'app-brave', label: 'Cache de Brave', badge: 'rebuild', root: false, processNames: ['brave', 'brave-browser'], app: true },
+  { id: 'app-vscode', label: 'Caches de VS Code', badge: 'rebuild', root: false, processNames: ['code', 'code-oss', 'codium'], app: true },
+  { id: 'app-discord', label: 'Caches de Discord', badge: 'rebuild', root: false, processNames: ['Discord', 'discord'], app: true },
+  { id: 'app-slack', label: 'Caches de Slack', badge: 'rebuild', root: false, processNames: ['slack'], app: true },
 ];
 
 export const FAMILY_IDS: readonly FamilyId[] = FAMILIES.map((f) => f.id);
 export const familyDef = (id: FamilyId): FamilyDef => FAMILIES.find((f) => f.id === id)!;
 export const isFamilyId = (v: unknown): v is FamilyId => typeof v === 'string' && (FAMILY_IDS as readonly string[]).includes(v);
+export const APP_CACHE_IDS: readonly FamilyId[] = FAMILIES.filter((f) => f.app).map((f) => f.id);
 
 /** Requête du renderer : 1 à 12 ids connus, sans doublon. */
 export function isFamilyRequest(v: unknown): v is FamilyId[] {
@@ -73,6 +86,29 @@ export function familyPaths(id: FamilyId, r: FamilyRoots): string[] {
     case 'trash': return [join(r.dataHome, 'Trash/files'), join(r.dataHome, 'Trash/info')];
     case 'pkg-cache': return [...PKG_CACHE_DIRS];
     case 'journal': return [JOURNAL_DIR];
+    case 'app-spotify': return [join(r.cacheHome, 'spotify')];
+    case 'app-chrome': return [join(r.cacheHome, 'google-chrome')];
+    case 'app-chromium': return [join(r.cacheHome, 'chromium')];
+    case 'app-firefox': return [join(r.cacheHome, 'mozilla/firefox')];
+    case 'app-brave': return [join(r.cacheHome, 'BraveSoftware/Brave-Browser')];
+    case 'app-vscode': return ['Cache', 'CachedData', 'CachedExtensionVSIXs', 'Code Cache', 'GPUCache'].map((n) => join(r.configHome, `Code/${n}`));
+    case 'app-discord': return ['Cache', 'Code Cache', 'GPUCache'].map((n) => join(r.configHome, `discord/${n}`));
+    case 'app-slack': return ['Cache', 'Code Cache', 'GPUCache', 'Service Worker/CacheStorage'].map((n) => join(r.configHome, `Slack/${n}`));
+  }
+}
+
+/** Profils d'une appli (jamais supprimés) : un processus qui les utilise veut dire que l'appli est ouverte. */
+export function appProfileDirs(id: FamilyId, r: FamilyRoots): string[] {
+  switch (id) {
+    case 'app-spotify': return [join(r.configHome, 'spotify')];
+    case 'app-chrome': return [join(r.configHome, 'google-chrome')];
+    case 'app-chromium': return [join(r.configHome, 'chromium')];
+    case 'app-firefox': return [join(r.home, '.mozilla/firefox'), join(r.configHome, 'mozilla/firefox')];
+    case 'app-brave': return [join(r.configHome, 'BraveSoftware/Brave-Browser')];
+    case 'app-vscode': return [join(r.configHome, 'Code')];
+    case 'app-discord': return [join(r.configHome, 'discord')];
+    case 'app-slack': return [join(r.configHome, 'Slack')];
+    default: return [];
   }
 }
 
@@ -186,9 +222,10 @@ function normalize(p: string): string {
 }
 
 /** Racine XDG dont dépendent les chemins d'une famille (null : chemins fixes sous HOME, ou système). */
-function xdgRootOf(id: FamilyId, r: FamilyRoots): { name: string; path: string } | null {
-  if (['uv', 'pip', 'yarn', 'paru', 'yay', 'test-browsers'].includes(id)) return { name: 'XDG_CACHE_HOME', path: r.cacheHome };
+function xdgRootOf(id: FamilyId, r: FamilyRoots): { name: 'XDG_CACHE_HOME' | 'XDG_DATA_HOME' | 'XDG_CONFIG_HOME'; path: string } | null {
+  if (['uv', 'pip', 'yarn', 'paru', 'yay', 'test-browsers', 'app-spotify', 'app-chrome', 'app-chromium', 'app-firefox', 'app-brave'].includes(id)) return { name: 'XDG_CACHE_HOME', path: r.cacheHome };
   if (id === 'pnpm' || id === 'trash') return { name: 'XDG_DATA_HOME', path: r.dataHome };
+  if (id === 'app-vscode' || id === 'app-discord' || id === 'app-slack') return { name: 'XDG_CONFIG_HOME', path: r.configHome };
   return null;
 }
 
@@ -197,9 +234,15 @@ const KNOWN_CACHE_DIRS = new Set([
   'uv', 'pip', 'yarn', 'pnpm', 'paru', 'yay', 'ms-playwright', 'puppeteer', 'mozilla', 'chromium', 'google-chrome', 'fontconfig',
   'mesa_shader_cache', 'thumbnails', 'electron', 'electron-builder', 'node-gyp', 'go-build', 'typescript', 'JNA', 'gstreamer-1.0',
   'matplotlib', 'pre-commit', 'huggingface', 'JetBrains', 'pypoetry', 'deno', 'bun', 'ccache', 'sccache', 'gradle', 'kdeconnect.app',
+  'spotify', 'BraveSoftware',
 ]);
 /** Sous-dossiers attendus dans un dossier de données (XDG_DATA_HOME). */
 const KNOWN_DATA_DIRS = new Set(['applications', 'icons', 'Trash', 'pnpm', 'mime', 'fonts']);
+/** Sous-dossiers attendus dans un dossier de configuration (XDG_CONFIG_HOME). */
+const KNOWN_CONFIG_DIRS = new Set([
+  'autostart', 'systemd', 'gtk-3.0', 'gtk-4.0', 'dconf', 'pulse', 'fontconfig', 'Code', 'discord', 'Slack', 'google-chrome', 'chromium',
+  'mimeapps.list', 'user-dirs.dirs', 'kdeglobals',
+]);
 
 export interface RootCheckOptions {
   /** Chemin réel (liens résolus) ; défaut : le chemin normalisé, sans accès au disque. */
@@ -224,12 +267,12 @@ export function familyRootRefusal(id: FamilyId, r: FamilyRoots, o: RootCheckOpti
   const shown = root === normalize(x.path) ? x.path : `${x.path} → ${root}`;
   const refuse = `racine XDG inhabituelle (${x.name} = ${shown}), refusé`;
   if (root === home || !root.startsWith(`${home}/`)) return refuse;
-  const isCache = x.name === 'XDG_CACHE_HOME';
-  if (root === `${home}/${isCache ? '.cache' : '.local/share'}`) return null;
+  const def = x.name === 'XDG_CACHE_HOME' ? '.cache' : x.name === 'XDG_DATA_HOME' ? '.local/share' : '.config';
+  if (root === `${home}/${def}`) return null;
   const names = o.ls?.(root) ?? null;
   if (!names) return refuse;
-  if (isCache && names.includes('CACHEDIR.TAG')) return null;
-  const known = isCache ? KNOWN_CACHE_DIRS : KNOWN_DATA_DIRS;
+  if (x.name === 'XDG_CACHE_HOME' && names.includes('CACHEDIR.TAG')) return null;
+  const known = x.name === 'XDG_CACHE_HOME' ? KNOWN_CACHE_DIRS : x.name === 'XDG_DATA_HOME' ? KNOWN_DATA_DIRS : KNOWN_CONFIG_DIRS;
   return names.filter((n) => known.has(n)).length >= 2 ? null : refuse;
 }
 
@@ -260,7 +303,34 @@ export function cacheSignature(id: FamilyId, path: string, ls: (p: string) => st
     case 'test-browsers':
       if (anyName(names, /^[a-z][a-z0-9_]*-\d{1,9}$/)) return true; // ms-playwright
       return (names ?? []).slice(0, 50).some((n) => anyName(ls(join(path, n)), /^[a-z0-9]+-\d{1,9}(\.\d{1,9})*$/)); // puppeteer
+    case 'app-chrome':
+    case 'app-chromium':
+    case 'app-brave':
+      return anyName(names, /^(Default|Profile \d{1,4}|System Profile|Guest Profile)$/);
+    case 'app-firefox':
+      return (names ?? []).slice(0, 50).some((n) => anyName(ls(join(path, n)), /^(cache2|startupCache|jumpListCache)$/));
+    case 'app-spotify':
+      return anyName(names, /^(Data|Storage|Browser|Default)$/);
+    case 'app-vscode':
+    case 'app-discord':
+    case 'app-slack':
+      return electronCacheSignature(path, names);
     default: return true;
+  }
+}
+
+/** Dossiers de cache d'une appli Electron, reconnus à leur nom et à leur contenu. */
+function electronCacheSignature(path: string, names: string[] | null): boolean {
+  if (!names) return false;
+  const base = path.slice(path.lastIndexOf('/') + 1);
+  switch (base) {
+    case 'Cache': return anyName(names, /^(Cache_Data|index|data_\d+|f_[0-9a-f]{6})$/);
+    case 'Code Cache': return anyName(names, /^(js|wasm|webui_js)$/);
+    case 'GPUCache': return anyName(names, /^(index|data_\d+)$/);
+    case 'CachedData':
+    case 'CacheStorage': return anyName(names, /^([0-9a-f]{40}|index\.txt)$/);
+    case 'CachedExtensionVSIXs': return true;
+    default: return false;
   }
 }
 
@@ -268,6 +338,8 @@ export function cacheSignature(id: FamilyId, path: string, ls: (p: string) => st
 export const toolName: Record<FamilyId, string> = {
   npm: 'npm', pnpm: 'pnpm', yarn: 'Yarn', uv: 'uv', pip: 'pip', cargo: 'Cargo', paru: 'paru', yay: 'yay',
   'test-browsers': 'Playwright / Puppeteer', trash: 'corbeille', 'pkg-cache': 'paquets', journal: 'journaux',
+  'app-spotify': 'Spotify', 'app-chrome': 'Chrome', 'app-chromium': 'Chromium', 'app-firefox': 'Firefox', 'app-brave': 'Brave',
+  'app-vscode': 'VS Code', 'app-discord': 'Discord', 'app-slack': 'Slack',
 };
 
 /** Raison de refus affichée : « utilisé par npm (pid 1234) ». */
