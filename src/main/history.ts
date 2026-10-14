@@ -3,7 +3,7 @@ import { existsSync, readFileSync, rmSync, statSync, writeFileSync, mkdirSync } 
 import type { DatabaseSync } from 'node:sqlite';
 import { historyBackups, openHistoryDb, SCHEMA_VERSION } from '../core/history/db';
 import {
-  historyCoverage, historyFrom, pruneLastActiveCache, queryCulprits, queryEvents, queryGroup, queryGroups, queryInactive, queryLastActive, queryProcs, queryProcTree, queryRuleStats, querySystem, queryDisk, queryTop, rangeFromPreset,
+  historyCoverage, historyFrom, pruneLastActiveCache, queryCulprits, queryEvents, queryGroup, queryGroups, queryInactive, queryLastActive, queryProcs, queryProcTree, queryRuleStats, querySystem, queryDisk, queryProjectsLastSeen, queryTop, rangeFromPreset,
   type HistoryCoverage, type LastActiveCache, type QueryOpts,
 } from '../core/history/queries';
 import { countUnseenAlerts, newestAlertTs, queryAlert, queryAlertTimes, queryUnseenAlerts, type UnseenFilter } from '../core/history/alertsQuery';
@@ -120,6 +120,8 @@ export function createHistoryReader(dataDir: string, getConfig: () => RecorderCo
     coverage: (from: number, now: number): HistoryCoverage | null => run((d) => historyCoverage(d, from, now), null),
     /** Premier instant couvert par l'historique ; null sans base ou base vide. */
     from: (): number | null => run((d) => historyFrom(d), null),
+    /** Page Disque : dernier instant vu de chaque projet (vide sans base). */
+    projectsLastSeen: (): Map<string, number> => run((d) => queryProjectsLastSeen(d), new Map<string, number>()),
     /** Ferme la connexion (avant suppression de la base). */
     close: closeDb,
     status: (): RecorderStatus | null => {

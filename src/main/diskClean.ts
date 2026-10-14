@@ -46,10 +46,25 @@ export interface CleanDeps {
   rootUnavailable?(id: RootAction): string | null;
 }
 
+/**
+ * Revue m-1 : archives .asar désactivées seulement pendant une suppression synchrone (jamais pendant une confirmation ni
+ * pendant pkexec) ; un fichier .asar est alors un fichier comme un autre.
+ */
+export function withNoAsar<T>(fn: () => T): T {
+  const proc = process as unknown as { noAsar?: boolean };
+  const prev = proc.noAsar;
+  try {
+    proc.noAsar = true;
+    return fn();
+  } finally {
+    proc.noAsar = prev;
+  }
+}
+
 /** Plafond de la mesure des tailles avant la confirmation (revue n-3). */
 const SIZE_TIMEOUT_MS = 30_000;
 
-const fmt = (kb: number) =>
+export const fmtKB = (kb: number) =>
   kb >= 1024 * 1024 ? `${(kb / (1024 * 1024)).toFixed(1).replace('.', ',')} Go` : kb >= 1024 ? `${Math.round(kb / 1024)} Mo` : `${Math.round(kb)} Ko`;
 
 const isUnder = (p: string, dir: string) => p === dir || p.startsWith(dir.endsWith('/') ? dir : `${dir}/`);
@@ -110,7 +125,7 @@ function checkPath(p: string, homeDev: number, d: CleanDeps): string | null {
 }
 
 /** Noms d'un dossier réel (jamais à travers un lien) ; null : absent, lien ou illisible. */
-function lsReal(p: string): string[] | null {
+export function lsReal(p: string): string[] | null {
   try {
     const st = lstatSync(p);
     return st.isDirectory() && !st.isSymbolicLink() ? readdirSync(p) : null;
@@ -120,7 +135,7 @@ function lsReal(p: string): string[] | null {
 }
 
 /** Chemin réel (liens résolus) ; inchangé s'il n'existe pas. */
-function realOr(p: string): string {
+export function realOr(p: string): string {
   try {
     return realpathSync(p);
   } catch {
@@ -206,17 +221,17 @@ function confirmSummary(
   const known = ids.map((id) => sizes?.[id]).filter((v): v is number => typeof v === 'number');
   const total = known.reduce((s, v) => s + v, 0);
   const n = ids.length;
-  const message = known.length ? `Libérer ≈ ${fmt(total)} ?` : `Libérer l’espace de ${n} famille${n > 1 ? 's' : ''} ?`;
+  const message = known.length ? `Libérer ≈ ${fmtKB(total)} ?` : `Libérer l’espace de ${n} famille${n > 1 ? 's' : ''} ?`;
   const lines = ids.map((id) => {
     const def = familyDef(id);
     const s = sizes?.[id];
-    const head = `• ${def.label} — ${typeof s === 'number' ? `≈ ${fmt(s)}` : 'taille inconnue'}${def.root ? ' (administrateur : mot de passe demandé)' : ''}`;
+    const head = `• ${def.label} — ${typeof s === 'number' ? `≈ ${fmtKB(s)}` : 'taille inconnue'}${def.root ? ' (administrateur : mot de passe demandé)' : ''}`;
     // chemins exacts, chacun avec sa taille
     const paths = (targets.get(id) ?? []).map((t) => {
       const kb = pathKB.get(t.path);
       // chemin réel : une racine XDG en lien affiche où les fichiers sont vraiment
       const unknown = sizesTimedOut ? 'taille inconnue (mesure trop longue)' : 'taille inconnue';
-      return `    ${t.contents ? 'contenu de ' : ''}${realOr(t.path)} (${kb === undefined ? unknown : fmt(kb)})`;
+      return `    ${t.contents ? 'contenu de ' : ''}${realOr(t.path)} (${kb === undefined ? unknown : fmtKB(kb)})`;
     });
     return [head, ...paths].join('\n');
   });
@@ -282,18 +297,11 @@ export async function cleanFamilies(ids: readonly FamilyId[], d: CleanDeps): Pro
       else refused.push({ id, reason: r.cancelled ? 'annulé' : r.error ?? 'échec' });
       continue;
     }
-    // revue m-1 : archives .asar désactivées seulement pendant la suppression, synchrone (jamais pendant la
-    // confirmation ni pendant pkexec) ; un fichier .asar d'un cache est alors un fichier comme un autre
-    const proc = process as unknown as { noAsar?: boolean };
-    const noAsar = proc.noAsar;
     try {
-      proc.noAsar = true;
-      removeFamily(id, d);
+      withNoAsar(() => removeFamily(id, d));
       done.push(id);
     } catch (e) {
       refused.push({ id, reason: `${(e as Error).message} (arrêté ; une partie a pu être supprimée)` });
-    } finally {
-      proc.noAsar = noAsar;
     }
   }
   const after = avail();

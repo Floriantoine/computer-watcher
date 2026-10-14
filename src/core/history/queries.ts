@@ -645,3 +645,17 @@ export function historyFrom(db: DatabaseSync): number | null {
   if (a === null) return b;
   return b === null ? a : Math.min(a, b);
 }
+
+/** Racine de chaque projet (groupes `project:<racine>`) → dernier instant où il avait un processus enregistré. */
+export function queryProjectsLastSeen(db: DatabaseSync): Map<string, number> {
+  const rows = db
+    .prepare(
+      `SELECT g.key AS key, MAX(x.t) AS t FROM (
+         SELECT group_id, MAX(ts) AS t FROM group_samples GROUP BY group_id
+         UNION ALL SELECT group_id, MAX(ts) AS t FROM group_minute GROUP BY group_id
+         UNION ALL SELECT group_id, MAX(ts) AS t FROM group_hour GROUP BY group_id
+       ) x JOIN groups g ON g.id = x.group_id WHERE g.kind = 'project' GROUP BY g.key`,
+    )
+    .all() as { key: string; t: number }[];
+  return new Map(rows.filter((r) => r.key.startsWith('project:/')).map((r) => [r.key.slice('project:'.length), r.t]));
+}
