@@ -39,3 +39,28 @@ export function createGitRun(o: { exists?: (p: string) => boolean; env?: NodeJS.
       });
     });
 }
+
+/**
+ * Clés de config qui font exécuter du code par `git status` ou `git worktree remove` (filtres clean/smudge/process activés
+ * par `.gitattributes`) ou qui le feraient sans nos `-c` (fsmonitor, hooks).
+ */
+export const RISKY_GIT_CONFIG_RE = '^(filter\\..*\\.(clean|smudge|process)|core\\.(fsmonitor|hookspath))$';
+/** Portées jamais retenues : nos propres `-c` (command) et la config de l'utilisateur ou du système (git-lfs, etc.). */
+const TRUSTED_SCOPES: ReadonlySet<string> = new Set(['command', 'global', 'system']);
+export const RISKY_GIT_CONFIG_REFUSAL = 'filtre git configuré : vérifie à la main';
+
+/**
+ * Lecture seule de la config vue depuis `cwd` (dépôt, includes et config de worktree si `extensions.worktreeConfig`
+ * compris) : jamais de filtre exécuté. null si rien de risqué dans la config du dépôt ou du worktree, sinon la raison.
+ * Toute ligne illisible, ou de portée inconnue, compte comme risquée.
+ */
+export async function riskyGitConfig(git: GitRun, cwd: string): Promise<string | null> {
+  const r = await git(['config', '--includes', '--show-scope', '--name-only', '--get-regexp', RISKY_GIT_CONFIG_RE], { cwd });
+  if (r.code === 1 && !r.stdout.trim()) return null; // aucune entrée
+  if (r.code !== 0) return `config git illisible : ${lastLine(r.stderr)}`;
+  const risky = r.stdout.split('\n').filter(Boolean).some((l) => {
+    const tab = l.indexOf('\t');
+    return tab < 0 || !TRUSTED_SCOPES.has(l.slice(0, tab));
+  });
+  return risky ? RISKY_GIT_CONFIG_REFUSAL : null;
+}

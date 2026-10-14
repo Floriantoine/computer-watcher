@@ -12,10 +12,10 @@ import { usedByText } from '../core/disk/families';
 import type { NodeModulesCandidate, WorktreeCandidate } from '../core/disk/extras';
 import type { DuFn } from '../core/disk/measure';
 import { DAY_MS, lastSeenFor, nodeModulesVerdict, SOURCE_SKIP_DIRS } from '../core/disk/projects';
-import { defaultBranchFrom, parseStatusZ, parseWorktreeList, statusRefusal, worktreeExclusion } from '../core/disk/worktrees';
+import { defaultBranchFrom, ignoredDirsToInspect, isSensitiveName, lostFilesText, parseStatusZ, parseWorktreeList, statusRefusal, worktreeExclusion } from '../core/disk/worktrees';
 import { findProjectRoot, projectLabel } from '../core/grouping/projectRoot';
 import { withNoAsar, type Holder } from './diskClean';
-import { lastLine, type GitRun } from './gitRun';
+import { lastLine, riskyGitConfig, type GitRun } from './gitRun';
 import { mountPointsOf, removeTreeSafe } from './safeFs';
 
 const MAX_DEPTH = 6;
@@ -39,6 +39,37 @@ const typeUnknown = (e: Dirent) =>
 /** Racine (chemin réel) la plus longue qui contient `p`, ou null. */
 export function rootFor(p: string, roots: readonly string[]): string | null {
   return roots.filter((r) => under(p, r)).sort((a, b) => b.length - a.length)[0] ?? null;
+}
+
+/**
+ * Racines de projets en chemins réels (dossiers seulement), jamais « / ». Racines par défaut (déduites de l'historique) :
+ * refiltrées après résolution des liens, jamais HOME ni un de ses parents, jamais un dossier caché.
+ */
+export function realProjectRoots(roots: readonly string[], o: { home: string; isDefault: boolean; realpath?: (p: string) => string; isDir?: (p: string) => boolean }): string[] {
+  const realpath = o.realpath ?? ((p: string) => realpathSync(p));
+  const isDir = o.isDir ?? ((p: string) => lstatSync(p).isDirectory());
+  let realHome = o.home;
+  try {
+    realHome = realpath(o.home);
+  } catch {
+    // HOME illisible : comparé tel quel
+  }
+  const homes = [o.home, realHome];
+  return [...new Set(roots.flatMap((p) => {
+    try {
+      const r = realpath(p);
+      if (r === '/' || !isDir(r)) return [];
+      if (o.isDefault) {
+        if (homes.some((h) => h === r || under(h, r))) return [];
+        // dossier caché : composants sous HOME (HOME lui-même peut être n'importe où), tous les composants hors de HOME
+        const h = homes.find((x) => under(r, x));
+        if ((h ? r.slice(h.length + 1) : r).split('/').some((x) => x.startsWith('.'))) return [];
+      }
+      return [r];
+    } catch {
+      return [];
+    }
+  }))];
 }
 
 /**
@@ -143,24 +174,44 @@ export async function newestMtime(dir: string, o: { since: number; maxEntries?: 
   return newest;
 }
 
-export interface NodeModulesScanDeps { home: string; seen: ReadonlyMap<string, number>; historyFrom: number | null; now: number; days: number; du: DuFn }
+export interface NodeModulesScanDeps {
+  home: string; seen: ReadonlyMap<string, number>; historyFrom: number | null; now: number; days: number; du: DuFn;
+  /** Échéance globale (60 s par défaut) et nombre de projets examinés au plus (2000) : au-delà, le reste n'est pas proposé. */
+  deadlineMs?: number; maxProjects?: number; clock?: () => number;
+}
+
+export const INTERRUPTED_TOO_LONG = 'analyse interrompue : trop long';
 
 /** node_modules inactifs parmi ceux trouvés (un passage par projet pour les dates des fichiers), avec leur taille. */
-export async function scanNodeModules(paths: readonly string[], d: NodeModulesScanDeps): Promise<NodeModulesCandidate[]> {
+export async function scanNodeModules(paths: readonly string[], d: NodeModulesScanDeps): Promise<{ nodeModules: NodeModulesCandidate[]; errors: string[] }> {
   const since = d.now - d.days * DAY_MS;
+  const clock = d.clock ?? Date.now;
+  const deadline = clock() + (d.deadlineMs ?? 60_000);
+  const maxProjects = d.maxProjects ?? 2000;
   const mtimes = new Map<string, Promise<number | null | 'budget'>>();
   const out: NodeModulesCandidate[] = [];
+  const errors: string[] = [];
   for (const path of paths) {
+    if (clock() > deadline) {
+      errors.push(`node_modules : ${INTERRUPTED_TOO_LONG}`);
+      break;
+    }
     const pkgDir = dirname(path);
     const projectDir = findProjectRoot(pkgDir, existsSync, d.home) ?? pkgDir;
-    if (!mtimes.has(projectDir)) mtimes.set(projectDir, newestMtime(projectDir, { since }));
+    if (!mtimes.has(projectDir)) {
+      if (mtimes.size >= maxProjects) {
+        errors.push(`node_modules : analyse interrompue : plus de ${maxProjects} projets`);
+        break;
+      }
+      mtimes.set(projectDir, newestMtime(projectDir, { since }));
+    }
     const lastSeen = lastSeenFor(projectDir, d.seen);
     const v = nodeModulesVerdict({ lastSeen, newestMtime: await mtimes.get(projectDir)!, historyFrom: d.historyFrom, now: d.now, days: d.days });
     if (v.inactive) out.push({ path, projectDir, label: projectLabel(pkgDir, d.home), sizeKB: null, lastSeen, partialHistory: v.partialHistory });
   }
   const sizes = out.length ? await d.du(out.map((c) => c.path)) : new Map<string, number>();
   for (const c of out) c.sizeKB = sizes.get(c.path) ?? null;
-  return out.sort((a, b) => (b.sizeKB ?? -1) - (a.sizeKB ?? -1));
+  return { nodeModules: out.sort((a, b) => (b.sizeKB ?? -1) - (a.sizeKB ?? -1)), errors };
 }
 
 export interface NodeModulesCheckDeps {
@@ -241,11 +292,60 @@ function realDirRefusal(p: string): string | null {
   }
 }
 
-/** État du worktree : propre (fichiers ignorés reconstructibles seulement) et rien de modifié depuis 24 h. */
-async function worktreeStateRefusal(git: GitRun, wt: string, now: number): Promise<string | null> {
+/**
+ * Fichiers sensibles (`.env*`, clés, bases) sous les dossiers ignorés « reconstructibles » (`dist/`, `build/`, `.cache/`…),
+ * que git status ne détaille pas. Parcours borné, sans suivre de lien ni changer de périphérique, sans entrer dans un
+ * `*.asar`. Chemins relatifs au worktree ; 'budget' si trop d'entrées.
+ */
+export async function sensitiveIgnored(wt: string, dirs: readonly string[], maxEntries = 20_000): Promise<string[] | 'budget'> {
+  const found: string[] = [];
+  let count = 0;
+  for (const rel of dirs) {
+    if (hasAsarPart(rel)) continue;
+    const top = await lstatOrNull(join(wt, rel));
+    if (!top?.isDirectory()) continue; // lien ou fichier : git worktree remove n'en supprime que l'entrée
+    const stack = [rel];
+    while (stack.length) {
+      const d = stack.pop()!;
+      let entries: Dirent[];
+      try {
+        entries = await readdir(join(wt, d), { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const e of entries) {
+        if (++count > maxEntries) return 'budget';
+        const r = `${d}/${e.name}`;
+        if (isSensitiveName(e.name)) found.push(r);
+        if (isAsarName(e.name) || (!e.isDirectory() && !typeUnknown(e))) continue;
+        const st = await lstatOrNull(join(wt, r));
+        if (st?.isDirectory() && st.dev === top.dev) stack.push(r);
+      }
+    }
+  }
+  return found.sort();
+}
+
+/**
+ * Ce que git worktree remove perdrait ou exécuterait : filtre configuré (jamais de git status alors), modification ou
+ * fichier non suivi, fichier ignoré non reconstructible ou sensible caché dans un dossier ignoré reconstructible.
+ */
+async function ignoredRefusal(git: GitRun, wt: string): Promise<string | null> {
+  const risky = await riskyGitConfig(git, wt);
+  if (risky) return risky;
   const s = await git(['status', '--porcelain=v1', '-z', '--ignored=traditional', '--untracked-files=normal'], { cwd: wt });
   if (s.code !== 0) return `git status impossible : ${lastLine(s.stderr)}`;
-  const why = statusRefusal(parseStatusZ(s.stdout));
+  const entries = parseStatusZ(s.stdout);
+  const why = statusRefusal(entries);
+  if (why) return why;
+  const hidden = await sensitiveIgnored(wt, ignoredDirsToInspect(entries));
+  if (hidden === 'budget') return 'trop de fichiers ignorés à vérifier';
+  return hidden.length ? lostFilesText(hidden) : null;
+}
+
+/** État du worktree : propre (fichiers ignorés reconstructibles seulement) et rien de modifié depuis 24 h. */
+async function worktreeStateRefusal(git: GitRun, wt: string, now: number): Promise<string | null> {
+  const why = await ignoredRefusal(git, wt);
   if (why) return why;
   const newest = await newestMtime(wt, { since: now - DAY_MS, maxEntries: 50_000 });
   if (newest === 'budget') return 'trop de fichiers pour juger de l’activité';
@@ -253,7 +353,11 @@ async function worktreeStateRefusal(git: GitRun, wt: string, now: number): Promi
   return null;
 }
 
-export interface WorktreeScanDeps { git: GitRun; projectRoots: readonly string[]; now: number; du: DuFn }
+export interface WorktreeScanDeps {
+  git: GitRun; projectRoots: readonly string[]; now: number; du: DuFn;
+  /** Échéance globale (60 s par défaut) : au-delà, le reste n'est pas proposé. */
+  deadlineMs?: number; clock?: () => number;
+}
 
 /**
  * Worktrees fusionnés des dépôts trouvés : branche ancêtre de la branche par défaut, sous les dossiers de projets ; jamais
@@ -262,7 +366,18 @@ export interface WorktreeScanDeps { git: GitRun; projectRoots: readonly string[]
 export async function scanWorktrees(repos: readonly string[], d: WorktreeScanDeps): Promise<{ worktrees: WorktreeCandidate[]; errors: string[] }> {
   const worktrees: WorktreeCandidate[] = [];
   const errors: string[] = [];
+  const clock = d.clock ?? Date.now;
+  const deadline = clock() + (d.deadlineMs ?? 60_000);
+  let late = false;
+  const tooLate = () => {
+    if (!late && clock() > deadline) {
+      late = true;
+      errors.push(`worktrees : ${INTERRUPTED_TOO_LONG}`);
+    }
+    return late;
+  };
   for (const repo of repos) {
+    if (tooLate()) break;
     const def = await defaultBranch(d.git, repo);
     if (!def) {
       errors.push(`${repo} : branche par défaut introuvable (ni origin/HEAD, ni main, ni master)`);
@@ -275,6 +390,7 @@ export async function scanWorktrees(repos: readonly string[], d: WorktreeScanDep
     }
     const entries = parseWorktreeList(l.stdout);
     for (const [i, e] of entries.entries()) {
+      if (tooLate()) break;
       if (worktreeExclusion(e, i, def.name) || !rootFor(e.path, d.projectRoots)) continue;
       if ((await isMerged(d.git, repo, e.branch!, def.ref)) !== true) continue;
       const refusal = realDirRefusal(e.path) ?? (await worktreeStateRefusal(d.git, e.path, d.now));
@@ -311,8 +427,15 @@ export async function checkWorktree(c: WorktreeCandidate, d: WorktreeCheckDeps):
 /**
  * `git worktree remove <chemin>` (jamais --force : git refuse lui-même un worktree sale), puis `git branch -d -- <branche>`
  * (jamais -D). Refus de la suppression du worktree : erreur. Refus de la branche : le worktree reste supprimé, note renvoyée.
+ *
+ * Juste avant git worktree remove, filtres configurés (dépôt et worktree) et fichiers ignorés sensibles sont revérifiés
+ * (checkWorktree vient de le faire, mais git worktree remove efface les ignorés sans rien dire). Fenêtre résiduelle : un
+ * fichier ignoré créé entre cette revérification et l'effacement par git (quelques millisecondes) serait perdu ; git
+ * refuse en revanche tout fichier non suivi ou modifié apparu entre-temps.
  */
 export async function removeWorktree(c: WorktreeCandidate, git: GitRun): Promise<string | null> {
+  const why = realDirRefusal(c.path) ?? (await riskyGitConfig(git, c.repo)) ?? (await ignoredRefusal(git, c.path));
+  if (why) throw new Error(why);
   const r1 = await git(['worktree', 'remove', c.path], { cwd: c.repo, timeoutMs: 10 * 60_000 });
   if (r1.code !== 0) throw new Error(`git a refusé de supprimer le worktree : ${lastLine(r1.stderr)}`);
   const r2 = await git(['branch', '-d', '--', c.branch], { cwd: c.repo });

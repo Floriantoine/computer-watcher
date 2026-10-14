@@ -83,6 +83,12 @@ const rebuildable = (p: string) => {
   return REBUILDABLE_IGNORED.has(name) || /\.(tsbuildinfo|pyc)$/.test(name);
 };
 
+/** Liste des fichiers qui seraient perdus, 5 au plus affichés. */
+export function lostFilesText(paths: readonly string[]): string {
+  const shown = paths.slice(0, 5).join(', ');
+  return `fichiers ignorés qui seraient perdus : ${shown}${paths.length > 5 ? ` et ${paths.length - 5} autres` : ''}`;
+}
+
 /**
  * Refus d'après `git status --ignored` : toute modification ou fichier non suivi (git worktree remove refuserait), ou un
  * fichier ignoré qui ne se reconstruit pas (`.env`, données locales : git worktree remove les supprimerait sans rien dire).
@@ -90,7 +96,26 @@ const rebuildable = (p: string) => {
 export function statusRefusal(entries: readonly StatusEntry[]): string | null {
   if (entries.some((e) => e.code !== '!!')) return 'modifications ou fichiers non suivis';
   const keep = entries.filter((e) => !rebuildable(e.path)).map((e) => e.path);
-  if (!keep.length) return null;
-  const shown = keep.slice(0, 5).join(', ');
-  return `fichiers ignorés qui seraient perdus : ${shown}${keep.length > 5 ? ` et ${keep.length - 5} autres` : ''}`;
+  return keep.length ? lostFilesText(keep) : null;
+}
+
+/** Dossiers ignorés reconstructibles jamais inspectés (dépendances, caches de lint ou de bytecode). */
+export const IGNORED_NOT_INSPECTED: ReadonlySet<string> = new Set([
+  'node_modules', '__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache', '.eslintcache',
+]);
+
+/**
+ * Entrées ignorées « reconstructibles » à inspecter : git n'affiche que `dist/`, pas le `.env` qu'il contient. Chemins
+ * relatifs au worktree, sans « / » final.
+ */
+export function ignoredDirsToInspect(entries: readonly StatusEntry[]): string[] {
+  return entries
+    .filter((e) => e.code === '!!' && rebuildable(e.path))
+    .map((e) => e.path.replace(/\/+$/, ''))
+    .filter((p) => p && !IGNORED_NOT_INSPECTED.has(p.split('/').pop()!));
+}
+
+/** Nom de fichier sensible : `.env*`, clé (`*.pem`, `*.key`), base de données (`*.db`, `*.sqlite*`). */
+export function isSensitiveName(n: string): boolean {
+  return n.startsWith('.env') || /\.(pem|key|db)$/i.test(n) || /\.sqlite/i.test(n);
 }

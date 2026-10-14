@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, test } from 'vitest';
 import type { NodeModulesCandidate } from '../core/disk/extras';
-import { checkNodeModules, findProjectDirs, newestMtime, removeNodeModules, scanNodeModules } from './diskProjects';
+import { checkNodeModules, findProjectDirs, newestMtime, realProjectRoots, removeNodeModules, scanNodeModules } from './diskProjects';
 import { removeTreeSafe } from './safeFs';
 
 // Dossiers temporaires sous ~/.cache/pw-disk2-* (jamais les vrais dépôts de l'utilisateur)
@@ -105,21 +105,57 @@ describe('scanNodeModules', () => {
   test('inactifs seulement, taille par du, projet = racine du projet', async () => {
     const { root } = tree();
     const { nodeModules } = await findProjectDirs([root]);
-    const r = await scanNodeModules(nodeModules, { home: homedir(), seen: new Map(), historyFrom: NOW - 60 * DAY, now: NOW, days: 30, du });
+    const { nodeModules: r, errors } = await scanNodeModules(nodeModules, { home: homedir(), seen: new Map(), historyFrom: NOW - 60 * DAY, now: NOW, days: 30, du });
+    expect(errors).toEqual([]);
     expect(r.map((c) => c.path).sort()).toEqual([join(root, 'mono/.worktrees/branche/node_modules'), join(root, 'vieux/node_modules')]);
     expect(r.find((c) => c.path.endsWith('/vieux/node_modules'))).toMatchObject({ sizeKB: 1234, partialHistory: false, projectDir: join(root, 'vieux'), lastSeen: null });
   });
   test('processus vu dans le projet il y a 3 jours : pas proposé', async () => {
     const { root } = tree();
     const { nodeModules } = await findProjectDirs([root]);
-    const r = await scanNodeModules(nodeModules, { home: homedir(), seen: new Map([[join(root, 'vieux'), NOW - 3 * DAY]]), historyFrom: NOW - 60 * DAY, now: NOW, days: 30, du });
+    const { nodeModules: r } = await scanNodeModules(nodeModules, { home: homedir(), seen: new Map([[join(root, 'vieux'), NOW - 3 * DAY]]), historyFrom: NOW - 60 * DAY, now: NOW, days: 30, du });
     expect(r.map((c) => c.path)).not.toContain(join(root, 'vieux/node_modules'));
   });
   test('historique plus court que le seuil : proposé, marqué partiel', async () => {
     const { root } = tree();
     const { nodeModules } = await findProjectDirs([root]);
-    const r = await scanNodeModules(nodeModules, { home: homedir(), seen: new Map(), historyFrom: NOW - 2 * DAY, now: NOW, days: 30, du });
+    const { nodeModules: r } = await scanNodeModules(nodeModules, { home: homedir(), seen: new Map(), historyFrom: NOW - 2 * DAY, now: NOW, days: 30, du });
     expect(r.every((c) => c.partialHistory)).toBe(true);
+  });
+});
+
+describe('scanNodeModules : échéance et plafond (m-4)', () => {
+  const du = async (paths: string[]) => new Map(paths.map((p) => [p, 1]));
+  test('échéance dépassée : arrêt, rien de plus proposé, « analyse interrompue : trop long »', async () => {
+    const { root } = tree();
+    const { nodeModules } = await findProjectDirs([root]);
+    let t = 0;
+    const r = await scanNodeModules(nodeModules, { home: homedir(), seen: new Map(), historyFrom: NOW - 60 * DAY, now: NOW, days: 30, du, deadlineMs: 1000, clock: () => (t += 5000) });
+    expect(r).toEqual({ nodeModules: [], errors: ['node_modules : analyse interrompue : trop long'] });
+  });
+  test('plus de projets que le plafond : les premiers seulement, arrêt signalé', async () => {
+    const { root } = tree();
+    const { nodeModules } = await findProjectDirs([root]);
+    const r = await scanNodeModules(nodeModules, { home: homedir(), seen: new Map(), historyFrom: NOW - 60 * DAY, now: NOW, days: 30, du, maxProjects: 1 });
+    expect(r.nodeModules.map((c) => c.path)).toEqual([join(root, 'mono/.worktrees/branche/node_modules')]); // premier dans l'ordre du parcours
+    expect(r.errors).toEqual(['node_modules : analyse interrompue : plus de 1 projets']);
+  });
+});
+
+describe('realProjectRoots (m-6)', () => {
+  test('défaut : jamais HOME, un de ses parents, « / » ni un dossier caché, même via un lien ; réglage : seulement jamais « / »', () => {
+    const { base, root } = tree();
+    const home = join(base, 'maison');
+    mkdirSync(join(home, '.cache/projets'), { recursive: true });
+    mkdirSync(join(home, 'Projets'), { recursive: true });
+    symlinkSync(home, join(home, 'Projets/vers-home'));
+    symlinkSync('/', join(home, 'Projets/vers-racine'));
+    symlinkSync(join(home, '.cache/projets'), join(home, 'Projets/vers-cache'));
+    symlinkSync(base, join(home, 'Projets/vers-parent'));
+    const links = ['vers-home', 'vers-racine', 'vers-cache', 'vers-parent'].map((n) => join(home, 'Projets', n));
+    // root est sous ~/.cache (dossier caché hors de HOME) : écarté aussi
+    expect(realProjectRoots([join(home, 'Projets'), root, ...links], { home, isDefault: true })).toEqual([join(home, 'Projets')]);
+    expect(realProjectRoots([...links], { home, isDefault: false })).toEqual([home, join(home, '.cache/projets'), base]);
   });
 });
 

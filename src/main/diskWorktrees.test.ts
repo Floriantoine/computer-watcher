@@ -28,7 +28,7 @@ function repo() {
   const main = join(root, 'alpha');
   mkdirSync(main, { recursive: true });
   sh(main, 'init', '-q', '-b', 'main');
-  writeFileSync(join(main, '.gitignore'), 'node_modules/\n.env\n');
+  writeFileSync(join(main, '.gitignore'), 'node_modules/\n.env\ndist/\nbuild/\n');
   writeFileSync(join(main, 'a.txt'), 'a');
   sh(main, 'add', '.');
   sh(main, 'commit', '-qm', 'init');
@@ -144,12 +144,99 @@ describe('checkWorktree / removeWorktree', () => {
     age(fini, 3);
     expect(await checkWorktree(c, d)).toBe('a changé depuis l’analyse : actualiser');
   });
-  test('git worktree remove refuse (fichier non suivi apparu) : erreur, rien de forcé', async () => {
+  test('fichier non suivi apparu : removeWorktree refuse avant git worktree remove, rien de forcé', async () => {
     const { root, main, wt, git } = repo();
     const fini = wt('fini', { merged: true });
     const [c] = (await scanWorktrees([main], { git, projectRoots: [root], now: NOW, du })).worktrees;
     writeFileSync(join(fini, 'nouveau.txt'), 'x');
-    await expect(removeWorktree(c, git)).rejects.toThrow(/git a refusé/);
+    await expect(removeWorktree(c, git)).rejects.toThrow('modifications ou fichiers non suivis');
     expect(existsSync(join(fini, 'nouveau.txt'))).toBe(true);
+  });
+});
+
+describe('fichiers sensibles dans un dossier ignoré « reconstructible » (I-1, m-3)', () => {
+  test('dist/.env ignoré : refusé, le chemin est dans la raison ; dist/ sans fichier sensible : accepté', async () => {
+    const { root, main, wt, git, age } = repo();
+    const propre = wt('propre', { merged: true });
+    mkdirSync(join(propre, 'dist/assets'), { recursive: true });
+    writeFileSync(join(propre, 'dist/assets/app.js'), 'x');
+    age(propre, 3);
+    const secret = wt('secret', { merged: true });
+    mkdirSync(join(secret, 'dist/conf'), { recursive: true });
+    writeFileSync(join(secret, 'dist/app.js'), 'x');
+    writeFileSync(join(secret, 'dist/conf/.env'), 'JETON=x');
+    age(secret, 3);
+    const r = await scanWorktrees([main], { git, projectRoots: [root], now: NOW, du });
+    const by = new Map(r.worktrees.map((c) => [c.path, c]));
+    expect(by.get(propre)!.refusal).toBeNull();
+    expect(by.get(secret)!.refusal).toBe('fichiers ignorés qui seraient perdus : dist/conf/.env');
+  });
+  test('clé, base de données, budget dépassé : refusés ; dossier *.asar jamais parcouru', async () => {
+    const { root, main, wt, git, age } = repo();
+    const cle = wt('cle', { merged: true });
+    mkdirSync(join(cle, 'build'), { recursive: true });
+    writeFileSync(join(cle, 'build/serveur.pem'), 'x');
+    writeFileSync(join(cle, 'build/data.sqlite3'), 'x');
+    age(cle, 3);
+    const arch = wt('arch', { merged: true });
+    mkdirSync(join(arch, 'dist/paquet.asar'), { recursive: true });
+    writeFileSync(join(arch, 'dist/paquet.asar/.env'), 'x'); // jamais lu (Electron le verrait comme une archive)
+    age(arch, 3);
+    const r = await scanWorktrees([main], { git, projectRoots: [root], now: NOW, du });
+    const by = new Map(r.worktrees.map((c) => [c.path, c]));
+    expect(by.get(cle)!.refusal).toBe('fichiers ignorés qui seraient perdus : build/data.sqlite3, build/serveur.pem');
+    expect(by.get(arch)!.refusal).toBeNull();
+  });
+  test('m-3 : dist/.env apparu après la vérification : removeWorktree refuse, fichier intact', async () => {
+    const { root, main, wt, git } = repo();
+    const fini = wt('fini', { merged: true });
+    const [c] = (await scanWorktrees([main], { git, projectRoots: [root], now: NOW, du })).worktrees;
+    expect(await checkWorktree(c, { git, projectRoots: [root], now: NOW, dirUser: () => null })).toBeNull();
+    mkdirSync(join(fini, 'dist'), { recursive: true });
+    writeFileSync(join(fini, 'dist/.env.local'), 'JETON=x');
+    await expect(removeWorktree(c, git)).rejects.toThrow('fichiers ignorés qui seraient perdus : dist/.env.local');
+    expect(existsSync(join(fini, 'dist/.env.local'))).toBe(true);
+  });
+});
+
+describe('filtres git configurés (I-2)', () => {
+  const setup = (where: 'local' | 'worktree') => {
+    const r = repo();
+    writeFileSync(join(r.main, '.gitattributes'), '*.txt filter=x\n');
+    r.sh(r.main, 'add', '.');
+    r.sh(r.main, 'commit', '-qm', 'attributs'); // filtre pas encore défini : rien n'est exécuté
+    const fini = r.wt('fini', { merged: true });
+    const marker = join(r.base, 'marqueur');
+    const cmd = `touch ${marker}; cat`;
+    if (where === 'local') r.sh(r.main, 'config', 'filter.x.clean', cmd);
+    else {
+      r.sh(r.main, 'config', 'extensions.worktreeConfig', 'true');
+      r.sh(fini, 'config', '--worktree', 'filter.x.clean', cmd);
+    }
+    r.age(fini, 3); // fichiers suivis aux dates changées : git status les relirait par le filtre
+    return { ...r, fini, marker };
+  };
+  for (const where of ['local', 'worktree'] as const) {
+    test(`filter.x.clean (config ${where}) : refusé à l’analyse, à la revérification et à la suppression ; jamais exécuté`, async () => {
+      const { root, main, git, fini, marker } = setup(where);
+      const r = await scanWorktrees([main], { git, projectRoots: [root], now: NOW, du });
+      const c = r.worktrees.find((x) => x.path === fini)!;
+      expect(c.refusal).toBe('filtre git configuré : vérifie à la main');
+      expect(await checkWorktree(c, { git, projectRoots: [root], now: NOW, dirUser: () => null })).toBe('filtre git configuré : vérifie à la main');
+      await expect(removeWorktree(c, git)).rejects.toThrow('filtre git configuré : vérifie à la main');
+      expect(existsSync(fini)).toBe(true);
+      expect(existsSync(marker)).toBe(false);
+    });
+  }
+});
+
+describe('échéance globale de scanWorktrees (m-4)', () => {
+  test('au-delà : arrêt, le reste n’est pas proposé, « analyse interrompue : trop long »', async () => {
+    const { root, main, wt, git } = repo();
+    wt('fini', { merged: true });
+    let t = 0;
+    const r = await scanWorktrees([main], { git, projectRoots: [root], now: NOW, du, deadlineMs: 1000, clock: () => (t += 5000) });
+    expect(r.worktrees).toEqual([]);
+    expect(r.errors).toEqual(['worktrees : analyse interrompue : trop long']);
   });
 });

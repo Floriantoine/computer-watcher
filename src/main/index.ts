@@ -68,7 +68,7 @@ import { diskRootRunner, runDiskRoot } from './diskRoot';
 import { realProcByName, staticRefusal, type CleanDeps } from './diskClean';
 import { buildUnits, cleanDisk, diskCleanAllEvent, EMPTY_EXTRAS, type ExtrasState } from './diskCleanAll';
 import { createExtrasCache } from './diskExtrasCache';
-import { findProjectDirs, scanNodeModules, scanWorktrees } from './diskProjects';
+import { findProjectDirs, realProjectRoots, scanNodeModules, scanWorktrees } from './diskProjects';
 import { createGitRun } from './gitRun';
 import { listCacheDirs } from './diskCacheDirs';
 import { dockerRunner, dockerStatus } from './diskDocker';
@@ -890,14 +890,7 @@ const diskDefaultRoots = () => defaultProjectRoots([...history.projectsLastSeen(
 const diskProjectRoots = () => {
   const configured = config.ui.diskProjectRoots;
   const roots = configured.length ? configured : diskDefaultRoots();
-  const real = [...new Set(roots.flatMap((p) => {
-    try {
-      const r = realpathSync(p);
-      return lstatSync(r).isDirectory() ? [r] : [];
-    } catch {
-      return [];
-    }
-  }))];
+  const real = realProjectRoots(roots, { home: homedir(), isDefault: !configured.length });
   return { roots, real, isDefault: !configured.length, missing: roots.filter((p) => !existsSync(p)) };
 };
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -916,7 +909,9 @@ const scanDiskExtras = async (): Promise<{ view: ExtrasView; state: ExtrasState 
   }
   let nodeModules: ExtrasView['nodeModules'] = [];
   try {
-    nodeModules = await scanNodeModules(found.nodeModules, { home, seen: history.projectsLastSeen(), historyFrom: history.from(), now, days, du: defaultDu });
+    const nm = await scanNodeModules(found.nodeModules, { home, seen: history.projectsLastSeen(), historyFrom: history.from(), now, days, du: defaultDu });
+    nodeModules = nm.nodeModules;
+    projectErrors.push(...nm.errors);
   } catch (e) {
     projectErrors.push(`node_modules : analyse impossible (${errText(e)})`);
   }

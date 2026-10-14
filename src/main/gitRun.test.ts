@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, test } from 'vitest';
-import { createGitRun, gitEnv } from './gitRun';
+import { createGitRun, gitEnv, riskyGitConfig } from './gitRun';
 
 mkdirSync(join(homedir(), '.cache'), { recursive: true });
 const made: string[] = [];
@@ -43,6 +43,26 @@ describe('createGitRun', () => {
     execFileSync(GIT, ['config', 'core.fsmonitor', `touch ${join(base, 'marqueur')}`], { cwd: base, env });
     const git = createGitRun({ env: { PATH: '/usr/bin:/bin', HOME: base } })!;
     expect((await git(['status', '--porcelain=v1', '-z'], { cwd: base })).code).toBe(0);
+    expect(existsSync(join(base, 'marqueur'))).toBe(false);
+  });
+});
+
+describe('riskyGitConfig', () => {
+  test('filtre ou hooks dans la config du dépôt (include compris) : refusé ; config globale et -c : ignorées ; jamais exécuté', async () => {
+    const base = realpathSync(mkdtempSync(join(homedir(), '.cache', 'pw-disk2-gitrun-')));
+    made.push(base);
+    const globalCfg = join(base, 'global.gitconfig');
+    writeFileSync(globalCfg, '[filter "lfs"]\n\tclean = git-lfs clean -- %f\n');
+    const env = { PATH: '/usr/bin:/bin', HOME: base, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: globalCfg };
+    execFileSync(GIT, ['init', '-q'], { cwd: base, env });
+    const git = createGitRun({ env: { PATH: '/usr/bin:/bin', HOME: base, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: globalCfg } })!;
+    expect(await riskyGitConfig(git, base)).toBeNull(); // global (git-lfs) et nos -c seulement
+    writeFileSync(join(base, 'inclus.gitconfig'), `[filter "x"]\n\tsmudge = touch ${join(base, 'marqueur')}\n`);
+    execFileSync(GIT, ['config', 'include.path', join(base, 'inclus.gitconfig')], { cwd: base, env });
+    expect(await riskyGitConfig(git, base)).toBe('filtre git configuré : vérifie à la main');
+    execFileSync(GIT, ['config', '--unset', 'include.path'], { cwd: base, env });
+    execFileSync(GIT, ['config', 'core.hooksPath', '.husky'], { cwd: base, env });
+    expect(await riskyGitConfig(git, base)).toBe('filtre git configuré : vérifie à la main');
     expect(existsSync(join(base, 'marqueur'))).toBe(false);
   });
 });

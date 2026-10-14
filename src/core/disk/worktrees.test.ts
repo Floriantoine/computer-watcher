@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { defaultBranchFrom, isSafeBranchName, parseStatusZ, parseWorktreeList, statusRefusal, worktreeExclusion } from './worktrees';
+import { defaultBranchFrom, ignoredDirsToInspect, isSafeBranchName, isSensitiveName, parseStatusZ, parseWorktreeList, statusRefusal, worktreeExclusion } from './worktrees';
 
 const LIST = [
   'worktree /p/alpha', 'HEAD aaa', 'branch refs/heads/main', '',
@@ -75,5 +75,15 @@ describe('statut', () => {
     expect(statusRefusal(parseStatusZ('!! node_modules/\0!! .env\0!! donnees/\0'))).toBe('fichiers ignorés qui seraient perdus : .env, donnees/');
     const many = Array.from({ length: 8 }, (_, i) => `!! f${i}.local`).join('\0') + '\0';
     expect(statusRefusal(parseStatusZ(many))).toBe('fichiers ignorés qui seraient perdus : f0.local, f1.local, f2.local, f3.local, f4.local et 3 autres');
+  });
+});
+
+describe('ignorés reconstructibles à inspecter (I-1)', () => {
+  test('dossiers reconstructibles inspectés, sauf dépendances et caches de lint ; noms sensibles', () => {
+    const e = (path: string, code = '!!') => ({ code, path });
+    expect(ignoredDirsToInspect([e('dist/'), e('pkg/build/'), e('node_modules/'), e('src/__pycache__/'), e('.eslintcache'), e('.env'), e('a.txt', ' M')]))
+      .toEqual(['dist', 'pkg/build']);
+    for (const n of ['.env', '.env.local', 'cle.pem', 'id.KEY', 'app.db', 'data.sqlite3', 'x.sqlite-wal']) expect(isSensitiveName(n)).toBe(true);
+    for (const n of ['app.js', 'env.ts', 'keys.json', 'dbx']) expect(isSensitiveName(n)).toBe(false);
   });
 });
