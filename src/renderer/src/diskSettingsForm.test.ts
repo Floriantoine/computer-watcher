@@ -13,4 +13,10 @@ describe('Réglages → Disque', () => {
     expect(validateDiskSettingsForm({ rootsText: '~/code', days: '30' }, null).ok).toBe(false);
     for (const d of ['0', '366', '1.5', 'abc', '']) expect(validateDiskSettingsForm({ rootsText: '', days: d }, null), d).toMatchObject({ ok: false, errors: { days: 'Un nombre entier de 1 à 365 est attendu' } });
   });
+  test('doublons fusionnés avant la limite ; ~ sans dossier personnel : message précis', () => {
+    const lignes = [...Array.from({ length: 20 }, (_, i) => `/srv/p${i}`), '/srv/p0/'].join('\n');
+    expect(validateDiskSettingsForm({ rootsText: lignes, days: '30' }, null)).toMatchObject({ ok: true, roots: expect.any(Array) });
+    expect((validateDiskSettingsForm({ rootsText: lignes, days: '30' }, null) as { roots: string[] }).roots).toHaveLength(20);
+    expect(validateDiskSettingsForm({ rootsText: '~/code', days: '30' }, null)).toMatchObject({ ok: false, errors: { roots: '~ indisponible : écris le chemin complet' } });
+  });
 });

@@ -4,7 +4,7 @@ import type { SunNode } from '../../core/disk/sunTree';
 import type { ExtrasView } from '../../core/disk/extras';
 import {
   arcPath, badgeText, breadcrumb, cleanRequest, emptyExtraSelection, extraCount, extraPaths, extrasTotal, familyOfPath, freedToast, highlighted, inactiveText, measuredAt,
-  pruneExtras, refusalText, selectedTotal, sunColors, toggleExtra,
+  createLatest, dockerActionEmpty, pruneExtras, refusalText, selectedTotal, sunColors, toggleExtra,
 } from './disk';
 
 const H = '/home/u';
@@ -145,4 +145,21 @@ test('texte d’inactivité ; toast avec éléments du lot 2 (libellé, note de 
     freedKB: 2048, done: ['worktree:/p/fini'], refused: [{ id: 'cache:x', label: '~/.cache/x (inconnu)', reason: 'utilisé par x (pid 3)' }],
     notes: [{ label: 'worktree depot › fini', note: 'worktree supprimé ; branche fini gardée : non fusionnée' }], cancelled: false,
   })).toEqual({ text: '2 Mo libérés · refusé : ~/.cache/x (inconnu) : utilisé par x (pid 3) · worktree supprimé ; branche fini gardée : non fusionnée', kind: 'info' });
+});
+
+test('Docker : action sans rien à retirer non cochable, élaguée', () => {
+  expect(dockerActionEmpty({ id: 'containers', reclaimKB: null, items: [] })).toBe(true);
+  expect(dockerActionEmpty({ id: 'containers', reclaimKB: 0, items: [] })).toBe(true);
+  expect(dockerActionEmpty({ id: 'volumes', reclaimKB: 60, items: [] })).toBe(false);
+  expect(dockerActionEmpty({ id: 'images', reclaimKB: 0, items: ['demo/x'] })).toBe(false);
+  const s = toggleExtra(toggleExtra(emptyExtraSelection(), 'docker', 'containers'), 'docker', 'volumes');
+  expect([...pruneExtras(s, X).docker]).toEqual(['volumes']);
+});
+
+test('réponses dans le désordre : seule la dernière requête compte', () => {
+  const latest = createLatest();
+  const a = latest.next();
+  const b = latest.next();
+  expect(latest.isLatest(a)).toBe(false);
+  expect(latest.isLatest(b)).toBe(true);
 });

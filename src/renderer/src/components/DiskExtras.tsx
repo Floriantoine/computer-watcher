@@ -1,7 +1,7 @@
 import { Container, FolderGit2, Package, TriangleAlert } from 'lucide-react';
 import { DOCKER_LABELS } from '../../../core/disk/docker';
 import type { ExtrasView } from '../../../core/disk/extras';
-import { inactiveText, measuredAt, type ExtraKind, type ExtraSelection } from '../disk';
+import { dockerActionEmpty, inactiveText, measuredAt, type ExtraKind, type ExtraSelection } from '../disk';
 import { formatKB } from '../format';
 
 interface Props {
@@ -31,14 +31,18 @@ function ExtraRow({ testid, k, checked, disabled, label, sizeKB, sub, why, onCha
 
 /** Sections du lot 2 : node_modules inactifs, worktrees fusionnés, dossiers inconnus de ~/.cache, Docker. */
 export function DiskExtras({ extras: x, error, loading, sel, busy, onToggle, onOpenSettings }: Props) {
-  if (error) return <div className="chart-empty small" role="alert">{error}</div>;
+  if (error && !x) return <div className="chart-empty small" role="alert">{error}</div>;
   if (!x) return <div className="chart-empty small" data-testid="disk-extras-status">Analyse des projets, de ~/.cache et de Docker…</div>;
+  // Après un échec d'actualisation, l'ancienne liste reste lisible mais rien n'y est cochable.
+  const locked = busy || !!error;
   return (
     <div className="disk-extras" data-testid="disk-extras">
+      {error && <div className="chart-empty small" role="alert">{error} · liste précédente, non cochable : actualise</div>}
       <div className="sub" data-testid="disk-extras-status">
         {loading ? 'Analyse…' : measuredAt(x.at).replace(/^mesuré/, 'analysé')} · dossiers de projets :{' '}
         {x.projectRoots.roots.length ? x.projectRoots.roots.join(', ') : 'aucun'}
         {x.projectRoots.isDefault ? ' (défaut)' : ''}
+        {x.projectRoots.missing.length ? ` · introuvable : ${x.projectRoots.missing.join(', ')}` : ''}
         {x.truncated ? ' · incomplet : trop de dossiers' : ''}
         {onOpenSettings && (
           <>
@@ -52,7 +56,7 @@ export function DiskExtras({ extras: x, error, loading, sel, busy, onToggle, onO
       {x.nodeModules.length ? (
         <ul className="disk-family-list">
           {x.nodeModules.map((c) => (
-            <ExtraRow key={c.path} testid="disk-nm-row" k={c.path} checked={sel.nodeModules.has(c.path)} disabled={busy} label={`node_modules de ${c.label}`}
+            <ExtraRow key={c.path} testid="disk-nm-row" k={c.path} checked={sel.nodeModules.has(c.path)} disabled={locked} label={`node_modules de ${c.label}`}
               sizeKB={c.sizeKB} sub={inactiveText(c, x.days)} onChange={() => onToggle('nodeModules', c.path)} />
           ))}
         </ul>
@@ -62,7 +66,7 @@ export function DiskExtras({ extras: x, error, loading, sel, busy, onToggle, onO
       {x.gitMissing ? <div className="chart-empty small">git introuvable (/usr/bin/git)</div> : x.worktrees.length ? (
         <ul className="disk-family-list">
           {x.worktrees.map((c) => (
-            <ExtraRow key={c.path} testid="disk-wt-row" k={c.path} checked={sel.worktrees.has(c.path)} disabled={busy} label={`worktree ${c.label}`} sizeKB={c.sizeKB}
+            <ExtraRow key={c.path} testid="disk-wt-row" k={c.path} checked={sel.worktrees.has(c.path)} disabled={locked} label={`worktree ${c.label}`} sizeKB={c.sizeKB}
               sub={`${c.path} · git worktree remove puis git branch -d (jamais forcé)`} why={c.refusal} onChange={() => onToggle('worktrees', c.path)} />
           ))}
         </ul>
@@ -75,7 +79,7 @@ export function DiskExtras({ extras: x, error, loading, sel, busy, onToggle, onO
           <p className="disk-warning">Inconnu : vérifie avant. Ces dossiers ne sont pas reconnus ; une appli peut y garder autre chose qu’un cache.</p>
           <ul className="disk-family-list">
             {x.cacheDirs.dirs.map((c) => (
-              <ExtraRow key={c.name} testid="disk-cache-row" k={c.name} checked={sel.cacheDirs.has(c.name)} disabled={busy} label={`~/.cache/${c.name}`} sizeKB={c.sizeKB}
+              <ExtraRow key={c.name} testid="disk-cache-row" k={c.name} checked={sel.cacheDirs.has(c.name)} disabled={locked} label={`~/.cache/${c.name}`} sizeKB={c.sizeKB}
                 sub="inconnu : vérifie avant" why={c.refusal} onChange={() => onToggle('cacheDirs', c.name)} />
             ))}
           </ul>
@@ -87,7 +91,7 @@ export function DiskExtras({ extras: x, error, loading, sel, busy, onToggle, onO
           <h4 className="disk-sub"><Container size={13} strokeWidth={2} /> Docker {x.docker.version}</h4>
           <ul className="disk-family-list">
             {x.docker.actions.map((a) => (
-              <ExtraRow key={a.id} testid="disk-docker-row" k={a.id} checked={sel.docker.has(a.id)} disabled={busy} label={DOCKER_LABELS[a.id]} sizeKB={a.reclaimKB}
+              <ExtraRow key={a.id} testid="disk-docker-row" k={a.id} checked={sel.docker.has(a.id)} disabled={locked || dockerActionEmpty(a)} label={DOCKER_LABELS[a.id]} sizeKB={a.reclaimKB}
                 sub={[a.items.slice(0, 5).join(', ') || 'rien à retirer', a.items.length > 5 ? `… et ${a.items.length - 5} autres` : '', a.note ?? ''].filter(Boolean).join(' · ')}
                 onChange={() => onToggle('docker', a.id)} />
             ))}

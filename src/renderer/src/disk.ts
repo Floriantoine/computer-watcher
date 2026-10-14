@@ -1,6 +1,6 @@
 // Page Disque (logique pure) : sélection des familles, liens soleil ↔ familles, fil d'Ariane, textes, géométrie du soleil.
 import { familyDef, isFamilyId, type FamilyDef, type FamilyId, type FamilyMeasure } from '../../core/disk/families';
-import type { DockerAction } from '../../core/disk/docker';
+import type { DockerAction, DockerActionView } from '../../core/disk/docker';
 import type { DiskCleanRequest, ExtrasView, NodeModulesCandidate } from '../../core/disk/extras';
 import type { SunNode } from '../../core/disk/sunTree';
 import { formatKB } from './format';
@@ -108,6 +108,15 @@ export function extrasTotal(s: ExtraSelection, x: ExtrasView | null): number {
   );
 }
 
+/** Action Docker sans rien à retirer (taille nulle ou inconnue, aucun élément) : case désactivée. */
+export const dockerActionEmpty = (a: DockerActionView): boolean => !a.items.length && !a.reclaimKB;
+
+/** Compteur de requêtes : seule la réponse de la dernière requête lancée est appliquée. */
+export function createLatest(): { next(): number; isLatest(n: number): boolean } {
+  let last = 0;
+  return { next: () => ++last, isLatest: (n) => n === last };
+}
+
 /** Après une nouvelle analyse : ne garder coché que ce qui est encore proposé et sans refus. */
 export function pruneExtras(s: ExtraSelection, x: ExtrasView | null): ExtraSelection {
   if (!x) return emptyExtraSelection();
@@ -116,7 +125,7 @@ export function pruneExtras(s: ExtraSelection, x: ExtrasView | null): ExtraSelec
     nodeModules: keep(s.nodeModules, new Set(x.nodeModules.map((c) => c.path))),
     worktrees: keep(s.worktrees, new Set(x.worktrees.filter((c) => !c.refusal).map((c) => c.path))),
     cacheDirs: keep(s.cacheDirs, new Set(x.cacheDirs.dirs.filter((c) => !c.refusal).map((c) => c.name))),
-    docker: keep(s.docker, new Set((x.docker?.actions ?? []).map((a) => a.id))),
+    docker: keep(s.docker, new Set((x.docker?.actions ?? []).filter((a) => !dockerActionEmpty(a)).map((a) => a.id))),
   };
 }
 

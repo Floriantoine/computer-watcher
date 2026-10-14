@@ -4,7 +4,7 @@ import { FAMILIES, familyDef, isFamilyId, type FamiliesFile, type FamilyId, type
 import type { ExtrasView } from '../../../core/disk/extras';
 import type { SunNode } from '../../../core/disk/sunTree';
 import {
-  badgeText, breadcrumb, cleanRequest, emptyExtraSelection, extraCount, extraPaths, extrasTotal, familyOfPath, freeButtonLabel, freedToast, highlighted, measuredAt,
+  badgeText, breadcrumb, cleanRequest, createLatest, emptyExtraSelection, extraCount, extraPaths, extrasTotal, familyOfPath, freeButtonLabel, freedToast, highlighted, measuredAt,
   pruneExtras, selectedTotal, toggleExtra, type CleanPhase, type ExtraKind, type ExtraSelection, type FamilyPaths,
 } from '../disk';
 import { formatKB } from '../format';
@@ -105,23 +105,27 @@ export function DiskPage({ onToast, onOpenSettings }: Props) {
       (e: unknown) => alive.current && setScan({ state: 'error', message: ipcErrorMessage(e) }),
     );
   }, []);
+  const extrasReq = useRef(createLatest()).current;
   const loadExtras = useCallback((force = false) => {
+    const req = extrasReq.next();
     setExtrasError(null);
     setExtrasLoading(true);
     window.procWatch.disk.extras(force).then(
       (x) => {
-        if (!alive.current) return;
+        if (!alive.current || !extrasReq.isLatest(req)) return;
         setExtras(x);
         setExtraSel((s) => pruneExtras(s, x));
         setExtrasLoading(false);
       },
       (e: unknown) => {
-        if (!alive.current) return;
+        if (!alive.current || !extrasReq.isLatest(req)) return;
+        // Jamais d'élément coché invisible ou périmé envoyé au ménage.
+        setExtraSel(emptyExtraSelection());
         setExtrasError(ipcErrorMessage(e));
         setExtrasLoading(false);
       },
     );
-  }, []);
+  }, [extrasReq]);
   useEffect(() => {
     const off = window.procWatch.disk.onScanProgress((kb) => setScan((s) => (s.state === 'running' ? { state: 'running', kb } : s)));
     loadBands();

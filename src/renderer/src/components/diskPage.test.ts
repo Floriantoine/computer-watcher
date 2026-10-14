@@ -74,4 +74,16 @@ describe('sections du lot 2', () => {
     expect(html).not.toMatch(/disk-docker-row/);
     expect(html).toMatch(/git introuvable/);
   });
+  it('dossiers de projets introuvables signalés ; Docker sans rien à retirer non cochable', () => {
+    const html = renderToStaticMarkup(createElement(DiskExtras, { extras: { ...EXTRAS, projectRoots: { roots: [`${H}/code`], isDefault: false, missing: [`${H}/parti`] } }, error: null, loading: false, sel: emptyExtraSelection(), busy: false, onToggle: noop }));
+    expect(html).toContain(`· introuvable : ${H}/parti`);
+    expect(html).toMatch(/data-testid="disk-docker-row" data-key="containers"[^>]*>[\s\S]*?disabled=""/);
+    expect(html).not.toMatch(/data-testid="disk-docker-row" data-key="volumes"[^>]*><input[^>]*disabled=""/);
+  });
+  it('échec d’actualisation : bandeau d’erreur, ancienne liste visible mais non cochable', () => {
+    const html = renderToStaticMarkup(createElement(DiskExtras, { extras: EXTRAS, error: 'analyse impossible', loading: false, sel: emptyExtraSelection(), busy: false, onToggle: noop }));
+    expect(html).toMatch(/role="alert"[^>]*>[^<]*analyse impossible/);
+    expect(html).toMatch(/disk-nm-row/);
+    expect(html.match(/<input type="checkbox"[^>]*>/g)!.every((i) => i.includes('disabled=""'))).toBe(true);
+  });
 });
