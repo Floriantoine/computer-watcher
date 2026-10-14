@@ -1,5 +1,7 @@
 // Page Disque (logique pure) : sélection des familles, liens soleil ↔ familles, fil d'Ariane, textes, géométrie du soleil.
-import { familyDef, type FamilyDef, type FamilyId, type FamilyMeasure } from '../../core/disk/families';
+import { familyDef, isFamilyId, type FamilyDef, type FamilyId, type FamilyMeasure } from '../../core/disk/families';
+import type { DockerAction, DockerActionView } from '../../core/disk/docker';
+import type { DiskCleanRequest, ExtrasView, NodeModulesCandidate } from '../../core/disk/extras';
 import type { SunNode } from '../../core/disk/sunTree';
 import { formatKB } from './format';
 
@@ -53,12 +55,23 @@ export function measuredAt(ts: number, now = Date.now()): string {
   return d.toDateString() === n.toDateString() ? `mesuré à ${hm}` : `mesuré le ${p2(d.getDate())}/${p2(d.getMonth() + 1)} à ${hm}`;
 }
 
-export interface CleanOutcome { freedKB: number; estimatedKB?: number; done: FamilyId[]; refused: { id: FamilyId; reason: string }[]; cancelled: boolean }
+/** Résultat du ménage : `id` = id de famille ou clé d'élément (`node_modules:<chemin>`…) ; `label` fourni par le main. */
+export interface CleanOutcome {
+  freedKB: number;
+  estimatedKB?: number;
+  done: string[];
+  refused: { id: string; label?: string; reason: string }[];
+  notes?: { label: string; note: string }[];
+  cancelled: boolean;
+}
 
-/** Toast après « Libérer… » : place libérée (statfs avant / après) et refus ; rien si annulé. */
+const refusedLabel = (x: { id: string; label?: string }) => x.label ?? (isFamilyId(x.id) ? familyDef(x.id).label : x.id);
+
+/** Toast après « Libérer… » : place libérée (statfs avant / après), refus, notes (branche gardée) ; rien si annulé. */
 export function freedToast(r: CleanOutcome): { text: string; kind: 'info' | 'error' } | null {
   if (r.cancelled && !r.refused.length) return null;
-  const refused = r.refused.map((x) => refusalText(x.id, x.reason)).join(' ; ');
+  const refused = r.refused.map((x) => `${refusedLabel(x)} : ${x.reason}`).join(' ; ');
+  const notes = (r.notes ?? []).map((n) => n.note).join(' ; ');
   // place pas encore visible par statfs (btrfs la montre après quelques secondes) : l'estimation, annoncée comme telle
   const est = r.estimatedKB ?? 0;
   const head = !r.done.length
@@ -66,7 +79,74 @@ export function freedToast(r: CleanOutcome): { text: string; kind: 'info' | 'err
     : est > 0 && r.freedKB < est / 2
       ? `≈ ${formatKB(Math.round(est))} libérés (estimation)`
       : `${formatKB(Math.round(r.freedKB))} libérés`;
-  return { text: refused ? `${head} · refusé : ${refused}` : head, kind: r.done.length ? 'info' : 'error' };
+  return { text: [head, refused && `refusé : ${refused}`, notes].filter(Boolean).join(' · '), kind: r.done.length ? 'info' : 'error' };
+}
+
+/** Lot 2 : éléments cochés (clés renvoyées au main, qui ne supprime que ce que sa dernière analyse a trouvé). */
+export interface ExtraSelection { nodeModules: ReadonlySet<string>; worktrees: ReadonlySet<string>; cacheDirs: ReadonlySet<string>; docker: ReadonlySet<DockerAction> }
+export type ExtraKind = keyof ExtraSelection;
+export const emptyExtraSelection = (): ExtraSelection => ({ nodeModules: new Set(), worktrees: new Set(), cacheDirs: new Set(), docker: new Set() });
+
+export function toggleExtra(s: ExtraSelection, kind: ExtraKind, key: string): ExtraSelection {
+  const next = new Set<string>(s[kind] as ReadonlySet<string>);
+  if (next.has(key)) next.delete(key);
+  else next.add(key);
+  return { ...s, [kind]: next } as ExtraSelection;
+}
+
+export const extraCount = (s: ExtraSelection) => s.nodeModules.size + s.worktrees.size + s.cacheDirs.size + s.docker.size;
+
+/** Place estimée des éléments cochés (tailles inconnues ignorées). */
+export function extrasTotal(s: ExtraSelection, x: ExtrasView | null): number {
+  if (!x) return 0;
+  const kb = (v: number | null) => v ?? 0;
+  return (
+    x.nodeModules.reduce((t, c) => t + (s.nodeModules.has(c.path) ? kb(c.sizeKB) : 0), 0) +
+    x.worktrees.reduce((t, c) => t + (s.worktrees.has(c.path) ? kb(c.sizeKB) : 0), 0) +
+    x.cacheDirs.dirs.reduce((t, c) => t + (s.cacheDirs.has(c.name) ? kb(c.sizeKB) : 0), 0) +
+    (x.docker?.actions ?? []).reduce((t, a) => t + (s.docker.has(a.id) ? kb(a.reclaimKB) : 0), 0)
+  );
+}
+
+/** Action Docker sans rien à retirer (taille nulle ou inconnue, aucun élément) : case désactivée. */
+export const dockerActionEmpty = (a: DockerActionView): boolean => !a.items.length && !a.reclaimKB;
+
+/** Compteur de requêtes : seule la réponse de la dernière requête lancée est appliquée. */
+export function createLatest(): { next(): number; isLatest(n: number): boolean } {
+  let last = 0;
+  return { next: () => ++last, isLatest: (n) => n === last };
+}
+
+/** Après une nouvelle analyse : ne garder coché que ce qui est encore proposé et sans refus. */
+export function pruneExtras(s: ExtraSelection, x: ExtrasView | null): ExtraSelection {
+  if (!x) return emptyExtraSelection();
+  const keep = <T extends string>(set: ReadonlySet<T>, ok: ReadonlySet<string>) => new Set([...set].filter((k) => ok.has(k)));
+  return {
+    nodeModules: keep(s.nodeModules, new Set(x.nodeModules.map((c) => c.path))),
+    worktrees: keep(s.worktrees, new Set(x.worktrees.filter((c) => !c.refusal).map((c) => c.path))),
+    cacheDirs: keep(s.cacheDirs, new Set(x.cacheDirs.dirs.filter((c) => !c.refusal).map((c) => c.name))),
+    docker: keep(s.docker, new Set((x.docker?.actions ?? []).filter((a) => !dockerActionEmpty(a)).map((a) => a.id))),
+  };
+}
+
+/** Chemins des éléments cochés, pour les surligner dans le soleil. */
+export function extraPaths(s: ExtraSelection, x: ExtrasView | null): string[] {
+  if (!x) return [];
+  return [
+    ...x.nodeModules.filter((c) => s.nodeModules.has(c.path)).map((c) => c.path),
+    ...x.worktrees.filter((c) => s.worktrees.has(c.path)).map((c) => c.path),
+    ...x.cacheDirs.dirs.filter((c) => s.cacheDirs.has(c.name)).map((c) => c.path),
+  ];
+}
+
+export const cleanRequest = (families: ReadonlySet<FamilyId>, s: ExtraSelection): DiskCleanRequest => ({
+  families: [...families], nodeModules: [...s.nodeModules], worktrees: [...s.worktrees], cacheDirs: [...s.cacheDirs], docker: [...s.docker],
+});
+
+/** « aucun processus vu, aucun fichier modifié depuis 30 j (historique partiel) ». */
+export function inactiveText(c: NodeModulesCandidate, days: number, now = Date.now()): string {
+  const seen = c.lastSeen === null ? 'aucun processus vu' : `dernier processus il y a ${Math.floor((now - c.lastSeen) / 86_400_000)} j`;
+  return `${seen}, aucun fichier modifié depuis ${days} j${c.partialHistory ? ' (historique partiel)' : ''}`;
 }
 
 /** Teintes des dossiers de premier niveau (maquette A). */

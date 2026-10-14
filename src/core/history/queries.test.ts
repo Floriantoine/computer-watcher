@@ -6,7 +6,7 @@ import { describe, expect, test } from 'vitest';
 import type { DatabaseSync } from 'node:sqlite';
 import { createV3Db, openTestDb } from './testDb';
 import { aggregateMinute } from './maintenance';
-import { bucketMs, historyCovers, queryRuleStats, pickSource, queryInactive, queryCulprits, queryEvents, queryGroup, queryGroups, PROC_TREE_MAX, queryProcs, queryProcsAt, queryProcTree, querySystem, queryTop, rangeFromPreset, historyCoverage, historyFrom, pruneLastActiveCache, queryLastActive, queryDisk } from './queries';
+import { bucketMs, historyCovers, queryRuleStats, pickSource, queryInactive, queryCulprits, queryEvents, queryGroup, queryGroups, PROC_TREE_MAX, queryProcs, queryProcsAt, queryProcTree, querySystem, queryTop, rangeFromPreset, historyCoverage, historyFrom, pruneLastActiveCache, queryLastActive, queryDisk, queryProjectsLastSeen } from './queries';
 
 const H = 3600_000;
 const M = 60_000;
@@ -811,4 +811,16 @@ test('queryDisk : une série par partition (libre au plus bas du bucket, taille)
   expect(old.series[0].availKB[0]).toBe(889); // minimum de la minute
   db.exec('DROP TABLE disk_samples; DROP TABLE disk_minute; DROP TABLE disk_hour;');
   expect(queryDisk(db, { from: 0, to: 10 * M }, opts(10 * M))).toEqual({ ts: [], series: [] });
+});
+
+test('queryProjectsLastSeen : dernier instant par projet (détail, minute, heure), projets seulement', () => {
+  const { db } = seeded(); // groupe 2 = project:/a, échantillons de 0 à 10 min
+  db.exec(`INSERT INTO groups(id,key,label,kind) VALUES (5,'project:/b','b','project'), (6,'app:x','x','app'), (7,'project:relatif','r','project')`);
+  db.prepare('INSERT INTO group_hour VALUES (?,?,?,?,?,?)').run(3 * H, 5, 1, 0, 1, 0);
+  db.prepare('INSERT INTO group_hour VALUES (?,?,?,?,?,?)').run(4 * H, 6, 1, 0, 1, 0);
+  db.prepare('INSERT INTO group_hour VALUES (?,?,?,?,?,?)').run(4 * H, 7, 1, 0, 1, 0);
+  const m = queryProjectsLastSeen(db);
+  expect(m.get('/a')).toBe(10 * M - 5000);
+  expect(m.get('/b')).toBe(3 * H);
+  expect([...m.keys()].sort()).toEqual(['/a', '/b']);
 });

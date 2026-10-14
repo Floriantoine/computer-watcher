@@ -1,15 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { HardDrive, RefreshCw, Trash2 } from 'lucide-react';
-import { FAMILIES, familyDef, type FamiliesFile, type FamilyId } from '../../../core/disk/families';
+import { FAMILIES, familyDef, isFamilyId, type FamiliesFile, type FamilyId, type FamilyMeasure } from '../../../core/disk/families';
+import type { ExtrasView } from '../../../core/disk/extras';
 import type { SunNode } from '../../../core/disk/sunTree';
-import { badgeText, breadcrumb, familyOfPath, freeButtonLabel, freedToast, type CleanPhase, highlighted, measuredAt, selectedTotal, type FamilyPaths } from '../disk';
+import {
+  badgeText, breadcrumb, cleanRequest, createLatest, emptyExtraSelection, extraCount, extraPaths, extrasTotal, familyOfPath, freeButtonLabel, freedToast, highlighted, measuredAt,
+  pruneExtras, selectedTotal, toggleExtra, type CleanPhase, type ExtraKind, type ExtraSelection, type FamilyPaths,
+} from '../disk';
 import { formatKB } from '../format';
 import { createSingleFlight } from '../tmpClean';
 import { ipcErrorMessage } from '../viewModel';
+import { DiskExtras } from './DiskExtras';
 import { SunburstChart } from './SunburstChart';
 
 interface Props {
   onToast?: (message: string, kind: 'info' | 'error') => void;
+  /** Lien « Réglages » de la section des projets : ouvre Réglages → Disque. */
+  onOpenSettings?: () => void;
 }
 
 interface Band { mount: string; sizeKB: number; availKB: number; reclaimKB: number }
@@ -41,11 +48,12 @@ function PartitionBand({ b }: { b: Band }) {
 }
 
 /**
- * Page Disque (lot 1) : bandes des partitions, soleil du dossier personnel (parcours à l'ouverture, en arrière-plan),
- * familles récupérables à cocher. La suppression passe par les familles seulement : le main recalcule les chemins, fait
- * confirmer et revérifie tout.
+ * Page Disque : bandes des partitions, soleil du dossier personnel (parcours à l'ouverture, en arrière-plan),
+ * familles récupérables à cocher, puis (lot 2) node_modules inactifs, worktrees fusionnés, dossiers inconnus de ~/.cache
+ * et Docker. Le renderer n'envoie que des ids et des clés : le main ne supprime que ce que sa dernière analyse a trouvé,
+ * fait confirmer une seule fois et revérifie tout.
  */
-export function DiskPage({ onToast }: Props) {
+export function DiskPage({ onToast, onOpenSettings }: Props) {
   const [bands, setBands] = useState<Band[] | null>(null);
   const [view, setView] = useState<FamiliesView | null>(null);
   const [famError, setFamError] = useState<string | null>(null);
@@ -54,6 +62,10 @@ export function DiskPage({ onToast }: Props) {
   const [selected, setSelected] = useState<ReadonlySet<FamilyId>>(new Set());
   const [busy, setBusy] = useState(false);
   const [phase, setPhase] = useState<CleanPhase | null>(null);
+  const [extras, setExtras] = useState<ExtrasView | null>(null);
+  const [extrasError, setExtrasError] = useState<string | null>(null);
+  const [extrasLoading, setExtrasLoading] = useState(false);
+  const [extraSel, setExtraSel] = useState<ExtraSelection>(emptyExtraSelection);
   useEffect(() => window.procWatch.disk.onCleanPhase(setPhase), []);
   const flight = useRef(createSingleFlight()).current;
   const alive = useRef(true);
@@ -93,13 +105,35 @@ export function DiskPage({ onToast }: Props) {
       (e: unknown) => alive.current && setScan({ state: 'error', message: ipcErrorMessage(e) }),
     );
   }, []);
+  const extrasReq = useRef(createLatest()).current;
+  const loadExtras = useCallback((force = false) => {
+    const req = extrasReq.next();
+    setExtrasError(null);
+    setExtrasLoading(true);
+    window.procWatch.disk.extras(force).then(
+      (x) => {
+        if (!alive.current || !extrasReq.isLatest(req)) return;
+        setExtras(x);
+        setExtraSel((s) => pruneExtras(s, x));
+        setExtrasLoading(false);
+      },
+      (e: unknown) => {
+        if (!alive.current || !extrasReq.isLatest(req)) return;
+        // Jamais d'élément coché invisible ou périmé envoyé au ménage.
+        setExtraSel(emptyExtraSelection());
+        setExtrasError(ipcErrorMessage(e));
+        setExtrasLoading(false);
+      },
+    );
+  }, [extrasReq]);
   useEffect(() => {
     const off = window.procWatch.disk.onScanProgress((kb) => setScan((s) => (s.state === 'running' ? { state: 'running', kb } : s)));
     loadBands();
     loadFamilies();
     loadScan();
+    loadExtras();
     return off;
-  }, [loadBands, loadFamilies, loadScan]);
+  }, [loadBands, loadFamilies, loadScan, loadExtras]);
 
   const measures = useMemo(
     () => [...(view?.file?.families ?? [])].sort((a, b) => (b.reclaimKB ?? -1) - (a.reclaimKB ?? -1) || FAMILIES.findIndex((f) => f.id === a.id) - FAMILIES.findIndex((f) => f.id === b.id)),
@@ -118,21 +152,29 @@ export function DiskPage({ onToast }: Props) {
     },
     [view],
   );
-  const total = selectedTotal(measures, selected);
+  const count = selected.size + extraCount(extraSel);
+  const total = selectedTotal(measures, selected) + extrasTotal(extraSel, extras);
+  const lit = useMemo(() => {
+    const fam = highlighted(selected, paths);
+    const dirs = extraPaths(extraSel, extras);
+    return (p: string) => fam(p) || dirs.some((d) => p === d || p.startsWith(`${d}/`));
+  }, [selected, paths, extraSel, extras]);
 
   const free = async () => {
     await flight(async () => {
       setBusy(true);
       try {
-        const r = await window.procWatch.disk.clean([...selected]);
+        const r = await window.procWatch.disk.clean(cleanRequest(selected, extraSel));
         const t = freedToast(r);
         if (t) onToast?.(t.text, t.kind);
         if (r.done.length) {
           setSelected(new Set());
+          setExtraSel(emptyExtraSelection());
           loadScan(true);
+          loadExtras(true);
         }
-        // après un ménage : attendre la nouvelle mesure (celle lancée par le main est partagée)
-        loadFamilies(r.done.length > 0);
+        // après un ménage de familles : attendre la nouvelle mesure (celle lancée par le main est partagée)
+        loadFamilies(r.done.some(isFamilyId));
       } catch (e) {
         onToast?.(ipcErrorMessage(e), 'error');
       } finally {
@@ -142,6 +184,33 @@ export function DiskPage({ onToast }: Props) {
         }
       }
     });
+  };
+
+  const familyRow = (m: FamilyMeasure) => {
+    const def = familyDef(m.id);
+    const why = view?.refusals[m.id];
+    const last = view?.lastRefusals[m.id];
+    const on = selected.has(m.id);
+    return (
+      <li key={m.id} className={`disk-family${on ? ' on' : ''}${why ? ' refused' : ''}`} data-testid="disk-family-row" data-id={m.id}>
+        <input
+          type="checkbox"
+          id={`fam-${m.id}`}
+          data-testid="disk-family-check"
+          checked={on}
+          disabled={!!why || busy}
+          onChange={() => toggle(m.id)}
+        />
+        <label htmlFor={`fam-${m.id}`} className="name">
+          {def.label}
+          <span className={`disk-badge ${def.badge}`}>{badgeText(def.badge)}</span>
+        </label>
+        <span className="size mono" title="Taille mesurée">{m.sizeKB === null ? 'taille inconnue' : formatKB(m.sizeKB)}</span>
+        <span className="reclaim mono">{m.reclaimKB === null ? '' : `libère ≈ ${formatKB(m.reclaimKB)}`}</span>
+        <span className="when">{measuredAt(m.at)}</span>
+        {(why || last || m.error) && <span className="why" data-testid="disk-family-why">{why ?? (last ? `dernier essai : ${last}` : m.error)}</span>}
+      </li>
+    );
   };
 
   const tree = scan.state === 'done' ? scan.tree : null;
@@ -163,6 +232,7 @@ export function DiskPage({ onToast }: Props) {
           onClick={() => {
             loadScan(true);
             loadFamilies(true);
+            loadExtras(true);
           }}
         >
           <RefreshCw size={13} strokeWidth={2} /> Actualiser
@@ -198,7 +268,7 @@ export function DiskPage({ onToast }: Props) {
               onEnter={setCurrent}
               onUp={() => setCurrent((c) => (c && c !== tree.path ? c.slice(0, c.lastIndexOf('/')) || tree.path : c))}
               familyOf={(p) => familyOfPath(p, paths)}
-              isHighlighted={highlighted(selected, paths)}
+              isHighlighted={lit}
               onToggleFamily={toggle}
               onOpen={(p) =>
                 void window.procWatch.disk.open(p).then(
@@ -224,42 +294,25 @@ export function DiskPage({ onToast }: Props) {
           ) : !measures.length ? (
             <div className="chart-empty small">Aucune famille récupérable trouvée</div>
           ) : (
-            <ul className="disk-family-list">
-              {measures.map((m) => {
-                const def = familyDef(m.id);
-                const why = view.refusals[m.id];
-                const last = view.lastRefusals[m.id];
-                const on = selected.has(m.id);
-                return (
-                  <li key={m.id} className={`disk-family${on ? ' on' : ''}${why ? ' refused' : ''}`} data-testid="disk-family-row" data-id={m.id}>
-                    <input
-                      type="checkbox"
-                      id={`fam-${m.id}`}
-                      data-testid="disk-family-check"
-                      checked={on}
-                      disabled={!!why || busy}
-                      onChange={() => toggle(m.id)}
-                    />
-                    <label htmlFor={`fam-${m.id}`} className="name">
-                      {def.label}
-                      <span className={`disk-badge ${def.badge}`}>{badgeText(def.badge)}</span>
-                    </label>
-                    <span className="size mono" title="Taille mesurée">{m.sizeKB === null ? 'taille inconnue' : formatKB(m.sizeKB)}</span>
-                    <span className="reclaim mono">{m.reclaimKB === null ? '' : `libère ≈ ${formatKB(m.reclaimKB)}`}</span>
-                    <span className="when">{measuredAt(m.at)}</span>
-                    {(why || last || m.error) && <span className="why" data-testid="disk-family-why">{why ?? (last ? `dernier essai : ${last}` : m.error)}</span>}
-                  </li>
-                );
-              })}
-            </ul>
+            <>
+              <ul className="disk-family-list">{measures.filter((m) => !familyDef(m.id).app).map(familyRow)}</ul>
+              {measures.some((m) => familyDef(m.id).app) && (
+                <>
+                  <h4 className="disk-sub">Caches d’applis (refusés si l’appli est ouverte)</h4>
+                  <ul className="disk-family-list">{measures.filter((m) => familyDef(m.id).app).map(familyRow)}</ul>
+                </>
+              )}
+            </>
           )}
+          <DiskExtras extras={extras} error={extrasError} loading={extrasLoading} sel={extraSel} busy={busy}
+            onToggle={(kind: ExtraKind, key: string) => setExtraSel((s) => toggleExtra(s, kind, key))} onOpenSettings={onOpenSettings} />
           <div className="disk-foot">
             <span className="sub">
-              {selected.size} coché{selected.size > 1 ? 's' : ''}
-              {selected.size > 0 && ` · ≈ ${formatKB(total)}`}
+              {count} coché{count > 1 ? 's' : ''}
+              {count > 0 && ` · ≈ ${formatKB(total)}`}
             </span>
-            <button className="danger" data-testid="disk-free-button" disabled={!selected.size || busy} onClick={() => void free()}>
-              <Trash2 size={13} strokeWidth={2} /> {freeButtonLabel(selected.size, total, busy ? phase : null)}
+            <button className="danger" data-testid="disk-free-button" disabled={!count || busy} onClick={() => void free()}>
+              <Trash2 size={13} strokeWidth={2} /> {freeButtonLabel(count, total, busy ? phase : null)}
             </button>
           </div>
         </section>

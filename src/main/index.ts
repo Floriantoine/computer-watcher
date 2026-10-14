@@ -65,8 +65,16 @@ import { confirmText, createSetAsideStore, createTmpCleaner, tmpCleanEvent, tmpR
 import { sharedScan, topTmpDirs } from './tmpUsage';
 import { createScanCache, scanHome } from './diskScan';
 import { diskRootRunner, runDiskRoot } from './diskRoot';
-import { cleanFamilies, diskCleanEvent, realProcByName, staticRefusal, type CleanDeps, type CleanResult } from './diskClean';
-import { familyPaths, familyRoots, isFamilyRequest, type FamiliesFile, type FamilyId } from '../core/disk/families';
+import { realProcByName, staticRefusal, type CleanDeps } from './diskClean';
+import { buildUnits, cleanDisk, diskCleanAllEvent, EMPTY_EXTRAS, type ExtrasState } from './diskCleanAll';
+import { createExtrasCache } from './diskExtrasCache';
+import { findProjectDirs, realProjectRoots, scanNodeModules, scanWorktrees } from './diskProjects';
+import { createGitRun } from './gitRun';
+import { listCacheDirs } from './diskCacheDirs';
+import { dockerRunner, dockerStatus } from './diskDocker';
+import { defaultProjectRoots } from '../core/disk/projects';
+import { isDiskCleanRequest, requestFromFamilies, type DiskCleanAllResult, type ExtrasView } from '../core/disk/extras';
+import { familyPaths, familyRoots, isFamilyId, isFamilyRequest, type FamiliesFile, type FamilyId } from '../core/disk/families';
 import { partitionOf, watchedPartitions } from '../core/disk/partitions';
 import { openInFileManager } from './diskOpen';
 import { defaultDu, measureFamilies, readFamiliesFile, writeFamiliesFile } from '../core/disk/measure';
@@ -871,40 +879,130 @@ const confirmDiskClean = async (s: { message: string; detail: string }): Promise
 const diskRoot = diskRootRunner(process.env, app.isPackaged);
 if (diskRoot.fake) console.error(`${APP_DISPLAY_NAME} : actions administrateur du disque simulées (PROC_WATCH_DISK_ROOT_FAKE)`);
 const diskRunRoot: CleanDeps['runRoot'] = (action) => runDiskRoot(action, diskRoot.run);
+// Page Disque, lot 2 : projets (node_modules inactifs, worktrees fusionnés), dossiers inconnus de ~/.cache, Docker.
+// Dernière analyse gardée 10 min ; le ménage ne touche que ce qu'elle a trouvé (revérifié).
+const diskGit = createGitRun();
+const diskDocker = dockerRunner(process.env, app.isPackaged);
+if (diskDocker?.fake) console.error(`${APP_DISPLAY_NAME} : Docker simulé (PROC_WATCH_DISK_DOCKER_FAKE)`);
+const DISK_EXTRAS_MAX_AGE_MS = 10 * 60_000;
+const diskDefaultRoots = () => defaultProjectRoots([...history.projectsLastSeen().keys()], homedir(), existsSync);
+/** Racines de projets : réglage (ou défaut) et chemins réels (dossiers seulement), seuls utilisés pour parcourir et supprimer. */
+const diskProjectRoots = () => {
+  const configured = config.ui.diskProjectRoots;
+  const roots = configured.length ? configured : diskDefaultRoots();
+  const real = realProjectRoots(roots, { home: homedir(), isDefault: !configured.length });
+  return { roots, real, isDefault: !configured.length, missing: roots.filter((p) => !existsSync(p)) };
+};
+const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+const scanDiskExtras = async (): Promise<{ view: ExtrasView; state: ExtrasState }> => {
+  const now = Date.now();
+  const pr = diskProjectRoots();
+  const days = config.ui.diskInactiveDays;
+  const home = homedir();
+  // chaque section rattrape ses erreurs : une section en échec n'empêche pas les autres ni la page
+  const projectErrors: string[] = [];
+  let found: Awaited<ReturnType<typeof findProjectDirs>> = { nodeModules: [], repos: [], truncated: false };
+  try {
+    found = await findProjectDirs(pr.real);
+  } catch (e) {
+    projectErrors.push(`parcours des dossiers de projets impossible : ${errText(e)}`);
+  }
+  let nodeModules: ExtrasView['nodeModules'] = [];
+  try {
+    const nm = await scanNodeModules(found.nodeModules, { home, seen: history.projectsLastSeen(), historyFrom: history.from(), now, days, du: defaultDu });
+    nodeModules = nm.nodeModules;
+    projectErrors.push(...nm.errors);
+  } catch (e) {
+    projectErrors.push(`node_modules : analyse impossible (${errText(e)})`);
+  }
+  let worktrees: ExtrasView['worktrees'] = [];
+  if (diskGit) {
+    try {
+      const wt = await scanWorktrees(found.repos, { git: diskGit, projectRoots: pr.real, now, du: defaultDu });
+      worktrees = wt.worktrees;
+      projectErrors.push(...wt.errors);
+    } catch (e) {
+      projectErrors.push(`worktrees : analyse impossible (${errText(e)})`);
+    }
+  }
+  let cacheDirs: ExtrasView['cacheDirs'];
+  try {
+    cacheDirs = await listCacheDirs(diskRoots(), { du: defaultDu, mountinfo: diskMountinfo });
+  } catch (e) {
+    cacheDirs = { dirs: [], refusal: `analyse impossible (${errText(e)})` };
+  }
+  let docker: ExtrasView['docker'] = null;
+  try {
+    docker = diskDocker ? await dockerStatus(diskDocker.run) : null;
+  } catch {
+    docker = null;
+  }
+  const view: ExtrasView = {
+    at: now, days, home, projectRoots: { roots: pr.roots, isDefault: pr.isDefault, missing: pr.missing },
+    nodeModules, worktrees, projectErrors, truncated: found.truncated, gitMissing: !diskGit, cacheDirs, docker,
+  };
+  return {
+    view,
+    // seuls les éléments sans refus d'analyse peuvent être demandés (sinon « plus dans la liste »)
+    state: {
+      nodeModules: new Map(nodeModules.map((c) => [c.path, c])),
+      worktrees: new Map(worktrees.filter((c) => !c.refusal).map((c) => [c.path, c])),
+      cacheDirs: new Map(cacheDirs.dirs.filter((c) => !c.refusal).map((c) => [c.name, c])),
+      docker,
+    },
+  };
+};
+// génération : une analyse lancée avant un ménage ne réécrit pas l'état et ne sert plus après lui
+const diskExtras = createExtrasCache(scanDiskExtras, { maxAgeMs: DISK_EXTRAS_MAX_AGE_MS, now: Date.now });
+ipcMain.handle('disk:extras', (_e, force: unknown) => diskExtras.get(force === true));
+ipcMain.handle('disk:project-roots-default', () => ({ home: homedir(), roots: diskDefaultRoots() }));
 let diskCleaning = false;
-ipcMain.handle('disk:clean', async (e, raw: unknown): Promise<CleanResult> => {
-  if (!isFamilyRequest(raw)) throw new Error('requête refusée : familles inconnues ou en double');
+ipcMain.handle('disk:clean', async (e, raw: unknown): Promise<DiskCleanAllResult> => {
+  // tableau d'ids : requête du lot 1 (familles seulement) ; objet : requête complète (ids et clés, jamais de chemin à croire)
+  const req = Array.isArray(raw) ? (isFamilyRequest(raw) ? requestFromFamilies(raw) : null) : isDiskCleanRequest(raw) ? raw : null;
+  if (!req) throw new Error('requête refusée : éléments inconnus ou en double');
   if (diskCleaning) throw new Error('un ménage est déjà en cours');
   diskCleaning = true;
   try {
     const sizes = Object.fromEntries((readFamiliesFile(diskFamiliesPath(data))?.families ?? []).map((m) => [m.id, m.reclaimKB]));
-    const r = await cleanFamilies(raw, {
+    const dirUser = (dir: string) => realDirUser(dir, { selfExes: ownAppImageExes() });
+    // ménage tenté (confirmé) : cartes et caches invalidés même si un élément a échoué en cours de suppression
+    let attempted = false;
+    const fam: CleanDeps = {
       roots: diskRoots(), confirm: confirmDiskClean, sizes, mountinfo: diskMountinfo, runRoot: diskRunRoot, pathSizes: defaultDu,
       // étape en cours (« Mesure des tailles… » sur le bouton)
       onPhase: (phase) => {
+        if (phase === 'cleaning') attempted = true;
         if (!e.sender.isDestroyed()) e.sender.send('disk:clean-phase', phase);
       },
-      dirUser: (dir) => realDirUser(dir, { selfExes: ownAppImageExes() }),
+      dirUser,
       procByName: (names) => realProcByName(names),
       statfs: (p) => {
         const st = statfsSync(p);
         return { availKB: Math.round((st.bavail * st.bsize) / 1024) };
       },
+    };
+    // unités liées aux cartes de la dernière analyse du main ; racines de projets en chemins réels
+    const units = buildUnits(req, diskExtras.state() ?? EMPTY_EXTRAS, {
+      roots: diskRoots(), projectRoots: diskProjectRoots().real, mountinfo: diskMountinfo, dirUser, git: diskGit, docker: diskDocker?.run ?? null,
+      now: Date.now, days: config.ui.diskInactiveDays, seen: () => history.projectsLastSeen(), historyFrom: () => history.from(),
     });
-    for (const id of raw) diskLastRefusals.delete(id);
-    for (const x of r.refused) diskLastRefusals.set(x.id, x.reason);
-    const ev = diskCleanEvent(r, Date.now());
+    const r = await cleanDisk(req, { fam, units });
+    for (const id of req.families) diskLastRefusals.delete(id);
+    for (const x of r.refused) if (isFamilyId(x.id)) diskLastRefusals.set(x.id, x.reason);
+    const ev = diskCleanAllEvent(r, Date.now());
     if (ev) {
       try {
         mkdirSync(data, { recursive: true });
         appendFileSync(appEventsPath(data), formatAppEvent(ev));
-      } catch (e) {
-        console.error('app event:', e);
+      } catch (err) {
+        console.error('app event:', err);
       }
     }
-    if (r.done.length) {
+    if (attempted) {
       diskScans.clear();
-      void measureDiskFamilies();
+      diskExtras.invalidate();
+      if (req.families.length) void measureDiskFamilies();
     }
     return r;
   } finally {

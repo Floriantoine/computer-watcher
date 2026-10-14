@@ -196,6 +196,46 @@ describe('cleanFamilies', () => {
     expect(r.refused).toEqual([{ id: 'pkg-cache', reason: 'utilisé par pacman (pid 5)' }]);
     expect(calls).toEqual([]);
   });
+
+  test('appli ouverte (profil utilisé) : cache refusé, rien supprimé', async () => {
+    const { home, roots } = fakeHome();
+    const put = (p: string) => {
+      mkdirSync(join(p, '..'), { recursive: true });
+      writeFileSync(p, 'x');
+    };
+    put(join(home, '.cache/google-chrome/Default/Cache/Cache_Data/f_000001'));
+    put(join(home, '.config/google-chrome/Default/Preferences'));
+    const { d } = deps(roots, { dirUser: (dir) => (dir === join(home, '.config/google-chrome') ? { pid: 4242, name: 'chrome' } : null) });
+    const r = await cleanFamilies(['app-chrome'], d);
+    expect(r.refused).toEqual([{ id: 'app-chrome', reason: 'Chrome est ouvert : utilisé par chrome (pid 4242)' }]);
+    expect(existsSync(join(home, '.cache/google-chrome/Default/Cache/Cache_Data/f_000001'))).toBe(true);
+  });
+
+  test('appli fermée : seul le cache part, le profil reste', async () => {
+    const { home, roots } = fakeHome();
+    const put = (p: string) => {
+      mkdirSync(join(p, '..'), { recursive: true });
+      writeFileSync(p, 'x');
+    };
+    put(join(home, '.config/Code/Cache/Cache_Data/f_000001'));
+    put(join(home, '.config/Code/GPUCache/data_0'));
+    put(join(home, '.config/Code/User/settings.json'));
+    const { d } = deps(roots);
+    const r = await cleanFamilies(['app-vscode'], d);
+    expect(r.done).toEqual(['app-vscode']);
+    expect(existsSync(join(home, '.config/Code/Cache'))).toBe(false);
+    expect(existsSync(join(home, '.config/Code/GPUCache'))).toBe(false);
+    expect(existsSync(join(home, '.config/Code/User/settings.json'))).toBe(true);
+  });
+
+  test('cache d’appli qui ne ressemble pas à un cache : refusé', async () => {
+    const { home, roots } = fakeHome();
+    mkdirSync(join(home, '.cache/spotify/photos'), { recursive: true });
+    const { d } = deps(roots);
+    const r = await cleanFamilies(['app-spotify'], d);
+    expect(r.refused[0]?.reason).toMatch(/ne ressemble pas à un cache de Spotify/);
+    expect(existsSync(join(home, '.cache/spotify/photos'))).toBe(true);
+  });
 });
 
 test('événement disk_clean : libéré, familles, refus (rien si aucune action)', () => {
@@ -367,5 +407,51 @@ describe('revue n-1 à n-3 (reproductions)', () => {
     await cleanFamilies(['npm'], d);
     expect(asked[0].detail).toContain('taille inconnue (mesure trop longue)');
     expect(phases).toEqual(['measuring', 'confirming', 'cleaning']);
+  });
+});
+
+describe('revue de sécurité du lot 2 (reproductions)', () => {
+  const put = (p: string) => {
+    mkdirSync(join(p, '..'), { recursive: true });
+    writeFileSync(p, 'x');
+  };
+  test('I-3 (a) : XDG_CACHE_HOME = ~/.config — le profil Chrome (~/.config/google-chrome) n’est jamais supprimé', async () => {
+    const { home } = fakeHome();
+    put(join(home, '.config/google-chrome/Default/Preferences'));
+    put(join(home, '.config/BraveSoftware/Brave-Browser/Default/Preferences'));
+    put(join(home, '.config/spotify/prefs'));
+    const roots = familyRoots({ XDG_CACHE_HOME: join(home, '.config') }, home);
+    const { d, asked } = deps(roots);
+    const r = await cleanFamilies(['app-chrome', 'app-brave'], d);
+    expect(r.done).toEqual([]);
+    for (const x of r.refused) expect(x.reason).toMatch(/racine XDG inhabituelle.*même dossier que XDG_CONFIG_HOME/);
+    expect(asked).toHaveLength(0);
+    expect(existsSync(join(home, '.config/google-chrome/Default/Preferences'))).toBe(true);
+    expect(existsSync(join(home, '.config/BraveSoftware/Brave-Browser/Default/Preferences'))).toBe(true);
+  });
+  test('I-3 (b) : chemin de famille sous un profil d’appli (XDG_CACHE_HOME dans ~/.config/Code) : refus, rien supprimé', async () => {
+    const { home } = fakeHome();
+    const cache = join(home, '.config/Code/caches');
+    put(join(cache, 'CACHEDIR.TAG'));
+    put(join(cache, 'uv/CACHEDIR.TAG'));
+    put(join(cache, 'uv/wheels/x.whl'));
+    const roots = familyRoots({ XDG_CACHE_HOME: cache }, home);
+    const { d, asked } = deps(roots);
+    const r = await cleanFamilies(['uv'], d);
+    expect(r.refused).toEqual([{ id: 'uv', reason: expect.stringMatching(/profil de VS Code/) }]);
+    expect(asked).toHaveLength(0);
+    expect(existsSync(join(cache, 'uv/wheels/x.whl'))).toBe(true);
+  });
+  test('I-3 (b) : cache d’appli qui contient un profil (XDG_CONFIG_HOME sous ~/.cache/spotify) : refus', async () => {
+    const { home } = fakeHome();
+    const cfg = join(home, '.cache/spotify/cfg');
+    for (const n of ['autostart', 'dconf']) mkdirSync(join(cfg, n), { recursive: true });
+    put(join(cfg, 'spotify/prefs'));
+    put(join(home, '.cache/spotify/Data/x'));
+    const roots = familyRoots({ XDG_CONFIG_HOME: cfg }, home);
+    const { d } = deps(roots);
+    const r = await cleanFamilies(['app-spotify'], d);
+    expect(r.refused).toEqual([{ id: 'app-spotify', reason: expect.stringMatching(/profil de Spotify/) }]);
+    expect(existsSync(join(cfg, 'spotify/prefs'))).toBe(true);
   });
 });

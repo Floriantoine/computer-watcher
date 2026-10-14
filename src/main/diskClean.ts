@@ -5,7 +5,7 @@
 // (safeFs : O_NOFOLLOW, jamais de lien suivi ni de montage traversé). Familles root : script figé via pkexec (diskRoot.ts).
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
-import { cacheSignature, familyDef, familyPaths, familyRootRefusal, isFamilyRequest, toolName, JOURNAL_DIR, PKG_CACHE_DIRS, usedByText, type FamilyId, type FamilyRoots } from '../core/disk/families';
+import { appProfileDirs, cacheSignature, familyDef, familyPaths, familyRootRefusal, isFamilyRequest, profileOverlapRefusal, toolName, JOURNAL_DIR, PKG_CACHE_DIRS, usedByText, type FamilyId, type FamilyRoots } from '../core/disk/families';
 import { browserDropPaths } from '../core/disk/measure';
 import type { DiskCleanEvent } from '../core/history/events';
 import { rootUnavailable, type RootAction } from './diskRoot';
@@ -46,10 +46,25 @@ export interface CleanDeps {
   rootUnavailable?(id: RootAction): string | null;
 }
 
+/**
+ * Revue m-1 : archives .asar désactivées seulement pendant une suppression synchrone (jamais pendant une confirmation ni
+ * pendant pkexec) ; un fichier .asar est alors un fichier comme un autre.
+ */
+export function withNoAsar<T>(fn: () => T): T {
+  const proc = process as unknown as { noAsar?: boolean };
+  const prev = proc.noAsar;
+  try {
+    proc.noAsar = true;
+    return fn();
+  } finally {
+    proc.noAsar = prev;
+  }
+}
+
 /** Plafond de la mesure des tailles avant la confirmation (revue n-3). */
 const SIZE_TIMEOUT_MS = 30_000;
 
-const fmt = (kb: number) =>
+export const fmtKB = (kb: number) =>
   kb >= 1024 * 1024 ? `${(kb / (1024 * 1024)).toFixed(1).replace('.', ',')} Go` : kb >= 1024 ? `${Math.round(kb / 1024)} Mo` : `${Math.round(kb)} Ko`;
 
 const isUnder = (p: string, dir: string) => p === dir || p.startsWith(dir.endsWith('/') ? dir : `${dir}/`);
@@ -110,7 +125,7 @@ function checkPath(p: string, homeDev: number, d: CleanDeps): string | null {
 }
 
 /** Noms d'un dossier réel (jamais à travers un lien) ; null : absent, lien ou illisible. */
-function lsReal(p: string): string[] | null {
+export function lsReal(p: string): string[] | null {
   try {
     const st = lstatSync(p);
     return st.isDirectory() && !st.isSymbolicLink() ? readdirSync(p) : null;
@@ -120,7 +135,7 @@ function lsReal(p: string): string[] | null {
 }
 
 /** Chemin réel (liens résolus) ; inchangé s'il n'existe pas. */
-function realOr(p: string): string {
+export function realOr(p: string): string {
   try {
     return realpathSync(p);
   } catch {
@@ -145,6 +160,9 @@ function checkFamily(id: FamilyId, homeDev: number, d: CleanDeps): string | null
   } else {
     const xdg = familyRootRefusal(id, d.roots, { real: realOr, ls: lsReal });
     if (xdg) return xdg;
+    // revue I-3 (b) : jamais un chemin égal à un profil d'appli, qui en contient un ou qui est dedans (chemins réels)
+    const profile = profileOverlapRefusal(id, d.roots, realOr);
+    if (profile) return profile;
     const paths = familyPaths(id, d.roots);
     if (!paths.some(exists)) return 'absent';
     for (const p of paths) {
@@ -152,6 +170,12 @@ function checkFamily(id: FamilyId, homeDev: number, d: CleanDeps): string | null
       if (why) return why;
       // signature de l'outil (lecture des noms seulement ; checkPath a écarté liens et autres disques)
       if (exists(p) && !cacheSignature(id, p, lsReal)) return `ne ressemble pas à un cache de ${toolName[id]}`;
+    }
+    // caches d'applis : l'appli tourne si un processus utilise son profil (cwd, fichier ouvert, bibliothèque projetée)
+    for (const dir of appProfileDirs(id, d.roots)) {
+      if (!exists(dir)) continue;
+      const h = d.dirUser(dir);
+      if (h) return `${toolName[id]} est ouvert : ${usedByText(h)}`;
     }
   }
   const busy = def.processNames.length ? d.procByName(def.processNames) : null;
@@ -179,7 +203,7 @@ function removeFamily(id: FamilyId, d: CleanDeps): void {
 }
 
 /** Points où mesurer le libre (un par périphérique) : le dossier personnel et les dossiers des familles root. */
-function statfsPoints(ids: readonly FamilyId[], r: FamilyRoots): string[] {
+export function statfsPoints(ids: readonly FamilyId[], r: FamilyRoots): string[] {
   const byDev = new Map<number, string>();
   const add = (p: string) => {
     try {
@@ -194,32 +218,17 @@ function statfsPoints(ids: readonly FamilyId[], r: FamilyRoots): string[] {
   return [...byDev.values()];
 }
 
-function confirmSummary(
-  ids: readonly FamilyId[], refused: CleanResult['refused'], sizes: CleanDeps['sizes'], targets: Map<FamilyId, { path: string; contents?: true }[]>, pathKB: Map<string, number>, sizesTimedOut = false,
-): { message: string; detail: string } {
-  const known = ids.map((id) => sizes?.[id]).filter((v): v is number => typeof v === 'number');
-  const total = known.reduce((s, v) => s + v, 0);
-  const n = ids.length;
-  const message = known.length ? `Libérer ≈ ${fmt(total)} ?` : `Libérer l’espace de ${n} famille${n > 1 ? 's' : ''} ?`;
-  const lines = ids.map((id) => {
-    const def = familyDef(id);
-    const s = sizes?.[id];
-    const head = `• ${def.label} — ${typeof s === 'number' ? `≈ ${fmt(s)}` : 'taille inconnue'}${def.root ? ' (administrateur : mot de passe demandé)' : ''}`;
-    // chemins exacts, chacun avec sa taille
-    const paths = (targets.get(id) ?? []).map((t) => {
-      const kb = pathKB.get(t.path);
-      // chemin réel : une racine XDG en lien affiche où les fichiers sont vraiment
-      const unknown = sizesTimedOut ? 'taille inconnue (mesure trop longue)' : 'taille inconnue';
-      return `    ${t.contents ? 'contenu de ' : ''}${realOr(t.path)} (${kb === undefined ? unknown : fmt(kb)})`;
-    });
-    return [head, ...paths].join('\n');
-  });
-  for (const r of refused) lines.push(`Refusé : ${familyDef(r.id).label} — ${r.reason}`);
-  lines.push('', 'C’est définitif : la corbeille ne libérerait rien.');
-  return { message, detail: lines.join('\n') };
+export interface PreparedFamilies {
+  ok: FamilyId[];
+  refused: CleanResult['refused'];
+  homeDev: number;
+  targets: Map<FamilyId, { path: string; contents?: true }[]>;
+  pathKB: Map<string, number>;
+  timedOut: boolean;
 }
 
-export async function cleanFamilies(ids: readonly FamilyId[], d: CleanDeps): Promise<CleanResult> {
+/** Vérifications avant la confirmation et taille de chaque chemin (plafonnée) ; lève si la requête est invalide. */
+export async function prepareFamilies(ids: readonly FamilyId[], d: CleanDeps): Promise<PreparedFamilies> {
   if (!isFamilyRequest(ids)) throw new Error('requête refusée : familles inconnues ou en double');
   const homeDev = lstatSync(d.roots.home).dev;
   const refused: CleanResult['refused'] = [];
@@ -230,11 +239,10 @@ export async function cleanFamilies(ids: readonly FamilyId[], d: CleanDeps): Pro
     else if (why) refused.push({ id, reason: why });
     else ok.push(id);
   }
-  if (!ok.length) return { freedKB: 0, done: [], refused, cancelled: false };
   const targets = new Map(ok.filter((id) => !familyDef(id).root).map((id) => [id, targetsOf(id, d.roots)] as const));
   let pathKB = new Map<string, number>();
   let timedOut = false;
-  if (d.pathSizes) {
+  if (ok.length && d.pathSizes) {
     d.onPhase?.('measuring');
     let timer: NodeJS.Timeout | undefined;
     const late = new Promise<'late'>((res) => (timer = setTimeout(() => res('late'), d.sizeTimeoutMs ?? SIZE_TIMEOUT_MS)));
@@ -248,24 +256,41 @@ export async function cleanFamilies(ids: readonly FamilyId[], d: CleanDeps): Pro
       clearTimeout(timer);
     }
   }
-  d.onPhase?.('confirming');
-  if (!(await d.confirm(confirmSummary(ok, refused, d.sizes, targets, pathKB, timedOut)))) return { freedKB: 0, done: [], refused, cancelled: true };
-  d.onPhase?.('cleaning');
+  return { ok, refused, homeDev, targets, pathKB, timedOut };
+}
 
-  const points = statfsPoints(ok, d.roots);
-  const avail = () => points.map((p) => {
-    try {
-      return d.statfs(p).availKB;
-    } catch {
-      return null;
-    }
+/** Lignes de la confirmation pour les familles retenues : libellé, taille, chemins réels avec leur taille. */
+export function familyLines(p: PreparedFamilies, sizes: CleanDeps['sizes']): string[] {
+  return p.ok.map((id) => {
+    const def = familyDef(id);
+    const s = sizes?.[id];
+    const head = `• ${def.label} — ${typeof s === 'number' ? `≈ ${fmtKB(s)}` : 'taille inconnue'}${def.root ? ' (administrateur : mot de passe demandé)' : ''}`;
+    const paths = (p.targets.get(id) ?? []).map((t) => {
+      const kb = p.pathKB.get(t.path);
+      const unknown = p.timedOut ? 'taille inconnue (mesure trop longue)' : 'taille inconnue';
+      return `    ${t.contents ? 'contenu de ' : ''}${realOr(t.path)} (${kb === undefined ? unknown : fmtKB(kb)})`;
+    });
+    return [head, ...paths].join('\n');
   });
-  const before = avail();
+}
+
+function confirmSummary(p: PreparedFamilies, sizes: CleanDeps['sizes']): { message: string; detail: string } {
+  const known = p.ok.map((id) => sizes?.[id]).filter((v): v is number => typeof v === 'number');
+  const total = known.reduce((s, v) => s + v, 0);
+  const n = p.ok.length;
+  const message = known.length ? `Libérer ≈ ${fmtKB(total)} ?` : `Libérer l’espace de ${n} famille${n > 1 ? 's' : ''} ?`;
+  const lines = familyLines(p, sizes);
+  for (const r of p.refused) lines.push(`Refusé : ${familyDef(r.id).label} — ${r.reason}`);
+  lines.push('', 'C’est définitif : la corbeille ne libérerait rien.');
+  return { message, detail: lines.join('\n') };
+}
+
+/** Exécution après la confirmation : hors root d'abord, puis root ; chaque famille revérifiée juste avant. */
+export async function runFamilies(p: PreparedFamilies, d: CleanDeps): Promise<{ done: FamilyId[]; refused: CleanResult['refused'] }> {
   const done: FamilyId[] = [];
-  // hors root d'abord, puis root (une fenêtre pkexec par action)
-  for (const id of [...ok.filter((x) => !familyDef(x).root), ...ok.filter((x) => familyDef(x).root)]) {
-    // revérification juste avant : la situation a pu changer pendant la confirmation
-    const why = checkFamily(id, homeDev, d);
+  const refused: CleanResult['refused'] = [];
+  for (const id of [...p.ok.filter((x) => !familyDef(x).root), ...p.ok.filter((x) => familyDef(x).root)]) {
+    const why = checkFamily(id, p.homeDev, d);
     if (why) {
       refused.push({ id, reason: why === 'absent' ? 'introuvable' : why });
       continue;
@@ -276,24 +301,36 @@ export async function cleanFamilies(ids: readonly FamilyId[], d: CleanDeps): Pro
       else refused.push({ id, reason: r.cancelled ? 'annulé' : r.error ?? 'échec' });
       continue;
     }
-    // revue m-1 : archives .asar désactivées seulement pendant la suppression, synchrone (jamais pendant la
-    // confirmation ni pendant pkexec) ; un fichier .asar d'un cache est alors un fichier comme un autre
-    const proc = process as unknown as { noAsar?: boolean };
-    const noAsar = proc.noAsar;
     try {
-      proc.noAsar = true;
-      removeFamily(id, d);
+      withNoAsar(() => removeFamily(id, d));
       done.push(id);
     } catch (e) {
       refused.push({ id, reason: `${(e as Error).message} (arrêté ; une partie a pu être supprimée)` });
-    } finally {
-      proc.noAsar = noAsar;
     }
   }
+  return { done, refused };
+}
+
+export async function cleanFamilies(ids: readonly FamilyId[], d: CleanDeps): Promise<CleanResult> {
+  const p = await prepareFamilies(ids, d);
+  if (!p.ok.length) return { freedKB: 0, done: [], refused: p.refused, cancelled: false };
+  d.onPhase?.('confirming');
+  if (!(await d.confirm(confirmSummary(p, d.sizes)))) return { freedKB: 0, done: [], refused: p.refused, cancelled: true };
+  d.onPhase?.('cleaning');
+  const points = statfsPoints(p.ok, d.roots);
+  const avail = () => points.map((x) => {
+    try {
+      return d.statfs(x).availKB;
+    } catch {
+      return null;
+    }
+  });
+  const before = avail();
+  const r = await runFamilies(p, d);
   const after = avail();
   const freedKB = Math.max(0, before.reduce<number>((s, b, i) => (b === null || after[i] === null ? s : s + (after[i]! - b)), 0));
-  const estimatedKB = done.reduce((t, id) => t + (d.sizes?.[id] ?? 0), 0);
-  return { freedKB, ...(estimatedKB > 0 ? { estimatedKB } : {}), done, refused, cancelled: false };
+  const estimatedKB = r.done.reduce((t, id) => t + (d.sizes?.[id] ?? 0), 0);
+  return { freedKB, ...(estimatedKB > 0 ? { estimatedKB } : {}), done: r.done, refused: [...p.refused, ...r.refused], cancelled: false };
 }
 
 /** Événement d'historique (app-events.jsonl) : rien si aucune famille traitée ni refusée (annulé). */

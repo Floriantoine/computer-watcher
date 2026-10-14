@@ -1,7 +1,11 @@
 import { describe, expect, test } from 'vitest';
 import type { FamilyMeasure } from '../../core/disk/families';
 import type { SunNode } from '../../core/disk/sunTree';
-import { arcPath, badgeText, breadcrumb, familyOfPath, freedToast, highlighted, measuredAt, refusalText, selectedTotal, sunColors } from './disk';
+import type { ExtrasView } from '../../core/disk/extras';
+import {
+  arcPath, badgeText, breadcrumb, cleanRequest, emptyExtraSelection, extraCount, extraPaths, extrasTotal, familyOfPath, freedToast, highlighted, inactiveText, measuredAt,
+  createLatest, dockerActionEmpty, pruneExtras, refusalText, selectedTotal, sunColors, toggleExtra,
+} from './disk';
 
 const H = '/home/u';
 const paths = {
@@ -97,4 +101,65 @@ test('revue n-3 : libellé du bouton pendant la mesure des tailles', async () =>
   expect(freeButtonLabel(2, 3 * 1024, 'measuring')).toBe('Mesure des tailles…');
   expect(freeButtonLabel(2, 3 * 1024, 'confirming')).toBe('Confirmation…');
   expect(freeButtonLabel(2, 3 * 1024, 'cleaning')).toBe('Suppression…');
+});
+
+const X: ExtrasView = {
+  at: 0, days: 30, home: H,
+  projectRoots: { roots: [`${H}/code`], isDefault: true, missing: [] },
+  nodeModules: [{ path: `${H}/code/vieux/node_modules`, projectDir: `${H}/code/vieux`, label: 'code / vieux', sizeKB: 2048, lastSeen: null, partialHistory: true }],
+  worktrees: [
+    { path: `${H}/code/depot/.worktrees/fini`, repo: `${H}/code/depot`, branch: 'fini', head: 'a', label: 'depot › fini', sizeKB: 1024, refusal: null },
+    { path: `${H}/code/depot/.worktrees/secret`, repo: `${H}/code/depot`, branch: 'secret', head: 'b', label: 'depot › secret', sizeKB: 10, refusal: 'fichiers ignorés qui seraient perdus : .env' },
+  ],
+  projectErrors: [], truncated: false, gitMissing: false,
+  cacheDirs: { dirs: [{ name: 'outil-inconnu', path: `${H}/.cache/outil-inconnu`, sizeKB: 512, refusal: null }], refusal: null },
+  docker: { version: '27.1.1', actions: [{ id: 'images', reclaimKB: 300, items: ['demo/old:0.9 (300MB)'] }, { id: 'containers', reclaimKB: null, items: [] }, { id: 'volumes', reclaimKB: 60, items: [] }] },
+};
+
+test('sélection du lot 2 : bascule, total, requête, élagage, chemins à surligner', () => {
+  let s = emptyExtraSelection();
+  s = toggleExtra(s, 'nodeModules', `${H}/code/vieux/node_modules`);
+  s = toggleExtra(s, 'worktrees', `${H}/code/depot/.worktrees/fini`);
+  s = toggleExtra(s, 'cacheDirs', 'outil-inconnu');
+  s = toggleExtra(s, 'docker', 'images');
+  expect(extraCount(s)).toBe(4);
+  expect(extrasTotal(s, X)).toBe(2048 + 1024 + 512 + 300);
+  expect(cleanRequest(new Set(['npm']), s)).toEqual({
+    families: ['npm'], nodeModules: [`${H}/code/vieux/node_modules`], worktrees: [`${H}/code/depot/.worktrees/fini`], cacheDirs: ['outil-inconnu'], docker: ['images'],
+  });
+  expect(extraPaths(s, X).sort()).toEqual([`${H}/.cache/outil-inconnu`, `${H}/code/depot/.worktrees/fini`, `${H}/code/vieux/node_modules`]);
+  expect(extraCount(toggleExtra(s, 'docker', 'images'))).toBe(3);
+  // élément refusé ou disparu de la nouvelle analyse : décoché
+  const s2 = toggleExtra(toggleExtra(s, 'worktrees', `${H}/code/depot/.worktrees/secret`), 'cacheDirs', 'parti');
+  const p = pruneExtras(s2, X);
+  expect([...p.worktrees]).toEqual([`${H}/code/depot/.worktrees/fini`]);
+  expect([...p.cacheDirs]).toEqual(['outil-inconnu']);
+  expect(extraCount(pruneExtras(s, null))).toBe(0);
+});
+
+test('texte d’inactivité ; toast avec éléments du lot 2 (libellé, note de branche gardée)', () => {
+  const now = 100 * 86_400_000;
+  expect(inactiveText(X.nodeModules[0], 30, now)).toBe('aucun processus vu, aucun fichier modifié depuis 30 j (historique partiel)');
+  expect(inactiveText({ ...X.nodeModules[0], lastSeen: now - 45 * 86_400_000, partialHistory: false }, 30, now)).toBe('dernier processus il y a 45 j, aucun fichier modifié depuis 30 j');
+  expect(freedToast({
+    freedKB: 2048, done: ['worktree:/p/fini'], refused: [{ id: 'cache:x', label: '~/.cache/x (inconnu)', reason: 'utilisé par x (pid 3)' }],
+    notes: [{ label: 'worktree depot › fini', note: 'worktree supprimé ; branche fini gardée : non fusionnée' }], cancelled: false,
+  })).toEqual({ text: '2 Mo libérés · refusé : ~/.cache/x (inconnu) : utilisé par x (pid 3) · worktree supprimé ; branche fini gardée : non fusionnée', kind: 'info' });
+});
+
+test('Docker : action sans rien à retirer non cochable, élaguée', () => {
+  expect(dockerActionEmpty({ id: 'containers', reclaimKB: null, items: [] })).toBe(true);
+  expect(dockerActionEmpty({ id: 'containers', reclaimKB: 0, items: [] })).toBe(true);
+  expect(dockerActionEmpty({ id: 'volumes', reclaimKB: 60, items: [] })).toBe(false);
+  expect(dockerActionEmpty({ id: 'images', reclaimKB: 0, items: ['demo/x'] })).toBe(false);
+  const s = toggleExtra(toggleExtra(emptyExtraSelection(), 'docker', 'containers'), 'docker', 'volumes');
+  expect([...pruneExtras(s, X).docker]).toEqual(['volumes']);
+});
+
+test('réponses dans le désordre : seule la dernière requête compte', () => {
+  const latest = createLatest();
+  const a = latest.next();
+  const b = latest.next();
+  expect(latest.isLatest(a)).toBe(false);
+  expect(latest.isLatest(b)).toBe(true);
 });

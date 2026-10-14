@@ -110,7 +110,7 @@ function label(e: HistoryEvent): string {
     }
     case 'disk_clean': {
       const n = Array.isArray(d.done) ? d.done.length : 0;
-      return `Ménage du disque : ${n} famille${n > 1 ? 's' : ''}, ${formatKB(Math.round(Number(d.freedKB) || 0))} libérés`;
+      return `Ménage du disque : ${n} élément${n > 1 ? 's' : ''}, ${formatKB(Math.round(Number(d.freedKB) || 0))} libérés`;
     }
     case 'leak': return `Fuite probable : ${e.groupLabel ?? '?'} +${formatKB(Number(d.growthKB))}`;
     case 'tmpfs': return `Fichiers en mémoire : ${formatKB(Number(d.shmemKB))}`;

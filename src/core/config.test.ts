@@ -131,11 +131,11 @@ test('recorder.groupMinMemMB : 20 Mo par défaut, ajouté si absent (config d\'u
 
 describe('section ui', () => {
   test('par défaut : effets visuels complets, mémoire en RSS', () => {
-    expect(DEFAULT_CONFIG.ui).toEqual({ reducedEffects: false, memoryMetric: 'rss', trayIcon: true, closeToTray: true, swapSleepMinMB: 100 });
+    expect(DEFAULT_CONFIG.ui).toEqual({ reducedEffects: false, memoryMetric: 'rss', trayIcon: true, closeToTray: true, swapSleepMinMB: 100, diskProjectRoots: [], diskInactiveDays: 30 });
   });
   test('config sans section ui : valide, défaut ajouté', () => {
     const { ui: _u, ...old } = DEFAULT_CONFIG;
-    expect(validateConfig(old)?.ui).toEqual({ reducedEffects: false, memoryMetric: 'rss', trayIcon: true, closeToTray: true, swapSleepMinMB: 100 });
+    expect(validateConfig(old)?.ui).toEqual({ reducedEffects: false, memoryMetric: 'rss', trayIcon: true, closeToTray: true, swapSleepMinMB: 100, diskProjectRoots: [], diskInactiveDays: 30 });
   });
   test('reducedEffects conservé ; ui sans memoryMetric (config existante) → rss', () => {
     expect(validateConfig({ ...DEFAULT_CONFIG, ui: { reducedEffects: true } })?.ui).toEqual({ ...DEFAULT_CONFIG.ui, reducedEffects: true, memoryMetric: 'rss' });
@@ -154,7 +154,7 @@ describe('section ui', () => {
 describe('ui : barre des tâches et swap endormi', () => {
   test('config existante sans ces champs → icône et fermeture vers la barre activées, 100 Mo', () => {
     const ui = validateConfig({ ...DEFAULT_CONFIG, ui: { reducedEffects: false, memoryMetric: 'pss' } })?.ui;
-    expect(ui).toEqual({ reducedEffects: false, memoryMetric: 'pss', trayIcon: true, closeToTray: true, swapSleepMinMB: 100 });
+    expect(ui).toEqual({ reducedEffects: false, memoryMetric: 'pss', trayIcon: true, closeToTray: true, swapSleepMinMB: 100, diskProjectRoots: [], diskInactiveDays: 30 });
   });
   test('valeurs conservées', () => {
     const ui = { ...DEFAULT_CONFIG.ui, trayIcon: false, closeToTray: false, swapSleepMinMB: 65_536 };
@@ -165,6 +165,19 @@ describe('ui : barre des tâches et swap endormi', () => {
   ])('%s = %j → config invalide', (field, value) => {
     expect(validateConfig({ ...DEFAULT_CONFIG, ui: { ...DEFAULT_CONFIG.ui, [field]: value } })).toBeNull();
   });
+});
+
+test('ui.diskProjectRoots / diskInactiveDays : défauts ajoutés à une config existante, bornes', () => {
+  const base = structuredClone(DEFAULT_CONFIG) as unknown as { ui: Record<string, unknown> } & Record<string, unknown>;
+  delete base.ui.diskProjectRoots;
+  delete base.ui.diskInactiveDays;
+  expect(validateConfig(base)?.ui).toMatchObject({ diskProjectRoots: [], diskInactiveDays: 30 });
+  expect(validateConfig({ ...base, ui: { ...base.ui, diskProjectRoots: ['/home/u/projets/'] } })?.ui.diskProjectRoots).toEqual(['/home/u/projets']);
+  expect(validateConfig({ ...base, ui: { ...base.ui, diskProjectRoots: ['relatif'] } })).toBeNull();
+  for (const d of [0, 366, 1.5, '30']) expect(validateConfig({ ...base, ui: { ...base.ui, diskInactiveDays: d } }), String(d)).toBeNull();
+  expect(validateConfig({ ...base, ui: { ...base.ui, diskInactiveDays: 365 } })?.ui.diskInactiveDays).toBe(365);
+  // jamais de tableau partagé avec DEFAULT_UI
+  expect(validateConfig(base)?.ui.diskProjectRoots).not.toBe(DEFAULT_CONFIG.ui.diskProjectRoots);
 });
 
 test('config sans classify : défauts', () => {
