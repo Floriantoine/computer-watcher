@@ -2,10 +2,12 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, w
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, test } from 'vitest';
-import { requestFromFamilies, type DiskCleanRequest } from '../core/disk/extras';
+import { requestFromFamilies, type DiskCleanRequest, type WorktreeCandidate } from '../core/disk/extras';
 import type { FamilyRoots } from '../core/disk/families';
 import { buildUnits, cleanDisk, diskCleanAllEvent, EMPTY_EXTRAS, type CleanUnit, type UnitDeps } from './diskCleanAll';
 import type { CleanDeps } from './diskClean';
+import { dockerStatus, fakeDocker, type DockerRun } from './diskDocker';
+import type { GitRun } from './gitRun';
 
 mkdirSync(join(homedir(), '.cache'), { recursive: true });
 const made: string[] = [];
@@ -111,6 +113,25 @@ describe('cleanDisk', () => {
   });
 });
 
+describe('cleanDisk : phase « cleaning » (le main invalide cartes et caches dessus)', () => {
+  test('signalée dès qu’un ménage confirmé est tenté, même si chaque élément échoue en cours de suppression', async () => {
+    const { roots } = fakeHome();
+    const phases: string[] = [];
+    const a = unit('cache:outil', { run: async () => { throw new Error('disque en lecture seule'); } });
+    const r = await cleanDisk({ ...empty, cacheDirs: ['outil'] }, { fam: famDeps(roots, { onPhase: (p) => phases.push(p) }).d, units: [a.u] });
+    expect(r.done).toEqual([]);
+    expect(r.refused[0].reason).toMatch(/une partie a pu être supprimée/);
+    expect(phases).toContain('cleaning');
+  });
+  test('non signalée si rien n’est confirmé (annulé ou tout refusé avant)', async () => {
+    const { roots } = fakeHome();
+    const phases: string[] = [];
+    await cleanDisk({ ...empty, cacheDirs: ['outil'] }, { fam: famDeps(roots, { onPhase: (p) => phases.push(p), confirm: async () => false }).d, units: [unit('cache:outil').u] });
+    await cleanDisk({ ...empty, cacheDirs: ['outil'] }, { fam: famDeps(roots, { onPhase: (p) => phases.push(p) }).d, units: [unit('cache:outil', { checks: ['occupé'] }).u] });
+    expect(phases).not.toContain('cleaning');
+  });
+});
+
 describe('buildUnits', () => {
   const unitDeps = (roots: FamilyRoots, projectRoots: string[]): UnitDeps => ({
     roots, projectRoots, mountinfo: () => '', dirUser: () => null, git: null, docker: null, now: () => NOW, days: 30, seen: () => new Map(), historyFrom: () => NOW - 60 * DAY,
@@ -121,7 +142,7 @@ describe('buildUnits', () => {
     const units = buildUnits({ ...empty, nodeModules: [forged], worktrees: ['/p/x'], cacheDirs: ['outil'], docker: ['images'] }, EMPTY_EXTRAS, unitDeps(roots, [join(home, 'projets')]));
     const r = await cleanDisk({ ...empty, nodeModules: [forged], worktrees: ['/p/x'], cacheDirs: ['outil'], docker: ['images'] }, { fam: famDeps(roots).d, units });
     expect(r.done).toEqual([]);
-    expect(r.refused.map((x) => x.reason)).toEqual(['plus dans la liste : actualiser la page', 'git introuvable', 'plus dans la liste : actualiser la page', 'Docker indisponible']);
+    expect(r.refused.map((x) => x.reason)).toEqual(['plus dans la liste : actualiser la page', 'plus dans la liste : actualiser la page', 'plus dans la liste : actualiser la page', 'Docker indisponible']);
     expect(existsSync(join(forged, 'dep/index.js'))).toBe(true);
   });
   test('node_modules de la dernière analyse et famille npm : une confirmation, les deux supprimés, package.json gardé', async () => {
@@ -137,6 +158,74 @@ describe('buildUnits', () => {
     expect(r.done).toEqual(['npm', `node_modules:${nm}`]);
     expect(existsSync(nm)).toBe(false);
     expect(existsSync(join(home, 'projets/vieux/package.json'))).toBe(true);
+  });
+  test('worktree : clé périmée → « plus dans la liste » même sans git ; élément connu sans git → « git introuvable »', async () => {
+    const { home, roots } = fakeHome();
+    const git: GitRun = async () => ({ code: 0, stdout: '', stderr: '' });
+    const wt = { path: '/p/x', repo: '/p', branch: 'fini', head: 'abc', label: 'p / x', sizeKB: 1 } as unknown as WorktreeCandidate;
+    const req = { ...empty, worktrees: ['/p/absent', '/p/x'] };
+    const stale = buildUnits(req, { ...EMPTY_EXTRAS, worktrees: new Map([['/p/x', wt]]) }, { ...unitDeps(roots, [join(home, 'projets')]), git });
+    expect(await stale[0].check()).toBe('plus dans la liste : actualiser la page');
+    const noGit = buildUnits(req, { ...EMPTY_EXTRAS, worktrees: new Map([['/p/x', wt]]) }, unitDeps(roots, [join(home, 'projets')]));
+    expect(await noGit[0].check()).toBe('plus dans la liste : actualiser la page');
+    expect(await noGit[1].check()).toBe('git introuvable');
+  });
+  test('Docker : un élément apparu après la confirmation → action refusée, rien de lancé', async () => {
+    const { home, roots } = fakeHome();
+    let grown = false;
+    const calls: string[][] = [];
+    const run: DockerRun = async (args) => {
+      calls.push(args);
+      const r = fakeDocker(args);
+      if (grown && args.join(' ') === 'ps -a --format {{json .}}') return { ...r, stdout: `${r.stdout}{"Names":"nouveau-1","Image":"demo/web:1.0","State":"exited","Status":"Exited (0) 1 second ago"}\n` };
+      return r;
+    };
+    const docker = await dockerStatus(run);
+    const req = { ...empty, docker: ['containers' as const] };
+    const units = buildUnits(req, { ...EMPTY_EXTRAS, docker }, { ...unitDeps(roots, [join(home, 'projets')]), docker: run });
+    const { d, asked } = famDeps(roots, { confirm: async (s) => (asked.push(s), (grown = true)) });
+    const r = await cleanDisk(req, { fam: d, units });
+    expect(asked[0].detail).toContain('vieux-1');
+    expect(asked[0].detail).not.toContain('nouveau-1');
+    expect(r.done).toEqual([]);
+    expect(r.refused).toEqual([{ id: 'docker:containers', label: expect.any(String), reason: expect.stringMatching(/nouveau-1.*non confirmé|non confirmé.*nouveau-1/) }]);
+    expect(calls.some((a) => a[1] === 'prune')).toBe(false);
+  });
+  test('Docker : liste inchangée (ou réduite) après la confirmation → action lancée', async () => {
+    const { home, roots } = fakeHome();
+    let shrunk = false;
+    const calls: string[][] = [];
+    const run: DockerRun = async (args) => {
+      calls.push(args);
+      const r = fakeDocker(args);
+      if (shrunk && args.join(' ') === 'ps -a --format {{json .}}') return { ...r, stdout: r.stdout.split('\n')[0] + '\n' };
+      return r;
+    };
+    const docker = await dockerStatus(run);
+    const req = { ...empty, docker: ['containers' as const] };
+    const units = buildUnits(req, { ...EMPTY_EXTRAS, docker }, { ...unitDeps(roots, [join(home, 'projets')]), docker: run });
+    const { d } = famDeps(roots, { confirm: async () => (shrunk = true) });
+    const r = await cleanDisk(req, { fam: d, units });
+    expect(r.done).toEqual(['docker:containers']);
+    expect(calls.some((a) => a.join(' ') === 'container prune -f')).toBe(true);
+  });
+  test('Docker : liste impossible à revérifier juste avant d’agir → refusé', async () => {
+    const { home, roots } = fakeHome();
+    let broken = false;
+    const calls: string[][] = [];
+    const run: DockerRun = async (args) => {
+      calls.push(args);
+      if (broken && args.join(' ') === 'ps -a --format {{json .}}') return { code: 1, stdout: '', stderr: 'panne' };
+      return fakeDocker(args);
+    };
+    const docker = await dockerStatus(run);
+    const req = { ...empty, docker: ['containers' as const] };
+    const units = buildUnits(req, { ...EMPTY_EXTRAS, docker }, { ...unitDeps(roots, [join(home, 'projets')]), docker: run });
+    const { d } = famDeps(roots, { confirm: async () => (broken = true) });
+    const r = await cleanDisk(req, { fam: d, units });
+    expect(r.done).toEqual([]);
+    expect(r.refused[0].reason).toMatch(/revérifi/);
+    expect(calls.some((a) => a[1] === 'prune')).toBe(false);
   });
   test('requête de familles du lot 1 (tableau) : même résultat qu’avant', async () => {
     const { roots } = fakeHome();

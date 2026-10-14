@@ -13,6 +13,8 @@ export type DockerRun = (args: string[], o: { timeoutMs: number }) => Promise<{ 
 
 const INFO = ['info', '--format', '{{.ServerVersion}}'];
 const PRUNE_TIMEOUT_MS = 10 * 60_000;
+/** Note d'une action dont la liste d'éléments n'a pas pu être lue. */
+export const DOCKER_DETAIL_MISSING = 'détail indisponible';
 
 /** Docker simulé (développement seulement) : sorties figées, appels enregistrés dans globalThis.__pwDockerFakeCalls. */
 export function fakeDocker(args: string[]): { code: number; stdout: string; stderr: string } {
@@ -86,7 +88,7 @@ export async function dockerStatus(run: DockerRun): Promise<DockerView | null> {
   const cs = rows(ps);
   const vs = rows(vols);
   const v = vs ? anonymousVolumes(vs) : null;
-  const missing = { note: 'détail indisponible' };
+  const missing = { note: DOCKER_DETAIL_MISSING };
   return {
     version,
     actions: [

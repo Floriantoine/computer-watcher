@@ -8,7 +8,7 @@ import { familyDef, isFamilyId, type FamilyRoots } from '../core/disk/families';
 import type { DiskCleanEvent } from '../core/history/events';
 import { checkCacheDir, removeCacheDir } from './diskCacheDirs';
 import { familyLines, fmtKB, prepareFamilies, runFamilies, statfsPoints, type CleanDeps, type Holder, type PreparedFamilies } from './diskClean';
-import { checkDocker, dockerPrune, dockerStatus, type DockerRun } from './diskDocker';
+import { checkDocker, DOCKER_DETAIL_MISSING, dockerPrune, dockerStatus, type DockerRun } from './diskDocker';
 import { checkNodeModules, checkWorktree, removeNodeModules, removeWorktree } from './diskProjects';
 import type { GitRun } from './gitRun';
 
@@ -80,7 +80,8 @@ export function buildUnits(req: DiskCleanRequest, s: ExtrasState, d: UnitDeps): 
     const id = `worktree:${key}`;
     const git = d.git;
     if (!c || !git) {
-      units.push(refusedUnit(id, `worktree (${key})`, !git ? 'git introuvable' : STALE));
+      // clé périmée d'abord : « git introuvable » seulement pour un élément bien présent dans l'analyse
+      units.push(refusedUnit(id, `worktree (${key})`, !c ? STALE : 'git introuvable'));
       continue;
     }
     units.push({
@@ -115,12 +116,25 @@ export function buildUnits(req: DiskCleanRequest, s: ExtrasState, d: UnitDeps): 
       units.push(refusedUnit(id, DOCKER_LABELS[a], 'Docker indisponible'));
       continue;
     }
+    // éléments listés dans la confirmation : juste avant d'agir, un élément nouveau (non confirmé) refuse l'action
+    let confirmed: { items: Set<string>; complete: boolean } | null = null;
     units.push({
       id, label: DOCKER_LABELS[a], estimatedKB: view.reclaimKB, statfsPath: existsSync('/var/lib/docker') ? '/var/lib/docker' : undefined,
       check: async () => {
         const why = await checkDocker(run);
         if (why) return why;
-        view = (await dockerStatus(run))?.actions.find((x) => x.id === a) ?? view; // détail à jour pour la confirmation
+        const fresh = (await dockerStatus(run))?.actions.find((x) => x.id === a) ?? null;
+        if (!confirmed) {
+          view = fresh ?? view; // détail à jour pour la confirmation
+          confirmed = { items: new Set(view!.items), complete: view!.note !== DOCKER_DETAIL_MISSING };
+          return null;
+        }
+        if (!fresh || (confirmed.complete && fresh.note === DOCKER_DETAIL_MISSING)) return 'liste Docker impossible à revérifier juste avant d’agir';
+        const added = fresh.items.filter((x) => !confirmed!.items.has(x));
+        if (added.length) {
+          const shown = added.slice(0, 3).join(', ') + (added.length > 3 ? ` et ${added.length - 3} autre${added.length > 4 ? 's' : ''}` : '');
+          return `élément${added.length > 1 ? 's' : ''} apparu${added.length > 1 ? 's' : ''} depuis la confirmation, non confirmé${added.length > 1 ? 's' : ''} : ${shown} (actualiser la page)`;
+        }
         return null;
       },
       detail: () => [`docker ${dockerPruneArgs(a).join(' ')}`, ...listItems(view!.items), ...(view!.note ? [view!.note] : [])],
