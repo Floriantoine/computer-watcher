@@ -227,6 +227,41 @@ describe('buildUnits', () => {
     expect(r.refused[0].reason).toMatch(/revérifi/);
     expect(calls.some((a) => a[1] === 'prune')).toBe(false);
   });
+  test('revue m-2 : même conteneur dont le Status a changé (« … ago ») → pas de refus ; nouveau conteneur → refus', async () => {
+    const { home, roots } = fakeHome();
+    const go = async (extra: string) => {
+      let after = false;
+      const calls: string[][] = [];
+      const run: DockerRun = async (args) => {
+        calls.push(args);
+        const r = fakeDocker(args);
+        if (after && args.join(' ') === 'ps -a --format {{json .}}') return { ...r, stdout: r.stdout.replace('3 weeks ago', '4 weeks ago') + extra };
+        return r;
+      };
+      const docker = await dockerStatus(run);
+      const req = { ...empty, docker: ['containers' as const] };
+      const units = buildUnits(req, { ...EMPTY_EXTRAS, docker }, { ...unitDeps(roots, [join(home, 'projets')]), docker: run });
+      const { d, asked } = famDeps(roots, { confirm: async (s) => (asked.push(s), (after = true)) });
+      const r = await cleanDisk(req, { fam: d, units });
+      return { r, asked, calls };
+    };
+    const same = await go('');
+    expect(same.asked[0].detail).toContain('vieux-1 (demo/web:1.0, Exited (0) 3 weeks ago)'); // affichage inchangé
+    expect(same.r.refused).toEqual([]);
+    expect(same.r.done).toEqual(['docker:containers']);
+    const added = await go('{"Names":"nouveau-1","Image":"demo/web:1.0","State":"exited","Status":"Exited (0) 1 second ago"}\n');
+    expect(added.r.done).toEqual([]);
+    expect(added.r.refused[0].reason).toMatch(/non confirmé : nouveau-1 \(demo\/web:1\.0, Exited \(0\) 1 second ago\)/);
+    expect(added.r.refused[0].reason).not.toMatch(/vieux-1/);
+    expect(added.calls.some((a) => a[1] === 'prune')).toBe(false);
+  });
+  test('revue I-4 : volumes demandés alors que Docker est trop ancien (action absente de l’analyse) → refus explicite', async () => {
+    const { home, roots } = fakeHome();
+    const run: DockerRun = async (args) => (args.join(' ') === 'version --format {{.Server.APIVersion}}' ? { code: 0, stdout: '1.41', stderr: '' } : fakeDocker(args));
+    const docker = await dockerStatus(run);
+    const units = buildUnits({ ...empty, docker: ['volumes'] }, { ...EMPTY_EXTRAS, docker }, { ...unitDeps(roots, [join(home, 'projets')]), docker: run });
+    expect(await units[0].check()).toBe('Docker trop ancien : docker volume prune supprimerait aussi les volumes nommés');
+  });
   test('requête de familles du lot 1 (tableau) : même résultat qu’avant', async () => {
     const { roots } = fakeHome();
     const r = await cleanDisk(requestFromFamilies(['npm']), { fam: famDeps(roots).d, units: [] });

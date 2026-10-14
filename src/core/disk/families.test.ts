@@ -298,3 +298,46 @@ describe('caches d’applis', () => {
     expect(familyRootRefusal('app-vscode', r)).toBeNull();
   });
 });
+
+describe('revue de sécurité du lot 2, I-3 : une racine de caches ne doit jamais être un dossier de configuration ou de données', () => {
+  // ~/.config ressemble à un dossier de caches (google-chrome, BraveSoftware, spotify sont des noms connus de ~/.cache)
+  const ls = (p: string) => (p === '/h/.config' || p === '/h/cfg' ? ['google-chrome', 'BraveSoftware', 'spotify', 'autostart'] : p === '/h/.local/share' ? ['applications', 'icons', 'uv', 'pip'] : null);
+  test('XDG_CACHE_HOME = XDG_CONFIG_HOME (ou ~/.config, ~/.local/share, ~/.local/state) : familles de ~/.cache refusées', async () => {
+    const { familyRootRefusal } = await import('./families');
+    const same = { ...r, cacheHome: '/h/.config' };
+    for (const id of ['app-chrome', 'app-brave', 'app-spotify', 'uv', 'yarn'] as FamilyId[]) {
+      expect(familyRootRefusal(id, same, { ls }), id).toMatch(/racine XDG inhabituelle \(XDG_CACHE_HOME = \/h\/\.config, même dossier que XDG_CONFIG_HOME\)/);
+    }
+    // XDG_CONFIG_HOME ailleurs : ~/.config reste le défaut des configurations, refusé quand même
+    expect(familyRootRefusal('app-chrome', { ...r, configHome: '/h/cfg', cacheHome: '/h/.config' }, { ls })).toMatch(/même dossier que ~\/\.config/);
+    expect(familyRootRefusal('app-chrome', { ...r, cacheHome: '/h/.local/share' }, { ls })).toMatch(/même dossier que XDG_DATA_HOME/);
+    expect(familyRootRefusal('uv', { ...r, cacheHome: '/h/.local/state' }, { ls: () => ['CACHEDIR.TAG'] })).toMatch(/même dossier que ~\/\.local\/state/);
+    // même dossier par un lien (chemins réels comparés)
+    expect(familyRootRefusal('app-chrome', { ...r, cacheHome: '/h/lien' }, { ls, real: (p) => (p === '/h/lien' ? '/h/.config' : p) })).toMatch(/même dossier que XDG_CONFIG_HOME/);
+  });
+  test('symétrique : XDG_CONFIG_HOME = XDG_CACHE_HOME (ou XDG_DATA_HOME = ~/.config) refusé pour les familles de configuration / données', async () => {
+    const { familyRootRefusal } = await import('./families');
+    expect(familyRootRefusal('app-vscode', { ...r, configHome: '/h/.cache' }, { ls: () => ['Code', 'autostart', 'dconf'] })).toMatch(/XDG_CONFIG_HOME = \/h\/\.cache, même dossier que XDG_CACHE_HOME/);
+    expect(familyRootRefusal('trash', { ...r, dataHome: '/h/.config' }, { ls: () => ['applications', 'icons'] })).toMatch(/XDG_DATA_HOME = \/h\/\.config, même dossier que XDG_CONFIG_HOME/);
+  });
+  test('défauts distincts : rien ne change', async () => {
+    const { familyRootRefusal } = await import('./families');
+    for (const id of APP_CACHE_IDS) expect(familyRootRefusal(id, r), id).toBeNull();
+  });
+});
+
+describe('revue de sécurité du lot 2, I-3 (b) : un chemin de famille ne recouvre jamais un profil d’appli', () => {
+  test('égal, parent ou enfant d’un profil (d’une autre famille ou de la sienne) → refus ; caches Electron dans leur propre profil → acceptés', async () => {
+    const { profileOverlapRefusal } = await import('./families');
+    // égal : cacheHome = configHome → ~/.config/google-chrome est le profil de Chrome
+    expect(profileOverlapRefusal('app-chrome', { ...r, cacheHome: '/h/.config' })).toMatch(/profil de Chrome/);
+    // parent : configHome sous ~/.cache/spotify → le cache Spotify contient le profil de Spotify
+    expect(profileOverlapRefusal('app-spotify', { ...r, configHome: '/h/.cache/spotify/cfg' })).toMatch(/profil de Spotify/);
+    // enfant : cacheHome sous le profil de VS Code → ~/.config/Code/c/yarn est dans le profil
+    expect(profileOverlapRefusal('yarn', { ...r, cacheHome: '/h/.config/Code/c' })).toMatch(/profil de VS Code/);
+    // par un lien : chemin réel égal au profil de Chromium
+    expect(profileOverlapRefusal('app-chrome', r, (p) => (p === '/h/.cache/google-chrome' ? '/h/.config/chromium' : p))).toMatch(/profil de Chromium/);
+    // défauts : aucun recouvrement (les caches de VS Code, Discord, Slack sont dans leur propre profil, par conception)
+    for (const id of FAMILIES.map((f) => f.id)) expect(profileOverlapRefusal(id, r), id).toBeNull();
+  });
+});

@@ -2,7 +2,7 @@
 // ~/.cache, actions Docker) dans une seule confirmation native. Chaque élément est revérifié avant la confirmation et juste
 // avant d'agir ; un élément absent de la dernière analyse du main est refusé (le renderer n'apporte jamais de chemin).
 import { existsSync, lstatSync } from 'node:fs';
-import { DOCKER_LABELS, dockerPruneArgs, type DockerView } from '../core/disk/docker';
+import { DOCKER_LABELS, DOCKER_TOO_OLD, dockerPruneArgs, type DockerActionView, type DockerView } from '../core/disk/docker';
 import type { CacheDirCandidate, DiskCleanAllResult, DiskCleanRequest, NodeModulesCandidate, WorktreeCandidate } from '../core/disk/extras';
 import { familyDef, isFamilyId, type FamilyRoots } from '../core/disk/families';
 import type { DiskCleanEvent } from '../core/history/events';
@@ -53,6 +53,8 @@ const refusedUnit = (id: string, label: string, reason: string): CleanUnit => ({
     throw new Error(reason);
   },
 });
+/** Revue m-2 : identifiant stable de chaque élément (jamais le Status affiché, qui change avec le temps). */
+const keysOf = (v: DockerActionView) => (v.keys && v.keys.length === v.items.length ? v.keys : v.items);
 const listItems = (items: readonly string[]) => [...items.slice(0, 20), ...(items.length > 20 ? [`… et ${items.length - 20} autres`] : [])];
 
 /** Unités d'une requête, chacune liée à l'élément trouvé par le main (jamais au chemin envoyé par le renderer). */
@@ -113,7 +115,8 @@ export function buildUnits(req: DiskCleanRequest, s: ExtrasState, d: UnitDeps): 
     const run = d.docker;
     let view = s.docker?.actions.find((x) => x.id === a) ?? null;
     if (!view || !run) {
-      units.push(refusedUnit(id, DOCKER_LABELS[a], 'Docker indisponible'));
+      // revue I-4 : action volumes retirée de l'analyse parce que l'API du démon est antérieure à 1.42
+      units.push(refusedUnit(id, DOCKER_LABELS[a], a === 'volumes' && s.docker && run ? DOCKER_TOO_OLD : 'Docker indisponible'));
       continue;
     }
     // éléments listés dans la confirmation : juste avant d'agir, un élément nouveau (non confirmé) refuse l'action
@@ -126,11 +129,12 @@ export function buildUnits(req: DiskCleanRequest, s: ExtrasState, d: UnitDeps): 
         const fresh = (await dockerStatus(run))?.actions.find((x) => x.id === a) ?? null;
         if (!confirmed) {
           view = fresh ?? view; // détail à jour pour la confirmation
-          confirmed = { items: new Set(view!.items), complete: view!.note !== DOCKER_DETAIL_MISSING };
+          confirmed = { items: new Set(keysOf(view!)), complete: view!.note !== DOCKER_DETAIL_MISSING };
           return null;
         }
         if (!fresh || (confirmed.complete && fresh.note === DOCKER_DETAIL_MISSING)) return 'liste Docker impossible à revérifier juste avant d’agir';
-        const added = fresh.items.filter((x) => !confirmed!.items.has(x));
+        const freshKeys = keysOf(fresh);
+        const added = fresh.items.filter((_, i) => !confirmed!.items.has(freshKeys[i]));
         if (added.length) {
           const shown = added.slice(0, 3).join(', ') + (added.length > 3 ? ` et ${added.length - 3} autre${added.length > 4 ? 's' : ''}` : '');
           return `élément${added.length > 1 ? 's' : ''} apparu${added.length > 1 ? 's' : ''} depuis la confirmation, non confirmé${added.length > 1 ? 's' : ''} : ${shown} (actualiser la page)`;

@@ -100,3 +100,12 @@ describe('checkCacheDir / removeCacheDir', () => {
     expect(existsSync(join(home, '.cache/paquet.asar/x'))).toBe(true);
   });
 });
+
+test('revue I-3 : XDG_CACHE_HOME = XDG_CONFIG_HOME (~/.config qui ressemble à des caches) → rien listé, refus', async () => {
+  const { home, roots, du } = fakeHome();
+  for (const n of ['google-chrome', 'BraveSoftware', 'spotify', 'outil-perso']) mkdirSync(join(home, '.config', n), { recursive: true });
+  const r = await listCacheDirs({ ...roots, cacheHome: roots.configHome }, { du, mountinfo: () => '' });
+  expect(r.dirs).toEqual([]);
+  expect(r.refusal).toMatch(/même dossier que XDG_CONFIG_HOME/);
+  expect(checkCacheDir({ ...roots, cacheHome: roots.configHome }, 'outil-perso', { mountinfo: () => '', dirUser: () => null })).toMatch(/même dossier que XDG_CONFIG_HOME/);
+});

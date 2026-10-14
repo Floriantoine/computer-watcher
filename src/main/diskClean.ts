@@ -5,7 +5,7 @@
 // (safeFs : O_NOFOLLOW, jamais de lien suivi ni de montage traversé). Familles root : script figé via pkexec (diskRoot.ts).
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
-import { appProfileDirs, cacheSignature, familyDef, familyPaths, familyRootRefusal, isFamilyRequest, toolName, JOURNAL_DIR, PKG_CACHE_DIRS, usedByText, type FamilyId, type FamilyRoots } from '../core/disk/families';
+import { appProfileDirs, cacheSignature, familyDef, familyPaths, familyRootRefusal, isFamilyRequest, profileOverlapRefusal, toolName, JOURNAL_DIR, PKG_CACHE_DIRS, usedByText, type FamilyId, type FamilyRoots } from '../core/disk/families';
 import { browserDropPaths } from '../core/disk/measure';
 import type { DiskCleanEvent } from '../core/history/events';
 import { rootUnavailable, type RootAction } from './diskRoot';
@@ -160,6 +160,9 @@ function checkFamily(id: FamilyId, homeDev: number, d: CleanDeps): string | null
   } else {
     const xdg = familyRootRefusal(id, d.roots, { real: realOr, ls: lsReal });
     if (xdg) return xdg;
+    // revue I-3 (b) : jamais un chemin égal à un profil d'appli, qui en contient un ou qui est dedans (chemins réels)
+    const profile = profileOverlapRefusal(id, d.roots, realOr);
+    if (profile) return profile;
     const paths = familyPaths(id, d.roots);
     if (!paths.some(exists)) return 'absent';
     for (const p of paths) {

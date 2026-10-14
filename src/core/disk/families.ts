@@ -222,7 +222,7 @@ function normalize(p: string): string {
 }
 
 /** Racine XDG dont dépendent les chemins d'une famille (null : chemins fixes sous HOME, ou système). */
-function xdgRootOf(id: FamilyId, r: FamilyRoots): { name: 'XDG_CACHE_HOME' | 'XDG_DATA_HOME' | 'XDG_CONFIG_HOME'; path: string } | null {
+function xdgRootOf(id: FamilyId, r: FamilyRoots): { name: XdgName; path: string } | null {
   if (['uv', 'pip', 'yarn', 'paru', 'yay', 'test-browsers', 'app-spotify', 'app-chrome', 'app-chromium', 'app-firefox', 'app-brave'].includes(id)) return { name: 'XDG_CACHE_HOME', path: r.cacheHome };
   if (id === 'pnpm' || id === 'trash') return { name: 'XDG_DATA_HOME', path: r.dataHome };
   if (id === 'app-vscode' || id === 'app-discord' || id === 'app-slack') return { name: 'XDG_CONFIG_HOME', path: r.configHome };
@@ -243,6 +243,43 @@ const KNOWN_CONFIG_DIRS = new Set([
   'autostart', 'systemd', 'gtk-3.0', 'gtk-4.0', 'dconf', 'pulse', 'fontconfig', 'Code', 'discord', 'Slack', 'google-chrome', 'chromium',
   'mimeapps.list', 'user-dirs.dirs', 'kdeglobals',
 ]);
+
+type XdgName = 'XDG_CACHE_HOME' | 'XDG_DATA_HOME' | 'XDG_CONFIG_HOME';
+
+/** Racines d'autres sortes (variables et défauts, ~/.local/state compris) qu'une racine XDG ne doit jamais égaler. */
+function otherRoots(name: XdgName, r: FamilyRoots): { label: string; path: string }[] {
+  const all: { kind: XdgName | 'state'; label: string; path: string }[] = [
+    { kind: 'XDG_CACHE_HOME', label: 'XDG_CACHE_HOME', path: r.cacheHome },
+    { kind: 'XDG_CONFIG_HOME', label: 'XDG_CONFIG_HOME', path: r.configHome },
+    { kind: 'XDG_DATA_HOME', label: 'XDG_DATA_HOME', path: r.dataHome },
+    { kind: 'XDG_CACHE_HOME', label: '~/.cache', path: join(r.home, '.cache') },
+    { kind: 'XDG_CONFIG_HOME', label: '~/.config', path: join(r.home, '.config') },
+    { kind: 'XDG_DATA_HOME', label: '~/.local/share', path: join(r.home, '.local/share') },
+    { kind: 'state', label: '~/.local/state', path: join(r.home, '.local/state') },
+  ];
+  return all.filter((o) => o.kind !== name);
+}
+
+/**
+ * Revue I-3 (b) : un chemin de la famille (chemin réel) égal à un profil d'appli, qui en contient un ou qui est dedans
+ * → refus. Seule exception : les caches Electron (VS Code, Discord, Slack) vivent par conception dans leur propre profil.
+ */
+export function profileOverlapRefusal(id: FamilyId, r: FamilyRoots, real: (p: string) => string = (p) => p): string | null {
+  if (familyDef(id).root) return null;
+  const rp = (p: string) => normalize(real(normalize(p)));
+  const ownInside = xdgRootOf(id, r)?.name === 'XDG_CONFIG_HOME';
+  const profiles = APP_CACHE_IDS.flatMap((a) => appProfileDirs(a, r).map((p) => ({ a, p: rp(p) })));
+  for (const raw of familyPaths(id, r)) {
+    const p = rp(raw);
+    for (const x of profiles) {
+      const inside = p.startsWith(`${x.p}/`);
+      if (p === x.p || x.p.startsWith(`${p}/`) || (inside && !(ownInside && x.a === id))) {
+        return `${raw} recouvre le profil de ${toolName[x.a]} (${x.p}), refusé`;
+      }
+    }
+  }
+  return null;
+}
 
 export interface RootCheckOptions {
   /** Chemin réel (liens résolus) ; défaut : le chemin normalisé, sans accès au disque. */
@@ -267,6 +304,9 @@ export function familyRootRefusal(id: FamilyId, r: FamilyRoots, o: RootCheckOpti
   const shown = root === normalize(x.path) ? x.path : `${x.path} → ${root}`;
   const refuse = `racine XDG inhabituelle (${x.name} = ${shown}), refusé`;
   if (root === home || !root.startsWith(`${home}/`)) return refuse;
+  // revue I-3 (a) : jamais le même dossier qu'une racine d'une autre sorte (ou que son défaut), même ressemblant à des caches
+  const same = otherRoots(x.name, r).find((o) => real(o.path) === root);
+  if (same) return `racine XDG inhabituelle (${x.name} = ${shown}, même dossier que ${same.label}), refusé`;
   const def = x.name === 'XDG_CACHE_HOME' ? '.cache' : x.name === 'XDG_DATA_HOME' ? '.local/share' : '.config';
   if (root === `${home}/${def}`) return null;
   const names = o.ls?.(root) ?? null;
