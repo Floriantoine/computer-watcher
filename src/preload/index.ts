@@ -3,6 +3,7 @@ import type { AlertEvent } from '../core/alerts';
 import type { EarlyoomSettings } from '../core/earlyoom';
 import type { SunNode } from '../core/disk/sunTree';
 import type { FamiliesFile, FamilyId } from '../core/disk/families';
+import type { DiskCleanAllResult, DiskCleanRequest, ExtrasView } from '../core/disk/extras';
 import type { EarlyoomSetupMode } from '../core/earlyoomSetup';
 import type { AboutInfo, AutostartInfo, InstallOutcome, OnboardingInfo, UninstallItem, UninstallOptions, UninstallResult } from '../core/onboarding';
 import type { MigrationReport } from '../core/nameMigration';
@@ -148,9 +149,12 @@ const api = {
       file: FamiliesFile | null; refusals: Partial<Record<FamilyId, string>>; lastRefusals: Partial<Record<FamilyId, string>>; paths: Partial<Record<FamilyId, string[]>>; home: string; measuring: boolean;
     }> =>
       ipcRenderer.invoke('disk:families', force),
-    /** Ménage : ids seulement ; le main recalcule les chemins, fait confirmer (boîte native) et revérifie tout. */
-    clean: (ids: FamilyId[]): Promise<{ freedKB: number; done: FamilyId[]; refused: { id: FamilyId; reason: string }[]; cancelled: boolean }> =>
-      ipcRenderer.invoke('disk:clean', ids),
+    /** Ménage : ids de familles (lot 1) ou requête complète ; le main ne touche que ce qu'il a trouvé, après confirmation. */
+    clean: (req: FamilyId[] | DiskCleanRequest): Promise<DiskCleanAllResult> => ipcRenderer.invoke('disk:clean', req),
+    /** Projets (node_modules inactifs, worktrees fusionnés), dossiers inconnus de ~/.cache, Docker (gardé 10 min ; `force` : « Actualiser »). */
+    extras: (force = false): Promise<ExtrasView> => ipcRenderer.invoke('disk:extras', force),
+    /** Défaut des dossiers de projets (parents des projets vus dans l'historique) et dossier personnel. */
+    projectRootsDefault: (): Promise<{ home: string; roots: string[] }> => ipcRenderer.invoke('disk:project-roots-default'),
     /** Disques réels surveillés : taille, libre, place récupérable des familles qui s'y trouvent. */
     partitions: (): Promise<{ mount: string; sizeKB: number; availKB: number; reclaimKB: number }[]> => ipcRenderer.invoke('disk:partitions'),
     /** Ouvre un dossier du soleil dans le gestionnaire de fichiers (dossier réel sous HOME seulement). */

@@ -1,5 +1,5 @@
 // Page Disque (logique pure) : sélection des familles, liens soleil ↔ familles, fil d'Ariane, textes, géométrie du soleil.
-import { familyDef, type FamilyDef, type FamilyId, type FamilyMeasure } from '../../core/disk/families';
+import { familyDef, isFamilyId, type FamilyDef, type FamilyId, type FamilyMeasure } from '../../core/disk/families';
 import type { SunNode } from '../../core/disk/sunTree';
 import { formatKB } from './format';
 
@@ -53,12 +53,13 @@ export function measuredAt(ts: number, now = Date.now()): string {
   return d.toDateString() === n.toDateString() ? `mesuré à ${hm}` : `mesuré le ${p2(d.getDate())}/${p2(d.getMonth() + 1)} à ${hm}`;
 }
 
-export interface CleanOutcome { freedKB: number; estimatedKB?: number; done: FamilyId[]; refused: { id: FamilyId; reason: string }[]; cancelled: boolean }
+/** Résultat du ménage : `id` = id de famille ou clé d'élément (`node_modules:<chemin>`…) ; `label` fourni par le main. */
+export interface CleanOutcome { freedKB: number; estimatedKB?: number; done: string[]; refused: { id: string; label?: string; reason: string }[]; cancelled: boolean }
 
 /** Toast après « Libérer… » : place libérée (statfs avant / après) et refus ; rien si annulé. */
 export function freedToast(r: CleanOutcome): { text: string; kind: 'info' | 'error' } | null {
   if (r.cancelled && !r.refused.length) return null;
-  const refused = r.refused.map((x) => refusalText(x.id, x.reason)).join(' ; ');
+  const refused = r.refused.map((x) => (x.label ? `${x.label} : ${x.reason}` : isFamilyId(x.id) ? refusalText(x.id, x.reason) : `${x.id} : ${x.reason}`)).join(' ; ');
   // place pas encore visible par statfs (btrfs la montre après quelques secondes) : l'estimation, annoncée comme telle
   const est = r.estimatedKB ?? 0;
   const head = !r.done.length

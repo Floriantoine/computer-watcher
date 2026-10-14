@@ -95,6 +95,12 @@ test('tmp_clean : action de l’app (pas une alerte), marqueur « Nettoyage de /
   expect(eventMarkers([e])[0].label).toBe('Nettoyage de /tmp : 2 éléments, 2,0 Go libérés');
 });
 
+test('disk_clean : nombre d’éléments (familles, node_modules, worktrees…)', () => {
+  const e = { ts: 5, type: 'disk_clean', groupKey: null, groupLabel: null, detail: { freedKB: 2 * G, done: ['npm', 'node_modules:/p/a/node_modules', 'worktree:/p/a/.worktrees/fini'], refused: [] } };
+  expect(alertsFrom([e])).toEqual([]);
+  expect(eventMarkers([e])[0].label).toBe('Ménage du disque : 3 éléments, 2,0 Go libérés');
+});
+
 test('eventMarkers : gap sans from/to, et base recréée', () => {
   const m = eventMarkers([
     { ts: 1, type: 'gap', groupKey: null, groupLabel: null, detail: { reason: 'base illisible, recréée', backup: '/x.bak' } },
