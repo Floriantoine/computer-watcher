@@ -17,7 +17,7 @@ export const DEFAULT_RECORDER: RecorderConfig = {
   diskAlertGB: 20,
 };
 
-export const DEFAULT_UI: UiConfig = { reducedEffects: false, memoryMetric: 'rss', trayIcon: true, closeToTray: true, swapSleepMinMB: 100 };
+export const DEFAULT_UI: UiConfig = { reducedEffects: false, memoryMetric: 'rss', trayIcon: true, closeToTray: true, swapSleepMinMB: 100, diskProjectRoots: [], diskInactiveDays: 30 };
 
 export const DEFAULT_CLASSIFY: ClassifyConfig = { detectPorts: true, overrides: {} };
 

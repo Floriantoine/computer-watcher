@@ -149,6 +149,10 @@ export interface UiConfig {
   closeToTray: boolean;
   /** Vue swap : seuil de swap cumulé (Mo) au-delà duquel un processus inactif est « endormi » */
   swapSleepMinMB: number;
+  /** Page Disque : dossiers où chercher node_modules et worktrees ([] : parents des projets vus dans l'historique). */
+  diskProjectRoots: string[];
+  /** Page Disque : node_modules inactif après ce nombre de jours sans processus ni fichier source modifié (1–365). */
+  diskInactiveDays: number;
 }
 
 export type { Category } from './classify/categories';
