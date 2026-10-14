@@ -9,11 +9,13 @@ import { existsSync, lstatSync, realpathSync, type Dirent } from 'node:fs';
 import { lstat, readdir } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { usedByText } from '../core/disk/families';
-import type { NodeModulesCandidate } from '../core/disk/extras';
+import type { NodeModulesCandidate, WorktreeCandidate } from '../core/disk/extras';
 import type { DuFn } from '../core/disk/measure';
 import { DAY_MS, lastSeenFor, nodeModulesVerdict, SOURCE_SKIP_DIRS } from '../core/disk/projects';
+import { defaultBranchFrom, parseStatusZ, parseWorktreeList, statusRefusal, worktreeExclusion } from '../core/disk/worktrees';
 import { findProjectRoot, projectLabel } from '../core/grouping/projectRoot';
 import { withNoAsar, type Holder } from './diskClean';
+import { lastLine, type GitRun } from './gitRun';
 import { mountPointsOf, removeTreeSafe } from './safeFs';
 
 const MAX_DEPTH = 6;
@@ -214,4 +216,105 @@ export function removeNodeModules(c: NodeModulesCandidate, d: { projectRoots: re
   if (basename(c.path) !== 'node_modules' || hasAsarPart(c.path)) throw new Error('chemin refusé');
   if (!rootFor(c.path, d.projectRoots)) throw new Error('hors des dossiers de projets');
   withNoAsar(() => (d.remove ?? removeTreeSafe)(['/'], c.path, { mountinfo: d.mountinfo() }));
+}
+
+async function defaultBranch(git: GitRun, repo: string): Promise<{ ref: string; name: string } | null> {
+  const o = await git(['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], { cwd: repo });
+  const l = await git(['for-each-ref', '--format=%(refname:short)', 'refs/heads/main', 'refs/heads/master'], { cwd: repo });
+  return defaultBranchFrom(o.code === 0 ? o.stdout.trim() : null, l.code === 0 ? l.stdout.split('\n').map((s) => s.trim()).filter(Boolean) : []);
+}
+
+async function isMerged(git: GitRun, repo: string, branch: string, ref: string): Promise<boolean | null> {
+  const r = await git(['merge-base', '--is-ancestor', `refs/heads/${branch}`, ref], { cwd: repo });
+  return r.code === 0 ? true : r.code === 1 ? false : null;
+}
+
+/** Dossier réel (ni lien, ni lien dans le chemin). */
+function realDirRefusal(p: string): string | null {
+  try {
+    const st = lstatSync(p);
+    if (st.isSymbolicLink()) return `${p} : lien symbolique, refusé (jamais suivi)`;
+    if (!st.isDirectory()) return 'pas un dossier';
+    return realpathSync(p) === p ? null : 'lien symbolique dans le chemin, refusé';
+  } catch {
+    return 'introuvable';
+  }
+}
+
+/** État du worktree : propre (fichiers ignorés reconstructibles seulement) et rien de modifié depuis 24 h. */
+async function worktreeStateRefusal(git: GitRun, wt: string, now: number): Promise<string | null> {
+  const s = await git(['status', '--porcelain=v1', '-z', '--ignored=traditional', '--untracked-files=normal'], { cwd: wt });
+  if (s.code !== 0) return `git status impossible : ${lastLine(s.stderr)}`;
+  const why = statusRefusal(parseStatusZ(s.stdout));
+  if (why) return why;
+  const newest = await newestMtime(wt, { since: now - DAY_MS, maxEntries: 50_000 });
+  if (newest === 'budget') return 'trop de fichiers pour juger de l’activité';
+  if (newest !== null && newest >= now - DAY_MS) return 'modifié il y a moins de 24 h';
+  return null;
+}
+
+export interface WorktreeScanDeps { git: GitRun; projectRoots: readonly string[]; now: number; du: DuFn }
+
+/**
+ * Worktrees fusionnés des dépôts trouvés : branche ancêtre de la branche par défaut, sous les dossiers de projets ; jamais
+ * le principal, un détaché, un verrouillé, un « prunable », la branche par défaut. `refusal` : listé mais pas supprimable.
+ */
+export async function scanWorktrees(repos: readonly string[], d: WorktreeScanDeps): Promise<{ worktrees: WorktreeCandidate[]; errors: string[] }> {
+  const worktrees: WorktreeCandidate[] = [];
+  const errors: string[] = [];
+  for (const repo of repos) {
+    const def = await defaultBranch(d.git, repo);
+    if (!def) {
+      errors.push(`${repo} : branche par défaut introuvable (ni origin/HEAD, ni main, ni master)`);
+      continue;
+    }
+    const l = await d.git(['worktree', 'list', '--porcelain', '-z'], { cwd: repo });
+    if (l.code !== 0) {
+      errors.push(`${repo} : git worktree list impossible (${lastLine(l.stderr)})`);
+      continue;
+    }
+    const entries = parseWorktreeList(l.stdout);
+    for (const [i, e] of entries.entries()) {
+      if (worktreeExclusion(e, i, def.name) || !rootFor(e.path, d.projectRoots)) continue;
+      if ((await isMerged(d.git, repo, e.branch!, def.ref)) !== true) continue;
+      const refusal = realDirRefusal(e.path) ?? (await worktreeStateRefusal(d.git, e.path, d.now));
+      worktrees.push({ path: e.path, repo, branch: e.branch!, head: e.head ?? '', label: `${basename(repo)} › ${e.branch}`, sizeKB: null, refusal });
+    }
+  }
+  const sizes = worktrees.length ? await d.du(worktrees.map((c) => c.path)) : new Map<string, number>();
+  for (const c of worktrees) c.sizeKB = sizes.get(c.path) ?? null;
+  return { worktrees, errors };
+}
+
+export interface WorktreeCheckDeps { git: GitRun; projectRoots: readonly string[]; now: number; dirUser(dir: string): Holder | null }
+
+/** Revérification complète d'un worktree avant la confirmation, puis juste avant git worktree remove. */
+export async function checkWorktree(c: WorktreeCandidate, d: WorktreeCheckDeps): Promise<string | null> {
+  if (!rootFor(c.path, d.projectRoots)) return 'hors des dossiers de projets';
+  const def = await defaultBranch(d.git, c.repo);
+  if (!def) return 'branche par défaut introuvable';
+  const l = await d.git(['worktree', 'list', '--porcelain', '-z'], { cwd: c.repo });
+  if (l.code !== 0) return `git worktree list impossible : ${lastLine(l.stderr)}`;
+  const entries = parseWorktreeList(l.stdout);
+  const i = entries.findIndex((e) => e.path === c.path);
+  if (i < 0) return 'plus dans git worktree list';
+  const ex = worktreeExclusion(entries[i], i, def.name);
+  if (ex) return ex;
+  if (entries[i].branch !== c.branch || entries[i].head !== c.head) return 'a changé depuis l’analyse : actualiser';
+  if ((await isMerged(d.git, c.repo, c.branch, def.ref)) !== true) return 'branche plus fusionnée';
+  const why = realDirRefusal(c.path) ?? (await worktreeStateRefusal(d.git, c.path, d.now));
+  if (why) return why;
+  const user = d.dirUser(c.path);
+  return user ? usedByText(user) : null;
+}
+
+/**
+ * `git worktree remove <chemin>` (jamais --force : git refuse lui-même un worktree sale), puis `git branch -d -- <branche>`
+ * (jamais -D). Refus de la suppression du worktree : erreur. Refus de la branche : le worktree reste supprimé, note renvoyée.
+ */
+export async function removeWorktree(c: WorktreeCandidate, git: GitRun): Promise<string | null> {
+  const r1 = await git(['worktree', 'remove', c.path], { cwd: c.repo, timeoutMs: 10 * 60_000 });
+  if (r1.code !== 0) throw new Error(`git a refusé de supprimer le worktree : ${lastLine(r1.stderr)}`);
+  const r2 = await git(['branch', '-d', '--', c.branch], { cwd: c.repo });
+  return r2.code === 0 ? null : `worktree supprimé ; branche ${c.branch} gardée : ${lastLine(r2.stderr)}`;
 }
