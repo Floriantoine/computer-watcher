@@ -1,7 +1,8 @@
 // src/core/rules/simulation.ts — crédit de Simulation d'une règle (pur). Seul le service l'accumule : temps passé en
 // Simulation avec la règle activée, l'interrupteur général allumé, et au moins une évaluation. Le passage en Active (main)
 // et l'action réelle (service) exigent ≥ 10 min ET ≥ 1 évaluation, avec la même condition. Rien d'écrit à la main dans
-// config.json ne donne de crédit.
+// config.json ne donne de crédit. Seule exception : la règle anti-gel recommandée intacte (isPreapproved).
+import { isPreapproved } from './recommended';
 import type { Rule, RuleCondition } from './types';
 
 /** Simulation minimale avant le passage en Active (main et service). */
@@ -30,6 +31,7 @@ export function accumulateSimulation(stats: SimStats, rules: readonly Rule[], en
 
 export function simulationCredit(stats: SimStats | null, rule: Rule): { ok: boolean; minutesLeft: number; evaluations: number } {
   const rec = stats?.[rule.id];
+  if (isPreapproved(rule)) return { ok: true, minutesLeft: 0, evaluations: rec?.evaluations ?? 0 };
   if (!rec || rec.condition !== conditionKey(rule.condition)) return { ok: false, minutesLeft: Math.ceil(MIN_SIMULATION_MS / 60_000), evaluations: 0 };
   const ok = rec.simulatedMs >= MIN_SIMULATION_MS && rec.evaluations >= 1;
   return { ok, minutesLeft: Math.max(0, Math.ceil((MIN_SIMULATION_MS - rec.simulatedMs) / 60_000)), evaluations: rec.evaluations };

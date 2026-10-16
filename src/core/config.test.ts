@@ -212,12 +212,13 @@ test('recorder.tmpfsAlertMB : 4000 Mo par défaut, ajouté si absent, bornes 100
 });
 
 describe('règles (⑥)', () => {
-  test('config v1 existante sans « rules » → valide, règles éteintes, liste vide', () => {
+  test('config v1 existante sans « rules » → valide, règles par défaut (recommandées)', () => {
     const { rules: _r, ...old } = { ...DEFAULT_CONFIG, rules: undefined };
     const c = validateConfig(old);
     expect(c).not.toBeNull();
-    expect(c!.rules).toEqual({ enabled: false, list: [] });
-    expect(DEFAULT_CONFIG.rules).toEqual({ enabled: false, list: [] });
+    expect(c!.rules).toEqual(DEFAULT_CONFIG.rules);
+    expect(DEFAULT_CONFIG.rules.enabled).toBe(true);
+    expect(DEFAULT_CONFIG.rules.list.map((r) => r.id)).toEqual(['rec-inactive-front-back', 'rec-test-memory', 'rec-antigel']);
   });
 
   test('une règle invalide écrite à la main → seule cette règle ignorée, erreur visible, reste de la config gardé', () => {

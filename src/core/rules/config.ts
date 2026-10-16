@@ -2,11 +2,16 @@
 import { CATEGORIES, isCategory } from '../classify/categories';
 import { APP_NAMES } from '../grouping/rules';
 import { isNeverKillName } from './neverKill';
+import { isPreapproved, RECOMMENDED_RULES, SYSTEM_DEFAULTS } from './recommended';
 import { simulationCredit, type SimStats } from './simulation';
 import type { Rule, RuleCondition, RuleIssue, RuleMatch, RuleMode, RulesConfig } from './types';
 
 export const MAX_RULES = 20;
-export const RULE_BOUNDS = { overMB: [100, 65_536], forMin: [1, 120], forHours: [1, 720], underMin: [1, 30] } as const;
+export const RULE_BOUNDS = {
+  overMB: [100, 65_536], forMin: [1, 120], forHours: [1, 720], underMin: [1, 30],
+  // anti-gel : jamais sous 70 % (tuerait des tests sur une machine simplement occupée), durées de 5 s à 10 min
+  memPercent: [70, 99], memForSec: [5, 600], cpuPercent: [70, 100], cpuForSec: [10, 600],
+} as const;
 export const RULE_ID_RE = /^[a-z0-9-]{1,40}$/;
 export const RULE_NAME_MAX = 80;
 /**
@@ -20,7 +25,10 @@ export const OPT_IN_APPS: readonly string[] = [...APP_NAMES].filter((n) => !isNe
 /** Erreurs de règles gardées (au-delà : une ligne « … et n autres »). */
 export const MAX_RULE_ISSUES = 20;
 
-export const DEFAULT_RULES: RulesConfig = { enabled: false, list: [] };
+/** Nouvelle config (section « rules » absente) : interrupteur allumé, les 3 règles recommandées. */
+export const DEFAULT_RULES: RulesConfig = { enabled: true, list: RECOMMENDED_RULES.map((r) => structuredClone(r)) };
+/** Section « rules » mal formée : tout éteint (jamais les défauts, qui contiennent une règle Active). */
+const RULES_OFF: RulesConfig = { enabled: false, list: [] };
 
 const CONTROL = /[\u0000-\u001f\u007f-\u009f‎‏‪-‮⁦-⁩]/;
 
@@ -61,6 +69,17 @@ function validateCondition(raw: unknown): RuleCondition | string {
       }
       return { kind: 'forecast', underMin: raw.underMin as number, includeApps: [...new Set(apps as string[])].sort() };
     }
+    case 'system': {
+      const B = RULE_BOUNDS;
+      if (!intIn(raw.memPercent, B.memPercent)) return `seuil mémoire hors bornes (${B.memPercent[0]} à ${B.memPercent[1]} %)`;
+      if (!intIn(raw.memForSec, B.memForSec)) return `durée mémoire hors bornes (${B.memForSec[0]} à ${B.memForSec[1]} s)`;
+      if (!intIn(raw.cpuPercent, B.cpuPercent)) return `seuil CPU hors bornes (${B.cpuPercent[0]} à ${B.cpuPercent[1]} %)`;
+      if (!intIn(raw.cpuForSec, B.cpuForSec)) return `durée CPU hors bornes (${B.cpuForSec[0]} à ${B.cpuForSec[1]} s)`;
+      return {
+        kind: 'system', memPercent: raw.memPercent as number, memForSec: raw.memForSec as number,
+        cpuPercent: raw.cpuPercent as number, cpuForSec: raw.cpuForSec as number,
+      };
+    }
     default:
       return 'type de condition inconnu';
   }
@@ -80,12 +99,13 @@ function validateRule(raw: unknown): Rule | string {
 
 /**
  * Validation stricte, règle par règle : une règle invalide (modifiée à la main) est ignorée seule et décrite dans
- * `issues` ; au-delà de MAX_RULES, les suivantes aussi ; un id déjà vu aussi. Section absente → défauts (désactivé).
+ * `issues` ; au-delà de MAX_RULES, les suivantes aussi ; un id déjà vu aussi. Section absente → défauts (les règles
+ * recommandées, interrupteur allumé).
  * Une section mal formée (pas un objet, liste absente) → règles éteintes, une erreur ; jamais de réinitialisation du reste.
  */
 export function validateRulesDetailed(raw: unknown): { rules: RulesConfig; issues: RuleIssue[] } {
   if (raw === undefined) return { rules: structuredClone(DEFAULT_RULES), issues: [] };
-  const broken = (error: string) => ({ rules: structuredClone(DEFAULT_RULES), issues: [{ index: -1, id: null, name: null, error }] });
+  const broken = (error: string) => ({ rules: structuredClone(RULES_OFF), issues: [{ index: -1, id: null, name: null, error }] });
   if (!isObj(raw)) return broken('section « rules » invalide : règles éteintes');
   const enabled = raw.enabled ?? false;
   if (typeof enabled !== 'boolean') return broken('interrupteur « Règles automatiques » invalide : règles éteintes');
@@ -123,7 +143,8 @@ const sameCondition = (a: RuleCondition, b: RuleCondition) => JSON.stringify(a) 
 /**
  * Erreur (texte FR) si une règle absente de `prev` arrive en mode 'active', si une règle active change de condition
  * sans repasser en Simulation, si une règle passe en Active sans crédit de Simulation enregistré par le service
- * (≥ 10 min et ≥ 1 évaluation, même condition), ou si un id est dupliqué ; null sinon.
+ * (≥ 10 min et ≥ 1 évaluation, même condition), ou si un id est dupliqué ; null sinon. Seule exception : la règle
+ * anti-gel recommandée intacte (isPreapproved), approuvée telle quelle.
  */
 export function checkRulesTransition(prev: RulesConfig, next: RulesConfig, sim: SimStats | null = null): string | null {
   const ids = new Set<string>();
@@ -135,6 +156,7 @@ export function checkRulesTransition(prev: RulesConfig, next: RulesConfig, sim: 
   for (const r of next.list) {
     if (r.mode !== 'active') continue;
     const old = before.get(r.id);
+    if (isPreapproved(r)) continue;
     if (!old) return `Une nouvelle règle démarre en Simulation (« ${r.name} »)`;
     if (!sameCondition(old.condition, r.condition)) return `Une règle modifiée repasse en Simulation (« ${r.name} »)`;
     if (old.mode !== 'active') {
@@ -149,12 +171,28 @@ export function checkRulesTransition(prev: RulesConfig, next: RulesConfig, sim: 
   return null;
 }
 
-/** Les 3 modèles fournis : tous désactivés, en Simulation. */
+/** Les 4 modèles fournis : tous désactivés, en Simulation (nouvel id : jamais pré-approuvés). */
 export const RULE_TEMPLATES: readonly Omit<Rule, 'id' | 'createdAt'>[] = [
   {
-    name: 'vitest > 4 Go pendant 5 min', enabled: false, mode: 'simulate',
-    condition: { kind: 'memory', target: 'instance', match: { by: 'name', value: 'vitest' }, overMB: 4096, forMin: 5 },
+    name: 'Test > 4 Go pendant 5 min', enabled: false, mode: 'simulate',
+    condition: { kind: 'memory', target: 'instance', match: { by: 'category', value: 'test' }, overMB: 4096, forMin: 5 },
   },
   { name: 'Front/Back de projet inactif depuis 1 j', enabled: false, mode: 'simulate', condition: { kind: 'inactive', categories: ['front', 'back'], forHours: 24 } },
   { name: 'Épuisement prévu dans < 3 min', enabled: false, mode: 'simulate', condition: { kind: 'forecast', underMin: 3, includeApps: [] } },
+  { name: 'Mémoire ou CPU > 95 % : tuer les tests', enabled: false, mode: 'simulate', condition: { kind: 'system', ...SYSTEM_DEFAULTS } },
 ];
+
+/**
+ * Bouton « Ajouter les règles recommandées » : ajoute celles dont l'id manque (jamais d'écrasement ni de doublon), à
+ * la fin, datées de `now`, dans la limite de MAX_RULES. L'interrupteur général n'est pas touché. Idempotent.
+ */
+export function withRecommendedRules(rules: RulesConfig, now: number): { rules: RulesConfig; added: Rule[] } {
+  const ids = new Set(rules.list.map((r) => r.id));
+  const room = Math.max(0, MAX_RULES - rules.list.length);
+  const createdAt = Math.max(0, Math.floor(now));
+  const added = RECOMMENDED_RULES.filter((r) => !ids.has(r.id)).slice(0, room).map((r) => ({ ...structuredClone(r), createdAt }));
+  return { rules: { ...rules, list: [...rules.list, ...added] }, added };
+}
+
+/** Règles recommandées absentes (par id). */
+export const missingRecommended = (rules: RulesConfig): Rule[] => RECOMMENDED_RULES.filter((r) => !rules.list.some((x) => x.id === r.id));
