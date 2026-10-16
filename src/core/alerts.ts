@@ -174,13 +174,15 @@ export function ruleEventText(type: 'rule_action' | 'rule_dry_run', d: Record<st
   const target = str(d.target);
   const mem = Number.isFinite(Number(d.memKB)) && d.memKB !== undefined ? ` (${fmtKB(Number(d.memKB))})` : '';
   const pause = 'Au plus 10 actions par heure : la règle est en pause pendant 1 h.';
+  // (d) anti-gel : la mesure qui a déclenché (« mémoire 97 % depuis 15 s »), texte du service
+  const why = typeof d.trigger === 'string' && d.trigger.length <= 80 ? `Déclencheur : ${d.trigger}. ` : '';
   if (type === 'rule_dry_run') {
     if (d.result === 'quota') return { title: `Simulation ${rule} : quota atteint`, body: pause };
-    return { title: `Simulation ${rule} : aurait arrêté ${target}${mem}`, body: 'Aucun processus touché (simulation).' };
+    return { title: `Simulation ${rule} : aurait arrêté ${target}${mem}`, body: `${why}Aucun processus touché (simulation).` };
   }
   switch (d.result) {
     case 'sigterm':
-      return { title: `Règle ${rule} : ${target} arrêté${mem}`, body: `SIGTERM envoyé ; SIGKILL 5 s plus tard s'il est toujours là.` };
+      return { title: `Règle ${rule} : ${target} arrêté${mem}`, body: `${why}SIGTERM envoyé ; SIGKILL 5 s plus tard s'il est toujours là.` };
     case 'sigkill':
       return { title: `Règle ${rule} : ${target} forcé (SIGKILL)`, body: 'Toujours vivant 5 s après SIGTERM.' };
     case 'refused':

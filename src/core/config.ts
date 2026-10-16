@@ -8,7 +8,7 @@ import { inBounds, RECORDER_BOUNDS, type RecorderNumField } from './recorderBoun
 import { isCategory } from './classify/categories';
 import { validateAlerts } from './alerts';
 import { validateEarlyoomReminder } from './earlyoomSetup';
-import { validateRulesDetailed } from './rules/config';
+import { RULES_OFF, validateRulesDetailed } from './rules/config';
 import { normalizeProjectRoots } from './disk/projects';
 import type { RuleIssue } from './rules/types';
 import type { Category, ClassifyConfig, Config, RecorderConfig, UiConfig } from './types';
@@ -134,6 +134,12 @@ export function saveConfig(dir: string, config: Config): void {
 }
 
 /** `ruleIssues` : présent seulement si des règles du fichier sont refusées (ignorées seules, fichier non modifié). */
+/**
+ * Config de repli quand config.json existe mais est illisible ou invalide : les défauts, règles automatiques éteintes
+ * (jamais l'anti-gel Actif sur un fichier que l'utilisateur avait peut-être réglé autrement).
+ */
+const fallbackConfig = (): Config => ({ ...structuredClone(DEFAULT_CONFIG), rules: structuredClone(RULES_OFF) });
+
 export function loadConfig(dir: string): { config: Config; warning: string | null; ruleIssues?: RuleIssue[] } {
   const file = join(dir, FILE);
   let text: string;
@@ -150,7 +156,7 @@ export function loadConfig(dir: string): { config: Config; warning: string | nul
         return { config: structuredClone(DEFAULT_CONFIG), warning: `Impossible d'écrire la configuration (${saveCode}) : valeurs par défaut utilisées` };
       }
     }
-    return { config: structuredClone(DEFAULT_CONFIG), warning: `config.json illisible (${code}) : valeurs par défaut utilisées, fichier non modifié` };
+    return { config: fallbackConfig(), warning: `config.json illisible (${code}) : valeurs par défaut utilisées (règles automatiques éteintes), fichier non modifié` };
   }
   let parsed: unknown;
   try {
@@ -162,10 +168,11 @@ export function loadConfig(dir: string): { config: Config; warning: string | nul
   if (checked) return checked.ruleIssues.length ? { config: checked.config, warning: null, ruleIssues: checked.ruleIssues } : { config: checked.config, warning: null };
   try {
     renameSync(file, `${file}.bak`);
-    saveConfig(dir, DEFAULT_CONFIG);
-    return { config: structuredClone(DEFAULT_CONFIG), warning: 'config.json invalide : sauvegardé en config.json.bak, valeurs par défaut restaurées' };
+    const fallback = fallbackConfig();
+    saveConfig(dir, fallback);
+    return { config: fallback, warning: 'config.json invalide : sauvegardé en config.json.bak, valeurs par défaut restaurées (règles automatiques éteintes)' };
   } catch (e) {
     const errCode = (e as NodeJS.ErrnoException).code;
-    return { config: structuredClone(DEFAULT_CONFIG), warning: `Impossible d'écrire la configuration (${errCode}) : valeurs par défaut utilisées` };
+    return { config: fallbackConfig(), warning: `Impossible d'écrire la configuration (${errCode}) : valeurs par défaut utilisées` };
   }
 }

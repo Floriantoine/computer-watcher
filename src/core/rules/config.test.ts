@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { checkRulesTransition, MAX_RULES, OPT_IN_APPS, RULE_TEMPLATES, validateRules, validateRulesDetailed } from './config';
+import { RECOMMENDED_RULES } from './recommended';
 import type { Rule, RulesConfig } from './types';
 
 const vitest: Rule = {
@@ -7,16 +8,18 @@ const vitest: Rule = {
   condition: { kind: 'memory', target: 'instance', match: { by: 'name', value: 'vitest' }, overMB: 4096, forMin: 5 },
 };
 const withCond = (c: Record<string, unknown>, over: Record<string, unknown> = {}) => ({ ...vitest, ...over, condition: { ...vitest.condition, ...c } });
+const sys = { kind: 'system', memPercent: 95, memForSec: 15, cpuPercent: 95, cpuForSec: 60 };
 const one = (r: unknown) => validateRulesDetailed({ enabled: true, list: [r] });
 
 describe('validateRules', () => {
-  test('section absente → éteint, liste vide', () => {
+  test('section absente (config d’avant les règles) → éteint, liste vide ; les recommandées ne sont pas ajoutées', () => {
     expect(validateRules(undefined)).toEqual({ enabled: false, list: [] });
+    expect(RECOMMENDED_RULES).toHaveLength(3);
     expect(validateRulesDetailed(undefined).issues).toEqual([]);
   });
 
-  test('les 3 modèles sont valides, désactivés et en Simulation', () => {
-    expect(RULE_TEMPLATES).toHaveLength(3);
+  test('les 4 modèles sont valides, désactivés et en Simulation', () => {
+    expect(RULE_TEMPLATES).toHaveLength(4);
     const list = RULE_TEMPLATES.map((t, i) => ({ ...t, id: `t-${i}`, createdAt: 0 }));
     const r = validateRulesDetailed({ enabled: false, list });
     expect(r.issues).toEqual([]);
@@ -49,6 +52,17 @@ describe('validateRules', () => {
     ['appli non autorisée (claude-desktop)', { ...vitest, condition: { kind: 'forecast', underMin: 3, includeApps: ['claude-desktop'] } }, /applis/],
     ['appli non autorisée (electron)', { ...vitest, condition: { kind: 'forecast', underMin: 3, includeApps: ['electron'] } }, /applis/],
     ['createdAt négatif', { ...vitest, createdAt: -1 }, /création/],
+    ['système memPercent: 69', { ...vitest, condition: { ...sys, memPercent: 69 } }, /seuil mémoire/],
+    ['système memPercent: 100', { ...vitest, condition: { ...sys, memPercent: 100 } }, /seuil mémoire/],
+    ['système memPercent non entier', { ...vitest, condition: { ...sys, memPercent: 95.5 } }, /seuil mémoire/],
+    ['système memPercent texte', { ...vitest, condition: { ...sys, memPercent: '95' } }, /seuil mémoire/],
+    ['système memForSec: 4', { ...vitest, condition: { ...sys, memForSec: 4 } }, /durée mémoire/],
+    ['système memForSec: 601', { ...vitest, condition: { ...sys, memForSec: 601 } }, /durée mémoire/],
+    ['système cpuPercent: 101', { ...vitest, condition: { ...sys, cpuPercent: 101 } }, /seuil CPU/],
+    ['système cpuPercent: NaN', { ...vitest, condition: { ...sys, cpuPercent: Number.NaN } }, /seuil CPU/],
+    ['système cpuForSec: 9', { ...vitest, condition: { ...sys, cpuForSec: 9 } }, /durée CPU/],
+    ['système cpuForSec: Infinity', { ...vitest, condition: { ...sys, cpuForSec: Number.POSITIVE_INFINITY } }, /durée CPU/],
+    ['système champ absent', { ...vitest, condition: { kind: 'system', memPercent: 95, memForSec: 15, cpuPercent: 95 } }, /durée CPU/],
   ])('refusée : %s (seule cette règle, avec son erreur)', (_label, bad, msg) => {
     const ok = { ...vitest, id: 'r-ok' };
     const r = validateRulesDetailed({ enabled: true, list: [bad, ok] });
@@ -77,6 +91,12 @@ describe('validateRules', () => {
     const r = validateRulesDetailed({ enabled: true, list: [vitest, { ...vitest, name: 'copie' }] });
     expect(r.rules.list).toEqual([vitest]);
     expect(r.issues[0]).toMatchObject({ index: 1, error: 'identifiant en double' });
+  });
+
+  test('condition système valide : reconstruite champ par champ (champ inconnu non recopié), bornes incluses', () => {
+    const r = one({ ...vitest, condition: { ...sys, pids: [1], memPercent: 70, cpuPercent: 100, memForSec: 600, cpuForSec: 10 } });
+    expect(r.issues).toEqual([]);
+    expect(r.rules.list[0]!.condition).toEqual({ kind: 'system', memPercent: 70, memForSec: 600, cpuPercent: 100, cpuForSec: 10 });
   });
 
   test("champ inconnu (action: 'rm') ignoré, non recopié", () => {

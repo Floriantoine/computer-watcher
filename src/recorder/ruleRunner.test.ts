@@ -49,6 +49,20 @@ function setup(o: { procs?: ProcSample[][]; kill?: KillFn } = {}) {
 }
 
 describe('Simulation', () => {
+  test('anti-gel en Simulation : aucun signal, aucune relecture de /proc ; événement avec la cible et le déclencheur', () => {
+    const s = setup({ kill: () => { throw new Error('kill appelé en simulation'); } });
+    const d: RuleDecision = {
+      ruleId: 'rec-antigel', ruleName: 'Mémoire ou CPU > 95 % : tuer les tests', mode: 'simulate', outcome: 'fire', revision: 'rev',
+      target: target({ label: 'tsc (demo)' }), trigger: 'mémoire 97 % depuis 15 s',
+      condition: { kind: 'system', memPercent: 95, memForSec: 15, cpuPercent: 95, cpuForSec: 60 },
+    };
+    s.runner.run([d]);
+    expect(s.kill).not.toHaveBeenCalled();
+    expect(s.readProcs).not.toHaveBeenCalled();
+    expect(s.timers).toEqual([]);
+    expect(s.events()).toEqual([expect.objectContaining({ type: 'rule_dry_run', ruleId: 'rec-antigel', target: 'tsc (demo)', pids: [700], result: 'dry_run', trigger: 'mémoire 97 % depuis 15 s' })]);
+  });
+
   test('50 décisions fire/simulate aléatoires → kill et readProcs jamais appelés, 50 événements rule_dry_run', () => {
     const s = setup({ kill: () => { throw new Error('kill appelé en simulation'); } });
     let seed = 42;

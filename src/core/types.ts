@@ -36,6 +36,8 @@ export interface ProcInfo extends ProcSample {
 export interface SystemInfo {
   memTotalKB: number;
   memAvailableKB: number;
+  /** false : ligne MemAvailable absente de /proc/meminfo (memAvailableKB vaut alors 0, inconnu) */
+  memAvailableKnown?: boolean;
   swapTotalKB: number;
   swapFreeKB: number;
   load1: number;

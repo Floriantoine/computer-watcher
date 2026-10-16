@@ -15,7 +15,13 @@ export type RuleCondition =
    * (c) la prévision ② annonce l'épuisement dans moins de `underMin` : le plus gros groupe qui grossit. Les groupes
    * d'applis (navigateur, éditeur…) ne sont visés que si leur nom est dans `includeApps` (choix explicite).
    */
-  | { kind: 'forecast'; underMin: number; includeApps: string[] };
+  | { kind: 'forecast'; underMin: number; includeApps: string[] }
+  /**
+   * (d) anti-gel : la RAM utilisée (d'après MemAvailable) ≥ `memPercent` pendant `memForSec`, OU le CPU total ≥
+   * `cpuPercent` pendant `cpuForSec`. Cible : la plus grosse « vérification » (instance de catégorie Test, ou `tsc` /
+   * `eslint` reconnus à leur ligne de commande), une à la fois.
+   */
+  | { kind: 'system'; memPercent: number; memForSec: number; cpuPercent: number; cpuForSec: number };
 
 export interface Rule {
   id: string;
