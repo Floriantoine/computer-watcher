@@ -138,7 +138,10 @@ try {
   const env = {
     ...process.env, HOME: home, XDG_CONFIG_HOME: cfg, XDG_DATA_HOME: data, XDG_CACHE_HOME: cache, XDG_STATE_HOME: join(base, 'state'),
     PROC_WATCH_NO_RECORDER_SYNC: '1', PROC_WATCH_DISK_ROOT_FAKE: '1', PROC_WATCH_DISK_DOCKER_FAKE: '1',
+    // earlyoom simulé (dossier vide : rien à proposer) : aucun pop-up earlyoom selon l'état réel de la machine
+    PROC_WATCH_EARLYOOM_FAKE: join(base, 'earlyoom'),
   };
+  mkdirSync(env.PROC_WATCH_EARLYOOM_FAKE);
   app = await electron.launch({ args: ['.'], env });
   const win = await app.firstWindow();
   await win.setViewportSize({ width: 1280, height: 900 }).catch(() => {});

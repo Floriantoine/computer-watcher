@@ -3,7 +3,8 @@
 //
 // Rien de réel n'est touché : config et données temporaires sous ~/.cache (XDG_CONFIG_HOME, XDG_DATA_HOME : jamais la vraie
 // metrics.db), service systemd laissé tranquille (PROC_WATCH_NO_RECORDER_SYNC), racine /tmp factice sous ~/.cache/pw-…
-// (PROC_WATCH_TMP_ROOT, avec son fichier témoin). Aucune suppression n'est demandée : aucun bouton « Supprimer » ni
+// (PROC_WATCH_TMP_ROOT, avec son fichier témoin), earlyoom simulé (PROC_WATCH_EARLYOOM_FAKE : aucun pop-up selon la machine).
+// Aucune suppression n'est demandée : aucun bouton « Supprimer » ni
 // « Vider la quarantaine » n'est cliqué. L'alerte tmpfs est simulée en remplaçant, dans le main, les gestionnaires IPC
 // de lecture des alertes. Captures seulement si TMP_PAGE_SHOTS désigne un dossier (hors du dépôt).
 import assert from 'node:assert/strict';
@@ -42,7 +43,10 @@ if (shots) mkdirSync(shots, { recursive: true });
 const shot = async (win, name) => shots && win.screenshot({ path: join(shots, `${name}.png`) });
 const shotOf = async (locator, name) => shots && locator.screenshot({ path: join(shots, `${name}.png`) });
 
-const env = { ...process.env, XDG_CONFIG_HOME: cfg, XDG_DATA_HOME: data, PROC_WATCH_NO_RECORDER_SYNC: '1', PROC_WATCH_TMP_ROOT: root };
+// earlyoom simulé (dossier vide : vu installé et actif, rien à proposer) : aucun pop-up earlyoom selon l'état réel de la machine
+const eoFake = join(base, 'earlyoom');
+mkdirSync(eoFake);
+const env = { ...process.env, XDG_CONFIG_HOME: cfg, XDG_DATA_HOME: data, PROC_WATCH_NO_RECORDER_SYNC: '1', PROC_WATCH_TMP_ROOT: root, PROC_WATCH_EARLYOOM_FAKE: eoFake };
 const app = await electron.launch({ args: ['.'], env });
 try {
   const win = await app.firstWindow();
