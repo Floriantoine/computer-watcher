@@ -6,7 +6,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeEach, describe, expect, test, vi } from 'vitest';
-import { EARLYOOM_LINE_PATTERN } from '../core/earlyoom';
+import { EARLYOOM_LINE_PATTERN, parseEarlyoomDefault } from '../core/earlyoom';
 import { PACKAGE_MANAGERS, type EarlyoomSetupMode } from '../core/earlyoomSetup';
 import type { Config, EarlyoomStatus } from '../core/types';
 import type { ExecFn } from './earlyoom';
@@ -525,8 +525,8 @@ describe('createEarlyoomSetup (IPC earlyoom:setup)', () => {
     const m = make();
     const r = await m.handler('install');
     expect(r.ok).toBe(true);
-    // nouvelle installation : les processus de test sont préférés par défaut
-    const fresh = VALID.replace(')$"', ')$ --prefer ^(vitest|node..vitest.|jest|pytest|playwright|cypress|mocha|karma|headless_shell|chrome-headless)$"');
+    // nouvelle installation : SIGTERM à 10 %, processus Node récents (MainThread), tsc, eslint et de test préférés par défaut
+    const fresh = VALID.replace('-m 8,5', '-m 10,5').replace(')$"', ')$ --prefer ^(MainThread|tsc|eslint|vitest|node..vitest.|jest|pytest|playwright|cypress|mocha|karma|headless_shell|chrome-headless)$"');
     expect(m.confirms).toEqual([{ mode: 'install', pm: 'pacman', line: fresh }]);
     expect(m.setups).toEqual([{ mode: 'install', line: fresh }]);
     expect(m.events).toEqual([{ ts: 42, type: 'earlyoom_setup', groupKey: null, detail: { mode: 'install', ok: true, code: 0 } }]);
@@ -557,6 +557,15 @@ describe('createEarlyoomSetup (IPC earlyoom:setup)', () => {
     await m.handler('activate');
     expect(m.confirms[0].pm).toBeNull();
     expect(m.setups[0].line).toBe(`EARLYOOM_ARGS="-m 10,4 -s 50,20 -r 0 --ignore ^(${BASE}|kitty)$ --prefer ^(node)$"`);
+  });
+  test('installé inactif, anciens défauts → activation ET mise à niveau en un seul mot de passe, exclusions du fichier gardées', async () => {
+    const old = `EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(${BASE}|fish|gnome-terminal-)$ --prefer ^(vitest|node..vitest.|jest|pytest|playwright|cypress|mocha|karma|headless_shell|chrome-headless)$"`;
+    const file = parseEarlyoomDefault(`${old}\n`);
+    const m = make({ st: status({ installed: true, active: 'inactive', enabled: 'disabled', file }), protectedList: ['kitty'] });
+    expect((await m.handler('activate')).ok).toBe(true);
+    expect(m.setups[0].line).toBe(
+      `EARLYOOM_ARGS="-m 10,5 -s 35,25 -r 0 --ignore ^(${BASE}|fish|gnome-terminal-|kitty)$ --prefer ^(MainThread|tsc|eslint|vitest|node..vitest.|jest|pytest|playwright|cypress|mocha|karma|headless_shell|chrome-headless)$"`,
+    );
   });
   test('aucun gestionnaire reconnu → message 20 sans mot de passe', async () => {
     const m = make({ pm: false });

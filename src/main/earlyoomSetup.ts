@@ -1,5 +1,5 @@
 // Installation et activation d'earlyoom depuis l'app (B8 bis) : un seul pkexec d'un script fixe.
-import { buildEarlyoomArgs, checkEarlyoomLine, EARLYOOM_LINE_PATTERN } from '../core/earlyoom';
+import { buildEarlyoomLine, checkEarlyoomLine, EARLYOOM_LINE_PATTERN, ignoreFromLine, mergeIgnore } from '../core/earlyoom';
 import {
   detectPackageManager, isSetupMode, OS_RELEASE, PACKAGE_MANAGERS, setupNeed, setupSettings, type EarlyoomSetupMode, type PackageManagerName,
 } from '../core/earlyoomSetup';
@@ -238,7 +238,9 @@ export function createEarlyoomSetup(deps: {
         }
         pm = c.pm;
       }
-      const built = buildEarlyoomArgs(setupSettings(st.file), deps.getProtected());
+      // Réglages du fichier (mis à niveau s'il le faut) ; exclusions du fichier gardées s'il respecte la politique, plus la liste protégée.
+      const kept = st.file ? ignoreFromLine(st.file.line) : null;
+      const built = buildEarlyoomLine(setupSettings(st.file), mergeIgnore(kept ?? [], deps.getProtected()));
       if (!built.ok) return { ok: false, reason: 'invalid', message: built.errors.join(' · ') };
       if (!(await deps.confirm({ mode: rawMode, pm, line: built.line }))) return { ok: false, reason: 'cancelled', message: "Annulé : rien n'a été modifié." };
       const o = await setup(rawMode, built.line);

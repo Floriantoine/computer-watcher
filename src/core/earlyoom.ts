@@ -48,11 +48,30 @@ export const EARLYOOM_LINE_PATTERN =
 
 export const EARLYOOM_LINE_RE = new RegExp(EARLYOOM_LINE_PATTERN);
 const TOKEN_RE = new RegExp(`^${TOKEN}$`);
+const IGNORE_TOKEN_RE = new RegExp(`^${IGNORE_TOKEN}$`);
+/** Découpage sans ambiguïté (temps linéaire) : listes --ignore et --prefer, sans parenthèse. */
+const SHAPE_RE = /^EARLYOOM_ARGS="-m [^ ]* -s [^ ]* -r 0 --ignore \^\(([^()]*)\)\$(?: --prefer \^\(([^()]*)\)\$)?"$/;
+
+/**
+ * Pré-contrôle jeton par jeton, avant EARLYOOM_LINE_RE : en JavaScript (moteur à retour arrière), le motif complet
+ * peut prendre un temps exponentiel sur une ligne presque conforme (chaque jeton `[…]*[…][…]*` se découpe de plusieurs
+ * façons ; ex. 10 exclusions suivies d'un antislash : plusieurs secondes). La ligne lue dans /etc/default/earlyoom n'est
+ * pas écrite par l'app : elle ne doit jamais bloquer le main. Accepte exactement ce que le motif accepte côté listes
+ * (base littérale en tête, jetons d'exclusion sans `.*`, jetons de préférence) ; le motif reste le juge final.
+ */
+function tokensConform(line: string): boolean {
+  const m = SHAPE_RE.exec(line);
+  if (!m) return false;
+  const ignore = m[1]!.split('|');
+  if (ignore.length < EARLYOOM_BASE_IGNORE.length || EARLYOOM_BASE_IGNORE.some((b, i) => ignore[i] !== b)) return false;
+  if (!ignore.slice(EARLYOOM_BASE_IGNORE.length).every((t) => IGNORE_TOKEN_RE.test(t))) return false;
+  return m[2] === undefined || m[2].split('|').every((t) => TOKEN_RE.test(t));
+}
 
 /** Politique appliquée aussi par le script root : longueur, forme et bornes (motif), puis SIGKILL ≤ SIGTERM. null si acceptée. */
 export function checkEarlyoomLine(line: string): string | null {
   if (line.length > EARLYOOM_MAX_LINE) return `Ligne trop longue (${line.length} caractères, ${EARLYOOM_MAX_LINE} au plus)`;
-  const m = EARLYOOM_LINE_RE.exec(line);
+  const m = tokensConform(line) ? EARLYOOM_LINE_RE.exec(line) : null;
   if (!m) return 'Ligne non conforme (forme, bornes, exclusions de base ou motifs)';
   if (Number(m[2]) > Number(m[1]) || Number(m[4]) > Number(m[3])) return 'Seuil SIGKILL supérieur au seuil SIGTERM';
   return null;
@@ -124,6 +143,17 @@ export function buildEarlyoomArgs(
   s: EarlyoomSettings,
   protectedList: readonly string[],
 ): { ok: true; line: string } | { ok: false; errors: string[] } {
+  return buildEarlyoomLine(s, ignoreList(protectedList));
+}
+
+/**
+ * Même chose avec la liste d'exclusions donnée telle quelle (base en tête, dans l'ordre : sinon le motif refuse la ligne).
+ * Sert à la mise à niveau, qui garde les exclusions déjà installées sans les réinterpréter.
+ */
+export function buildEarlyoomLine(
+  s: EarlyoomSettings,
+  ignore: readonly string[],
+): { ok: true; line: string } | { ok: false; errors: string[] } {
   const errors: string[] = [];
   checkInt('Mémoire (SIGTERM)', s.memTerm, 1, 50, errors);
   checkInt('Mémoire (SIGKILL)', s.memKill, 1, Number.isInteger(s.memTerm) ? Math.max(1, Math.min(50, s.memTerm)) : 50, errors);
@@ -134,7 +164,6 @@ export function buildEarlyoomArgs(
     const e = checkRegexPart(p);
     if (e) errors.push(`Préférence ${e}`);
   }
-  const ignore = ignoreList(protectedList);
   for (const p of ignore) {
     const e = checkRegexPart(p);
     if (e) errors.push(`Exclusion ${e}`);
@@ -145,6 +174,32 @@ export function buildEarlyoomArgs(
   const bad = checkEarlyoomLine(line);
   if (bad) return { ok: false, errors: [bad.startsWith('Ligne trop longue') ? `${bad} : raccourcir la liste protégée ou les préférences` : bad] };
   return { ok: true, line };
+}
+
+/**
+ * Exclusions (--ignore) d'une ligne conforme à la politique, base comprise, dans l'ordre ; null si la ligne ne l'est pas
+ * (écrite à la main, antislash, bornes) : on ne sait alors pas la reprendre sans risquer d'en perdre une.
+ */
+export function ignoreFromLine(line: string): string[] | null {
+  if (checkEarlyoomLine(line) !== null) return null;
+  // Ligne conforme : les jetons ne contiennent ni « ) » ni espace, le premier « )$ » ferme donc la liste.
+  const m = /--ignore \^\(([^)]*)\)\$/.exec(line);
+  return m ? m[1]!.split('|') : null;
+}
+
+/**
+ * Exclusions gardées puis celles de la liste protégée, sans doublon : base en tête, puis `kept` (hors base, tels quels :
+ * jamais tronqués ni retirés), puis les noms protégés qui manquent.
+ */
+export function mergeIgnore(kept: readonly string[], protectedList: readonly string[]): string[] {
+  const out = [...EARLYOOM_BASE_IGNORE];
+  const seen = new Set(out);
+  for (const t of [...kept, ...ignoreList(protectedList)]) {
+    if (seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+  }
+  return out;
 }
 
 /** Coupe aux « | » de premier niveau (hors parenthèses, hors caractère échappé). */

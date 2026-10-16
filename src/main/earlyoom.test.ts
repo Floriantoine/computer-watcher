@@ -7,7 +7,11 @@ import { join } from 'node:path';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import { DEFAULT_CONFIG } from '../core/defaults';
 import { buildEarlyoomArgs, checkEarlyoomLine, EARLYOOM_LINE_PATTERN, EARLYOOM_LINE_RE, parseEarlyoomDefault } from '../core/earlyoom';
-import { applyEarlyoom, applyExitMessage, createEarlyoomApplier, EARLYOOM_APPLY_SCRIPT, earlyoomStatus, parseIsEnabled, PKEXEC, type ExecFn } from './earlyoom';
+import { EARLYOOM_DEFAULT_SETTINGS } from '../core/earlyoomSetup';
+import type { ApplyResult, EarlyoomStatus } from '../core/types';
+import {
+  applyEarlyoom, applyExitMessage, createEarlyoomApplier, createEarlyoomUpgrade, EARLYOOM_APPLY_SCRIPT, earlyoomStatus, parseIsEnabled, PKEXEC, type EarlyoomLock, type ExecFn,
+} from './earlyoom';
 
 const cacheRoot = join(homedir(), '.cache');
 mkdirSync(cacheRoot, { recursive: true });
@@ -527,4 +531,108 @@ describe('parseIsEnabled', () => {
     ['enabled\n', 'enabled'], ['enabled-runtime', 'enabled'], ['disabled\n', 'disabled'], ['masked', 'masked'], ['masked-runtime', 'masked'],
     ['static', 'other'], ['not-found', 'other'], ['alias', 'other'], ['', 'unknown'], [undefined, 'unknown'], ['Failed to get unit file state: x', 'unknown'],
   ])('%j → %s', (out, want) => expect(parseIsEnabled(out)).toBe(want));
+});
+
+describe('createEarlyoomUpgrade (IPC earlyoom:upgrade, « Protection anti-gel à mettre à jour »)', () => {
+  const OLD_DEFAULT = `EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(${BASE}|fish|gnome-terminal-)$ --prefer ^(vitest|node..vitest.|jest|pytest|playwright|cypress|mocha|karma|headless_shell|chrome-headless)$"`;
+  const UPGRADED = `EARLYOOM_ARGS="-m 10,5 -s 35,25 -r 0 --ignore ^(${BASE}|fish|gnome-terminal-|kitty)$ --prefer ^(MainThread|tsc|eslint|vitest|node..vitest.|jest|pytest|playwright|cypress|mocha|karma|headless_shell|chrome-headless)$"`;
+  const status = (o: Partial<EarlyoomStatus> & { line?: string | null } = {}): EarlyoomStatus => {
+    const line = o.line === undefined ? OLD_DEFAULT : o.line;
+    return { installed: true, version: '1.8', active: 'active', enabled: 'enabled', file: line === null ? null : parseEarlyoomDefault(`${line}\n`), installHint: '', ...o };
+  };
+  const make = (o: { st?: EarlyoomStatus; confirm?: boolean; protectedList?: string[]; result?: ApplyResult; lock?: EarlyoomLock } = {}) => {
+    const confirms: { line: string; detail: string }[] = [];
+    const applied: string[] = [];
+    const handler = createEarlyoomUpgrade({
+      status: async () => o.st ?? status(),
+      getProtected: () => o.protectedList ?? ['kitty'],
+      confirm: async (c) => (confirms.push({ line: c.line, detail: c.detail }), o.confirm ?? true),
+      apply: async (line) => (applied.push(line), o.result ?? { ok: true, line }),
+      lock: o.lock,
+    });
+    return { handler, confirms, applied };
+  };
+  test('anciens défauts → confirmation avec la ligne exacte puis « Appliquer » (pkexec du script figé) avec cette ligne', async () => {
+    const m = make();
+    expect(await m.handler()).toEqual({ ok: true, line: UPGRADED });
+    expect(m.confirms.map((c) => c.line)).toEqual([UPGRADED]);
+    expect(m.confirms[0].detail).toContain('MainThread, tsc, eslint');
+    expect(m.confirms[0].detail).toContain('8 % → 10 %');
+    expect(m.confirms[0].detail).toContain(UPGRADED);
+    expect(m.applied).toEqual([UPGRADED]);
+    expect(checkEarlyoomLine(UPGRADED)).toBeNull();
+  });
+  test('la ligne mise à niveau passe le vrai script root (bash) et une seconde mise à niveau n’a plus rien à faire', async () => {
+    const r = runScript({ arg: UPGRADED, existing: `${OLD_DEFAULT}\n` });
+    expect(r.code).toBe(0);
+    expect(r.read()).toBe(`${UPGRADED}\n`);
+    const m = make({ st: status({ line: UPGRADED }) });
+    expect(await m.handler()).toMatchObject({ ok: false, reason: 'stale' });
+    expect(m.confirms).toEqual([]);
+  });
+  test('nouvelle ligne par défaut (MainThread, tsc, eslint ; 10,5) : acceptée par le vrai bash ([[ =~ ]] sous 4 locales) et par le script', () => {
+    const b = buildEarlyoomArgs(EARLYOOM_DEFAULT_SETTINGS, DEFAULT_CONFIG.protected);
+    if (!b.ok) throw new Error(b.errors.join());
+    expect(b.line).toContain('-m 10,5 ');
+    expect(b.line).toContain('--prefer ^(MainThread|tsc|eslint|vitest|');
+    for (const line of [b.line, UPGRADED]) {
+      for (const lang of ['C', 'C.UTF-8', 'fr_FR.UTF-8', 'en_US.UTF-8']) {
+        const r = spawnSync('/usr/bin/bash', ['-c', '[[ $1 =~ $2 ]]', 'x', line, EARLYOOM_LINE_PATTERN], { env: { PATH: '/usr/bin', LANG: lang, LC_ALL: lang } });
+        expect({ line, lang, ok: r.status === 0 }).toEqual({ line, lang, ok: true });
+      }
+      expect(EARLYOOM_LINE_RE.test(line)).toBe(true);
+      newDir();
+      expect(runScript({ arg: line, existing: OLD }).code).toBe(0);
+    }
+  });
+  test('liste protégée vidée entre-temps → aucune exclusion du fichier retirée', async () => {
+    const m = make({ protectedList: [] });
+    await m.handler();
+    expect(m.applied[0]).toContain(`--ignore ^(${BASE}|fish|gnome-terminal-)$`);
+  });
+  test.each([
+    ['config déjà à jour', status({ line: UPGRADED })],
+    ['config illisible', status({ line: null })],
+    ['ligne écrite à la main', status({ line: 'EARLYOOM_ARGS="-m 6 -s 30 -r 0"' })],
+    ['earlyoom masqué', status({ active: 'inactive', enabled: 'masked' })],
+    ['earlyoom inactif (c’est l’activation qui est proposée)', status({ active: 'inactive', enabled: 'disabled' })],
+    ['earlyoom absent', status({ installed: false, active: 'unknown', enabled: 'unknown' })],
+  ])('%s → stale, ni confirmation ni pkexec', async (_l, st) => {
+    const m = make({ st });
+    const r = await m.handler();
+    expect(r).toMatchObject({ ok: false, reason: 'stale' });
+    expect(m.confirms).toEqual([]);
+    expect(m.applied).toEqual([]);
+  });
+  test('confirmation refusée → cancelled, pas de pkexec', async () => {
+    const m = make({ confirm: false });
+    expect(await m.handler()).toEqual({ ok: false, reason: 'cancelled', message: "Annulé : rien n'a été modifié." });
+    expect(m.applied).toEqual([]);
+  });
+  test('verrou partagé tenu (« Appliquer » ou installation en cours) → refus, rien lancé', async () => {
+    const m = make({ lock: { held: true } });
+    expect(await m.handler()).toMatchObject({ ok: false, reason: 'failed' });
+    expect(m.confirms).toEqual([]);
+  });
+  test('verrou rendu après un échec du script', async () => {
+    const lock = { held: false };
+    const m = make({ lock, result: { ok: false, reason: 'failed', message: 'x' } });
+    expect((await m.handler()).ok).toBe(false);
+    expect(lock.held).toBe(false);
+  });
+  test('ligne trop longue après fusion → invalid, ni confirmation ni pkexec', async () => {
+    const toks: string[] = [];
+    const lineWith = () => `EARLYOOM_ARGS="-m 8,5 -s 35,25 -r 0 --ignore ^(${BASE}|${toks.join('|')})$"`;
+    while (lineWith().length < 4050) toks.push(`p${String(toks.length).padStart(12, '0')}`);
+    const m = make({ st: status({ line: lineWith() }), protectedList: [] });
+    expect(await m.handler()).toMatchObject({ ok: false, reason: 'invalid' });
+    expect(m.confirms).toEqual([]);
+  });
+  test('par défaut : applyEarlyoom, c’est-à-dire pkexec du script « Appliquer » inchangé (simulé)', async () => {
+    const calls: string[][] = [];
+    const run: ExecFn = async (cmd, args) => (calls.push([cmd, ...args]), { code: 0, stdout: '', stderr: '' });
+    const handler = createEarlyoomUpgrade({ status: async () => status(), getProtected: () => ['kitty'], confirm: async () => true, run });
+    expect((await handler()).ok).toBe(true);
+    expect(calls).toEqual([[PKEXEC, '/usr/bin/bash', '-c', EARLYOOM_APPLY_SCRIPT, 'computer-watcher-earlyoom', UPGRADED]]);
+  });
 });

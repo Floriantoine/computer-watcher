@@ -19,8 +19,8 @@ describe('formFromStatus', () => {
       converted: [], line: 'x',
     }))).toEqual({ memTerm: '6', memKill: '3', swapTerm: '30', swapKill: '15', prefer: 'chrome\nnode..vitest.' });
   });
-  test('sans fichier → défauts 8,5 / 35,25, processus de test préférés', () => {
-    expect(formFromStatus(status(null))).toEqual({ memTerm: '8', memKill: '5', swapTerm: '35', swapKill: '25', prefer: EARLYOOM_TEST_PREFER.join('\n') });
+  test('sans fichier → défauts 10,5 / 35,25, processus de test préférés', () => {
+    expect(formFromStatus(status(null))).toEqual({ memTerm: '10', memKill: '5', swapTerm: '35', swapKill: '25', prefer: EARLYOOM_TEST_PREFER.join('\n') });
   });
 });
 

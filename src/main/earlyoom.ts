@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import { cleanEnv } from '../core/childEnv';
 import { existsSync, readFileSync } from 'node:fs';
 import { buildEarlyoomArgs, checkEarlyoomLine, EARLYOOM_LINE_PATTERN, EARLYOOM_MAX_LINE, isEarlyoomSettings, parseEarlyoomDefault } from '../core/earlyoom';
+import { upgradeLine, upgradeNeed, type EarlyoomUpgrade } from '../core/earlyoomSetup';
 import type { ApplyResult, EarlyoomStatus } from '../core/types';
 
 export type ExecFn = (cmd: string, args: string[], opts?: { timeout?: number }) => Promise<{ code: number; stdout: string; stderr: string; timedOut?: boolean }>;
@@ -207,6 +208,62 @@ export function createEarlyoomApplier(
     lock.held = true;
     try {
       if (!(await confirm(built.line))) return { ok: false, reason: 'cancelled', message: "Annulé : rien n'a été modifié." };
+      return await apply(built.line);
+    } finally {
+      lock.held = false;
+    }
+  };
+}
+
+/** Ce que change la mise à niveau, en clair (confirmation native, carte de Réglages, pop-up). */
+export function upgradeChanges(u: EarlyoomUpgrade): string[] {
+  return [
+    ...(u.addedPrefer.length ? [`Tués en premier, en plus des vôtres : ${u.addedPrefer.join(', ')}.`] : []),
+    ...(u.memTerm ? [`SIGTERM dès ${u.memTerm.to} % de mémoire disponible (${u.memTerm.from} % → ${u.memTerm.to} %) : earlyoom réagit avant le gel.`] : []),
+    'Aucune exclusion retirée (terminaux, Claude, session, liste protégée) ; vos autres réglages restent.',
+  ];
+}
+
+/** Texte de la confirmation native de la mise à niveau : changements, ligne exacte, sauvegarde et restauration. */
+export function upgradeConfirmation(u: EarlyoomUpgrade, line: string): { message: string; detail: string; confirm: string } {
+  return {
+    message: 'Mettre à jour la protection anti-gel (earlyoom) ?',
+    detail: [
+      upgradeChanges(u).join('\n'),
+      `Ligne écrite dans ${EARLYOOM_TARGET} (l'ancien fichier est copié en .bak) :\n${line}`,
+      "earlyoom est redémarré ; s'il ne reste pas actif, l'ancien fichier est restauré. Le mot de passe administrateur est demandé une seule fois.",
+    ].join('\n\n'),
+    confirm: 'Mettre à jour',
+  };
+}
+
+/**
+ * Gestionnaire d'`earlyoom:upgrade` (« Protection anti-gel à mettre à jour ») : aucun argument du renderer. Le main relit
+ * l'état et /etc/default/earlyoom, fusionne (motifs recommandés ajoutés, SIGTERM monté à 10 s'il est plus bas, exclusions
+ * du fichier toutes gardées), demande confirmation avec la ligne exacte, puis le même pkexec que « Appliquer » (script figé).
+ */
+export function createEarlyoomUpgrade(deps: {
+  status: () => Promise<EarlyoomStatus>;
+  getProtected: () => readonly string[];
+  confirm: (c: { line: string; message: string; detail: string; confirm: string }) => Promise<boolean>;
+  apply?: (line: string) => Promise<ApplyResult>;
+  /** Pour les tests : exécution simulée de pkexec. */
+  run?: ExecFn;
+  /** Verrou partagé avec « Appliquer » et l'installation. */
+  lock?: EarlyoomLock;
+}): () => Promise<ApplyResult> {
+  const apply = deps.apply ?? ((line: string) => applyEarlyoom(line, { run: deps.run }));
+  const lock = deps.lock ?? { held: false };
+  return async () => {
+    if (lock.held) return { ok: false, reason: 'failed', message: 'Une installation ou une application est déjà en cours.' };
+    lock.held = true;
+    try {
+      const st = await deps.status();
+      if (!upgradeNeed(st)) return { ok: false, reason: 'stale', message: "Rien à mettre à jour : la configuration d'earlyoom a changé entre-temps. Rien n'a été modifié." };
+      const built = upgradeLine(st.file, deps.getProtected());
+      if (!built.ok) return { ok: false, reason: 'invalid', message: `${built.errors.join(' · ')} : rien n'a été modifié.` };
+      const c = upgradeConfirmation(built.upgrade, built.line);
+      if (!(await deps.confirm({ line: built.line, ...c }))) return { ok: false, reason: 'cancelled', message: "Annulé : rien n'a été modifié." };
       return await apply(built.line);
     } finally {
       lock.held = false;
