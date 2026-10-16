@@ -1,5 +1,6 @@
 // src/core/rules/engine.ts — moteur des règles automatiques (⑥). Pur : aucun effet de bord hors `state`, aucune
 // horloge (instant fourni), aucun accès à /proc ni à la base (fonctions `inactive` et `isProtected` injectées).
+import { checkCommand, matchCommand } from '../classify/rules';
 import { HOLD_MS, MIN_DECLINING, type Forecast } from '../forecast/forecast';
 import { flattenGroup, type Classification } from '../snapshot';
 import type { Group, KillTarget, ProcInfo } from '../types';
@@ -13,6 +14,15 @@ export const INACTIVE_CHECK_MS = 60_000;
 export const QUOTA_PAUSE_MS = 3600_000;
 /** (c) : seuls les groupes qui ont grossi d'au moins 100 Mio sur 5 min sont des coupables. */
 export const FORECAST_MIN_GROWTH_KB = 100 * 1024;
+/** (d) anti-gel, Active : délai minimal entre deux victimes (escalade SIGKILL à 5 s et mesure suivante comprises). */
+export const SYSTEM_SETTLE_MS = 15_000;
+/** (d) : victime toujours vivante après ce délai (signal refusé, processus bloqué) : écartée tant qu'elle vit, la suivante peut être visée. */
+export const SYSTEM_STUCK_MS = 60_000;
+/** (d) déclencheur mémoire : la victime pèse au moins 512 Mio et 5 % de la RAM (sinon la tuer ne libère rien d'utile). */
+export const SYSTEM_MIN_MEM_KB = 512 * 1024;
+export const SYSTEM_MIN_MEM_SHARE = 0.05;
+/** (d) déclencheur CPU : la victime occupe au moins 10 % de la machine (tous cœurs). */
+export const SYSTEM_MIN_CPU_SHARE = 10;
 const HOUR_MS = 3600_000;
 
 export interface RuleTarget {
@@ -53,11 +63,21 @@ export interface RuleState {
   lastGapWall: number | null;
   /** Début (monotone) de la condition de prévision tenue, observée sans trou. */
   forecastHeldSince: number | null;
+  /** (d) ruleId → début (monotone) du dépassement mémoire, et du dépassement CPU, observés sans trou. */
+  systemMemSince: Map<string, number>;
+  systemCpuSince: Map<string, number>;
+  /** (d) ruleId → victime en cours (clés `${pid}:${startTicks}`) et instant du déclenchement (Active seulement). */
+  systemPending: Map<string, { keys: string[]; at: number }>;
+  /** (d) ruleId → victimes restées vivantes après SYSTEM_STUCK_MS : plus visées tant qu'elles vivent. */
+  systemStuck: Map<string, Set<string>>;
+  /** (d) règles dont la condition est tenue sans aucune vérification à arrêter (évaluation courante). */
+  systemNoTarget: Set<string>;
 }
 
 export const emptyRuleState = (): RuleState => ({
   overSince: new Map(), lastFire: new Map(), actions: [], dryRuns: [], lastInactiveCheck: new Map(), pausedUntil: new Map(), lastGuard: new Map(),
   lastEval: null, lastGapWall: null, forecastHeldSince: null,
+  systemMemSince: new Map(), systemCpuSince: new Map(), systemPending: new Map(), systemStuck: new Map(), systemNoTarget: new Set(),
 });
 
 /**
@@ -82,6 +102,15 @@ export interface EvalInput {
   rules: readonly Rule[];
   groups: readonly Group[];
   classification: Classification | null;
+  /**
+   * (d) Mesures du tick : RAM utilisée en % (d'après MemAvailable) et CPU total en % (toutes les cœurs = 100 %).
+   * null, absente ou non finie → la condition n'est jamais tenue (échec fermé).
+   */
+  system?: {
+    memUsedPercent: number | null; cpuPercent: number | null;
+    /** MemTotal (Kio) et nombre de cœurs : seuils de contribution de la victime ; absents → seuil mémoire fixe, CPU jamais. */
+    memTotalKB?: number | null; cpuCount?: number | null;
+  } | null;
   /** Prévision ② et décision de stepAlert : `held` = condition d'alerte tenue (≥ 30 s), sans l'anti-répétition. */
   forecast: { forecast: Forecast; held: boolean } | null;
   /** `${pid}:${startTicks}` → hausse mémoire sur 5 min (ProcGrowth) ; null sans 5 min observées. */
@@ -97,10 +126,14 @@ export interface EvalInput {
 /** `culprit-protected` : (c) le plus gros responsable de la croissance est intouchable, rien n'est visé. */
 export type SkipReason = 'cooldown' | 'hourly-quota' | 'guard' | 'culprit-protected';
 export type RuleDecision =
-  | { ruleId: string; ruleName: string; mode: RuleMode; outcome: 'fire'; target: RuleTarget; condition: RuleCondition; revision: string }
+  | {
+    ruleId: string; ruleName: string; mode: RuleMode; outcome: 'fire'; target: RuleTarget; condition: RuleCondition; revision: string;
+    /** (d) mesure qui a déclenché (« mémoire 97 % depuis 15 s »), pour l'historique. */
+    trigger?: string;
+  }
   | { ruleId: string; ruleName: string; mode: RuleMode; outcome: 'skip'; reason: SkipReason; target: RuleTarget | null };
 
-/** Règle activée de type instance, catégorie ou inactive : le service doit classer les groupes. */
+/** Règle activée de type instance, catégorie, inactive ou prévision : le service doit classer les groupes (pas l'anti-gel, qui lit les lignes de commande). */
 export function needsClassification(rules: readonly Rule[], enabled = true): boolean {
   if (!enabled) return false;
   return rules.some((r) => r.enabled && (r.condition.kind === 'inactive' || r.condition.kind === 'forecast' ||
@@ -130,6 +163,8 @@ export function evaluateRules(input: EvalInput, state: RuleState): RuleDecision[
   if (last && (now < last.mono || now - last.mono > maxGap || wall < last.wall || Math.abs((wall - last.wall) - (now - last.mono)) > maxSkew)) {
     state.overSince.clear();
     state.forecastHeldSince = null;
+    state.systemMemSince.clear();
+    state.systemCpuSince.clear();
     state.lastGapWall = Math.max(wall, last.wall);
   }
   state.lastEval = { mono: now, wall };
@@ -137,6 +172,10 @@ export function evaluateRules(input: EvalInput, state: RuleState): RuleDecision[
   // état des règles retirées ou désactivées
   const live = new Set(enabledRules.map((r) => r.id));
   for (const k of state.overSince.keys()) if (!live.has(k.slice(0, k.indexOf('|')))) state.overSince.delete(k);
+  for (const m of [state.systemMemSince, state.systemCpuSince, state.systemPending, state.systemStuck]) {
+    for (const k of m.keys()) if (!live.has(k)) m.delete(k);
+  }
+  state.systemNoTarget.clear();
   // fenêtre glissante d'1 h : un instant dans le futur reste compté (échec fermé)
   const cut = now - HOUR_MS;
   state.actions = state.actions.filter((t) => t > cut);
@@ -157,7 +196,12 @@ export function evaluateRules(input: EvalInput, state: RuleState): RuleDecision[
     }
     return byPid;
   };
-  const guard = (): GuardContext => ({ byPid: procs(), currentUid: input.currentUid, selfPid: input.selfPid, appRoot: input.appRoot, isProtected: input.isProtected });
+  // pids du groupe Claude (outils détachés compris) : refusés comme dans le ruleRunner, avant tout déclenchement
+  let claudePids: Set<number> | null = null;
+  const guard = (): GuardContext => ({
+    byPid: procs(), currentUid: input.currentUid, selfPid: input.selfPid, appRoot: input.appRoot, isProtected: input.isProtected,
+    claudePids: (claudePids ??= new Set(input.groups.filter((g) => g.kind === 'claude').flatMap((g) => flattenGroup(g).map((p) => p.pid)))),
+  });
 
   const toTarget = (c: Candidate): RuleTarget => {
     const { kept, refused } = filterTargets(c.pids, guard());
@@ -181,7 +225,17 @@ export function evaluateRules(input: EvalInput, state: RuleState): RuleDecision[
       state.pausedUntil.delete(rule.id);
     }
     const ready = candidatesFor(rule, input, groups, state);
-    if (ready.length === 0) continue;
+    if (ready.length === 0) {
+      // (d) condition tenue, aucune vérification à arrêter : signalé au plus une fois par RULE_COOLDOWN_MS
+      if (state.systemNoTarget.has(rule.id)) {
+        const lastGuard = state.lastGuard.get(rule.id);
+        if (lastGuard === undefined || now - lastGuard >= RULE_COOLDOWN_MS) {
+          state.lastGuard.set(rule.id, now);
+          out.push({ ruleId: rule.id, ruleName: rule.name, mode: rule.mode, outcome: 'skip', reason: 'guard', target: null });
+        }
+      }
+      continue;
+    }
     // (c) : si le principal responsable de la croissance (processus ou instance) est refusé (Claude, protégé, jamais
     // tuer), arrêter un plus petit ne libérerait pas assez : rien, signalé au plus une fois par RULE_COOLDOWN_MS.
     if (rule.condition.kind === 'forecast' && topGrowerRefused(input, procs(), guard())) {
@@ -214,8 +268,10 @@ export function evaluateRules(input: EvalInput, state: RuleState): RuleDecision[
       continue;
     }
     const lastFire = state.lastFire.get(rule.id);
+    // (d) Active : pas de cooldown fixe, mais une victime à la fois (attente de sa mort, voir candidatesFor)
+    const oneAtATime = rule.condition.kind === 'system' && rule.mode === 'active';
     // un dernier déclenchement « dans le futur » compte comme maintenant : cooldown
-    if (lastFire !== undefined && now - lastFire < RULE_COOLDOWN_MS) {
+    if (!oneAtATime && lastFire !== undefined && now - lastFire < RULE_COOLDOWN_MS) {
       out.push({ ...base, outcome: 'skip', reason: 'cooldown', target });
       continue;
     }
@@ -228,7 +284,9 @@ export function evaluateRules(input: EvalInput, state: RuleState): RuleDecision[
     used.push(now);
     state.lastFire.set(rule.id, now);
     state.overSince.delete(`${rule.id}|${target.key}`);
-    out.push({ ...base, outcome: 'fire', target, condition: rule.condition, revision: ruleRevision(rule) });
+    if (oneAtATime) state.systemPending.set(rule.id, { keys: target.targets.map((t) => `${t.pid}:${t.startTicks}`), at: now });
+    const trigger = rule.condition.kind === 'system' ? systemTrigger(rule.condition, rule.id, input, state, now) : undefined;
+    out.push({ ...base, outcome: 'fire', target, condition: rule.condition, revision: ruleRevision(rule), ...(trigger ? { trigger } : {}) });
   }
   return out;
 }
@@ -261,6 +319,34 @@ function topGrowerRefused(input: EvalInput, byPid: ReadonlyMap<number, ProcInfo>
   if (topPid !== null && topKB > 0 && filterTargets([topPid], guard).refused.size > 0) return true;
   if (topInst && instKB > 0 && filterTargets(topInst, guard).refused.size > 0) return true;
   return false;
+}
+
+/**
+ * (d) RAM utilisée en %, d'après MemAvailable (comme `free`) ; null si /proc/meminfo est incohérent (ligne
+ * MemAvailable absente, total nul ou absent, disponible négatif ou non fini).
+ */
+export function memUsedPercent(s: { memTotalKB: number; memAvailableKB: number; memAvailableKnown?: boolean }): number | null {
+  if (s.memAvailableKnown === false) return null;
+  const total = s.memTotalKB;
+  const avail = s.memAvailableKB;
+  if (!(Number.isFinite(total) && total > 0) || !(Number.isFinite(avail) && avail >= 0)) return null;
+  return ((total - Math.min(avail, total)) / total) * 100;
+}
+
+/** Pourcentage mesuré utilisable (fini) ; sinon null (mesure absente ou illisible). */
+const pct = (v: number | null | undefined): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
+/** (d) « mémoire 97 % depuis 15 s » ou « CPU 99 % depuis 60 s » : la mesure tenue (la mémoire d'abord). */
+function systemTrigger(c: Extract<RuleCondition, { kind: 'system' }>, ruleId: string, input: EvalInput, state: RuleState, now: number): string | undefined {
+  const held = (v: number | null, since: number | undefined, forSec: number) => v !== null && since !== undefined && now - since >= forSec * 1000;
+  const mem = pct(input.system?.memUsedPercent);
+  const cpu = pct(input.system?.cpuPercent);
+  const memSince = state.systemMemSince.get(ruleId);
+  const cpuSince = state.systemCpuSince.get(ruleId);
+  const sec = (since: number) => Math.round((now - since) / 1000);
+  if (held(mem, memSince, c.memForSec)) return `mémoire ${Math.round(mem!)} % depuis ${sec(memSince!)} s`;
+  if (held(cpu, cpuSince, c.cpuForSec)) return `CPU ${Math.round(cpu!)} % depuis ${sec(cpuSince!)} s`;
+  return undefined;
 }
 
 const eqName = (value: string) => {
@@ -373,6 +459,113 @@ function candidatesFor(rule: Rule, input: EvalInput, groups: readonly Group[], s
           out.push({ key: i.key, kind: 'instance', group: g, label: g.kind === 'project' ? `${i.label} (${g.label})` : i.label, pids: i.pids, sizeKB: mem(i), growthKB: kb, attributable: true });
         }
       }
+      return out;
+    }
+    case 'system': {
+      // tenue : posée à la première mesure au-dessus, effacée dès une mesure en dessous, absente ou illisible
+      const track = (m: Map<string, number>, v: number | null, threshold: number, forSec: number): boolean => {
+        if (v === null || !(v >= threshold)) {
+          m.delete(rule.id);
+          return false;
+        }
+        let since = m.get(rule.id);
+        if (since === undefined || since > now) {
+          since = now;
+          m.set(rule.id, now);
+        }
+        return now - since >= forSec * 1000;
+      };
+      const memHeld = track(state.systemMemSince, pct(input.system?.memUsedPercent), c.memPercent, c.memForSec);
+      const cpuHeld = track(state.systemCpuSince, pct(input.system?.cpuPercent), c.cpuPercent, c.cpuForSec);
+      // processus vivants (pid + startTicks) : victime précédente encore là ?
+      const alive = new Set<string>();
+      for (const g of input.groups) for (const p of flattenGroup(g)) alive.add(`${p.pid}:${p.startTicks}`);
+      const stuck = state.systemStuck.get(rule.id);
+      if (stuck) {
+        for (const k of [...stuck]) if (!alive.has(k)) stuck.delete(k);
+        if (!stuck.size) state.systemStuck.delete(rule.id);
+      }
+      // une victime à la fois, toutes règles système confondues : une autre règle attend la sienne → rien
+      for (const id of state.systemPending.keys()) if (id !== rule.id) return [];
+      const pending = state.systemPending.get(rule.id);
+      if (pending) {
+        if (pending.at > now) pending.at = now;
+        const elapsed = now - pending.at;
+        const waiting = pending.keys.filter((k) => alive.has(k));
+        // une victime à la fois : stabilisation après le signal, puis attente de sa mort (bornée)
+        if (elapsed < SYSTEM_SETTLE_MS || (waiting.length && elapsed < SYSTEM_STUCK_MS)) return [];
+        if (waiting.length) {
+          const set = state.systemStuck.get(rule.id) ?? new Set<string>();
+          for (const k of waiting) set.add(k);
+          state.systemStuck.set(rule.id, set);
+        }
+        state.systemPending.delete(rule.id);
+      }
+      if (!(memHeld || cpuHeld)) return [];
+      const skip = state.systemStuck.get(rule.id) ?? new Set<string>();
+      // Tous les processus connus (hors Claude) : une vérification emmène ses descendants rangés ailleurs (workers
+      // Node au comm « MainThread », rangés dans leur propre groupe de commande).
+      const byPid = new Map<number, ProcInfo>();
+      const groupOf = new Map<number, Group>();
+      for (const g of groups) for (const p of flattenGroup(g)) {
+        byPid.set(p.pid, p);
+        groupOf.set(p.pid, g);
+      }
+      const children = new Map<number, number[]>();
+      for (const p of byPid.values()) if (p.ppid !== p.pid) children.set(p.ppid, [...(children.get(p.ppid) ?? []), p.pid]);
+      const subtree = (roots: readonly number[]): number[] => {
+        // parcours en profondeur, racines et enfants dans l'ordre (racine d'abord)
+        const seen = new Set<number>();
+        const stack = [...roots].reverse();
+        while (stack.length) {
+          const pid = stack.pop()!;
+          if (seen.has(pid) || !byPid.has(pid)) continue;
+          seen.add(pid);
+          stack.push(...[...(children.get(pid) ?? [])].reverse());
+        }
+        return [...seen].filter((pid) => !skip.has(`${pid}:${byPid.get(pid)!.startTicks}`));
+      };
+      const size = (pids: readonly number[]) => pids.reduce((s, pid) => s + mem(byPid.get(pid)!), 0);
+      const label = (l: string, g: Group | undefined) => (g?.kind === 'project' ? `${l} (${g.label})` : l);
+      // Cibles « vérifications », reconnues processus par processus à leur ligne de commande, comme le classement
+      // (jamais au comm « MainThread » de Node ≥ 24, jamais d'après la racine d'une instance ou d'un groupe) : lanceur de
+      // tests (vitest, jest, pytest, playwright test…) ou tsc (hors --watch) / eslint ; le plus haut seulement, avec ses
+      // descendants. Dans tous les groupes sauf Claude et « Autres » ; les garde-fous filtrent ensuite (Claude et ce
+      // qu'il a lancé, shells, protégés…).
+      const kinds = new Map<number, string>();
+      for (const p of byPid.values()) {
+        const m = matchCommand([p]);
+        const k = m?.category === 'test' ? m.label : checkCommand(p.name, p.cmdline);
+        if (k) kinds.set(p.pid, k);
+      }
+      // seuil de contribution : la victime doit peser dans la saturation (sinon, rien à arrêter)
+      const sys = input.system;
+      const totalKB = sys?.memTotalKB;
+      const minMemKB = Math.max(SYSTEM_MIN_MEM_KB, typeof totalKB === 'number' && Number.isFinite(totalKB) && totalKB > 0 ? totalKB * SYSTEM_MIN_MEM_SHARE : 0);
+      const ncpu = sys?.cpuCount;
+      const cpuShare = (pids: readonly number[]) =>
+        typeof ncpu === 'number' && Number.isFinite(ncpu) && ncpu >= 1
+          ? pids.reduce((s, pid) => s + (Number.isFinite(byPid.get(pid)!.cpuPercent) ? byPid.get(pid)!.cpuPercent : 0), 0) / ncpu
+          : 0;
+      const out: Candidate[] = [];
+      for (const [pid, k] of kinds) {
+        // la vérification la plus haute seulement (un eslint sous un autre est compris dans celui du dessus)
+        let nested = false;
+        const seen = new Set<number>([pid]);
+        for (let up = byPid.get(pid)!.ppid; byPid.has(up) && !seen.has(up); up = byPid.get(up)!.ppid) {
+          seen.add(up);
+          if (kinds.has(up)) nested = true;
+        }
+        if (nested) continue;
+        const pids = subtree([pid]);
+        if (!pids.length) continue;
+        const sizeKB = size(pids);
+        if (!((memHeld && sizeKB >= minMemKB) || (cpuHeld && cpuShare(pids) >= SYSTEM_MIN_CPU_SHARE))) continue;
+        const p = byPid.get(pid)!;
+        const g = groupOf.get(pid)!;
+        out.push({ key: `check:${p.pid}:${p.startTicks}`, kind: 'instance', group: g, label: label(k, g), pids, sizeKB });
+      }
+      if (!out.length) state.systemNoTarget.add(rule.id);
       return out;
     }
   }

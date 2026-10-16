@@ -48,3 +48,10 @@ button.primary svg, .rules-tpl > button svg { margin-right: 2px; }
   .rules-list li .rule-mode { grid-column: 2; justify-self: start; grid-row: 1; }
   .rules-list li .rule-text-col { grid-column: 1 / -1; }
 }
+/* bouton « Ajouter les règles recommandées » : au-dessus des boutons de la carte */
+.rules-recommended {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  margin-top: 10px; padding: 8px 10px; border: 1px dashed var(--border-2); border-radius: var(--r-md);
+}
+.rules-recommended .hint { margin: 0; flex: 1 1 260px; }
+.rules-recommended > button { display: inline-flex; align-items: center; gap: 6px; }

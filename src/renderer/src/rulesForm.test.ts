@@ -1,11 +1,13 @@
 import { describe, expect, test } from 'vitest';
 import { RULE_TEMPLATES, validateRulesDetailed } from '../../core/rules/config';
 import type { Rule } from '../../core/rules/types';
-import { formToRule, newRuleFrom, ruleSummary, ruleToForm, statsLabel, withRule, withoutRule, withRuleMode, type RuleForm } from './rulesForm';
+import { checkRulesTransition } from '../../core/rules/config';
+import { formToRule, newRuleFrom, ruleSummary, ruleToForm, statsLabel, withRecommended, withRule, withoutRule, withRuleMode, type RuleForm } from './rulesForm';
 
 const base = { id: 'r-a', createdAt: 5, enabled: true, mode: 'simulate' as const };
 const templates: Rule[] = RULE_TEMPLATES.map((t, i) => ({ ...t, id: `t-${i}`, createdAt: 0 }));
-const vitestForm = (): RuleForm => ruleToForm({ ...templates[0]!, ...base });
+const vitestRule: Rule = { ...templates[0]!, condition: { kind: 'memory', target: 'instance', match: { by: 'name', value: 'vitest' }, overMB: 4096, forMin: 5 } };
+const vitestForm = (): RuleForm => ruleToForm({ ...vitestRule, ...base });
 
 describe('ruleToForm / formToRule', () => {
   test.each(templates)('aller-retour : $name', (r) => {
@@ -39,6 +41,30 @@ describe('ruleToForm / formToRule', () => {
   });
 });
 
+describe('condition système (anti-gel)', () => {
+  const sysForm = (): RuleForm => ruleToForm({ ...templates[3]!, ...base });
+  test('formulaire : les 4 champs, valeurs par défaut', () => {
+    expect(sysForm()).toMatchObject({ kind: 'system', memPercent: '95', memForSec: '15', cpuPercent: '95', cpuForSec: '60' });
+    // une règle Mémoire passée en « Système » part des valeurs par défaut
+    expect(formToRule({ ...vitestForm(), kind: 'system' }, base).rule?.condition).toEqual({ kind: 'system', memPercent: 95, memForSec: 15, cpuPercent: 95, cpuForSec: 60 });
+  });
+  test('bornes : chaque champ hors bornes ou non entier → son erreur', () => {
+    const err = (patch: Partial<RuleForm>) => formToRule({ ...sysForm(), ...patch }, base).errors;
+    expect(err({ memPercent: '69' }).memPercent).toBe('Un entier entre 70 et 99');
+    expect(err({ memPercent: '100' }).memPercent).toBe('Un entier entre 70 et 99');
+    expect(err({ memForSec: '4' }).memForSec).toBe('Un entier entre 5 et 600');
+    expect(err({ cpuPercent: '95,5' }).cpuPercent).toBe('Un entier entre 70 et 100');
+    expect(err({ cpuForSec: '' }).cpuForSec).toBe('Un entier entre 10 et 600');
+    expect(err({ cpuForSec: '601' }).cpuForSec).toBe('Un entier entre 10 et 600');
+    expect(formToRule({ ...sysForm(), memPercent: '90', cpuForSec: '120' }, base).rule?.condition).toEqual({ kind: 'system', memPercent: 90, memForSec: 15, cpuPercent: 95, cpuForSec: 120 });
+  });
+  test('résumé : secondes ou minutes', () => {
+    expect(ruleSummary({ ...templates[3]!, condition: { kind: 'system', memPercent: 90, memForSec: 30, cpuPercent: 99, cpuForSec: 90 } })).toBe(
+      'Si la mémoire dépasse 90 % pendant 30 s ou le CPU 99 % pendant 90 s → arrêter la plus grosse vérification (tests, tsc, eslint), une à la fois',
+    );
+  });
+});
+
 describe('newRuleFrom', () => {
   test('mode simulate, désactivée, id unique, champs du modèle', () => {
     const ids = new Set(['r-' + (1000).toString(36)]);
@@ -55,12 +81,14 @@ describe('newRuleFrom', () => {
 });
 
 describe('ruleSummary', () => {
-  test('les 3 modèles (texte exact)', () => {
+  test('les 4 modèles (texte exact)', () => {
     expect(templates.map(ruleSummary)).toEqual([
-      'Si vitest dépasse 4 Go pendant 5 min → arrêter',
+      'Si une instance Tests dépasse 4 Go pendant 5 min → arrêter',
       'Si une instance Front ou Back de projet est inactive depuis 1 j → arrêter',
       "Si la mémoire doit s'épuiser dans moins de 3 min → arrêter le plus gros groupe qui grossit",
+      'Si la mémoire dépasse 95 % pendant 15 s ou le CPU 95 % pendant 1 min → arrêter la plus grosse vérification (tests, tsc, eslint), une à la fois',
     ]);
+    expect(ruleSummary(vitestRule)).toBe('Si vitest dépasse 4 Go pendant 5 min → arrêter');
   });
   test('groupe, catégorie, Mo, heures, applis incluses', () => {
     const mem = (c: object) => ruleSummary({ ...templates[0]!, condition: { ...(templates[0]!.condition as object), ...c } as Rule['condition'] });
@@ -99,5 +127,16 @@ describe('modifications de la config', () => {
     const changed = { ...templates[0]!, mode: 'active' as const, condition: { ...(templates[0]!.condition as object), overMB: 200 } as Rule['condition'] };
     expect(withRule(active, changed).rules.list[0].mode).toBe('simulate');
     expect(withRule(active, { ...templates[0]!, mode: 'active', name: 'autre nom' }).rules.list[0].mode).toBe('active');
+  });
+  test('withRecommended : ajoute les 3 recommandées manquantes, puis rien (idempotent) ; accepté par le main', () => {
+    const c = { version: 1, rules: { enabled: false, list: [templates[0]!] } } as never;
+    const once = withRecommended(c, 42);
+    expect(once.added).toBe(3);
+    expect(once.config.rules.list.map((r: Rule) => r.id)).toEqual(['t-0', 'rec-inactive-front-back', 'rec-test-memory', 'rec-antigel']);
+    expect(once.config.rules.enabled).toBe(false);
+    expect(checkRulesTransition((c as { rules: never }).rules, once.config.rules)).toBeNull();
+    const twice = withRecommended(once.config, 43);
+    expect(twice.added).toBe(0);
+    expect(twice.config.rules).toEqual(once.config.rules);
   });
 });

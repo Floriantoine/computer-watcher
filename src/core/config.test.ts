@@ -30,7 +30,9 @@ test('JSON corrompu → .bak, défauts, avertissement', () => {
   const dir = tmp();
   writeFileSync(join(dir, 'config.json'), '{ pas du json');
   const r = loadConfig(dir);
-  expect(r.config).toEqual(DEFAULT_CONFIG);
+  // jamais l'anti-gel Actif sur un fichier que l'utilisateur avait réglé : règles éteintes, aussi dans le fichier réécrit
+  expect(r.config).toEqual({ ...DEFAULT_CONFIG, rules: { enabled: false, list: [] } });
+  expect(JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')).rules).toEqual({ enabled: false, list: [] });
   expect(r.warning).toMatch(/config\.json\.bak/);
   expect(readFileSync(join(dir, 'config.json.bak'), 'utf8')).toBe('{ pas du json');
 });
@@ -47,7 +49,7 @@ test('fichier illisible → défauts et avertissement, sans écraser le fichier'
   writeFileSync(join(dir, 'config.json'), JSON.stringify(DEFAULT_CONFIG));
   chmodSync(join(dir, 'config.json'), 0o000);
   const r = loadConfig(dir);
-  expect(r.config).toEqual(DEFAULT_CONFIG);
+  expect(r.config).toEqual({ ...DEFAULT_CONFIG, rules: { enabled: false, list: [] } });
   expect(r.warning).toMatch(/illisible/);
   expect(existsSync(join(dir, 'config.json.bak'))).toBe(false);
 });
@@ -76,7 +78,7 @@ test('fichier invalide en dossier illisible → défauts et avertissement, sans 
   writeFileSync(join(dir, 'config.json'), '{ pas du json');
   chmodSync(dir, 0o500);
   const r = loadConfig(dir);
-  expect(r.config).toEqual(DEFAULT_CONFIG);
+  expect(r.config).toEqual({ ...DEFAULT_CONFIG, rules: { enabled: false, list: [] } });
   expect(r.warning).not.toBeNull();
   expect(r.warning).toMatch(/Impossible d'écrire/);
   chmodSync(dir, 0o755); // cleanup pour teardown
@@ -212,12 +214,13 @@ test('recorder.tmpfsAlertMB : 4000 Mo par défaut, ajouté si absent, bornes 100
 });
 
 describe('règles (⑥)', () => {
-  test('config v1 existante sans « rules » → valide, règles éteintes, liste vide', () => {
+  test('config v1 existante sans « rules » → valide, règles éteintes, liste vide (recommandées seulement à la création)', () => {
     const { rules: _r, ...old } = { ...DEFAULT_CONFIG, rules: undefined };
     const c = validateConfig(old);
     expect(c).not.toBeNull();
     expect(c!.rules).toEqual({ enabled: false, list: [] });
-    expect(DEFAULT_CONFIG.rules).toEqual({ enabled: false, list: [] });
+    expect(DEFAULT_CONFIG.rules.enabled).toBe(true);
+    expect(DEFAULT_CONFIG.rules.list.map((r) => r.id)).toEqual(['rec-inactive-front-back', 'rec-test-memory', 'rec-antigel']);
   });
 
   test('une règle invalide écrite à la main → seule cette règle ignorée, erreur visible, reste de la config gardé', () => {

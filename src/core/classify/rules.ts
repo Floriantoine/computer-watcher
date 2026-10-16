@@ -83,6 +83,19 @@ export function isMcpServer(name: string, cmdline: string): boolean {
   return pkgs !== null && pkgs.some((p) => MCP_PACKAGE.test(stripVersion(p)));
 }
 
+/**
+ * Vérification ponctuelle visée par la règle anti-gel : `tsc` (hors `--watch`) ou `eslint`, reconnus au programme
+ * significatif de la ligne de commande comme le classement (jamais au comm, `MainThread` pour Node). Jamais un shell
+ * ou un lanceur qui les a en argument.
+ */
+export function checkCommand(name: string, cmdline: string): 'tsc' | 'eslint' | null {
+  if (!cmdline.trim()) return null;
+  const c = ctxOf(name, cmdline);
+  if (c.cmd === 'tsc' && !has(c, '-w', '--watch')) return 'tsc';
+  if (c.cmd === 'eslint') return 'eslint';
+  return null;
+}
+
 const BROWSER = /^(chrome|chromium|chromium-browser|google-chrome|firefox|brave|msedge)([-_].*)?$/;
 
 export const COMMAND_RULES: Rule[] = [
