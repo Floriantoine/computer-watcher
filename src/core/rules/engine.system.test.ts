@@ -53,7 +53,7 @@ function world(alive: (pid: number) => boolean = () => true, over: { eslintName?
   const worker = proc('MainThread', `node ${NM}/jest-worker/build/workers/processChild.js`, { pid: 701, startTicks: 7010, rssKB: 0.5 * GB });
   const npm = proc('npm run typech', 'npm run typecheck', { pid: 610, rssKB: 50_000 });
   const sh = proc('sh', 'sh -c tsc --noEmit', { pid: 611, rssKB: 1000 });
-  const tsc = proc('MainThread', `node ${NM}/typescript/bin/tsc --noEmit`, { pid: 612, startTicks: 6120, rssKB: 4 * GB, swapKB: 0.5 * GB });
+  const tsc = proc('MainThread', `node ${NM}/typescript/bin/tsc --noEmit`, { pid: 612, startTicks: 6120, rssKB: 4 * GB, swapKB: 0.5 * GB, cpuPercent: 300 });
   const eslint = proc(over.eslintName ?? 'MainThread', `node ${NM}/eslint/bin/eslint.js src`, { pid: 620, startTicks: 6200, rssKB: 2 * GB });
   const claude = proc('claude', 'claude', { pid: 800, ppid: 603 });
   const czsh = proc('zsh', '/bin/zsh -c jest', { pid: 801 });
@@ -139,11 +139,15 @@ describe('condition système : tenue', () => {
 
   test('CPU ≥ 95 % pendant 60 s (mémoire basse) : déclenche ; une baisse remet à zéro', () => {
     const st = emptyRuleState();
-    step(st, 0, 40, 99);
-    step(st, 30 * SEC, 40, 50);
-    step(st, 31 * SEC, 40, 99);
-    expect(step(st, 90 * SEC, 40, 99)).toEqual([]);
-    const d = step(st, 91 * SEC, 40, 99);
+    const cpu = (now: number, v: number) => {
+      const w = world();
+      return evaluateRules(input({ now, groups: w.groups, classification: w.classification, system: { memUsedPercent: 40, cpuPercent: v, cpuCount: 16 } }), st);
+    };
+    cpu(0, 99);
+    cpu(30 * SEC, 50);
+    cpu(31 * SEC, 99);
+    expect(cpu(90 * SEC, 99)).toEqual([]);
+    const d = cpu(91 * SEC, 99);
     expect(victim(d)).toEqual([[612]]);
     expect(fires(d)[0]!.trigger).toMatch(/^CPU 99 %/);
   });
@@ -160,12 +164,11 @@ describe('condition système : tenue', () => {
     }
   });
 
-  test('sans classement : rien (échec fermé)', () => {
+  test('sans classement : agit quand même (cibles reconnues à leur ligne de commande)', () => {
     const st = emptyRuleState();
     const w = world();
-    for (let t = 0; t <= 60 * SEC; t += 5 * SEC) {
-      expect(fires(evaluateRules(input({ now: t, groups: w.groups, classification: null, system: { memUsedPercent: 99, cpuPercent: 99 } }), st))).toEqual([]);
-    }
+    evaluateRules(input({ now: 0, groups: w.groups, classification: null, system: { memUsedPercent: 99, cpuPercent: 10 } }), st);
+    expect(victim(evaluateRules(input({ now: 15 * SEC, groups: w.groups, classification: null, system: { memUsedPercent: 99, cpuPercent: 10 } }), st))).toEqual([[612]]);
   });
 
   test('trou entre deux évaluations (veille) : la tenue repart', () => {
@@ -181,13 +184,15 @@ describe('condition système : tenue', () => {
   test('memUsedPercent : d’après MemAvailable ; meminfo incohérent → null', () => {
     expect(memUsedPercent({ memTotalKB: 1000, memAvailableKB: 50 })).toBe(95);
     expect(memUsedPercent({ memTotalKB: 1000, memAvailableKB: 2000 })).toBe(0);
+    // ligne MemAvailable absente (parseMeminfo met 0) : inconnu, jamais « 100 % »
+    expect(memUsedPercent({ memTotalKB: 1000, memAvailableKB: 0, memAvailableKnown: false })).toBeNull();
     for (const [t, a] of [[0, 0], [-5, 1], [Number.NaN, 1], [1000, -1], [1000, Number.NaN], [Number.POSITIVE_INFINITY, 1]]) {
       expect(memUsedPercent({ memTotalKB: t!, memAvailableKB: a! })).toBeNull();
     }
   });
 
-  test('needsClassification : vrai pour une règle système activée', () => {
-    expect(needsClassification([antigel()])).toBe(true);
+  test('needsClassification : inutile pour l’anti-gel (lignes de commande)', () => {
+    expect(needsClassification([antigel()])).toBe(false);
     expect(needsClassification([antigel({ enabled: false })])).toBe(false);
   });
 });
@@ -221,7 +226,7 @@ describe('condition système : victimes', () => {
     expect(fires(out)).toEqual([]);
     const skips = out.filter((d) => d.outcome === 'skip');
     expect(skips.length).toBe(2); // 0 + 5 min
-    expect(skips[0]).toMatchObject({ reason: 'guard', target: null });
+    expect(skips[0]).toMatchObject({ reason: 'guard' }); // le jest de Claude, refusé par les garde-fous
   });
 
   test('processus protégé (liste protégée) : jamais visé, le suivant l’est', () => {
@@ -386,5 +391,78 @@ describe('condition système : groupe de commande classé Test d’après sa rac
     const d = run(15 * SEC);
     expect(victim(d)).toEqual([[720, 721]]);
     expect(fires(d)[0]!.target.label).toBe('vitest');
+  });
+});
+
+describe('revue de sécurité', () => {
+  const sysd = () => proc('systemd', 'systemd --user', { pid: 500, ppid: 1 });
+  const evalAt = (st: RuleState, now: number, groups: Group[], system: EvalInput['system'], rules = [antigel()]) =>
+    evaluateRules(input({ now, groups, classification: null, system, rules }), st);
+
+  test('I-1 : orchestrateur non reconnu (python run_all) avec pytest, uvicorn et postgres : seulement pytest', () => {
+    const run = proc('python3', 'python3 tools/run_all.py', { pid: 530, ppid: 500, rssKB: 50_000 });
+    const pyt = proc('python3', 'python3 -m pytest', { pid: 540, rssKB: 3 * GB });
+    const uvi = proc('python3', 'python3 -m uvicorn app.main:app', { pid: 550, rssKB: 1 * GB });
+    const pg = proc('postgres', 'postgres -D /var/db', { pid: 560, rssKB: 1 * GB });
+    const project = mkGroup('project:/home/u/demo', 'project', [node(run, node(pyt), node(uvi))], 'demo');
+    const pgG = mkGroup('command:postgres', 'command', [{ proc: pg, children: [] }], 'postgres');
+    pg.ppid = 530;
+    const sv = mkGroup('command:systemd', 'command', [node(sysd())], 'systemd');
+    const st = emptyRuleState();
+    evalAt(st, 0, [project, pgG, sv], { memUsedPercent: 99, cpuPercent: 10 });
+    expect(victim(evalAt(st, 15 * SEC, [project, pgG, sv], { memUsedPercent: 99, cpuPercent: 10 }))).toEqual([[540]]);
+  });
+
+  test('I-2 : Node ≥ 24 (comm MainThread) : jest rangé dans le terminal (groupe d’appli) est visé, pas le terminal', () => {
+    const warp = proc('warp', 'warp', { pid: 600, ppid: 500 });
+    const zsh = proc('zsh', 'zsh', { pid: 601 });
+    const jest = proc('MainThread', `node ${NM}/jest/bin/jest.js`, { pid: 700, rssKB: 2 * GB });
+    const app = mkGroup('app:warp', 'app', [node(warp, node(zsh, node(jest)))], 'Warp');
+    const sv = mkGroup('command:systemd', 'command', [node(sysd())], 'systemd');
+    const st = emptyRuleState();
+    evalAt(st, 0, [app, sv], { memUsedPercent: 99, cpuPercent: 10 });
+    const d = evalAt(st, 15 * SEC, [app, sv], { memUsedPercent: 99, cpuPercent: 10 });
+    expect(victim(d)).toEqual([[700]]);
+    expect(fires(d)[0]!.target.label).toBe('jest');
+  });
+
+  test('I-4 : la victime doit peser — mémoire : < 512 Mio ou < 5 % de la RAM, jamais ; CPU : < 10 % de la machine, jamais', () => {
+    const lint = proc('MainThread', `node ${NM}/eslint/bin/eslint.js .`, { pid: 620, ppid: 500, rssKB: 80_000, cpuPercent: 0 });
+    const g = mkGroup('command:MainThread', 'command', [{ proc: lint, children: [] }], 'MainThread');
+    const sv = mkGroup('command:systemd', 'command', [node(sysd())], 'systemd');
+    // mémoire pleine, eslint de 80 Mo : rien à arrêter
+    const st = emptyRuleState();
+    evalAt(st, 0, [g, sv], { memUsedPercent: 99, cpuPercent: 10, memTotalKB: 32 * GB });
+    const d = evalAt(st, 15 * SEC, [g, sv], { memUsedPercent: 99, cpuPercent: 10, memTotalKB: 32 * GB });
+    expect(fires(d)).toEqual([]);
+    expect(d[0]).toMatchObject({ outcome: 'skip', reason: 'guard', target: null });
+    // 1 Gio sur 32 Gio : sous 5 % de la RAM
+    lint.rssKB = 1 * GB;
+    const st2 = emptyRuleState();
+    evalAt(st2, 0, [g, sv], { memUsedPercent: 99, cpuPercent: 10, memTotalKB: 32 * GB });
+    expect(fires(evalAt(st2, 15 * SEC, [g, sv], { memUsedPercent: 99, cpuPercent: 10, memTotalKB: 32 * GB }))).toEqual([]);
+    // 2 Gio : au-dessus des deux seuils
+    lint.rssKB = 2 * GB;
+    expect(victim(evalAt(st2, 20 * SEC, [g, sv], { memUsedPercent: 99, cpuPercent: 10, memTotalKB: 32 * GB }))).toEqual([[620]]);
+    // CPU saturé par autre chose, eslint gros mais inactif : rien ; puis à 2 cœurs sur 16 (12,5 %) : visé
+    const st3 = emptyRuleState();
+    const cpu = (now: number) => evalAt(st3, now, [g, sv], { memUsedPercent: 40, cpuPercent: 99, cpuCount: 16 });
+    cpu(0);
+    expect(fires(cpu(60 * SEC))).toEqual([]);
+    lint.cpuPercent = 200;
+    expect(victim(cpu(65 * SEC))).toEqual([[620]]);
+    // nombre de cœurs inconnu : jamais par le CPU
+    const st4 = emptyRuleState();
+    evalAt(st4, 0, [g, sv], { memUsedPercent: 40, cpuPercent: 99 });
+    expect(fires(evalAt(st4, 60 * SEC, [g, sv], { memUsedPercent: 40, cpuPercent: 99 }))).toEqual([]);
+  });
+
+  test('I-6 : deux règles système Actives : une seule victime à la fois en tout', () => {
+    const st = emptyRuleState();
+    const rules = [antigel(), antigel({ id: 'r-copie', name: 'copie' })];
+    step(st, 0, 99, 10, undefined, { rules });
+    const d = step(st, 15 * SEC, 99, 10, undefined, { rules });
+    expect(fires(d)).toHaveLength(1);
+    for (let t = 20 * SEC; t < 15 * SEC + SYSTEM_STUCK_MS; t += 5 * SEC) expect(fires(step(st, t, 99, 10, undefined, { rules }))).toEqual([]);
   });
 });

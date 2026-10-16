@@ -12,8 +12,9 @@ const sys = { kind: 'system', memPercent: 95, memForSec: 15, cpuPercent: 95, cpu
 const one = (r: unknown) => validateRulesDetailed({ enabled: true, list: [r] });
 
 describe('validateRules', () => {
-  test('section absente → défauts : interrupteur allumé, les 3 règles recommandées', () => {
-    expect(validateRules(undefined)).toEqual({ enabled: true, list: [...RECOMMENDED_RULES] });
+  test('section absente (config d’avant les règles) → éteint, liste vide ; les recommandées ne sont pas ajoutées', () => {
+    expect(validateRules(undefined)).toEqual({ enabled: false, list: [] });
+    expect(RECOMMENDED_RULES).toHaveLength(3);
     expect(validateRulesDetailed(undefined).issues).toEqual([]);
   });
 

@@ -27,7 +27,8 @@ function setup(o: { availPercent?: number; rules?: unknown } = {}) {
   addProc(procRoot, { pid: 600, comm: 'warp', ppid: 500, rssKB: 300_000, cmdline: ['warp'] });
   addProc(procRoot, { pid: 601, comm: 'zsh', ppid: 600, rssKB: 5_000, cmdline: ['zsh'], cwd: '/home/u/demo' });
   // jest (comm node) et ses deux workers au comm « MainThread »
-  addProc(procRoot, { pid: 700, comm: 'node', ppid: 601, starttime: 7000, rssKB: 0.3 * GB, cwd: '/home/u/demo', cmdline: ['node', `${NM}/jest/bin/jest.js`] });
+  // Node ≥ 24 : le processus principal a aussi le comm « MainThread »
+  addProc(procRoot, { pid: 700, comm: 'MainThread', ppid: 601, starttime: 7000, rssKB: 0.3 * GB, cwd: '/home/u/demo', cmdline: ['node', `${NM}/jest/bin/jest.js`] });
   for (const pid of [701, 702]) {
     addProc(procRoot, { pid, comm: 'MainThread', ppid: 700, starttime: pid * 10, rssKB: 2.5 * GB, cwd: '/home/u/demo', cmdline: ['node', `${NM}/jest-worker/build/workers/processChild.js`] });
   }
@@ -39,9 +40,9 @@ function setup(o: { availPercent?: number; rules?: unknown } = {}) {
   addProc(procRoot, { pid: 810, comm: 'MainThread', ppid: 801, starttime: 8100, rssKB: 9 * GB, cwd: '/home/u/demo', cmdline: ['node', `${NM}/typescript/bin/tsc`, '--noEmit'] });
   const cfgDir = join(base, 'cfg');
   mkdirSync(cfgDir, { recursive: true });
-  // config d'un nouvel utilisateur : pas de section « rules » → règles recommandées (anti-gel Active)
+  // config d'un nouvel utilisateur : telle qu'écrite à la création (règles recommandées, anti-gel Actif)
   const { rules: _r, ...cfg } = { ...DEFAULT_CONFIG, recorder: { ...DEFAULT_CONFIG.recorder, intervalSec: 5 }, classify: { detectPorts: false, overrides: {} } };
-  writeFileSync(join(cfgDir, 'config.json'), JSON.stringify(o.rules === undefined ? cfg : { ...cfg, rules: o.rules }));
+  writeFileSync(join(cfgDir, 'config.json'), JSON.stringify({ ...cfg, rules: o.rules === undefined ? DEFAULT_CONFIG.rules : o.rules }));
   let t = 10_000_000;
   let mono = 0;
   const kill = vi.fn<KillFn>();

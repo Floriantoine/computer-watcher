@@ -396,7 +396,7 @@ export function RulesPanel({ config, issues, onSaved, onFormState }: Props) {
               <Row label="Ou CPU total au-dessus de" error={err.cpuPercent} help="Tous les cœurs : 100 % = machine entièrement occupée.">
                 {(id) => <TextField id={id} value={f.cpuPercent} unit="%" ariaLabel="Seuil CPU" invalid={!!err.cpuPercent} testid="rule-cpu-percent" onChange={(v) => setForm({ cpuPercent: v })} />}
               </Row>
-              <Row label="Pendant" error={err.cpuForSec} help="Cible : la plus grosse vérification (instance Tests, tsc, eslint) avec ses workers, jamais une lancée par Claude ; la suivante seulement une fois la précédente arrêtée, si la condition tient toujours.">
+              <Row label="Pendant" error={err.cpuForSec} help="Cible : la plus grosse vérification (lanceur de tests, tsc, eslint, reconnu à sa ligne de commande) avec ses workers, si elle pèse dans la saturation (≥ 512 Mio et 5 % de la RAM, ou ≥ 10 % du CPU) ; jamais une lancée par Claude. La suivante seulement une fois la précédente arrêtée, si la condition tient toujours.">
                 {(id) => <TextField id={id} value={f.cpuForSec} unit="s" ariaLabel="Durée CPU" invalid={!!err.cpuForSec} testid="rule-cpu-for-sec" onChange={(v) => setForm({ cpuForSec: v })} />}
               </Row>
             </>

@@ -25,10 +25,13 @@ export const OPT_IN_APPS: readonly string[] = [...APP_NAMES].filter((n) => !isNe
 /** Erreurs de règles gardées (au-delà : une ligne « … et n autres »). */
 export const MAX_RULE_ISSUES = 20;
 
-/** Nouvelle config (section « rules » absente) : interrupteur allumé, les 3 règles recommandées. */
+/**
+ * Première installation seulement (config.json absent) : interrupteur allumé, les 3 règles recommandées. Jamais
+ * appliqué à une config existante (section absente, fichier illisible ou invalide : RULES_OFF).
+ */
 export const DEFAULT_RULES: RulesConfig = { enabled: true, list: RECOMMENDED_RULES.map((r) => structuredClone(r)) };
-/** Section « rules » mal formée : tout éteint (jamais les défauts, qui contiennent une règle Active). */
-const RULES_OFF: RulesConfig = { enabled: false, list: [] };
+/** Config existante sans section « rules », section mal formée, fichier illisible ou invalide : tout éteint. */
+export const RULES_OFF: RulesConfig = { enabled: false, list: [] };
 
 const CONTROL = /[\u0000-\u001f\u007f-\u009f‎‏‪-‮⁦-⁩]/;
 
@@ -99,12 +102,13 @@ function validateRule(raw: unknown): Rule | string {
 
 /**
  * Validation stricte, règle par règle : une règle invalide (modifiée à la main) est ignorée seule et décrite dans
- * `issues` ; au-delà de MAX_RULES, les suivantes aussi ; un id déjà vu aussi. Section absente → défauts (les règles
- * recommandées, interrupteur allumé).
+ * `issues` ; au-delà de MAX_RULES, les suivantes aussi ; un id déjà vu aussi. Section absente → éteint, liste vide (les
+ * règles recommandées ne sont posées qu'à la création de config.json).
  * Une section mal formée (pas un objet, liste absente) → règles éteintes, une erreur ; jamais de réinitialisation du reste.
  */
 export function validateRulesDetailed(raw: unknown): { rules: RulesConfig; issues: RuleIssue[] } {
-  if (raw === undefined) return { rules: structuredClone(DEFAULT_RULES), issues: [] };
+  // config existante d'avant les règles : rien n'est ajouté (bouton « Ajouter les règles recommandées »)
+  if (raw === undefined) return { rules: structuredClone(RULES_OFF), issues: [] };
   const broken = (error: string) => ({ rules: structuredClone(RULES_OFF), issues: [{ index: -1, id: null, name: null, error }] });
   if (!isObj(raw)) return broken('section « rules » invalide : règles éteintes');
   const enabled = raw.enabled ?? false;

@@ -65,6 +65,8 @@ export function parseMeminfo(content: string) {
   return {
     memTotalKB: kb('MemTotal'),
     memAvailableKB: kb('MemAvailable'),
+    /** ligne MemAvailable absente (noyau ancien, /proc émulé) : RAM utilisée inconnue, pas 100 % (anti-gel) */
+    ...(field(content, 'MemAvailable') === undefined ? { memAvailableKnown: false as const } : {}),
     swapTotalKB: kb('SwapTotal'),
     swapFreeKB: kb('SwapFree'),
     /** Fichiers en mémoire (tmpfs : /tmp, /dev/shm ; mémoire partagée) ; null si la ligne manque (inconnu, pas 0) */
