@@ -202,14 +202,14 @@ export function App() {
     setTimeout(() => setToasts((t) => t.slice(1)), 5000);
   };
 
-  // B8 bis : earlyoom absent ou arrêté → pop-up au lancement (élément mémoïsé : AlertPopups reste mémoïsé entre deux snapshots).
+  // B8 bis : earlyoom absent, arrêté ou à mettre à jour → pop-up au lancement (élément mémoïsé : AlertPopups reste mémoïsé entre deux snapshots).
   const eoReminder = useEarlyoomReminder({ onState: setConfigState, onToast: (m, kind) => pushToast(m, kind) });
   // Accueil ouvert au lancement : il a sa propre étape earlyoom, pas de pop-up en plus pendant ce lancement.
   const eoLead = useMemo(
     () => !onboardingAtLaunch && eoReminder.mode && (
-      <EarlyoomSetupPopup key="earlyoom-setup" mode={eoReminder.mode} busy={eoReminder.busy} onSetup={eoReminder.setup} onLater={eoReminder.remindLater} />
+      <EarlyoomSetupPopup key="earlyoom-setup" mode={eoReminder.mode} upgrade={eoReminder.upgrade} busy={eoReminder.busy} onSetup={eoReminder.setup} onLater={eoReminder.remindLater} />
     ),
-    [onboardingAtLaunch, eoReminder.mode, eoReminder.busy, eoReminder.setup, eoReminder.remindLater],
+    [onboardingAtLaunch, eoReminder.mode, eoReminder.upgrade, eoReminder.busy, eoReminder.setup, eoReminder.remindLater],
   );
   // Mise à jour disponible : pop-up en tête de pile, après celui d'earlyoom.
   const [updateView, setUpdateView] = useUpdateView();

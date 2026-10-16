@@ -6,3 +6,10 @@
 .eo-setup-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
 .eo-setup-row .hint { margin: 0; }
 .eo-manual { margin: 10px 0 4px; }
+/* « Protection anti-gel à mettre à jour » (Réglages › earlyoom) : encadré ambre, une action. */
+.eo-upgrade { margin-top: 12px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--amber) 45%, transparent); border-radius: var(--r-md); background: color-mix(in srgb, var(--amber) 8%, transparent); }
+.eo-upgrade-head { display: flex; align-items: center; gap: 7px; color: var(--amber); }
+.eo-upgrade-head strong { color: var(--text); }
+.eo-upgrade .hint { margin: 6px 0 4px; }
+.eo-upgrade-list { margin: 4px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--text-2); }
+.eo-upgrade-list li { margin: 2px 0; }

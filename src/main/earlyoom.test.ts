@@ -10,7 +10,7 @@ import { buildEarlyoomArgs, checkEarlyoomLine, EARLYOOM_LINE_PATTERN, EARLYOOM_L
 import { EARLYOOM_DEFAULT_SETTINGS } from '../core/earlyoomSetup';
 import type { ApplyResult, EarlyoomStatus } from '../core/types';
 import {
-  applyEarlyoom, applyExitMessage, createEarlyoomApplier, createEarlyoomUpgrade, EARLYOOM_APPLY_SCRIPT, earlyoomStatus, parseIsEnabled, PKEXEC, type EarlyoomLock, type ExecFn,
+  applyEarlyoom, applyExitMessage, createEarlyoomApplier, createEarlyoomUpgrade, EARLYOOM_APPLY_SCRIPT, earlyoomFake, earlyoomStatus, parseIsEnabled, PKEXEC, type EarlyoomLock, type ExecFn,
 } from './earlyoom';
 
 const cacheRoot = join(homedir(), '.cache');
@@ -634,5 +634,27 @@ describe('createEarlyoomUpgrade (IPC earlyoom:upgrade, « Protection anti-gel à
     const handler = createEarlyoomUpgrade({ status: async () => status(), getProtected: () => ['kitty'], confirm: async () => true, run });
     expect((await handler()).ok).toBe(true);
     expect(calls).toEqual([[PKEXEC, '/usr/bin/bash', '-c', EARLYOOM_APPLY_SCRIPT, 'computer-watcher-earlyoom', UPGRADED]]);
+  });
+});
+
+describe('earlyoomFake (bout en bout : PROC_WATCH_EARLYOOM_FAKE, aucun pkexec)', () => {
+  test('ignoré dans une app empaquetée, sans valeur, chemin relatif ou sous /etc', () => {
+    expect(earlyoomFake({ PROC_WATCH_EARLYOOM_FAKE: dir }, true)).toBeNull();
+    expect(earlyoomFake({}, false)).toBeNull();
+    expect(earlyoomFake({ PROC_WATCH_EARLYOOM_FAKE: 'relatif' }, false)).toBeNull();
+    expect(earlyoomFake({ PROC_WATCH_EARLYOOM_FAKE: '/etc/default' }, false)).toBeNull();
+  });
+  test('état lu dans <dossier>/default ; ligne revalidée puis écrite dans ce fichier et notée', async () => {
+    const f = earlyoomFake({ PROC_WATCH_EARLYOOM_FAKE: dir }, false);
+    if (!f) throw new Error('simulation attendue');
+    writeFileSync(join(dir, 'default'), `${VALID}\n`);
+    const st = await f.status();
+    expect(st).toMatchObject({ installed: true, active: 'active', enabled: 'enabled' });
+    expect(st.file?.line).toBe(VALID);
+    expect(await f.apply(ATTACK)).toMatchObject({ ok: false, reason: 'invalid' });
+    expect(readFileSync(join(dir, 'default'), 'utf8')).toBe(`${VALID}\n`);
+    expect(await f.apply(CURRENT)).toEqual({ ok: true, line: CURRENT });
+    expect(readFileSync(join(dir, 'default'), 'utf8')).toBe(`${CURRENT}\n`);
+    expect(readFileSync(join(dir, 'applied.log'), 'utf8')).toBe(`${CURRENT}\n`);
   });
 });

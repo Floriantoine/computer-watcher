@@ -1,9 +1,10 @@
 // État d'earlyoom et application d'une nouvelle configuration via pkexec d'un script fixe.
 import { execFile } from 'node:child_process';
 import { cleanEnv } from '../core/childEnv';
-import { existsSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
 import { buildEarlyoomArgs, checkEarlyoomLine, EARLYOOM_LINE_PATTERN, EARLYOOM_MAX_LINE, isEarlyoomSettings, parseEarlyoomDefault } from '../core/earlyoom';
-import { upgradeLine, upgradeNeed, type EarlyoomUpgrade } from '../core/earlyoomSetup';
+import { upgradeChanges, upgradeLine, upgradeNeed, type EarlyoomUpgrade } from '../core/earlyoomSetup';
 import type { ApplyResult, EarlyoomStatus } from '../core/types';
 
 export type ExecFn = (cmd: string, args: string[], opts?: { timeout?: number }) => Promise<{ code: number; stdout: string; stderr: string; timedOut?: boolean }>;
@@ -215,15 +216,6 @@ export function createEarlyoomApplier(
   };
 }
 
-/** Ce que change la mise à niveau, en clair (confirmation native, carte de Réglages, pop-up). */
-export function upgradeChanges(u: EarlyoomUpgrade): string[] {
-  return [
-    ...(u.addedPrefer.length ? [`Tués en premier, en plus des vôtres : ${u.addedPrefer.join(', ')}.`] : []),
-    ...(u.memTerm ? [`SIGTERM dès ${u.memTerm.to} % de mémoire disponible (${u.memTerm.from} % → ${u.memTerm.to} %) : earlyoom réagit avant le gel.`] : []),
-    'Aucune exclusion retirée (terminaux, Claude, session, liste protégée) ; vos autres réglages restent.',
-  ];
-}
-
 /** Texte de la confirmation native de la mise à niveau : changements, ligne exacte, sauvegarde et restauration. */
 export function upgradeConfirmation(u: EarlyoomUpgrade, line: string): { message: string; detail: string; confirm: string } {
   return {
@@ -268,5 +260,30 @@ export function createEarlyoomUpgrade(deps: {
     } finally {
       lock.held = false;
     }
+  };
+}
+
+/**
+ * Bout en bout : `PROC_WATCH_EARLYOOM_FAKE=<dossier absolu>` hors paquet. earlyoom vu installé, actif et lancé au démarrage ;
+ * /etc/default/earlyoom remplacé par <dossier>/default ; « Appliquer » et la mise à niveau écrivent la ligne (revalidée)
+ * dans ce fichier et la notent dans <dossier>/applied.log : aucun pkexec. Une app empaquetée l'ignore toujours.
+ */
+export function earlyoomFake(env: NodeJS.ProcessEnv, isPackaged: boolean): { dir: string; status: () => Promise<EarlyoomStatus>; apply: (line: string) => Promise<ApplyResult> } | null {
+  const dir = env.PROC_WATCH_EARLYOOM_FAKE;
+  if (isPackaged || !dir || !isAbsolute(dir) || dir.startsWith('/etc')) return null;
+  const file = join(dir, 'default');
+  return {
+    dir,
+    status: async () => {
+      const text = readText(file);
+      return { installed: true, version: 'simulé', active: 'active', enabled: 'enabled', file: text === null ? null : parseEarlyoomDefault(text), installHint: EARLYOOM_INSTALL_HINT };
+    },
+    apply: async (line) => {
+      const bad = checkEarlyoomLine(line);
+      if (bad) return { ok: false, reason: 'invalid', message: `${bad} : rien n'a été modifié.` };
+      writeFileSync(file, `${line}\n`);
+      appendFileSync(join(dir, 'applied.log'), `${line}\n`);
+      return { ok: true, line };
+    },
   };
 }

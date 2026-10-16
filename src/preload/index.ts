@@ -4,7 +4,7 @@ import type { EarlyoomSettings } from '../core/earlyoom';
 import type { SunNode } from '../core/disk/sunTree';
 import type { FamiliesFile, FamilyId } from '../core/disk/families';
 import type { DiskCleanAllResult, DiskCleanRequest, ExtrasView } from '../core/disk/extras';
-import type { EarlyoomSetupMode } from '../core/earlyoomSetup';
+import type { EarlyoomReminderKind, EarlyoomSetupMode } from '../core/earlyoomSetup';
 import type { AboutInfo, AutostartInfo, InstallOutcome, OnboardingInfo, UninstallItem, UninstallOptions, UninstallResult } from '../core/onboarding';
 import type { MigrationReport } from '../core/nameMigration';
 import type { RuleStats } from '../core/rules/types';
@@ -77,7 +77,7 @@ const api = {
      */
     apply: (s: EarlyoomSettings, expectedLine: string): Promise<ApplyResult> => ipcRenderer.invoke('earlyoom:apply', s, expectedLine),
     /** Pop-up du lancement : mode à proposer (null : rien à faire, « Plus tard » ou pause de 7 jours) et état lu. */
-    reminder: (): Promise<{ mode: EarlyoomSetupMode | null; status: EarlyoomStatus }> => ipcRenderer.invoke('earlyoom:reminder'),
+    reminder: (): Promise<{ mode: EarlyoomReminderKind | null; status: EarlyoomStatus }> => ipcRenderer.invoke('earlyoom:reminder'),
     /** « Plus tard » (jusqu'au prochain lancement) ou « Ne plus rappeler pendant 7 jours » (config, horodatée par le main). */
     remindLater: (kind: 'later' | 'week'): Promise<ConfigState> => ipcRenderer.invoke('earlyoom:remindLater', kind),
     /**
@@ -85,6 +85,12 @@ const api = {
      * dans une confirmation native avec le paquet, puis un seul pkexec d'un script fixe.
      */
     setup: (mode: EarlyoomSetupMode): Promise<ApplyResult> => ipcRenderer.invoke('earlyoom:setup', mode),
+    /**
+     * « Protection anti-gel à mettre à jour » : aucun argument. Le main relit /etc/default/earlyoom, fusionne (motifs
+     * recommandés ajoutés, SIGTERM monté à 10 s'il est plus bas, aucune exclusion retirée), confirme avec la ligne exacte,
+     * puis le même pkexec que « Appliquer ».
+     */
+    upgrade: (): Promise<ApplyResult> => ipcRenderer.invoke('earlyoom:upgrade'),
   },
   alerts: {
     /** Alertes non vues (les 100 plus récentes d'abord) et leur nombre total. */

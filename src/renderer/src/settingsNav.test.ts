@@ -115,6 +115,12 @@ describe('sectionAttention', () => {
   test('tout va bien → aucun point', () => {
     expect(sectionAttention(calm)).toEqual({});
   });
+  test('earlyoom actif mais protection anti-gel à mettre à jour → avertissement (pas rouge)', () => {
+    const eo = (status: AttentionInput['earlyoom']['status']) => sectionAttention({ ...calm, earlyoom: { ...calm.earlyoom, status } }).earlyoom;
+    expect(eo({ installed: true, active: 'active', enabled: 'enabled', upgrade: true })).toEqual({ tone: 'warn', reasons: ['Protection anti-gel à mettre à jour'] });
+    expect(eo({ installed: true, active: 'active', enabled: 'enabled', upgrade: false })).toBeUndefined();
+    expect(eo({ installed: true, active: 'failed', upgrade: true })).toEqual({ tone: 'error', reasons: ['earlyoom n’est pas actif'] });
+  });
   test('earlyoom absent, inactif ou pas lancé au démarrage → point ROUGE tant que ce n’est pas réglé (B8 bis)', () => {
     const eo = (status: AttentionInput['earlyoom']['status']) => sectionAttention({ ...calm, earlyoom: { ...calm.earlyoom, status } }).earlyoom;
     expect(eo({ installed: false, active: 'unknown' })).toEqual({ tone: 'error', reasons: ['earlyoom n’est pas installé'] });

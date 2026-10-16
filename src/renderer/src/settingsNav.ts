@@ -106,7 +106,7 @@ export interface AttentionInput {
   alerts: FormState;
   /** null : pas encore lu. */
   recorder: FormState & { status: { available: boolean; enabled: boolean; running: boolean } | null };
-  earlyoom: FormState & { status: { installed: boolean; active: string; enabled?: string } | null };
+  earlyoom: FormState & { status: { installed: boolean; active: string; enabled?: string; upgrade?: boolean } | null };
   /** Réglages › Règles : éditeur ouvert (modifié, invalide) et règles du fichier refusées. */
   rules?: FormState & { issues: number };
 }
@@ -144,8 +144,10 @@ function earlyoomWarning(s: AttentionInput['earlyoom']['status']): string | null
 
 /** earlyoom absent, arrêté ou pas lancé au démarrage : point rouge tant que ce n'est pas réglé (B8 bis), quel que soit le formulaire. */
 function earlyoomAttention(i: AttentionInput['earlyoom']): Attention | undefined {
-  const a = attention(i, earlyoomWarning(i.status));
-  return a && earlyoomWarning(i.status) ? { ...a, tone: 'error' } : a;
+  const w = earlyoomWarning(i.status);
+  // Mise à niveau proposée : simple avertissement (earlyoom tourne déjà).
+  const a = attention(i, w ?? (i.status?.upgrade ? 'Protection anti-gel à mettre à jour' : null));
+  return a && w ? { ...a, tone: 'error' } : a;
 }
 
 /** Points de la barre latérale : section → ton (invalide > modifié > avertissement) et raisons (infobulle). */

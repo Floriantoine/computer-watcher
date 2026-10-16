@@ -52,7 +52,7 @@ import { createAppImageBackend } from './appImageUpdate';
 import { relaunchDetached, sanitizeAppImageEnv } from './relaunch';
 import { createPrefsStore, createReleasesApiBackend, createUpdateController, type UpdateBackend } from './updater';
 import { isReleaseUrl, RELEASES_API_URL, testFeedFromEnv, updateMode } from '../core/update';
-import { createEarlyoomApplier, earlyoomStatus, type EarlyoomLock } from './earlyoom';
+import { createEarlyoomApplier, createEarlyoomUpgrade, earlyoomFake, earlyoomStatus, type EarlyoomLock } from './earlyoom';
 import { createEarlyoomSetup, keepEarlyoomReminder, setupConfirmation, snoozeReminder } from './earlyoomSetup';
 import { OS_RELEASE, reminderMode } from '../core/earlyoomSetup';
 import { clearHistory, createHistoryReader } from './history';
@@ -1021,7 +1021,11 @@ ipcMain.handle('recorder:setEnabled', async (_e, enabled: unknown) => {
 });
 ipcMain.handle('recorder:clearHistory', () => clearHistory(data, { running: recorderState().running, pid: history.status()?.pid, beforeDelete: history.close }));
 
-ipcMain.handle('earlyoom:status', () => earlyoomStatus());
+// PROC_WATCH_EARLYOOM_FAKE=<dossier> (hors paquet seulement) : earlyoom simulé, aucun pkexec (bout en bout)
+const eoFake = earlyoomFake(process.env, app.isPackaged);
+if (eoFake) console.error(`${APP_DISPLAY_NAME} : earlyoom simulé (PROC_WATCH_EARLYOOM_FAKE)`);
+const readEarlyoomStatus = () => (eoFake ? eoFake.status() : earlyoomStatus());
+ipcMain.handle('earlyoom:status', () => readEarlyoomStatus());
 /** Confirmation dans le main, avec la ligne exacte que le main a construite, avant tout pkexec. */
 const confirmEarlyoomLine = async (line: string): Promise<boolean> => {
   const opts: Electron.MessageBoxOptions = {
@@ -1040,13 +1044,13 @@ const confirmEarlyoomLine = async (line: string): Promise<boolean> => {
 };
 /** Un seul script root earlyoom à la fois : « Appliquer », installation et activation partagent ce verrou. */
 const earlyoomLock: EarlyoomLock = { held: false };
-const applyEarlyoomIpc = createEarlyoomApplier(() => config.protected, confirmEarlyoomLine, undefined, earlyoomLock);
+const applyEarlyoomIpc = createEarlyoomApplier(() => config.protected, confirmEarlyoomLine, eoFake?.apply, earlyoomLock);
 ipcMain.handle('earlyoom:apply', (_e, s: unknown, expectedLine: unknown) => applyEarlyoomIpc(s, expectedLine));
 
 // B8 bis : pop-up du lancement (une fois par lancement : « Plus tard » est gardé en mémoire par le main), installation / activation.
 let earlyoomLater = false;
 ipcMain.handle('earlyoom:reminder', async () => {
-  const status = await earlyoomStatus();
+  const status = await readEarlyoomStatus();
   return { mode: reminderMode({ status, snoozedAt: config.earlyoomReminder?.snoozedAt, later: earlyoomLater, now: Date.now() }), status };
 });
 ipcMain.handle('earlyoom:remindLater', (_e, kind: unknown): ConfigState => {
@@ -1060,7 +1064,7 @@ ipcMain.handle('earlyoom:remindLater', (_e, kind: unknown): ConfigState => {
   return configState();
 });
 const earlyoomSetupIpc = createEarlyoomSetup({
-  status: () => earlyoomStatus(),
+  status: () => readEarlyoomStatus(),
   getProtected: () => config.protected,
   exists: existsSync,
   readOsRelease: () => {
@@ -1092,6 +1096,26 @@ const earlyoomSetupIpc = createEarlyoomSetup({
 ipcMain.handle('earlyoom:setup', async (_e, mode: unknown) => {
   const r = await earlyoomSetupIpc(mode);
   if (r.ok) earlyoomLater = true; // réglé : plus de pop-up dans ce lancement
+  return r;
+});
+// « Protection anti-gel à mettre à jour » : aucun argument ; le main relit le fichier, fusionne, confirme, puis « Appliquer ».
+const earlyoomUpgradeIpc = createEarlyoomUpgrade({
+  status: () => readEarlyoomStatus(),
+  getProtected: () => config.protected,
+  lock: earlyoomLock,
+  apply: eoFake?.apply,
+  confirm: async (c) => {
+    const opts: Electron.MessageBoxOptions = {
+      type: 'warning', title: 'earlyoom', message: c.message, detail: c.detail, buttons: ['Annuler', c.confirm], defaultId: 0, cancelId: 0, noLink: true,
+    };
+    const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const r = parent ? await dialog.showMessageBox(parent, opts) : await dialog.showMessageBox(opts);
+    return r.response === 1;
+  },
+});
+ipcMain.handle('earlyoom:upgrade', async () => {
+  const r = await earlyoomUpgradeIpc();
+  if (r.ok) earlyoomLater = true;
   return r;
 });
 

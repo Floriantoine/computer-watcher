@@ -95,7 +95,7 @@ Un assistant de 3 ou 4 écrans (« Passer » à tout moment, Échap ; Alt+← / 
 1. **Installer comme une app** (AppImage seulement) : voir plus haut.
 2. **Démarrer avec la session** (coché par défaut) : `~/.config/autostart/computer-watcher.desktop` lance Computer Watcher avec `--hidden`, caché dans la barre des tâches (fenêtre réduite si le bureau n'a pas de zone de notification). Réglable ensuite dans Réglages › Affichage.
 3. **Historique** : le service d'enregistrement (voir [Historique en arrière-plan](#historique-en-arrière-plan)) : ce qui est noté, où, combien de place.
-4. **Protection contre les gels** : état d'earlyoom et « Installer et configurer ».
+4. **Protection contre les gels** : état d'earlyoom et « Installer et configurer » (ou « Mettre à jour » si sa protection anti-gel est ancienne).
 
 Chaque étape affiche le résultat exact (chemins écrits) ou l'erreur. L'assistant ne revient plus ensuite ; il se rouvre depuis Réglages › À propos › **Relancer l'accueil**.
 
@@ -148,6 +148,7 @@ Avec npm 11.10+ (dont npm 12), les scripts d'installation des dépendances sont 
 | `npm run smoke` | build + lancement réel de l'app via Playwright |
 | `npm run dist` | produit l'AppImage et le .deb dans `release/` |
 | `npm run test:disk-page` | build + page Disque de bout en bout sur un HOME factice (faux caches, faux dépôt git et `node_modules`, Docker et pkexec simulés, confirmation remplacée) |
+| `npm run test:earlyoom-upgrade` | build + « Protection anti-gel à mettre à jour » de bout en bout (earlyoom simulé par `PROC_WATCH_EARLYOOM_FAKE=<dossier>`, ignoré par une app empaquetée : aucun pkexec, `/etc` jamais lu ni écrit ; confirmation remplacée) |
 | `npm run test:update` | build + mises à jour de bout en bout contre un flux local (rien n'est installé) ; le flux de test n'est accepté que depuis les sources, avec l'option `--update-feed-test`, une adresse en boucle locale et un jeton aléatoire en tête du chemin (`http://127.0.0.1:<port>/<jeton ≥ 32 caractères>/`) ; jamais dans une version empaquetée |
 | `npm run release -- patch\|minor\|major [--dry-run]` | prépare une version : vérifications, tests, commit `chore(release): vX.Y.Z` et étiquette annotée, sans pousser |
 
@@ -245,6 +246,10 @@ Réglages → Règles : le service d'enregistrement peut arrêter des processus 
 ## Va bien avec earlyoom
 
 Computer Watcher ne tue jamais rien tout seul, sauf règles automatiques que tu as activées. Pour éviter qu'un manque de mémoire ne gèle la machine, installe [earlyoom](https://github.com/rfjakob/earlyoom). Si earlyoom manque ou est arrêté, Computer Watcher le signale au lancement et peut l'installer, le configurer et l'activer (Réglages › earlyoom), avec un seul mot de passe administrateur, après une confirmation qui montre le paquet, le gestionnaire et la ligne exacte. Le gestionnaire de paquets (pacman, apt-get, dnf ou zypper ; d'après `/etc/os-release` s'il y en a plusieurs) tourne sans questions et sans paquets recommandés ; apt-get ne supprime jamais rien (`--no-remove`). Attention : en mode non interactif, dnf importe automatiquement la clé GPG d'un dépôt qui la demande, et pacman importe une clé PGP inconnue (la confiance du trousseau reste exigée).
+
+Réglages recommandés (installation, activation et formulaire de Réglages › earlyoom) : SIGTERM sous 10 % de mémoire disponible, SIGKILL sous 5 % (swap : 35 % et 25 %), terminaux, Claude et session toujours exclus, et tués en premier les processus qu'on relance sans rien perdre : `MainThread`, `tsc`, `eslint`, puis les lanceurs de tests (`vitest`, `jest`, `pytest`, `playwright`…). `MainThread` est le nom système (celui que compare earlyoom) des processus Node récents — jest, tsc, eslint, nest… lancés par npx : sans lui, earlyoom tuait des onglets de 10 Mo pendant que des jest de 4 Go continuaient.
+
+**Protection anti-gel à mettre à jour** : si `/etc/default/earlyoom` (lu sans privilège) porte d'anciens réglages recommandés par Computer Watcher, ou ne vise pas `MainThread`, `tsc` ou `eslint`, Computer Watcher le propose au lancement (« Plus tard » et « Ne plus rappeler pendant 7 jours » respectés, comme pour l'installation ; rien si earlyoom est masqué), dans Réglages › earlyoom et dans l'accueil, avec un seul bouton « Mettre à jour ». La fusion ajoute les motifs recommandés qui manquent et garde ceux déjà là, monte le seuil SIGTERM à 10 % seulement s'il est plus bas, et ne retire jamais une exclusion (celles du fichier sont toutes gardées, plus la liste protégée). Une confirmation native montre la ligne exacte, puis le mot de passe est demandé par la fenêtre système : aucune commande à taper. L'écriture passe par le même script figé qu'« Appliquer » (sauvegarde `.bak`, restauration si earlyoom ne redémarre pas). Une ligne écrite à la main hors de la politique de l'app n'est jamais fusionnée : rien n'est proposé.
 
 ## Licence
 

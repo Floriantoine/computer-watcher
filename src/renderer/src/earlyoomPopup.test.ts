@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { earlyoomPopupText, popupAfterSetup, settingsSetupAction } from './earlyoomPopup';
+import { earlyoomPopupText, popupAfterSetup, settingsSetupAction, upgradeSummary } from './earlyoomPopup';
 
 describe('earlyoomPopupText', () => {
   test('non installé : « Installer et configurer », « Plus tard », « Ne plus rappeler pendant 7 jours »', () => {
@@ -39,5 +39,38 @@ describe('settingsSetupAction (bouton de Réglages › earlyoom)', () => {
   });
   test('actif et activé → aucun bouton', () => {
     expect(settingsSetupAction({ installed: true, active: 'active', enabled: 'enabled' })).toBeNull();
+  });
+});
+
+describe('« Protection anti-gel à mettre à jour »', () => {
+  const up = {
+    oldDefaults: true, addedPrefer: ['MainThread', 'tsc', 'eslint'], memTerm: { from: 8, to: 10 },
+    settings: { memTerm: 10, memKill: 5, swapTerm: 35, swapKill: 25, prefer: ['MainThread', 'tsc', 'eslint', 'vitest'] },
+  };
+  test('pop-up : titre, un seul bouton d’action, « Plus tard » et pause de 7 jours comme pour l’installation', () => {
+    const t = earlyoomPopupText('upgrade', up);
+    expect(t.title).toBe('Protection anti-gel à mettre à jour');
+    expect(t.primary).toBe('Mettre à jour');
+    expect(t.busy).toBe('Mise à jour…');
+    expect(t.later).toBe('Plus tard');
+    expect(t.snooze).toBe('Ne plus rappeler pendant 7 jours');
+    expect(t.body).toContain('MainThread, tsc, eslint');
+    expect(t.body).toContain('8 % → 10 %');
+    expect(t.body).toMatch(/aucune exclusion retirée/i);
+    expect(t.body).toMatch(/mot de passe/);
+  });
+  test('sans détail (état pas encore lu) : texte générique', () => {
+    expect(earlyoomPopupText('upgrade').body).toMatch(/MainThread/);
+  });
+  test('libellés d’attente des autres modes inchangés', () => {
+    expect(earlyoomPopupText('install').busy).toBe('Installation…');
+    expect(earlyoomPopupText('activate').busy).toBe('Activation…');
+  });
+  test('upgradeSummary : une ligne par changement', () => {
+    expect(upgradeSummary(up)).toEqual([
+      'Tués en premier : MainThread, tsc, eslint (vos motifs restent).',
+      'SIGTERM dès 10 % de mémoire disponible (8 % → 10 %) : earlyoom réagit avant le gel.',
+      'Aucune exclusion retirée (terminaux, Claude, session, liste protégée) ; vos autres réglages restent.',
+    ]);
   });
 });

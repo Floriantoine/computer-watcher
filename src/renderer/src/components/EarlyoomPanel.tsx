@@ -1,11 +1,12 @@
 import { APP_DISPLAY_NAME } from '../../../core/appName';
 import { useCallback, useEffect, useState } from 'react';
-import { Activity, Copy, KeyRound, ShieldCheck, TriangleAlert } from 'lucide-react';
+import { Activity, Copy, KeyRound, ShieldCheck, ShieldPlus, TriangleAlert } from 'lucide-react';
 import { ignoreConversions, ignoreList } from '../../../core/earlyoom';
 import type { EarlyoomStatus } from '../../../core/types';
 import { formFromStatus, lastEarlyoomKills, missingTestPrefer, validateEarlyoomForm, withTestPrefer, type EarlyoomForm } from '../earlyoomForm';
-import { settingsSetupAction } from '../earlyoomPopup';
-import { EARLYOOM_CHANGED, runEarlyoomSetup } from './EarlyoomSetupPopup';
+import { upgradeNeed } from '../../../core/earlyoomSetup';
+import { settingsSetupAction, upgradeSummary } from '../earlyoomPopup';
+import { EARLYOOM_CHANGED, runEarlyoomSetup, runEarlyoomUpgrade } from './EarlyoomSetupPopup';
 import { formatInstant } from '../metrics';
 import { linesDirty, numbersDirty, tokenDiff, type FormState } from '../settingsNav';
 import { Card, NumberField, Row, SaveBar } from './settingsUi';
@@ -17,7 +18,7 @@ interface Props {
   onAttention?: (s: EarlyoomAttention) => void;
 }
 
-export type EarlyoomAttention = FormState & { status: { installed: boolean; active: string; enabled: string } | null };
+export type EarlyoomAttention = FormState & { status: { installed: boolean; active: string; enabled: string; upgrade?: boolean } | null };
 
 const ACTIVE: Record<EarlyoomStatus['active'], { label: string; tone: string }> = {
   active: { label: 'actif', tone: 'ok' },
@@ -40,6 +41,7 @@ export function EarlyoomPanel({ protectedList, onToast, onAttention }: Props) {
   const [kills, setKills] = useState<{ ts: number; name: string; signal: string }[]>([]);
   const [applying, setApplying] = useState(false);
   const [settingUp, setSettingUp] = useState(false);
+  const [upgrading, setUpgrading] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -73,9 +75,12 @@ export function EarlyoomPanel({ protectedList, onToast, onAttention }: Props) {
   const installed = st ? st.installed : null;
   const active = st?.active ?? null;
   const enabled = st?.enabled ?? null;
+  // « Protection anti-gel à mettre à jour » : proposée ici même après « Plus tard » (choix fait dans Réglages, comme l'installation).
+  const upgrade = st ? upgradeNeed(st) : null;
+  const needsUpgrade = upgrade !== null;
   useEffect(() => {
-    onAttention?.({ status: installed === null ? null : { installed, active: active ?? 'unknown', enabled: enabled ?? 'unknown' }, dirty, invalid });
-  }, [installed, active, enabled, dirty, invalid, onAttention]);
+    onAttention?.({ status: installed === null ? null : { installed, active: active ?? 'unknown', enabled: enabled ?? 'unknown', upgrade: needsUpgrade }, dirty, invalid });
+  }, [installed, active, enabled, needsUpgrade, dirty, invalid, onAttention]);
 
   const setupAction = st ? settingsSetupAction(st) : null;
   const setup = async () => {
@@ -89,7 +94,7 @@ export function EarlyoomPanel({ protectedList, onToast, onAttention }: Props) {
   };
   const setupButton = setupAction && (
     <div className="eo-setup-row">
-      <button className="primary" data-testid="earlyoom-setup" disabled={settingUp || applying} onClick={() => void setup()}>
+      <button className="primary" data-testid="earlyoom-setup" disabled={settingUp || applying || upgrading} onClick={() => void setup()}>
         {setupAction.mode === 'install' ? <ShieldCheck size={14} strokeWidth={2} /> : <KeyRound size={14} strokeWidth={2} />}
         {settingUp ? (setupAction.mode === 'install' ? 'Installation…' : 'Activation…') : setupAction.label}
       </button>
@@ -98,6 +103,37 @@ export function EarlyoomPanel({ protectedList, onToast, onAttention }: Props) {
           ? `Installe le paquet earlyoom, écrit la configuration (exclusions obligatoires) et active le service. ${APP_DISPLAY_NAME} montre d’abord le détail exact.`
           : `Écrit la configuration (exclusions obligatoires) puis systemctl enable --now earlyoom. ${APP_DISPLAY_NAME} montre d’abord la ligne exacte.`}
       </span>
+    </div>
+  );
+
+  const runUpgrade = async () => {
+    setUpgrading(true);
+    try {
+      await runEarlyoomUpgrade(onToast); // diffuse EARLYOOM_CHANGED en cas de succès : load() relancé
+    } finally {
+      setUpgrading(false);
+    }
+  };
+  const upgradeCard = upgrade && (
+    <div className="eo-upgrade" data-testid="earlyoom-upgrade-card" role="region" aria-label="Protection anti-gel à mettre à jour">
+      <div className="eo-upgrade-head">
+        <ShieldPlus size={16} strokeWidth={2} aria-hidden />
+        <strong>Protection anti-gel à mettre à jour</strong>
+      </div>
+      <p className="hint">
+        Les processus Node récents (jest, tsc, eslint, nest…) s’appellent « MainThread » pour earlyoom : la configuration actuelle ne les vise pas,
+        et earlyoom peut tuer un petit onglet pendant qu’un test de plusieurs Go continue.
+      </p>
+      <ul className="eo-upgrade-list">
+        {upgradeSummary(upgrade).map((l) => <li key={l}>{l}</li>)}
+      </ul>
+      <div className="eo-setup-row">
+        <button className="primary" data-testid="earlyoom-upgrade" disabled={upgrading || settingUp || applying} onClick={() => void runUpgrade()}>
+          <KeyRound size={14} strokeWidth={2} />
+          {upgrading ? 'Mise à jour…' : 'Mettre à jour (mot de passe)'}
+        </button>
+        <span className="hint">{APP_DISPLAY_NAME} montre d’abord la ligne exacte ; l’ancien fichier est copié en .bak et restauré si earlyoom ne redémarre pas.</span>
+      </div>
     </div>
   );
 
@@ -171,6 +207,7 @@ export function EarlyoomPanel({ protectedList, onToast, onAttention }: Props) {
           <strong data-testid="earlyoom-state">earlyoom{st.version ? ` ${st.version}` : ''} · {a.label}{st.enabled === 'disabled' ? ' · ne démarre pas avec le système' : ''}</strong>
         </div>
         {setupButton}
+        {upgradeCard}
         <h4 className="eo-title">Derniers kills</h4>
         {kills.length === 0 ? (
           <p className="hint" style={{ margin: 0 }}>Aucun kill enregistré ces 7 derniers jours.</p>
@@ -238,7 +275,7 @@ export function EarlyoomPanel({ protectedList, onToast, onAttention }: Props) {
         {v.errors.prefer && <span className="field-error">{v.errors.prefer}</span>}
         {missingTestPrefer(form.prefer).length > 0 && (
           <button className="eo-add-tests" data-testid="earlyoom-add-tests" onClick={() => setField('prefer', withTestPrefer(form.prefer))}>
-            Ajouter les processus de test (vitest, jest, playwright…)
+            Ajouter les processus recommandés (MainThread, tsc, eslint, vitest, jest…)
           </button>
         )}
       </Card>
@@ -271,7 +308,7 @@ export function EarlyoomPanel({ protectedList, onToast, onAttention }: Props) {
         </div>
         <SaveBar
           dirty={dirty}
-          disabled={!v.settings || unchanged || applying}
+          disabled={!v.settings || unchanged || applying || upgrading}
           onSave={() => v.settings && v.preview && void apply(v.settings, v.preview)}
           testid="earlyoom-apply"
           label={

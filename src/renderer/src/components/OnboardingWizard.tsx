@@ -4,12 +4,13 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { motion } from 'motion/react';
 import { AppWindow, Check, CircleAlert, HardDrive, KeyRound, Power, RotateCw, ShieldCheck, Sparkles } from 'lucide-react';
 import { ONBOARDING_STEPS, stepPosition, wizardKey, type OnboardingInfo, type OnboardingStep, type InstallOutcome } from '../../../core/onboarding';
-import { setupNeed } from '../../../core/earlyoomSetup';
+import { setupNeed, upgradeNeed } from '../../../core/earlyoomSetup';
 import type { EarlyoomStatus, RecorderState } from '../../../core/types';
 import { useFocusTrap } from '../focusTrap';
 import { autostartResult, installResult, originalDeletionResult, recorderResult, type ResultText } from '../onboardingText';
 import { ipcErrorMessage } from '../viewModel';
-import { runEarlyoomSetup } from './EarlyoomSetupPopup';
+import { runEarlyoomSetup, runEarlyoomUpgrade } from './EarlyoomSetupPopup';
+import { upgradeSummary } from '../earlyoomPopup';
 import { Switch } from './settingsUi';
 import '../onboarding.css';
 
@@ -117,6 +118,13 @@ export function OnboardingWizard({ info, onClose, onToast }: {
       }
     });
   const eoMode = eo ? setupNeed(eo) : null;
+  const eoUpgrade = eo ? upgradeNeed(eo) : null;
+  const upgradeEarlyoom = () =>
+    run(async () => {
+      const r = await runEarlyoomUpgrade(onToast);
+      setResult('earlyoom', r.ok ? { tone: 'ok', lines: ['Protection anti-gel mise à jour'] } : { tone: r.reason === 'cancelled' || r.reason === 'stale' ? 'warn' : 'error', lines: [r.message] });
+      window.procWatch.earlyoom.status().then(setEo, () => {});
+    });
   const setupEarlyoom = () =>
     run(async () => {
       if (!eoMode) return;
@@ -224,8 +232,21 @@ export function OnboardingWizard({ info, onClose, onToast }: {
           configurer (terminaux, Claude et session toujours exclus) et l’activer, avec un seul mot de passe administrateur.
         </p>
         <p className="onb-eo-state" data-testid="onb-earlyoom-state">
-          {!eo ? 'Lecture de l’état…' : !eo.installed ? 'earlyoom n’est pas installé.' : eoMode ? 'earlyoom est installé mais pas actif au démarrage.' : `earlyoom ${eo.version ?? ''} est installé et actif.`}
+          {!eo ? 'Lecture de l’état…' : !eo.installed ? 'earlyoom n’est pas installé.' : eoMode ? 'earlyoom est installé mais pas actif au démarrage.' : eoUpgrade ? `earlyoom ${eo.version ?? ''} est actif, mais sa protection anti-gel est à mettre à jour.` : `earlyoom ${eo.version ?? ''} est installé et actif.`}
         </p>
+        {!eoMode && eoUpgrade && (
+          <>
+            <ul className="eo-upgrade-list" data-testid="onb-earlyoom-upgrade-list">
+              {upgradeSummary(eoUpgrade).map((l) => <li key={l}>{l}</li>)}
+            </ul>
+            <div className="onb-actions">
+              <button className="primary" data-testid="onb-earlyoom-upgrade" disabled={busy} onClick={() => void upgradeEarlyoom()}>
+                <KeyRound size={14} strokeWidth={2} />
+                Mettre à jour
+              </button>
+            </div>
+          </>
+        )}
         {eoMode && (
           <div className="onb-actions">
             <button className="primary" data-testid="onb-earlyoom-setup" disabled={busy} onClick={() => void setupEarlyoom()}>

@@ -110,6 +110,15 @@ export function upgradeLine(
   return built.ok ? { ok: true, line: built.line, upgrade } : built;
 }
 
+/** Ce que change la mise à niveau, en clair (confirmation native, carte de Réglages, pop-up). */
+export function upgradeChanges(u: EarlyoomUpgrade): string[] {
+  return [
+    ...(u.addedPrefer.length ? [`Tués en premier : ${u.addedPrefer.join(', ')} (vos motifs restent).`] : []),
+    ...(u.memTerm ? [`SIGTERM dès ${u.memTerm.to} % de mémoire disponible (${u.memTerm.from} % → ${u.memTerm.to} %) : earlyoom réagit avant le gel.`] : []),
+    'Aucune exclusion retirée (terminaux, Claude, session, liste protégée) ; vos autres réglages restent.',
+  ];
+}
+
 /** Mise à niveau à proposer : earlyoom installé, actif et lancé au démarrage (ni à installer, ni à activer, ni masqué). */
 export function upgradeNeed(s: EarlyoomServiceState & { file?: { settings: EarlyoomSettings; line: string } | null }): EarlyoomUpgrade | null {
   if (!s.installed || s.active !== 'active' || s.enabled === 'masked' || setupNeed(s) !== null) return null;
