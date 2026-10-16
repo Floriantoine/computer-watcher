@@ -1,15 +1,15 @@
 import { APP_DISPLAY_NAME } from '../../../core/appName';
 import { useEffect, useId, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { AnimatePresence } from 'motion/react';
-import { Bot, ChevronDown, FlaskConical, LayoutTemplate, Pencil, Plus, ShieldAlert, Trash2, TriangleAlert } from 'lucide-react';
+import { Bot, ChevronDown, FlaskConical, LayoutTemplate, ListPlus, Pencil, Plus, ShieldAlert, Trash2, TriangleAlert } from 'lucide-react';
 import { CATEGORIES } from '../../../core/classify/categories';
-import { MAX_RULES, OPT_IN_APPS, RULE_TEMPLATES } from '../../../core/rules/config';
+import { MAX_RULES, missingRecommended, OPT_IN_APPS, RULE_TEMPLATES } from '../../../core/rules/config';
 import type { Rule, RuleIssue, RuleStats } from '../../../core/rules/types';
 import type { Config } from '../../../core/types';
 import { CATEGORY_META } from '../categories';
 import { pollWhileLive } from '../history';
 import {
-  formToRule, newRuleFrom, ruleSummary, ruleToForm, statsLabel, withRule, withRuleEnabled, withRuleMode, withRulesEnabled, withoutRule,
+  formToRule, newRuleFrom, ruleSummary, ruleToForm, statsLabel, withRecommended, withRule, withRuleEnabled, withRuleMode, withRulesEnabled, withoutRule,
   type RuleErrors, type RuleForm,
 } from '../rulesForm';
 import type { FormState } from '../settingsNav';
@@ -27,7 +27,7 @@ interface Props {
   onFormState?: (s: FormState) => void;
 }
 
-const KINDS: [RuleForm['kind'], string][] = [['memory', 'Mémoire'], ['inactive', 'Inactivité'], ['forecast', 'Prévision']];
+const KINDS: [RuleForm['kind'], string][] = [['memory', 'Mémoire'], ['inactive', 'Inactivité'], ['forecast', 'Prévision'], ['system', 'Saturation']];
 const STATS_EVERY_MS = 60_000;
 
 /** Champ texte (nombre décimal à virgule possible) suivi de son unité. */
@@ -173,6 +173,11 @@ export function RulesPanel({ config, issues, onSaved, onFormState }: Props) {
     setTplOpen(false);
     await save(withRule(config, newRuleFrom(t, ids, Date.now())));
   };
+  // règles recommandées absentes (par id) : le bouton les ajoute sans toucher aux autres
+  const missing = useMemo(() => missingRecommended(rules), [rules]);
+  const addRecommended = async () => {
+    await save(withRecommended(config, Date.now()).config);
+  };
 
   const nameId = useId();
   const f = draft?.form;
@@ -189,7 +194,7 @@ export function RulesPanel({ config, issues, onSaved, onFormState }: Props) {
             shells, le bureau, systemd et {APP_DISPLAY_NAME}. 10 actions par heure au plus.
           </span>
         </p>
-        <Row label="Règles automatiques" help="Éteint : rien ne tourne, pas même les simulations. Chaque nouvelle règle démarre en Simulation (journal « aurait arrêté… », aucun signal).">
+        <Row label="Règles automatiques" help="Éteint : rien ne tourne, pas même les simulations. Chaque nouvelle règle démarre en Simulation (journal « aurait arrêté… », aucun signal), sauf la règle anti-gel recommandée, Active telle quelle.">
           {(id) => (
             <span data-testid="rules-master">
               <Switch id={id} checked={rules.enabled} label="Règles automatiques" disabled={busy} onToggle={() => void save(withRulesEnabled(config, !rules.enabled))} />
@@ -220,7 +225,7 @@ export function RulesPanel({ config, issues, onSaved, onFormState }: Props) {
 
       <Card title={<>Règles<span className="cat-count">{rules.list.length}/{MAX_RULES}</span></>}>
         {rules.list.length === 0 ? (
-          <p className="hint" style={{ margin: 0 }} data-testid="rules-empty">Aucune règle. Ajoute-en une, ou pars d'un modèle.</p>
+          <p className="hint" style={{ margin: 0 }} data-testid="rules-empty">Aucune règle. Ajoute les règles recommandées, ajoute-en une, ou pars d'un modèle.</p>
         ) : (
           <ul className="rules-list" data-testid="rules-list">
             {rules.list.map((r) => (
@@ -253,6 +258,19 @@ export function RulesPanel({ config, issues, onSaved, onFormState }: Props) {
               </li>
             ))}
           </ul>
+        )}
+        {missing.length > 0 && (
+          <div className="rules-recommended" data-testid="rules-recommended-box">
+            <p className="hint">
+              Règles recommandées absentes : {missing.map((r) => `« ${r.name} »`).join(', ')}.
+              {missing.some((r) => r.mode === 'active') && ' L’anti-gel arrive Active (il ne vise que les tests, tsc et eslint, une à la fois) ; les autres en Simulation.'}
+              {!rules.enabled && ' L’interrupteur « Règles automatiques » reste à allumer.'}
+            </p>
+            <button type="button" data-testid="rules-recommended" disabled={busy || full} onClick={() => void addRecommended()}>
+              <ListPlus size={13} strokeWidth={2.2} />
+              Ajouter les règles recommandées
+            </button>
+          </div>
         )}
         <div className="s-foot">
           {full && <span className="hint">Au plus {MAX_RULES} règles.</span>}
@@ -364,6 +382,22 @@ export function RulesPanel({ config, issues, onSaved, onFormState }: Props) {
                 {() => (
                   <Toggles label="Applis visables" testid="rule-apps" items={OPT_IN_APPS.map((a) => ({ value: a, label: a }))} selected={f.includeApps} onChange={(includeApps) => setForm({ includeApps })} />
                 )}
+              </Row>
+            </>
+          )}
+          {f.kind === 'system' && (
+            <>
+              <Row label="Mémoire utilisée au-dessus de" error={err.memPercent} help="RAM utilisée d’après la mémoire disponible (MemAvailable), comme free.">
+                {(id) => <TextField id={id} value={f.memPercent} unit="%" ariaLabel="Seuil mémoire" invalid={!!err.memPercent} testid="rule-mem-percent" onChange={(v) => setForm({ memPercent: v })} />}
+              </Row>
+              <Row label="Pendant" error={err.memForSec}>
+                {(id) => <TextField id={id} value={f.memForSec} unit="s" ariaLabel="Durée mémoire" invalid={!!err.memForSec} testid="rule-mem-for-sec" onChange={(v) => setForm({ memForSec: v })} />}
+              </Row>
+              <Row label="Ou CPU total au-dessus de" error={err.cpuPercent} help="Tous les cœurs : 100 % = machine entièrement occupée.">
+                {(id) => <TextField id={id} value={f.cpuPercent} unit="%" ariaLabel="Seuil CPU" invalid={!!err.cpuPercent} testid="rule-cpu-percent" onChange={(v) => setForm({ cpuPercent: v })} />}
+              </Row>
+              <Row label="Pendant" error={err.cpuForSec} help="Cible : la plus grosse vérification (instance Tests, tsc, eslint) avec ses workers, jamais une lancée par Claude ; la suivante seulement une fois la précédente arrêtée, si la condition tient toujours.">
+                {(id) => <TextField id={id} value={f.cpuForSec} unit="s" ariaLabel="Durée CPU" invalid={!!err.cpuForSec} testid="rule-cpu-for-sec" onChange={(v) => setForm({ cpuForSec: v })} />}
               </Row>
             </>
           )}

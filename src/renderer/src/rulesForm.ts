@@ -1,13 +1,14 @@
 // Réglages › Règles (logique pure) : formulaire ↔ règle, nouvelle règle, résumé, statistiques, modifications de la config.
 import { CATEGORIES, type Category } from '../../core/classify/categories';
-import { MATCH_VALUE_RE, RULE_BOUNDS, RULE_NAME_MAX, validateRulesDetailed } from '../../core/rules/config';
+import { MATCH_VALUE_RE, RULE_BOUNDS, RULE_NAME_MAX, validateRulesDetailed, withRecommendedRules } from '../../core/rules/config';
+import { SYSTEM_DEFAULTS } from '../../core/rules/recommended';
 import type { Rule, RuleCondition, RuleMode, RuleStats } from '../../core/rules/types';
 import type { Config } from '../../core/types';
 import { CATEGORY_META } from './categories';
 
 export interface RuleForm {
   name: string;
-  kind: 'memory' | 'inactive' | 'forecast';
+  kind: 'memory' | 'inactive' | 'forecast' | 'system';
   target: 'group' | 'instance';
   matchBy: 'name' | 'category';
   /** Nom à comparer : texte comparé tel quel (sans casse), jamais interprété. */
@@ -19,6 +20,11 @@ export interface RuleForm {
   forHours: string;
   underMin: string;
   includeApps: string[];
+  /** Anti-gel : RAM utilisée (%) et durée (s), CPU total (%) et durée (s). */
+  memPercent: string;
+  memForSec: string;
+  cpuPercent: string;
+  cpuForSec: string;
 }
 
 export type RuleErrors = Partial<Record<keyof RuleForm, string>>;
@@ -26,6 +32,8 @@ export type RuleErrors = Partial<Record<keyof RuleForm, string>>;
 const DEFAULT_FORM: RuleForm = {
   name: '', kind: 'memory', target: 'instance', matchBy: 'name', matchValue: '', matchCategory: 'test', overGB: '4', forMin: '5',
   categories: ['front', 'back'], forHours: '24', underMin: '3', includeApps: [],
+  memPercent: String(SYSTEM_DEFAULTS.memPercent), memForSec: String(SYSTEM_DEFAULTS.memForSec),
+  cpuPercent: String(SYSTEM_DEFAULTS.cpuPercent), cpuForSec: String(SYSTEM_DEFAULTS.cpuForSec),
 };
 
 /** « 4096 » → « 4 », « 4608 » → « 4,5 » (Go, deux décimales au plus). */
@@ -44,9 +52,14 @@ export function ruleToForm(r: Rule): RuleForm {
   } else if (c.kind === 'inactive') {
     f.categories = [...c.categories];
     f.forHours = String(c.forHours);
-  } else {
+  } else if (c.kind === 'forecast') {
     f.underMin = String(c.underMin);
     f.includeApps = [...c.includeApps];
+  } else {
+    f.memPercent = String(c.memPercent);
+    f.memForSec = String(c.memForSec);
+    f.cpuPercent = String(c.cpuPercent);
+    f.cpuForSec = String(c.cpuForSec);
   }
   return f;
 }
@@ -84,10 +97,24 @@ export function formToRule(f: RuleForm, base: { id: string; createdAt: number; e
     const forHours = intIn(f.forHours, RULE_BOUNDS.forHours);
     if (forHours === null) errors.forHours = `Un entier entre ${RULE_BOUNDS.forHours[0]} et ${RULE_BOUNDS.forHours[1]}`;
     if (cats.length && forHours !== null) condition = { kind: 'inactive', categories: cats, forHours };
-  } else {
+  } else if (f.kind === 'forecast') {
     const underMin = intIn(f.underMin, RULE_BOUNDS.underMin);
     if (underMin === null) errors.underMin = `Un entier entre ${RULE_BOUNDS.underMin[0]} et ${RULE_BOUNDS.underMin[1]}`;
     else condition = { kind: 'forecast', underMin, includeApps: [...new Set(f.includeApps)].sort() };
+  } else {
+    const field = (k: 'memPercent' | 'memForSec' | 'cpuPercent' | 'cpuForSec') => {
+      const n = intIn(f[k], RULE_BOUNDS[k]);
+      if (n === null) errors[k] = `Un entier entre ${RULE_BOUNDS[k][0]} et ${RULE_BOUNDS[k][1]}`;
+      return n;
+    };
+    const memPercent = field('memPercent');
+    const memForSec = field('memForSec');
+    const cpuPercent = field('cpuPercent');
+    const cpuForSec = field('cpuForSec');
+    if (memPercent !== null && memForSec !== null && cpuPercent !== null && cpuForSec !== null) {
+      // même ordre de champs que la validation (comparaison des conditions par JSON)
+      condition = { kind: 'system', memPercent, memForSec, cpuPercent, cpuForSec };
+    }
   }
   if (Object.keys(errors).length || !condition) return { errors };
   const rule: Rule = { id: base.id, name, enabled: base.enabled, mode: base.mode, condition, createdAt: base.createdAt };
@@ -110,6 +137,8 @@ export function newRuleFrom(template: Omit<Rule, 'id' | 'createdAt'> | null, exi
 }
 
 const size = (mb: number) => (mb >= 1024 ? `${gb(mb)} Go` : `${mb} Mo`);
+/** 15 → « 15 s », 60 → « 1 min », 90 → « 90 s ». */
+const seconds = (s: number) => (s % 60 === 0 ? `${s / 60} min` : `${s} s`);
 const duration = (h: number) => (h % 24 === 0 ? `${h / 24} j` : `${h} h`);
 const catList = (cats: readonly Category[]) => {
   const labels = cats.map((c) => CATEGORY_META[c].label);
@@ -129,6 +158,9 @@ export function ruleSummary(r: Rule): string {
     return c.match.by === 'name' ? `Si ${c.match.value} ${over} → arrêter` : `Si une instance ${CATEGORY_META[c.match.value].label} ${over} → arrêter`;
   }
   if (c.kind === 'inactive') return `Si une instance ${catList(c.categories)} de projet est inactive depuis ${duration(c.forHours)} → arrêter`;
+  if (c.kind === 'system') {
+    return `Si la mémoire dépasse ${c.memPercent} % pendant ${seconds(c.memForSec)} ou le CPU ${c.cpuPercent} % pendant ${seconds(c.cpuForSec)} → arrêter la plus grosse vérification (tests, tsc, eslint), une à la fois`;
+  }
   const apps = c.includeApps.length ? ` (applis incluses : ${c.includeApps.join(', ')})` : '';
   return `Si la mémoire doit s'épuiser dans moins de ${c.underMin} min → arrêter le plus gros groupe qui grossit${apps}`;
 }
@@ -165,4 +197,10 @@ export function withRuleEnabled(c: Config, id: string, enabled: boolean): Config
 
 export function withRulesEnabled(c: Config, enabled: boolean): Config {
   return { ...c, rules: { ...c.rules, enabled } };
+}
+
+/** Bouton « Ajouter les règles recommandées » : celles qui manquent (par id), sans écraser ni dupliquer. */
+export function withRecommended(c: Config, now: number): { config: Config; added: number } {
+  const r = withRecommendedRules(c.rules, now);
+  return { config: { ...c, rules: r.rules }, added: r.added.length };
 }
