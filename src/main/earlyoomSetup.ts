@@ -1,5 +1,5 @@
 // Installation et activation d'earlyoom depuis l'app (B8 bis) : un seul pkexec d'un script fixe.
-import { buildEarlyoomLine, checkEarlyoomLine, EARLYOOM_LINE_PATTERN, ignoreFromLine, mergeIgnore } from '../core/earlyoom';
+import { buildEarlyoomLine, checkEarlyoomLine, EARLYOOM_LINE_PATTERN, fileIgnoreTokens, mergeIgnore } from '../core/earlyoom';
 import {
   detectPackageManager, isSetupMode, OS_RELEASE, PACKAGE_MANAGERS, setupNeed, setupSettings, type EarlyoomSetupMode, type PackageManagerName,
 } from '../core/earlyoomSetup';
@@ -238,11 +238,23 @@ export function createEarlyoomSetup(deps: {
         }
         pm = c.pm;
       }
-      // Réglages du fichier (mis à niveau s'il le faut) ; exclusions du fichier gardées s'il respecte la politique, plus la liste protégée.
-      const kept = st.file ? ignoreFromLine(st.file.line) : null;
-      const built = buildEarlyoomLine(setupSettings(st.file), mergeIgnore(kept ?? [], deps.getProtected()));
+      // Réglages du fichier (mis à niveau s'il le faut) ; exclusions du fichier toutes gardées, plus la liste protégée.
+      // Exclusion du fichier impossible à reprendre (regex écrite à la main) : refus, jamais d'exclusion perdue.
+      const kept = st.file ? fileIgnoreTokens(st.file.line) : [];
+      if (kept === null) {
+        return {
+          ok: false, reason: 'invalid',
+          message: `${EARLYOOM_TARGET} contient des exclusions que l’app ne sait pas reprendre (motifs écrits à la main) : rien n'a été modifié. Les simplifier (un nom par exclusion) ou régler earlyoom à la main.`,
+        };
+      }
+      const built = buildEarlyoomLine(setupSettings(st.file), mergeIgnore(kept, deps.getProtected()));
       if (!built.ok) return { ok: false, reason: 'invalid', message: built.errors.join(' · ') };
       if (!(await deps.confirm({ mode: rawMode, pm, line: built.line }))) return { ok: false, reason: 'cancelled', message: "Annulé : rien n'a été modifié." };
+      // Relu après la confirmation : fichier ou état changé entre-temps → on n'écrase rien.
+      const again = await deps.status();
+      if (setupNeed(again) !== rawMode || (again.file?.line ?? null) !== (st.file?.line ?? null)) {
+        return { ok: false, reason: 'stale', message: 'La configuration d’earlyoom a changé pendant la confirmation : rien n’a été modifié.' };
+      }
       const o = await setup(rawMode, built.line);
       deps.log({ ts: now(), type: 'earlyoom_setup', groupKey: null, detail: { mode: rawMode, ok: o.result.ok, code: o.code, ...(o.timedOut ? { timedOut: true as const } : {}) } });
       release = false;

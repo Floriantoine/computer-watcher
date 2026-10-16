@@ -1,7 +1,7 @@
 // État d'earlyoom et application d'une nouvelle configuration via pkexec d'un script fixe.
 import { execFile } from 'node:child_process';
 import { cleanEnv } from '../core/childEnv';
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { buildEarlyoomArgs, checkEarlyoomLine, EARLYOOM_LINE_PATTERN, EARLYOOM_MAX_LINE, isEarlyoomSettings, parseEarlyoomDefault } from '../core/earlyoom';
 import { upgradeChanges, upgradeLine, upgradeNeed, type EarlyoomUpgrade } from '../core/earlyoomSetup';
@@ -256,6 +256,12 @@ export function createEarlyoomUpgrade(deps: {
       if (!built.ok) return { ok: false, reason: 'invalid', message: `${built.errors.join(' · ')} : rien n'a été modifié.` };
       const c = upgradeConfirmation(built.upgrade, built.line);
       if (!(await deps.confirm({ line: built.line, ...c }))) return { ok: false, reason: 'cancelled', message: "Annulé : rien n'a été modifié." };
+      // Relu après la confirmation : fichier modifié entre-temps (exclusion ajoutée…) → on n'écrase rien.
+      const again = await deps.status();
+      const rebuilt = upgradeNeed(again) ? upgradeLine(again.file, deps.getProtected()) : null;
+      if (!rebuilt?.ok || rebuilt.line !== built.line || again.file?.line !== st.file?.line) {
+        return { ok: false, reason: 'stale', message: "La configuration d'earlyoom a changé pendant la confirmation : rien n'a été modifié." };
+      }
       return await apply(built.line);
     } finally {
       lock.held = false;
@@ -269,8 +275,17 @@ export function createEarlyoomUpgrade(deps: {
  * dans ce fichier et la notent dans <dossier>/applied.log : aucun pkexec. Une app empaquetée l'ignore toujours.
  */
 export function earlyoomFake(env: NodeJS.ProcessEnv, isPackaged: boolean): { dir: string; status: () => Promise<EarlyoomStatus>; apply: (line: string) => Promise<ApplyResult> } | null {
-  const dir = env.PROC_WATCH_EARLYOOM_FAKE;
-  if (isPackaged || !dir || !isAbsolute(dir) || dir.startsWith('/etc')) return null;
+  const raw = env.PROC_WATCH_EARLYOOM_FAKE;
+  if (isPackaged || !raw || !isAbsolute(raw)) return null;
+  // Chemin résolu (.., liens) : un dossier existant, jamais sous /etc ni /usr.
+  let dir: string;
+  try {
+    dir = realpathSync(raw);
+    if (!statSync(dir).isDirectory()) return null;
+  } catch {
+    return null;
+  }
+  if (['/etc', '/usr'].some((p) => dir === p || dir.startsWith(`${p}/`))) return null;
   const file = join(dir, 'default');
   return {
     dir,

@@ -236,11 +236,30 @@ export function parseEarlyoomDefault(text: string): { settings: EarlyoomSettings
     if (/^EARLYOOM_ARGS=/.test(t)) line = t; // la dernière affectation l'emporte, comme EnvironmentFile
   }
   if (line === null) return null;
+  const opt = argsOption(line);
+  const [memTerm, memKill] = parsePair(opt('-m', '--mem'), [10, 5]);
+  const [swapTerm, swapKill] = parsePair(opt('-s', '--swap'), [10, 5]);
+  const converted: string[] = [];
+  const prefer: string[] = [];
+  const pv = opt('--prefer', '--prefer');
+  if (pv) {
+    for (const part of listParts(pv)) {
+      if (part.includes('\\')) {
+        converted.push(part);
+        prefer.push(part.replace(/\\[\s\S]?/g, '.'));
+      } else prefer.push(part);
+    }
+  }
+  return { settings: { memTerm, memKill, swapTerm, swapKill, prefer }, converted, line };
+}
+
+/** Lecteur des options d'une ligne EARLYOOM_ARGS (guillemets retirés, dernière occurrence, formes `-m 5`, `-m5`, `--mem=5`). */
+function argsOption(line: string): (short: string, long: string) => string | undefined {
   let value = line.slice('EARLYOOM_ARGS='.length);
   const q = value[0];
   if ((q === '"' || q === "'") && value.endsWith(q) && value.length >= 2) value = value.slice(1, -1);
   const tokens = value.split(/\s+/).filter(Boolean);
-  const opt = (short: string, long: string): string | undefined => {
+  return (short, long) => {
     let found: string | undefined;
     for (let i = 0; i < tokens.length; i++) {
       const tk = tokens[i];
@@ -250,21 +269,26 @@ export function parseEarlyoomDefault(text: string): { settings: EarlyoomSettings
     }
     return found;
   };
-  const [memTerm, memKill] = parsePair(opt('-m', '--mem'), [10, 5]);
-  const [swapTerm, swapKill] = parsePair(opt('-s', '--swap'), [10, 5]);
-  const converted: string[] = [];
-  const prefer: string[] = [];
-  const pv = opt('--prefer', '--prefer');
-  if (pv) {
-    const m = pv.match(/^\^\((.*)\)\$$/);
-    for (const part of m ? splitTopLevel(m[1]) : [pv]) {
-      if (part.includes('\\')) {
-        converted.push(part);
-        prefer.push(part.replace(/\\[\s\S]?/g, '.'));
-      } else prefer.push(part);
-    }
-  }
-  return { settings: { memTerm, memKill, swapTerm, swapKill, prefer }, converted, line };
+}
+
+/** `^(a|b)$` → [a, b] (« | » de premier niveau) ; autre forme → la valeur entière. */
+function listParts(v: string): string[] {
+  const m = v.match(/^\^\((.*)\)\$$/);
+  return m ? splitTopLevel(m[1]) : [v];
+}
+
+/**
+ * Exclusions (--ignore) d'une ligne lue, même écrite à la main : [] sans --ignore (fichier du paquet), la liste si chaque
+ * exclusion est un nom représentable dans la grammaire de l'app (ou une entrée de base), sinon null : on ne sait pas la
+ * reprendre, et l'app ne doit alors pas réécrire le fichier (elle perdrait une exclusion).
+ */
+export function fileIgnoreTokens(line: string): string[] | null {
+  if (line.length > EARLYOOM_MAX_LINE) return null;
+  const iv = argsOption(line)('--ignore', '--ignore');
+  if (iv === undefined) return line.split(/\s/).some((t) => t.replace(/^["']/, '').startsWith('--ignore')) ? null : [];
+  const parts = listParts(iv);
+  const ok = parts.every((p) => EARLYOOM_BASE_IGNORE.includes(p) || (p.length <= MAX_PART && IGNORE_TOKEN_RE.test(p)));
+  return ok && parts.length > 0 ? parts : null;
 }
 
 export function isEarlyoomSettings(v: unknown): v is EarlyoomSettings {

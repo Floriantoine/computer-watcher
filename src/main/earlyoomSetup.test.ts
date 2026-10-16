@@ -567,6 +567,33 @@ describe('createEarlyoomSetup (IPC earlyoom:setup)', () => {
       `EARLYOOM_ARGS="-m 10,5 -s 35,25 -r 0 --ignore ^(${BASE}|fish|gnome-terminal-|kitty)$ --prefer ^(MainThread|tsc|eslint|vitest|node..vitest.|jest|pytest|playwright|cypress|mocha|karma|headless_shell|chrome-headless)$"`,
     );
   });
+  test('revue I1 : fichier écrit à la main, exclusions représentables → reprises dans la ligne écrite', async () => {
+    const file = parseEarlyoomDefault("EARLYOOM_ARGS='-r 60 --ignore ^(postgres|Xorg|my-db)$'\n");
+    const m = make({ st: status({ installed: true, active: 'inactive', enabled: 'disabled', file }), protectedList: ['kitty'] });
+    expect((await m.handler('activate')).ok).toBe(true);
+    expect(m.setups[0].line).toContain(`--ignore ^(${BASE}|postgres|Xorg|my-db|kitty)$`);
+  });
+  test('revue I1 : exclusion non représentable → refus avant la confirmation (jamais d’exclusion perdue)', async () => {
+    const file = parseEarlyoomDefault('EARLYOOM_ARGS="-r 60 --ignore ^(postgres|my.(db).*)$"\n');
+    const m = make({ st: status({ installed: true, active: 'inactive', enabled: 'disabled', file }) });
+    const r = await m.handler('activate');
+    expect(r).toMatchObject({ ok: false, reason: 'invalid' });
+    expect(!r.ok && r.message).toMatch(/exclusions/);
+    expect(m.confirms).toEqual([]);
+    expect(m.setups).toEqual([]);
+  });
+  test('revue I2 : fichier modifié pendant la confirmation → stale, rien lancé', async () => {
+    let n = 0;
+    const a = status({ installed: true, active: 'inactive', enabled: 'disabled', file: parseEarlyoomDefault(`EARLYOOM_ARGS="-m 9,5 -s 35,25 -r 0 --ignore ^(${BASE})$"\n`) });
+    const b = { ...a, file: parseEarlyoomDefault(`EARLYOOM_ARGS="-m 9,5 -s 35,25 -r 0 --ignore ^(${BASE}|ajout)$"\n`) };
+    const setups: string[] = [];
+    const handler = createEarlyoomSetup({
+      status: async () => (n++ === 0 ? a : b), getProtected: () => [], exists: () => true, confirm: async () => true, log: () => {},
+      setup: async (mode, line) => { setups.push(line); return { result: { ok: true, line }, code: 0, timedOut: false, done: Promise.resolve() }; },
+    });
+    expect(await handler('activate')).toMatchObject({ ok: false, reason: 'stale' });
+    expect(setups).toEqual([]);
+  });
   test('aucun gestionnaire reconnu → message 20 sans mot de passe', async () => {
     const m = make({ pm: false });
     const r = await m.handler('install');

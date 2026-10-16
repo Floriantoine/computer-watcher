@@ -604,6 +604,16 @@ describe('createEarlyoomUpgrade (IPC earlyoom:upgrade, « Protection anti-gel à
     expect(m.confirms).toEqual([]);
     expect(m.applied).toEqual([]);
   });
+  test('revue I2 : fichier modifié pendant la confirmation → stale, aucun pkexec', async () => {
+    let n = 0;
+    const applied: string[] = [];
+    const handler = createEarlyoomUpgrade({
+      status: async () => (n++ === 0 ? status() : status({ line: OLD_DEFAULT.replace('|gnome-terminal-)', '|gnome-terminal-|ajout)') })),
+      getProtected: () => [], confirm: async () => true, apply: async (l) => (applied.push(l), { ok: true, line: l }),
+    });
+    expect(await handler()).toMatchObject({ ok: false, reason: 'stale' });
+    expect(applied).toEqual([]);
+  });
   test('confirmation refusée → cancelled, pas de pkexec', async () => {
     const m = make({ confirm: false });
     expect(await m.handler()).toEqual({ ok: false, reason: 'cancelled', message: "Annulé : rien n'a été modifié." });
@@ -643,6 +653,11 @@ describe('earlyoomFake (bout en bout : PROC_WATCH_EARLYOOM_FAKE, aucun pkexec)',
     expect(earlyoomFake({}, false)).toBeNull();
     expect(earlyoomFake({ PROC_WATCH_EARLYOOM_FAKE: 'relatif' }, false)).toBeNull();
     expect(earlyoomFake({ PROC_WATCH_EARLYOOM_FAKE: '/etc/default' }, false)).toBeNull();
+  });
+  test('revue M3 : chemin résolu (.., liens) sous /etc ou /usr → ignoré', () => {
+    expect(earlyoomFake({ PROC_WATCH_EARLYOOM_FAKE: '/tmp/../etc/default' }, false)).toBeNull();
+    expect(earlyoomFake({ PROC_WATCH_EARLYOOM_FAKE: '/usr/share' }, false)).toBeNull();
+    expect(earlyoomFake({ PROC_WATCH_EARLYOOM_FAKE: join(dir, 'absent') }, false)).toBeNull();
   });
   test('état lu dans <dossier>/default ; ligne revalidée puis écrite dans ce fichier et notée', async () => {
     const f = earlyoomFake({ PROC_WATCH_EARLYOOM_FAKE: dir }, false);

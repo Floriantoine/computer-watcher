@@ -1,7 +1,7 @@
 // Mise à niveau de la protection anti-gel (défauts de la ligne earlyoom, octobre 2026) : détection et fusion, logique pure.
 import { describe, expect, test } from 'vitest';
 import { DEFAULT_CONFIG } from './defaults';
-import { buildEarlyoomArgs, checkEarlyoomLine, EARLYOOM_BASE_IGNORE, EARLYOOM_LINE_RE, ignoreFromLine, parseEarlyoomDefault } from './earlyoom';
+import { buildEarlyoomArgs, checkEarlyoomLine, EARLYOOM_BASE_IGNORE, EARLYOOM_LINE_RE, fileIgnoreTokens, ignoreFromLine, parseEarlyoomDefault } from './earlyoom';
 import {
   EARLYOOM_ANTIGEL_PREFER, EARLYOOM_DEFAULT_SETTINGS, EARLYOOM_PREVIOUS_DEFAULTS, EARLYOOM_RECOMMENDED_MEM_TERM, EARLYOOM_TEST_PREFER,
   earlyoomUpgrade, reminderMode, setupSettings, upgradeLine, upgradeNeed,
@@ -221,5 +221,31 @@ describe('ligne lue presque conforme : jamais de blocage (retour arrière expone
       expect(earlyoomUpgrade(file(line.endsWith('x') ? line.slice(0, -1).replace('-m 8,5', '-m 8,5 -x') : line))).toBeNull();
       expect(performance.now() - t).toBeLessThan(50);
     }
+  });
+});
+
+describe('fileIgnoreTokens (revue I1 : exclusions d’un fichier non conforme)', () => {
+  test('ligne conforme → ses exclusions', () => expect(fileIgnoreTokens(OLD_NO_PREFER.replace(')$"', '|kitty)$"'))).toEqual([...EARLYOOM_BASE_IGNORE, 'kitty']));
+  test('aucun --ignore (fichier du paquet) → aucune', () => {
+    expect(fileIgnoreTokens('EARLYOOM_ARGS="-r 3600"')).toEqual([]);
+    expect(fileIgnoreTokens('EARLYOOM_ARGS=""')).toEqual([]);
+  });
+  test('ligne écrite à la main, exclusions représentables → reprises', () => {
+    expect(fileIgnoreTokens("EARLYOOM_ARGS='-r 60 --ignore ^(postgres|Xorg|my-db)$'")).toEqual(['postgres', 'Xorg', 'my-db']);
+    expect(fileIgnoreTokens('EARLYOOM_ARGS="-m 5 --ignore=^(postgres)$"')).toEqual(['postgres']);
+    expect(fileIgnoreTokens('EARLYOOM_ARGS="--ignore postgres"')).toEqual(['postgres']);
+  });
+  test('exclusion non représentable (regex, antislash, .*) → null : on ne sait pas la reprendre', () => {
+    expect(fileIgnoreTokens('EARLYOOM_ARGS="-r 60 --ignore ^(postgres|my\\(db\\))$"')).toBeNull();
+    expect(fileIgnoreTokens('EARLYOOM_ARGS="--ignore ^(pg.*)$"')).toBeNull();
+    expect(fileIgnoreTokens('EARLYOOM_ARGS="--ignore ^(a[0-9])$"')).toBeNull();
+    expect(fileIgnoreTokens(`EARLYOOM_ARGS="--ignore ^(${'a'.repeat(101)})$"`)).toBeNull();
+  });
+});
+
+describe('revue M1 : motif du fichier de plus de 100 caractères', () => {
+  test('aucune proposition (sinon impasse : proposée mais jamais applicable)', () => {
+    expect(earlyoomUpgrade(file(OLD_NO_PREFER.replace(')$"', `|${'a'.repeat(101)})$"`)))).toBeNull();
+    expect(earlyoomUpgrade(file(`${OLD_NO_PREFER.slice(0, -1)} --prefer ^(${'b'.repeat(101)})$"`))).toBeNull();
   });
 });

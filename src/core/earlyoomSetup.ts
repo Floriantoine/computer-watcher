@@ -1,5 +1,5 @@
 // Installation / activation d'earlyoom depuis l'app (B8 bis) : logique pure partagée par le main et le renderer.
-import { buildEarlyoomArgs, buildEarlyoomLine, EARLYOOM_MAX_PREFER, ignoreFromLine, mergeIgnore, type EarlyoomSettings } from './earlyoom';
+import { buildEarlyoomArgs, buildEarlyoomLine, checkRegexPart, EARLYOOM_MAX_PREFER, ignoreFromLine, mergeIgnore, type EarlyoomSettings } from './earlyoom';
 
 /** Seul paramètre de mode accepté du renderer et transmis au script root, comparé à l'identique (jamais interprété). */
 export type EarlyoomSetupMode = 'install' | 'activate';
@@ -74,8 +74,11 @@ function coveredBy(prefer: readonly string[]): (name: string) => boolean {
  * Si les 30 motifs ne laissent pas la place à toute la liste : seulement MainThread, tsc, eslint ; sinon rien.
  */
 export function earlyoomUpgrade(file: { settings: EarlyoomSettings; line: string } | null): EarlyoomUpgrade | null {
-  if (!file || ignoreFromLine(file.line) === null) return null;
+  const kept = file ? ignoreFromLine(file.line) : null;
+  if (!file || kept === null) return null;
   const s = file.settings;
+  // Motif de plus de 100 caractères (accepté par la grammaire, refusé à la reconstruction) : proposition jamais applicable.
+  if ([...kept, ...s.prefer].some((t) => checkRegexPart(t) !== null)) return null;
   const covered = coveredBy(s.prefer);
   const oldDefaults = EARLYOOM_PREVIOUS_DEFAULTS.some((d) => sameSettings(d, s));
   const antigelMissing = EARLYOOM_ANTIGEL_PREFER.filter((p) => !covered(p));
