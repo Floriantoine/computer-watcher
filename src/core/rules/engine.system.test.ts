@@ -371,3 +371,20 @@ describe('condition système : workers « MainThread » rangés à part', () => 
     expect(d3[0]).toMatchObject({ outcome: 'skip', reason: 'guard' });
   });
 });
+
+describe('condition système : groupe de commande classé Test d’après sa racine', () => {
+  test('« MainThread » dont la racine est vitest : seulement vitest et ses descendants, jamais un serveur voisin', () => {
+    const vit = proc('MainThread', `node ${NM}/vitest/vitest.mjs run`, { pid: 720, ppid: 1, rssKB: 1 * GB });
+    const vw = proc('MainThread', `node ${NM}/vitest/dist/workers/forks.js`, { pid: 721, ppid: 720, rssKB: 1 * GB });
+    const srv = proc('MainThread', `node ${NM}/next/dist/server/next-server.js`, { pid: 730, ppid: 1, rssKB: 6 * GB });
+    const mt = mkGroup('command:MainThread', 'command', [{ proc: vit, children: [{ proc: vw, children: [] }] }, { proc: srv, children: [] }], 'MainThread');
+    const one = { ...inst(mt, mt.roots[0]!, 'test', 'vitest'), pids: [720, 721, 730] };
+    const classification = new Map<string, GroupClassification>([[mt.id, { categories: ['test'], instances: [one], launcherPids: [] }]]);
+    const st = emptyRuleState();
+    const run = (now: number) => evaluateRules(input({ now, groups: [mt], classification, system: { memUsedPercent: 99, cpuPercent: 10 } }), st);
+    run(0);
+    const d = run(15 * SEC);
+    expect(victim(d)).toEqual([[720, 721]]);
+    expect(fires(d)[0]!.target.label).toBe('vitest');
+  });
+});

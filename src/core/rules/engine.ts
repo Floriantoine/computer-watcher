@@ -1,6 +1,6 @@
 // src/core/rules/engine.ts — moteur des règles automatiques (⑥). Pur : aucun effet de bord hors `state`, aucune
 // horloge (instant fourni), aucun accès à /proc ni à la base (fonctions `inactive` et `isProtected` injectées).
-import { checkCommand } from '../classify/rules';
+import { checkCommand, matchCommand } from '../classify/rules';
 import { HOLD_MS, MIN_DECLINING, type Forecast } from '../forecast/forecast';
 import { flattenGroup, type Classification } from '../snapshot';
 import type { Group, KillTarget, ProcInfo } from '../types';
@@ -524,6 +524,19 @@ function candidatesFor(rule: Rule, input: EvalInput, groups: readonly Group[], s
         if (g.kind !== 'project' && g.kind !== 'deleted' && g.kind !== 'command') continue;
         for (const i of input.classification.get(g.id)?.instances ?? []) {
           if (i.category !== 'test' || i.launchedBy === 'claude') continue;
+          if (g.kind === 'command') {
+            // Groupe de commande : une seule « instance » qui regroupe tous les processus du même nom (ex. tous les
+            // « MainThread »), classée d'après sa racine. Jamais le groupe entier : seulement les processus dont la ligne
+            // de commande est elle-même un lanceur de tests, chacun avec ses descendants.
+            for (const pid of i.pids) {
+              const p = byPid.get(pid);
+              if (!p || covered.has(pid) || matchCommand([p])?.category !== 'test') continue;
+              const pids = subtree([pid]);
+              pids.forEach((q) => covered.add(q));
+              if (pids.length) out.push({ key: `test:${p.pid}:${p.startTicks}`, kind: 'instance', group: g, label: label(matchCommand([p])!.label, g), pids, sizeKB: size(pids) });
+            }
+            continue;
+          }
           const pids = subtree(i.pids);
           pids.forEach((pid) => covered.add(pid));
           if (pids.length) out.push({ key: i.key, kind: 'instance', group: g, label: label(i.label, g), pids, sizeKB: size(pids) });
