@@ -58,6 +58,8 @@ export function serviceKill(
   };
 }
 
+/** (d) mesure qui a déclenché la règle anti-gel, si présente. */
+const triggerDetail = (d: Extract<RuleDecision, { outcome: 'fire' }>) => (d.trigger ? { trigger: d.trigger } : {});
 const targetsDetail = (t: RuleTarget) => t.targets.map((x, i) => ({ name: t.names[i] ?? '?', pid: x.pid, memKB: t.memKBs[i] ?? 0 }));
 
 export function createRuleRunner(deps: RuleRunnerDeps): { run(decisions: readonly RuleDecision[]): void; pendingEscalations(): number } {
@@ -133,7 +135,7 @@ export function createRuleRunner(deps: RuleRunnerDeps): { run(decisions: readonl
     record('rule_action', t.groupKey, {
       ruleId: d.ruleId, rule: d.ruleName, target: t.label, memKB: t.memKB, pids: t.targets.map((x) => x.pid), targets: targetsDetail(t),
       signal: 'SIGTERM', killed, refused: results.filter((r) => !r.ok).map((r) => ({ pid: r.pid, error: r.error })),
-      result: killed > 0 ? 'sigterm' : 'refused',
+      result: killed > 0 ? 'sigterm' : 'refused', ...triggerDetail(d),
     }, true);
     if (killed > 0) {
       pending++;
@@ -165,7 +167,7 @@ export function createRuleRunner(deps: RuleRunnerDeps): { run(decisions: readonl
             // Simulation : ni readProcs, ni planKill, ni kill.
             record('rule_dry_run', d.target.groupKey, {
               ruleId: d.ruleId, rule: d.ruleName, target: d.target.label, memKB: d.target.memKB, pids: d.target.targets.map((x) => x.pid),
-              targets: targetsDetail(d.target), result: 'dry_run',
+              targets: targetsDetail(d.target), result: 'dry_run', ...triggerDetail(d),
             }, true);
             continue;
           }

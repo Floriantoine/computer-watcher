@@ -34,7 +34,7 @@ import { compileProtection, type Protection } from '../core/protection';
 import { ProcGrowth } from '../core/rules/growth';
 import { accumulateSimulation, simulationCredit, type SimStats } from '../core/rules/simulation';
 import { readSimStatsFile, writeSimStatsFile } from '../core/rules/simulationFile';
-import { emptyRuleState, evaluateRules, needsClassification, restoreRuleState, ruleRevision, type RuleState } from '../core/rules/engine';
+import { emptyRuleState, evaluateRules, memUsedPercent, needsClassification, restoreRuleState, ruleRevision, type RuleState } from '../core/rules/engine';
 import type { Rule, RuleIssue, RulesConfig } from '../core/rules/types';
 import type { Group, RecorderConfig as RecCfg } from '../core/types';
 import { flattenGroup } from '../core/snapshot';
@@ -508,7 +508,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
   };
 
   /** Règles après l'écriture du tick, dans leur propre try : une erreur ici ne casse jamais l'échantillonnage. */
-  const runRules = (d: DatabaseSync, ts: number, groups: Group[], procs: readonly ProcInfo[]) => {
+  const runRules = (d: DatabaseSync, ts: number, groups: Group[], procs: readonly ProcInfo[], system: SystemInfo, cpuPercent: number) => {
     // interrupteur général éteint, ou aucune règle activée : rien (pas même de classement ni de simulation, ni de crédit)
     if (!rulesCfg.enabled || !rulesCfg.list.some((r) => r.enabled)) {
       lastRulesMono = null;
@@ -540,6 +540,8 @@ export function createRecorder(deps: RecorderDeps): Recorder {
         // ralentissement toléré jusqu'à 4 × intervalle ; veille ou saut d'horloge (écart murale/monotone) dès 2 ×
         now: m, wallNow: ts, maxGapMs: 4 * intervalMs, maxSkewMs: 2 * intervalMs,
         enabled: rulesCfg.enabled, rules, groups, classification, forecast: fc, procGrowthKB,
+        // (d) anti-gel : RAM utilisée d'après MemAvailable, CPU total du tick (premier tick : 0 %, aucune mesure de CPU)
+        system: { memUsedPercent: memUsedPercent(system), cpuPercent: Number.isFinite(cpuPercent) ? cpuPercent : null },
         // sans historique couvrant toute la période (service récent, trou d'enregistrement) : null, rien n'est « inactif »
         inactive: (targets, since) => (historyCovers(d, since, ts) ? queryInactive(d, targets, since, opts, inactiveCpuThreshold(cfg)) : null),
         isProtected: protection.isProtected, appRoot, currentUid, selfPid,
@@ -641,7 +643,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
         tmpfs = r.state;
         runDisk(db, ts);
         runForecast(db, ts, system);
-        runRules(db, ts, groups, procs);
+        runRules(db, ts, groups, procs, system, cpuPercent);
         st.lastSampleAt = ts;
         ok('tick');
         writeStatus();

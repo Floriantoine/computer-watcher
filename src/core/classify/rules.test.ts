@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { classifyByName, isMcpServer, matchCommand } from './rules';
+import { checkCommand, classifyByName, isMcpServer, matchCommand } from './rules';
 
 const P = '/home/u/acme/node_modules/.bin';
 type C = { name: string; cmdline: string };
@@ -120,5 +120,30 @@ describe('isMcpServer', () => {
     ['uv', 'uv run --with fastmcp python app.py', false],
   ])('%s %s → %s', (name, cmdline, want) => {
     expect(isMcpServer(name, cmdline)).toBe(want);
+  });
+});
+
+describe('checkCommand (vérifications visées par la règle anti-gel)', () => {
+  const P = '/home/u/app/node_modules';
+  test.each([
+    ['node tsc --noEmit', 'MainThread', `node ${P}/typescript/bin/tsc --noEmit`, 'tsc'],
+    ['tsc -p tsconfig.json', 'tsc', 'tsc -p tsconfig.json', 'tsc'],
+    ['node eslint.js', 'MainThread', `node ${P}/eslint/bin/eslint.js src --ext .ts`, 'eslint'],
+    ['.bin/eslint', 'node', `node ${P}/.bin/eslint .`, 'eslint'],
+  ])('reconnue : %s', (_l, name, cmdline, want) => {
+    expect(checkCommand(name, cmdline)).toBe(want);
+  });
+  test.each([
+    ['tsc --watch (outil de dev, catégorie Construction)', 'node', `node ${P}/typescript/bin/tsc --watch`],
+    ['tsc -w', 'node', `node ${P}/typescript/bin/tsc -w`],
+    ['eslint_d (démon)', 'node', `node ${P}/eslint_d/bin/eslint_d.js start`],
+    ['comm MainThread seul, sans ligne de commande', 'MainThread', ''],
+    ['comm MainThread, autre programme', 'MainThread', `node ${P}/next/dist/server/next-server.js`],
+    ['shell qui lance tsc', 'sh', 'sh -c tsc --noEmit'],
+    ['zsh qui lance eslint', 'zsh', 'zsh -c eslint .'],
+    ['npm run lint', 'npm', 'npm run lint'],
+    ['éditeur avec tsc en argument', 'code', '/usr/lib/code/code --open tsc'],
+  ])('jamais : %s', (_l, name, cmdline) => {
+    expect(checkCommand(name, cmdline)).toBeNull();
   });
 });

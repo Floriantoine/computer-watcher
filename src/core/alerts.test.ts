@@ -156,6 +156,16 @@ describe('textes des règles (⑥)', () => {
     expect(ev('rule_dry_run', { ...d, result: 'dry_run' })).toEqual({ title: 'Simulation « vitest > 4 Go » : aurait arrêté vitest (4,3 Go)', body: 'Aucun processus touché (simulation).' });
     expect(ev('rule_dry_run', { rule: 'x', result: 'quota' }).title).toBe('Simulation « x » : quota atteint');
   });
+  test('anti-gel : la mesure qui a déclenché dans le texte (simulation et action) ; trop longue ou pas une chaîne, ignorée', () => {
+    const d = { rule: 'Mémoire ou CPU > 95 % : tuer les tests', target: 'tsc', memKB: 4 * 1024 * 1024, trigger: 'mémoire 97 % depuis 15 s' };
+    expect(ev('rule_dry_run', { ...d, result: 'dry_run' })).toEqual({
+      title: 'Simulation « Mémoire ou CPU > 95 % : tuer les tests » : aurait arrêté tsc (4,0 Go)',
+      body: 'Déclencheur : mémoire 97 % depuis 15 s. Aucun processus touché (simulation).',
+    });
+    expect(ev('rule_action', { ...d, result: 'sigterm' }).body).toMatch(/^Déclencheur : mémoire 97 % depuis 15 s\. SIGTERM envoyé/);
+    expect(ev('rule_action', { ...d, trigger: 'x'.repeat(81), result: 'sigterm' }).body).toMatch(/^SIGTERM/);
+    expect(ev('rule_action', { ...d, trigger: { a: 1 }, result: 'sigterm' }).body).toMatch(/^SIGTERM/);
+  });
 });
 
 describe('disk_low (disque presque plein)', () => {
