@@ -154,6 +154,11 @@ export interface GuardContext {
   /** Pids du groupe Claude du dernier instantané (outils détachés compris). */
   claudePids?: ReadonlySet<number>;
   /**
+   * Anti-gel lot 3 : processus d'un projet « au frigo » (gelés). Jamais visés : l'utilisateur les a mis de côté, un SIGTERM
+   * resterait en attente jusqu'au réveil, et « inactif depuis T » les viserait à tort.
+   */
+  frozen?: ReadonlySet<number>;
+  /**
    * Règle anti-gel (saturation) seulement : vérifications (tests, tsc, eslint) et leurs descendants, voir verification.ts.
    * Pour ces pids, être lancé par Claude ou rangé dans son groupe n'est plus un refus (accord de l'utilisateur du
    * 2026-10-19) ; Claude lui-même, un dossier de travail sous ses dossiers et toutes les autres raisons restent des refus.
@@ -161,7 +166,7 @@ export interface GuardContext {
   verification?: ReadonlySet<number>;
 }
 
-export type GuardReason = 'never-kill' | 'claude' | 'protected' | 'root' | 'uid' | 'self' | 'unknown' | 'launcher';
+export type GuardReason = 'never-kill' | 'claude' | 'protected' | 'root' | 'uid' | 'self' | 'unknown' | 'launcher' | 'frozen';
 
 const isClaudeItself = (p: GuardProc, ctx: GuardContext) =>
   isClaudeProc(p) || (!!ctx.claudeDirs?.length && !!p.cwd && isUnderAny(p.cwd, ctx.claudeDirs));
@@ -172,6 +177,7 @@ function ownReason(pid: number, ctx: GuardContext, selfChain: ReadonlySet<number
   if (!Number.isInteger(pid) || pid <= 1) return 'self';
   const p = ctx.byPid.get(pid);
   if (!p) return 'unknown';
+  if (ctx.frozen?.has(pid)) return 'frozen';
   if (p.uid === 0) return 'root';
   if (p.uid !== ctx.currentUid) return 'uid';
   if (selfChain.has(pid)) return 'self';

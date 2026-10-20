@@ -41,6 +41,8 @@ export interface RuleRunnerDeps {
   claudeDirs?: readonly string[];
   /** Pids du groupe Claude du dernier instantané. */
   claudePids?: () => ReadonlySet<number>;
+  /** Anti-gel lot 3 : processus des projets au frigo (relus au dernier tick), refusés avant chaque signal. */
+  frozenPids?: () => ReadonlySet<number>;
 }
 
 /** Une seule notification « quota atteint » par heure, toutes règles confondues. */
@@ -104,7 +106,7 @@ export function createRuleRunner(deps: RuleRunnerDeps): { run(decisions: readonl
     const same = targets.filter((t) => byPid.get(t.pid)?.startTicks === t.startTicks);
     const { kept, refused } = filterTargets(same.map((t) => t.pid), {
       byPid, currentUid: deps.currentUid, selfPid: deps.selfPid, appRoot: deps.appRoot, isProtected: deps.isProtected,
-      claudeDirs: deps.claudeDirs, claudePids: deps.claudePids?.(),
+      claudeDirs: deps.claudeDirs, claudePids: deps.claudePids?.(), frozen: deps.frozenPids?.(),
       ...(verification ? { verification: verificationPids(byPid) } : {}),
     });
     const keptSet = new Set(kept);
