@@ -5,9 +5,12 @@ import { formatKB } from './format';
 
 const live = (v: AntigelView | null) => (v && v.fresh && v.state && v.state.status === 'active' ? v.state : null);
 
-/** Entrée du frigo d'une racine de projet (état frais et actif seulement). */
+/**
+ * Entrée du frigo d'une racine de projet. Même si l'état n'est plus frais (service en difficulté) : « Réveiller » reste
+ * proposé, c'est le sens sûr (le main l'accepte toujours).
+ */
 export function fridgeEntry(v: AntigelView | null, root: string | null): FridgeEntryState | null {
-  const s = live(v);
+  const s = v?.state ?? null;
   if (!s || root === null) return null;
   return s.fridge?.find((e) => e.root === root) ?? null;
 }

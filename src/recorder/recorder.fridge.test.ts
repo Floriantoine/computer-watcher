@@ -69,8 +69,9 @@ function setup() {
     fridge: {
       client, probe: () => ({ ok: true, userBase: BASE, busctl: '/usr/bin/busctl' }),
       read: (cg, f) => {
-        if (!fake.sys.has(cg) && !cg.includes('.scope')) return null;
+        if (!fake.sys.has(cg) && !frozen.has(cg) && !cg.includes('.scope')) return null;
         if (f === 'cgroup.freeze') return frozen.has(cg) ? '1\n' : '0\n';
+        if (f === 'cgroup.events') return `populated 1\nfrozen ${frozen.has(cg) ? 1 : 0}\n`;
         if (f === 'memory.current') return String(fake.sys.get(cg)?.currentBytes ?? 0);
         if (f === 'memory.stat') return 'anon 0\nfile 0\n';
         if (f === 'cgroup.procs') return [...fake.cg].filter(([, c]) => c === cg).map(([p]) => p).join('\n');
@@ -86,7 +87,7 @@ function setup() {
     rec.tick();
     await rec.antigelIdle();
   };
-  return { rec, tick, fcalls, frozen, dataDir, A, logs, now: () => t, statePath: join(dataDir, 'antigel-state.json') };
+  return { rec, tick, fcalls, frozen, dataDir, A, logs, procRoot, now: () => t, statePath: join(dataDir, 'antigel-state.json') };
 }
 
 test('demande de la fenêtre → projet au frigo, état publié ; réveil ; arrêt du service : rien ne reste gelé', async () => {
@@ -119,5 +120,23 @@ test('demande d’un projet hors plafond ou d’une racine inconnue : refusée p
   await s.tick();
   expect(s.fcalls).toEqual([]);
   expect(JSON.parse(readFileSync(s.statePath, 'utf8')).fridgeNotice).toMatchObject({ root: '/home/u/ailleurs', ok: false });
+  s.rec.stop();
+});
+
+test('démarrage : slice de projet restée gelée dégelée avant tout ; échantillonnage en échec : le réveil passe quand même', async () => {
+  const s = setup();
+  s.frozen.add(PSCG); // gelée par une vie précédente du service
+  s.rec.start();
+  expect(s.fcalls).toEqual([`thawSync ${PS}`]);
+  await s.tick();
+  writeFridgeRequest(s.dataDir, { root: s.A, action: 'freeze', at: s.now() });
+  await s.tick();
+  expect(s.frozen.has(PSCG)).toBe(true);
+  // /proc/meminfo illisible : l'échantillonnage du tick échoue
+  rmSync(join(s.procRoot, 'meminfo'));
+  writeFridgeRequest(s.dataDir, { root: s.A, action: 'thaw', at: s.now() });
+  await s.tick();
+  expect(s.logs.some((l) => /tick/.test(l))).toBe(true);
+  expect(s.frozen.has(PSCG)).toBe(false);
   s.rec.stop();
 });

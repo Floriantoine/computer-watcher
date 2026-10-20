@@ -13,7 +13,7 @@ describe('fenêtre : frigo', () => {
     expect(antigelMarks(fresh()).get('project:/home/u/alpha')).toEqual({ throttled: false, budgetMB: null });
     expect(sameMark({ throttled: false, budgetMB: null, frozen: 'frozen' }, { throttled: false, budgetMB: null })).toBe(false);
     expect(fridgeEntry(v, '/home/u/alpha')).toEqual(E);
-    expect(fridgeEntry({ ...v, fresh: false }, '/home/u/alpha')).toBeNull();
+    expect(fridgeEntry({ ...v, fresh: false }, '/home/u/alpha')).toEqual(E); // « Réveiller » reste proposé
     expect(fridgeEntry(v, null)).toBeNull();
   });
 

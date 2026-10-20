@@ -12,7 +12,7 @@ const ALPHA = 'cwatch-p-alpha.slice';
 const GiB = 1024 ** 3;
 
 /** Faux /sys/fs/cgroup et faux client : FreezeUnit / ThawUnit écrivent cgroup.freeze de la slice (argv validé). */
-function setup(o: { fail?: (m: string, s: string) => BusctlError | null; reclaim?: (cg: string, n: number) => 'ok' | 'again'; current?: number } = {}) {
+function setup(o: { fail?: (m: string, s: string) => BusctlError | null; reclaim?: (cg: string, n: number) => 'ok' | 'again'; current?: number; partial?: boolean; swapFree?: () => number } = {}) {
   const files = new Map<string, string>();
   const dirs = new Map<string, string[]>();
   const calls: string[] = [];
@@ -23,6 +23,7 @@ function setup(o: { fail?: (m: string, s: string) => BusctlError | null; reclaim
     const cg = `${P}/${name}`;
     dirs.set(P, [...(dirs.get(P) ?? []), name]);
     put(cg, 'cgroup.freeze', o2.frozen ? '1\n' : '0\n');
+    put(cg, 'cgroup.events', `populated 1\nfrozen ${o2.frozen ? 1 : 0}\n`);
     put(cg, 'memory.current', String(o2.current ?? 3 * GiB));
     put(cg, 'memory.stat', `anon ${2 * GiB}\nfile ${GiB}\nkernel 1000\n`);
     const scope = `${name.slice(0, -'.slice'.length)}-a1.scope`;
@@ -38,6 +39,7 @@ function setup(o: { fail?: (m: string, s: string) => BusctlError | null; reclaim
       const e = o.fail?.('freeze', s);
       if (e) throw e;
       put(`${P}/${s}`, 'cgroup.freeze', '1\n');
+      if (!o.partial) put(`${P}/${s}`, 'cgroup.events', 'populated 1\nfrozen 1\n');
     },
     thaw: async (s) => {
       thawArgv(s);
@@ -46,6 +48,7 @@ function setup(o: { fail?: (m: string, s: string) => BusctlError | null; reclaim
       if (e) throw e;
       if (!files.has(`${P}/${s}/cgroup.freeze`)) throw new BusctlError(`Unit ${s} not loaded.`, 'no-unit');
       put(`${P}/${s}`, 'cgroup.freeze', '0\n');
+      put(`${P}/${s}`, 'cgroup.events', 'populated 1\nfrozen 0\n');
     },
     thawSync: (s) => {
       thawArgv(s);
@@ -73,6 +76,7 @@ function setup(o: { fail?: (m: string, s: string) => BusctlError | null; reclaim
     },
     monoNow: () => clock,
     log: (m) => logs.push(m),
+    swapFreeBytes: o.swapFree,
     sleep: async () => {
       clock += 1;
     },
@@ -326,4 +330,85 @@ test('coût : aucun appel ni lecture de pids en régime établi sans projet au f
   await s.tick();
   expect(reads).toBe(0);
   expect(s.calls).toEqual([]);
+});
+
+describe('corrections de la revue', () => {
+  test('I1 : swap relue avant chaque morceau ; deux mises au frigo ne dépassent pas la place', async () => {
+    let free = 3 * GiB;
+    const s = setup({ swapFree: () => free, reclaim: (_cg, n) => { free -= n; return 'ok'; } });
+    s.put(`${UB}/cwatch.slice`, 'memory.swap.max', 'max');
+    s.addSlice(ALPHA);
+    s.addSlice('cwatch-p-beta.slice');
+    const st = sampleState({
+      slices: { [ALPHA]: '/home/u/alpha', 'cwatch-p-beta.slice': '/home/u/beta' },
+      projects: [{ unit: ALPHA, root: '/home/u/alpha', procs: 2, currentKB: 1, budgetMB: null, throttled: false },
+        { unit: 'cwatch-p-beta.slice', root: '/home/u/beta', procs: 2, currentKB: 1, budgetMB: null, throttled: false }],
+    });
+    await s.tick([freezeReq(), freezeReq('/home/u/beta')], st, 3 * 1024 * 1024);
+    const pushed = s.reclaims.reduce((a, [, n]) => a + n, 0);
+    expect(pushed).toBeLessThanOrEqual(2 * GiB + RECLAIM_CHUNK); // 3 Gio libres − 1 Gio de marge (+ un morceau au plus)
+    expect(free).toBeGreaterThanOrEqual(SWAP_MARGIN - RECLAIM_CHUNK);
+  });
+
+  test('I2 : un réveil n’attend pas le reclaim d’un autre projet', async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    const s = setup();
+    s.deps.reclaim = async () => { await gate; return 'ok'; };
+    s.addSlice(ALPHA);
+    s.addSlice('cwatch-p-beta.slice', { frozen: true });
+    const st = sampleState({ slices: { [ALPHA]: '/home/u/alpha', 'cwatch-p-beta.slice': '/home/u/beta' } });
+    s.advance(1); // pas de balayage au premier tick pour beta : on le veut par la demande
+    const f = createFridge(s.deps);
+    f.tick({ ts: 1, antigel: st, swapFreeKB: 1e7, requests: [freezeReq()] });
+    await new Promise((r) => setTimeout(r, 10));
+    f.tick({ ts: 2, antigel: st, swapFreeKB: 1e7, requests: [thawReq('/home/u/beta')] });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(s.calls).toContain('thaw cwatch-p-beta.slice');
+    release();
+    await f.idle();
+  });
+
+  test('M1 : réveil en échec : reste au frigo (règles, contrôleur), nouvel essai après 60 s', async () => {
+    let fail = true;
+    const s = setup({ fail: (m) => (m === 'thaw' && fail ? new BusctlError('x', 'other') : null) });
+    s.addSlice(ALPHA);
+    await s.tick([freezeReq()]);
+    await s.tick([thawReq()]);
+    expect(s.fridge.publish().fridge[0]!.phase).toBe('thawing');
+    expect(s.fridge.frozenSlices().has(ALPHA)).toBe(true);
+    expect(s.fridge.frozenPids().size).toBe(2);
+    fail = false;
+    await s.tick();
+    expect(s.calls.filter((c) => c.startsWith('thaw'))).toHaveLength(1);
+    s.advance(60_000);
+    await s.tick();
+    expect(s.fridge.publish().fridge).toEqual([]);
+  });
+
+  test('M4 : gel non effectif (cgroup.events) : aucun reclaim, réveil de sécurité', async () => {
+    const s = setup({ partial: true });
+    s.addSlice(ALPHA);
+    await s.tick([freezeReq()]);
+    expect(s.reclaims).toEqual([]);
+    expect(s.calls).toEqual([`freeze ${ALPHA}`, `thaw ${ALPHA}`]);
+  });
+
+  test('dégel synchrone au démarrage, avant tout le reste', () => {
+    const s = setup();
+    s.addSlice(ALPHA, { frozen: true });
+    s.addSlice('cwatch-p-beta.slice');
+    s.fridge.startupThawSync();
+    expect(s.calls).toEqual([`thawSync ${ALPHA}`]);
+  });
+
+  test('I4 : un processus vu au frigo après le début de la période n’est pas « inactif »', async () => {
+    const s = setup();
+    s.addSlice(ALPHA);
+    await s.tick([freezeReq()]);
+    await s.tick();
+    expect(s.fridge.frozenSince(700, 4000)).toBe(true);
+    expect(s.fridge.frozenSince(700, 6000)).toBe(false);
+    expect(s.fridge.frozenSince(999, 0)).toBe(false);
+  });
 });

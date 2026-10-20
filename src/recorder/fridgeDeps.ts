@@ -72,6 +72,11 @@ export function fridgeDepsFor(o: {
   return {
     client,
     probe: () => probeAvailability({ procRoot, sysfsRoot, uid: o.uid, selfPid: o.selfPid, busctl }),
+    // relue avant chaque morceau de reclaim : la place en swap change pendant une mise au frigo
+    swapFreeBytes: () => {
+      const m = /^SwapFree:\s+(\d+) kB$/m.exec(readBounded(join(procRoot, 'meminfo')) ?? '');
+      return m ? Number(m[1]) * 1024 : null;
+    },
     read: (cg, file) => {
       const c = underCwatch(cg, o.uid);
       return c && READABLE.has(file) ? readBounded(join(sysfsRoot, c, file)) : null;

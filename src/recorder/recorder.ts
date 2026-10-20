@@ -560,7 +560,12 @@ export function createRecorder(deps: RecorderDeps): Recorder {
         // (d) anti-gel : RAM utilisée d'après MemAvailable, CPU total du tick (premier tick : 0 %, aucune mesure de CPU)
         system: { memUsedPercent: memUsedPercent(system), cpuPercent: Number.isFinite(cpuPercent) ? cpuPercent : null, memTotalKB: system.memTotalKB, cpuCount: ncpu },
         // sans historique couvrant toute la période (service récent, trou d'enregistrement) : null, rien n'est « inactif »
-        inactive: (targets, since) => (historyCovers(d, since, ts) ? queryInactive(d, targets, since, opts, inactiveCpuThreshold(cfg)) : null),
+        inactive: (targets, since) => {
+          const active = historyCovers(d, since, ts) ? queryInactive(d, targets, since, opts, inactiveCpuThreshold(cfg)) : null;
+          // lot 3 : une période au frigo (0 % de CPU) n'est jamais de l'inactivité : vu au frigo depuis `since` → actif
+          if (active && fridge) for (const t of targets) if (fridge.frozenSince(t.pid, since)) active.add(`${t.pid}:${t.startTicks}`);
+          return active;
+        },
         isProtected: protection.isProtected, appRoot, currentUid, selfPid, frozenPids: fridge?.frozenPids() ?? noPids,
       }, ruleState);
       ruleRunner(d).run(out);
@@ -589,6 +594,25 @@ export function createRecorder(deps: RecorderDeps): Recorder {
     writeFileSync(tmp, JSON.stringify(s), { mode: 0o600 });
     renameSync(tmp, p);
   };
+  /**
+   * Lot 3 (« mettre au frigo ») : à chaque tick, dans son propre try et même si l'échantillonnage a échoué (disque plein, base
+   * en erreur, service sans base) : demandes de la fenêtre, réveils, balayage des gelés oubliés, état publié.
+   */
+  let lastSwapFreeKB = 0;
+  const runFridge = () => {
+    if (!fridge) return;
+    try {
+      const ts = now();
+      const state: AntigelState = antigel?.state() ?? {
+        version: 1, at: ts, enabled: false, status: 'unavailable', reason: 'service d’enregistrement sans base', memTotalKB: 0, reserveKB: null,
+        slice: null, projects: [], slices: {}, lastError: null, tickMs: 0, dbusCalls: 0,
+      };
+      fridge.tick({ ts, antigel: state, swapFreeKB: lastSwapFreeKB, requests: takeFridgeRequests(deps.dataDir, ts) });
+      if (antigel) writeAntigelState({ ...antigel.state(), ...fridge.publish() });
+    } catch (e) {
+      log(`anti-gel (frigo) : ${(e as Error).message}`);
+    }
+  };
   /** Après l'écriture du tick, dans son propre try : une erreur ici ne casse jamais l'échantillonnage. */
   const runAntigel = (d: DatabaseSync, ts: number, procs: readonly ProcInfo[], groups: Group[], system: SystemInfo) => {
     if (!antigel) return;
@@ -597,16 +621,10 @@ export function createRecorder(deps: RecorderDeps): Recorder {
         ts, procs, groups, system, config: antigelCfg, currentUid, selfPid, appRoot, isProtected: protection.isProtected, home: homedir(),
         claudeDirs: claudeConfigDirs, frozenSlices: fridge?.frozenSlices(),
       });
-      // lot 3 : demandes de la fenêtre prises et revalidées, gel / réveil en arrière-plan ; jamais bloquant
-      if (fridge) {
-        try {
-          fridge.tick({ ts, antigel: antigel.state(), swapFreeKB: system.swapFreeKB, requests: takeFridgeRequests(deps.dataDir, ts) });
-        } catch (e) {
-          log(`anti-gel (frigo) : ${(e as Error).message}`);
-        }
-      }
+      lastSwapFreeKB = system.swapFreeKB;
       for (const o of ooms) insertEvent(d, ts, 'antigel_oom', o.root ? `project:${o.root}` : null, { unit: o.unit, root: o.root, kills: o.kills });
-      writeAntigelState(fridge ? { ...antigel.state(), ...fridge.publish() } : antigel.state());
+      // avec le frigo, l'état est écrit par runFridge (après lui, même si l'échantillonnage échoue)
+      if (!fridge) writeAntigelState(antigel.state());
       if (jobErrors.antigel) ok('antigel');
     } catch (e) {
       // texte affiché dans Réglages (erreurs du service) : nom de la fonctionnalité dans l'interface
@@ -614,7 +632,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
     }
   };
 
-  return {
+  const rec: Recorder = {
     config: () => cfg,
     notifyAlert: (e) => notifyAlert(e),
     forecast: () => lastForecast,
@@ -627,6 +645,15 @@ export function createRecorder(deps: RecorderDeps): Recorder {
 
     start() {
       mkdirSync(deps.dataDir, { recursive: true, mode: 0o700 });
+      // lot 3 : avant tout ce qui peut échouer (base…) : aucun projet ne reste gelé d'une vie précédente du service
+      if (deps.antigel && deps.fridge) {
+        fridge = createFridge({ ...deps.fridge, log, monoNow: mono });
+        try {
+          fridge.startupThawSync();
+        } catch (e) {
+          log(`anti-gel (frigo) : ${(e as Error).message}`);
+        }
+      }
       // crédit de Simulation des règles (accumulé par ce service seulement)
       simStats = readSimStatsFile(rulesSimulationPath(deps.dataDir)) ?? {};
       lastRulesMono = null;
@@ -675,7 +702,6 @@ export function createRecorder(deps: RecorderDeps): Recorder {
         log(`règles: état non restauré : ${(e as Error).message}`);
       }
       if (deps.antigel) antigel = createAntigel({ ...deps.antigel, log, monoNow: mono, initialSlices: readAntigelSlices() });
-      if (deps.antigel && deps.fridge) fridge = createFridge({ ...deps.fridge, log, monoNow: mono });
       writeStatus();
     },
 
@@ -854,19 +880,29 @@ export function createRecorder(deps: RecorderDeps): Recorder {
     },
 
     stop() {
-      db?.close();
-      db = null;
-      writer = null;
-      runner = null;
-      antigel = null;
-      // lot 3 : rien ne reste au frigo quand le service s'arrête (dégel synchrone, borné)
+      // lot 3 : rien ne reste au frigo quand le service s'arrête (dégel synchrone, borné), avant tout ce qui peut lever
       try {
         fridge?.thawAllSync();
       } catch (e) {
         log(`anti-gel (frigo) : ${(e as Error).message}`);
       }
       fridge = null;
+      db?.close();
+      db = null;
+      writer = null;
+      runner = null;
+      antigel = null;
       saveSim(true);
     },
   };
+  // lot 3 : le frigo tourne à chaque tick, dans son propre try, même si l'échantillonnage échoue ou n'a pas de base
+  const sample = rec.tick;
+  rec.tick = () => {
+    try {
+      sample();
+    } finally {
+      runFridge();
+    }
+  };
+  return rec;
 }

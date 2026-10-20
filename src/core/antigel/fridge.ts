@@ -27,6 +27,13 @@ export const SWAP_MARGIN = 1024 * 1024 * 1024;
 export const RECLAIM_MAX_BYTES = 64 * 1024 * 1024 * 1024;
 /** Dégel synchrone à l'arrêt : jamais plus de 15 s au total. */
 export const STOP_DEADLINE_MS = 15_000;
+/** Nouvel essai d'un réveil en échec. */
+export const THAW_RETRY_MS = 60_000;
+/** Attente de l'état effectif « frozen 1 » (cgroup.events) après FreezeUnit. */
+export const FREEZE_CONFIRM_MS = 2_000;
+/** Mémoire des processus vus au frigo (règle « inactif depuis T », au plus 720 h) : 31 jours, 20 000 processus au plus. */
+const FROZEN_MEMORY_MS = 31 * 24 * 3600_000;
+const FROZEN_MEMORY_MAX = 20_000;
 const MAX_PIDS = 8192;
 
 export interface FridgeDeps {
@@ -41,6 +48,8 @@ export interface FridgeDeps {
   monoNow: () => number;
   log: (msg: string) => void;
   sleep?: (ms: number) => Promise<void>;
+  /** Swap libre en octets, relue avant chaque morceau de reclaim (/proc/meminfo) ; absente : valeur du tick de la demande. */
+  swapFreeBytes?: () => number | null;
 }
 
 export interface FridgeTickInput {
@@ -60,10 +69,18 @@ export interface Fridge {
   publish(): { fridge: FridgeEntryState[]; fridgeNotice: FridgeNotice | null };
   /** Arrêt du service : tout ce qui est gelé est dégelé, de façon synchrone et bornée. */
   thawAllSync(): void;
+  /**
+   * Démarrage du service, avant tout le reste (base comprise) : toute slice de projet gelée est dégelée, de façon synchrone et
+   * bornée. Un service qui ne démarre pas jusqu'au bout ne laisse donc jamais un projet gelé.
+   */
+  startupThawSync(): void;
+  /** Le processus était-il au frigo à `sinceWall` ou après ? (« inactif depuis T » ne compte pas une période au frigo) */
+  frozenSince(pid: number, sinceWall: number): boolean;
   idle(): Promise<void>;
 }
 
-interface Entry { unit: string; root: string; since: number; phase: FridgePhase; reclaimedKB: number; abort: boolean }
+/** `retryAt` : réveil en échec, nouvel essai à cette heure (horloge monotone) ; l'entrée reste (règles, contrôleur, badge). */
+interface Entry { unit: string; root: string; since: number; phase: FridgePhase; reclaimedKB: number; abort: boolean; retryAt?: number }
 
 const num = (t: string | null): number | null => {
   const s = t?.trim();
@@ -122,6 +139,11 @@ export function createFridge(deps: FridgeDeps): Fridge {
   let lastTs = 0;
   let chain: Promise<void> = Promise.resolve();
   let pending = 0;
+  /** Reclaims à part de la file des appels : un réveil n'attend jamais le reclaim d'un autre projet. */
+  let reclaimChain: Promise<void> = Promise.resolve();
+  let reclaiming = 0;
+  let stopped = false;
+  const lastFrozen = new Map<number, number>();
 
   const base = () => (avail?.ok ? avail.userBase : null);
   const cgOf = (b: string, slice: string) => `${b}/${slicePath(slice)}`;
@@ -137,7 +159,10 @@ export function createFridge(deps: FridgeDeps): Fridge {
       pending--;
     });
   };
+  /** Gel demandé sur la slice elle-même (cgroup.freeze) : « gelée par nous ou par un autre ». */
   const frozenNow = (b: string, slice: string) => deps.read(cgOf(b, slice), 'cgroup.freeze')?.trim() === '1';
+  /** Gel effectif (cgroup.events « frozen 1 ») : tous les processus de la slice sont arrêtés. */
+  const frozenEffective = (b: string, slice: string) => /^frozen 1$/m.test(deps.read(cgOf(b, slice), 'cgroup.events') ?? '');
 
   const queueThaw = (slice: string, root: string | null, why: string) => {
     if (thawing.has(slice)) return;
@@ -155,8 +180,10 @@ export function createFridge(deps: FridgeDeps): Fridge {
       } catch (err) {
         if (err instanceof BusctlError && err.code === 'no-unit') entries.delete(slice);
         else {
-          // le balayage (au plus 60 s) réessaiera : la slice n'est plus dans le frigo, donc « gelée par oubli »
-          entries.delete(slice);
+          // l'entrée reste (toujours gelée : règles, contrôleur et badge la voient) ; nouvel essai dans 60 s. Une slice trouvée
+          // par le balayage (sans entrée) est reprise par le balayage suivant.
+          const cur = entries.get(slice);
+          if (cur) cur.retryAt = deps.monoNow() + THAW_RETRY_MS;
           say(root, `réveil de « ${root ? label(root) : slice} » en échec, nouvel essai sous une minute : ${err instanceof Error ? err.message : String(err)}`, false);
         }
       } finally {
@@ -169,16 +196,30 @@ export function createFridge(deps: FridgeDeps): Fridge {
     const cg = cgOf(b, e.unit);
     const rootCg = `${b}/${ROOT_SLICE}`;
     const before = num(deps.read(cg, 'memory.current'));
+    const swapFree = () => deps.swapFreeBytes?.() ?? swapFreeKB * 1024;
     const target = reclaimTarget({
-      stat: deps.read(cg, 'memory.stat'), currentBytes: before, swapFreeBytes: swapFreeKB * 1024,
+      stat: deps.read(cg, 'memory.stat'), currentBytes: before, swapFreeBytes: swapFree(),
       rootSwapMax: deps.read(rootCg, 'memory.swap.max'), rootSwapCurrent: deps.read(rootCg, 'memory.swap.current'),
     });
+    /** Place de swap encore permise, relue avant chaque morceau (autres projets au frigo, reste du système). */
+    const room = (): number => {
+      let r = swapFree() - SWAP_MARGIN;
+      const max = deps.read(rootCg, 'memory.swap.max');
+      if (max !== null && max.trim() !== 'max') {
+        const m = parseLimit(max);
+        const c = num(deps.read(rootCg, 'memory.swap.current'));
+        r = m === null || c === null ? 0 : Math.min(r, m - c);
+      }
+      return r;
+    };
     const t0 = deps.monoNow();
     let done = 0;
     let again = 0;
     while (done < target && again < 2 && !e.abort && deps.monoNow() - t0 < RECLAIM_MAX_MS) {
       // dégelé entre-temps (systemctl thaw, slice disparue) : jamais de reclaim sur un projet qui tourne
-      if (!frozenNow(b, e.unit)) break;
+      if (!frozenNow(b, e.unit) || !frozenEffective(b, e.unit)) break;
+      // plus de place en swap (marge atteinte) : arrêt, le noyau choisit lui-même ce qu'il pousse
+      if (room() <= 0) break;
       const n = Math.min(RECLAIM_CHUNK, target - done);
       let r: 'ok' | 'again';
       try {
@@ -202,7 +243,7 @@ export function createFridge(deps: FridgeDeps): Fridge {
     const e: Entry = { unit: slice, root, since: ts, phase: 'freezing', reclaimedKB: 0, abort: false };
     entries.set(slice, e);
     queue(async () => {
-      if (entries.get(slice) !== e || e.abort) return; // réveil demandé avant le gel
+      if (entries.get(slice) !== e || e.abort || stopped) return; // réveil demandé avant le gel, ou service à l'arrêt
       const b = base();
       if (!b) return void entries.delete(slice);
       try {
@@ -214,7 +255,10 @@ export function createFridge(deps: FridgeDeps): Fridge {
         queueThaw(slice, null, 'gel en échec');
         return;
       }
-      if (!frozenNow(b, slice)) {
+      // gel effectif (tous les processus arrêtés) avant tout reclaim
+      const t0 = deps.monoNow();
+      for (let k = 0; k < FREEZE_CONFIRM_MS / 100 && !(frozenNow(b, slice) && frozenEffective(b, slice)) && deps.monoNow() - t0 < FREEZE_CONFIRM_MS; k++) await sleep(100);
+      if (!(frozenNow(b, slice) && frozenEffective(b, slice))) {
         entries.delete(slice);
         say(root, `mise au frigo de « ${label(root)} » non confirmée par le noyau : projet réveillé`, false);
         queueThaw(slice, null, 'gel non confirmé');
@@ -222,10 +266,17 @@ export function createFridge(deps: FridgeDeps): Fridge {
       }
       if (e.abort) return;
       e.phase = 'reclaiming';
-      await reclaimLoop(e, b, swapFreeKB);
-      if (entries.get(slice) !== e || e.abort) return;
-      e.phase = 'frozen';
-      say(root, `« ${label(root)} » au frigo${e.reclaimedKB >= 1024 ? ` : ≈ ${giB(e.reclaimedKB)} sortis de la RAM` : ''}`, true);
+      // reclaim hors de la file des appels : un réveil (de ce projet ou d'un autre) part tout de suite
+      reclaiming++;
+      reclaimChain = reclaimChain.then(async () => {
+        if (entries.get(slice) !== e || e.abort) return;
+        await reclaimLoop(e, b, swapFreeKB);
+        if (entries.get(slice) !== e || e.abort) return;
+        e.phase = 'frozen';
+        say(root, `« ${label(root)} » au frigo${e.reclaimedKB >= 1024 ? ` : ≈ ${giB(e.reclaimedKB)} sortis de la RAM` : ''}`, true);
+      }).catch((err) => deps.log(`anti-gel (frigo) : ${err instanceof Error ? err.message : String(err)}`)).finally(() => {
+        reclaiming--;
+      });
     });
   };
 
@@ -302,6 +353,10 @@ export function createFridge(deps: FridgeDeps): Fridge {
       if (i.antigel.status !== 'active' || !i.antigel.enabled) {
         for (const e of [...entries.values()]) if (e.phase !== 'thawing') queueThaw(e.unit, e.root, 'plafond de travail éteint');
       }
+      // réveils en échec : nouvel essai
+      for (const e of [...entries.values()]) {
+        if (e.phase === 'thawing' && !thawing.has(e.unit) && (e.retryAt ?? Infinity) <= now) queueThaw(e.unit, e.root, 'nouvel essai');
+      }
       // projets dégelés par un autre (systemctl thaw) ou slice disparue : sortis du frigo
       for (const e of [...entries.values()]) {
         if (e.phase !== 'frozen' && e.phase !== 'reclaiming') continue;
@@ -321,14 +376,46 @@ export function createFridge(deps: FridgeDeps): Fridge {
         sweep(b);
       }
       pids = entries.size || thawing.size ? readPids(b) : new Set();
+      // processus vus au frigo (horloge murale) : « inactif depuis T » ne compte jamais une période au frigo
+      for (const p of pids) lastFrozen.set(p, i.ts);
+      if (lastFrozen.size > FROZEN_MEMORY_MAX || (lastFrozen.size && now === sweptAt)) {
+        for (const [p, at] of lastFrozen) if (i.ts - at > FROZEN_MEMORY_MS || i.ts < at) lastFrozen.delete(p);
+        while (lastFrozen.size > FROZEN_MEMORY_MAX) lastFrozen.delete(lastFrozen.keys().next().value!);
+      }
     },
+    frozenSince: (pid, sinceWall) => (lastFrozen.get(pid) ?? -Infinity) >= sinceWall,
     frozenSlices: () => new Set([...entries.keys(), ...thawing]),
     frozenPids: () => pids,
     publish: () => ({
       fridge: [...entries.values()].slice(0, MAX_FROZEN).map((e) => ({ unit: e.unit, root: e.root, since: e.since, phase: e.phase, reclaimedKB: e.reclaimedKB })),
       fridgeNotice: notice,
     }),
+    startupThawSync() {
+      const now = deps.monoNow();
+      avail = deps.probe();
+      probedAt = now;
+      const b = base();
+      if (!b) return;
+      sweptAt = now;
+      const t0 = deps.monoNow();
+      for (const n of deps.list(projectsDir(b)) ?? []) {
+        if (!isProdProjectSliceName(n) || !frozenNow(b, n)) continue;
+        if (deps.monoNow() - t0 > STOP_DEADLINE_MS) {
+          deps.log('anti-gel (frigo) : démarrage, dégel interrompu (délai) ; le balayage reprendra');
+          sweptAt = null;
+          break;
+        }
+        try {
+          client.thawSync(n);
+          deps.log(`anti-gel (frigo) : ${n} dégelée au démarrage du service`);
+        } catch (err) {
+          sweptAt = null; // balayage au premier tick
+          deps.log(`anti-gel (frigo) : dégel de ${n} au démarrage en échec : ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    },
     thawAllSync() {
+      stopped = true;
       const t0 = deps.monoNow();
       const b = base();
       const all = new Set([...entries.keys(), ...thawing]);
@@ -349,7 +436,10 @@ export function createFridge(deps: FridgeDeps): Fridge {
       entries.clear();
     },
     async idle() {
-      while (pending > 0) await chain;
+      while (pending > 0 || reclaiming > 0) {
+        await chain;
+        await reclaimChain;
+      }
     },
   };
 }

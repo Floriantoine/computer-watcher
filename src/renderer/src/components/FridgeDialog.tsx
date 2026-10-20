@@ -33,7 +33,10 @@ export function FridgeDialog({ label, procs, onConfirm, onCancel }: { label: str
             ? 'Son processus rangé sous le plafond de travail est suspendu, puis sa mémoire est poussée en swap autant que la swap libre le permet. Rien n’est arrêté : « Réveiller » le relance là où il en était.'
             : `${procs ? `Ses ${procs}` : 'Ses'} processus rangés sous le plafond de travail sont suspendus, puis leur mémoire est poussée en swap autant que la swap libre le permet. Rien n’est arrêté : « Réveiller » les relance là où ils en étaient.`}
         </p>
-        <p className="sub">Pendant ce temps, ses serveurs ne répondent plus. Ce que vous relancez dans ce projet tourne normalement, hors plafond, jusqu’au réveil.</p>
+        <p className="sub">
+          Pendant ce temps, ses serveurs ne répondent plus, et des tests ou vérifications lancés par Claude dans ce projet restent bloqués (la
+          commande de Claude attend jusqu’au réveil ou jusqu’à son délai). Ce que vous relancez dans ce projet tourne normalement, hors plafond, jusqu’au réveil.
+        </p>
         <div className="actions">
           <button onClick={guard(onCancel)}>Annuler</button>
           <button data-testid="antigel-fridge-confirm" autoFocus onClick={guard(onConfirm)}>Mettre au frigo</button>
