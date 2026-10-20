@@ -1222,3 +1222,13 @@ button.primary:hover:not(:disabled) { background: rgba(124, 92, 255, 0.32); bord
 @media (max-width: 900px) {
   .disk-main { grid-template-columns: minmax(0, 1fr); }
 }
+
+.antigel-card { margin: 12px 0; padding: 12px 14px; border-radius: 12px; background: color-mix(in srgb, #3dd6ff 6%, transparent); border: 1px solid color-mix(in srgb, #3dd6ff 22%, transparent); }
+.antigel-card.tone-warn { background: color-mix(in srgb, #ffb547 8%, transparent); border-color: color-mix(in srgb, #ffb547 30%, transparent); }
+.antigel-card.tone-na, .antigel-card.tone-off { background: transparent; border-style: dashed; }
+.antigel-head { display: flex; align-items: center; gap: 8px; }
+.antigel-head h3 { margin: 0; font-size: 13px; }
+.antigel-mem { margin: 6px 0 4px; }
+.antigel-budgets { list-style: none; padding: 0; margin: 6px 0 0; display: grid; gap: 6px; }
+.antigel-budgets li { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 10px; }
+.antigel-budgets-title { margin: 16px 0 4px; font-size: 12.5px; }

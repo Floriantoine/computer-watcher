@@ -2,7 +2,7 @@
 
 import { APP_DISPLAY_NAME } from '../../core/appName';
 
-export type SettingsSection = 'protected' | 'others' | 'display' | 'classify' | 'alerts' | 'rules' | 'recorder' | 'disk' | 'earlyoom' | 'desktop' | 'about';
+export type SettingsSection = 'protected' | 'others' | 'display' | 'classify' | 'alerts' | 'rules' | 'antigel' | 'recorder' | 'disk' | 'earlyoom' | 'desktop' | 'about';
 
 export const SETTINGS_SECTIONS: { id: SettingsSection; label: string; description: string }[] = [
   { id: 'protected', label: 'Protégés', description: 'Programmes dont le kill demande toujours une confirmation.' },
@@ -11,6 +11,7 @@ export const SETTINGS_SECTIONS: { id: SettingsSection; label: string; descriptio
   { id: 'classify', label: 'Classement', description: 'Classement automatique des instances, ports et corrections manuelles.' },
   { id: 'alerts', label: 'Alertes', description: 'Où chaque type d’alerte est signalé, et à quelle fréquence.' },
   { id: 'rules', label: 'Règles', description: 'Arrêts automatiques sous conditions, exécutés par le service d’enregistrement.' },
+  { id: 'antigel', label: 'Plafond de travail', description: 'Plafonne la mémoire des tests, compilations et serveurs de dev pour que le bureau ne gèle jamais.' },
   { id: 'recorder', label: 'Enregistrement', description: 'Service d’arrière-plan qui alimente l’onglet Métriques.' },
   { id: 'disk', label: 'Disque', description: 'Dossiers de projets explorés par la page Disque et seuil d’inactivité des node_modules.' },
   { id: 'earlyoom', label: 'earlyoom', description: 'Tue le processus le plus gourmand avant que le système ne gèle.' },

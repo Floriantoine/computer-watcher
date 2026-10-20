@@ -11,7 +11,9 @@ import {
   breakdownAt, eventMarkers, fetchMetrics, freeSpaceSeries, formatInstant, INVESTIGATION_LAYERS, investigationSeries, PRESET_MS, refreshMsFor, REST_HINTS, REST_KEYS, REST_TONES,
 } from '../metrics';
 import { useChartZoom, ZoomChip } from '../chartZoom';
+import type { AntigelView } from '../../../core/antigel/state';
 import { AlertsPanel } from './AlertsPanel';
+import { AntigelCard } from './AntigelCard';
 import type { SettingsSection } from '../settingsNav';
 import { CulpritsPanel } from './CulpritsPanel';
 import { OpenPortsPanel } from './OpenPortsPanel';
@@ -31,6 +33,8 @@ interface Props {
   onOpenSettings?: (section: SettingsSection) => void;
   /** Panneau « Ports ouverts » (sous les alertes) ; absent sans `onFreePort`. */
   openPorts?: OpenPortsInfo | null;
+  /** Plafond de travail (état écrit par le service). */
+  antigel?: AntigelView | null;
   pendingPids?: Set<number>;
   onFreePort?: (row: OpenPort) => void;
   onOpenPortGroup?: (groupId: string) => void;
@@ -79,7 +83,7 @@ interface SysChart {
 
 const NO_PIDS = new Set<number>();
 
-export function MetricsView({ at, canOpen, onOpenGroup, onOpenSettings, openPorts, pendingPids = NO_PIDS, onFreePort, onOpenPortGroup, swapMinMB = 100, onStopSleeping, onStopSwapRow, onSetSwapMinMB, onOpenTmp }: Props) {
+export function MetricsView({ at, canOpen, onOpenGroup, onOpenSettings, openPorts, antigel, pendingPids = NO_PIDS, onFreePort, onOpenPortGroup, swapMinMB = 100, onStopSleeping, onStopSwapRow, onSetSwapMinMB, onOpenTmp }: Props) {
   const [preset, setPreset] = useState<RangePreset>(() => presetFor(at));
   const z = useChartZoom(PRESET_MS[preset]);
   const { zoom, view, setZoom } = z;
@@ -218,6 +222,8 @@ export function MetricsView({ at, canOpen, onOpenGroup, onOpenSettings, openPort
           );
         }}
       />
+
+      <AntigelCard view={antigel ?? null} onSettings={onOpenSettings && (() => onOpenSettings('antigel'))} />
 
       <div className="sys-charts">
         {(sysCharts ?? [

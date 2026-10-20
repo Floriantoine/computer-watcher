@@ -547,6 +547,7 @@ export function App() {
                 onOpenGroup={(key) => groupIds.has(key) && setRoute({ view: 'detail', groupId: key })}
                 onOpenSettings={openSettings}
                 openPorts={snapshot.openPorts}
+                antigel={antigel}
                 pendingPids={pendingPids}
                 onFreePort={onFreePort}
                 onOpenPortGroup={onOpenPortGroup}
