@@ -23,7 +23,7 @@
     "test:disk-page": "electron-vite build && node scripts/disk-page-e2e.mjs",
     "test:earlyoom-upgrade": "electron-vite build && node scripts/earlyoom-upgrade-e2e.mjs",
     "test:appimage-rename": "electron-vite build && node scripts/appimage-e2e.mjs --rename",
-    "test:antigel": "PROC_WATCH_ANTIGEL_E2E=1 vitest run src/core/antigel/systemd.e2e.test.ts --disableConsoleIntercept",
+    "test:antigel": "PROC_WATCH_ANTIGEL_E2E=1 vitest run src/core/antigel/systemd.e2e.test.ts src/core/antigel/desk.e2e.test.ts --disableConsoleIntercept",
     "test:antigel-ui": "electron-vite build && node scripts/antigel-ui-e2e.mjs",
     "dist": "electron-vite build && electron-builder --linux",
     "release": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/release.mjs"
