@@ -10,10 +10,11 @@ const L = { reserveBytes: 4 * GiB, highBytes: 12 * GiB, maxBytes: 14 * GiB, swap
 const REAL_EXISTS = 'Call failed: Unit cwatch-p-alpha.slice was already loaded or has a fragment file.';
 
 describe('argv busctl figés', () => {
-  test('scope neuf : PIDs dédoublonnés, Slice de projet, OOMPolicy=continue, Description, aucune limite', () => {
+  test('scope neuf : PIDs dédoublonnés, Slice de projet, OOMPolicy=continue, CollectMode=inactive-or-failed, Description, aucune limite', () => {
     expect(startScopeArgv('cwatch-p-alpha-a1.scope', 'cwatch-p-alpha.slice', [700, 701, 700])).toEqual([
-      ...HEAD, 'StartTransientUnit', 'ssa(sv)a(sa(sv))', 'cwatch-p-alpha-a1.scope', 'fail', '4',
-      'PIDs', 'au', '2', '700', '701', 'Slice', 's', 'cwatch-p-alpha.slice', 'OOMPolicy', 's', 'continue', 'Description', 's', DESCRIPTION, '0',
+      ...HEAD, 'StartTransientUnit', 'ssa(sv)a(sa(sv))', 'cwatch-p-alpha-a1.scope', 'fail', '5',
+      'PIDs', 'au', '2', '700', '701', 'Slice', 's', 'cwatch-p-alpha.slice', 'OOMPolicy', 's', 'continue', 'CollectMode', 's', 'inactive-or-failed',
+      'Description', 's', DESCRIPTION, '0',
     ]);
     expect(startScopeArgv('cwatch-p-alpha-a1.scope', 'cwatch-p-alpha.slice', [700]).join(' ')).not.toMatch(/Memory/);
     expect(startScopeArgv('cwatch-e2eab12-1.scope', 'cwatch-e2eab12-a.slice', [700])).toContain('cwatch-e2eab12-a.slice');

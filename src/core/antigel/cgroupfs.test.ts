@@ -58,10 +58,13 @@ describe('cgroups', () => {
     writeFileSync(join(dir, 'memory.max'), 'max\n');
     writeFileSync(join(dir, 'memory.swap.max'), '0\n');
     writeFileSync(join(dir, 'memory.events'), 'high 4\noom_kill 1\n');
-    writeFileSync(join(dir, 'cgroup.procs'), '10\n11\n');
+    writeFileSync(join(dir, 'cgroup.events'), 'populated 1\nfrozen 0\n');
     expect(readCgroupStats(sys, `${BASE}/cwatch.slice`)).toEqual({
-      currentBytes: 1073741824, highBytes: 12884901888, maxBytes: null, swapMaxBytes: 0, events: { high: 4, max: 0, oom: 0, oomKill: 1 }, procs: 2,
+      currentBytes: 1073741824, highBytes: 12884901888, maxBytes: null, swapMaxBytes: 0, events: { high: 4, max: 0, oom: 0, oomKill: 1 }, populated: true,
     });
+    // slice vide (processus tous partis) : cgroup.events « populated 0 »
+    writeFileSync(join(dir, 'cgroup.events'), 'populated 0\nfrozen 0\n');
+    expect(readCgroupStats(sys, `${BASE}/cwatch.slice`)?.populated).toBe(false);
     expect(readCgroupStats(sys, `${BASE}/cwatch.slice/../cwatch.slice`)).toBeNull();
     expect(readCgroupStats(sys, `${BASE}/absent.slice`)).toBeNull();
   });
@@ -119,7 +122,7 @@ describe('cgroups', () => {
     const sys = mkdtempSync(join(tmpdir(), 'pw-sysfs-'));
     const dir = join(sys, BASE, 'cwatch.slice');
     mkdirSync(dir, { recursive: true });
-    for (const f of ['memory.high', 'memory.max', 'memory.swap.max', 'memory.events', 'cgroup.procs']) writeFileSync(join(dir, f), 'max\n');
+    for (const f of ['memory.high', 'memory.max', 'memory.swap.max', 'memory.events', 'cgroup.events']) writeFileSync(join(dir, f), 'max\n');
     writeFileSync(join(dir, 'memory.current'), 'abc\n');
     expect(readCgroupStats(sys, `${BASE}/cwatch.slice`)).toBeNull();
   });

@@ -4,7 +4,7 @@ import { antigelCard } from '../antigel';
 import { formatKB } from '../format';
 import { cardTone } from '../theme';
 
-/** Métriques : mémoire de cwatch.slice face à son plafond, ralentissements, arrêts par le noyau dans la slice. */
+/** Métriques : mémoire de cwatch.slice face à son plafond, ralentissements, arrêts par le noyau sous le plafond. */
 export function AntigelCard({ view, onSettings }: { view: AntigelView | null; onSettings?: () => void }) {
   const m = antigelCard(view);
   return (

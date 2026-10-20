@@ -3,8 +3,9 @@
 // en arrière-plan, un enchaînement à la fois : le tick n'attend jamais busctl, et en régime établi il ne fait aucun appel.
 //
 // Ordre garanti dans un enchaînement : cwatch.slice assurée (plafonds) avant toute slice de projet ; slice de projet
-// assurée (budget ou infinity) dans ce processus avant tout scope rangé dedans. Un échec arrête l'enchaînement : jamais de
-// scope vers une slice que systemd créerait vide.
+// assurée (budget ou infinity) dans ce processus avant tout scope rangé dedans : jamais de scope vers une slice que systemd
+// créerait vide. Un échec de cwatch.slice (ou du gestionnaire : refus, injoignable, délai) arrête l'enchaînement ; un échec
+// propre à un projet (son budget, sa slice, son scope) n'arrête que la suite de ce projet, les autres projets continuent.
 import type { Group, ProcInfo, SystemInfo } from '../types';
 import type { Availability, CgroupStats, MemoryEvents } from './cgroupfs';
 import type { AntigelConfig } from './config';
@@ -16,6 +17,8 @@ import { OTHERS_SLICE, ROOT_SLICE, isProdProjectSliceName, newScopeName, project
 
 export const PROBE_EVERY_MS = 300_000;
 export const THROTTLE_HOLD_MS = 15_000;
+/** Recul avant un nouvel essai d'un budget en échec (autre que « no-unit ») : pas un busctl par tick. */
+export const BUDGET_RETRY_MS = 60_000;
 const CGROUP_MAX_AGE_MS = 60_000;
 /** Entrées au plus dans `slices` et `projects` de l'état (borne de parseAntigelState). */
 const MAX_UNITS = 200;
@@ -37,6 +40,8 @@ export interface AntigelDeps {
   perfNow?: () => number;
   /** Attribution slice de projet → racine relue dans antigel-state.json au démarrage (champ `slices`). */
   initialSlices?: Record<string, string | null>;
+  /** Cache « pid:startTicks » → travail (défaut : neuf) ; injecté par les tests pour en suivre la taille. */
+  workMemo?: Map<string, boolean>;
 }
 
 export interface AntigelTickInput {
@@ -65,7 +70,8 @@ export interface AntigelController {
   idle(): Promise<void>;
 }
 
-type Step = () => Promise<void>;
+/** `critical` : son échec arrête tout l'enchaînement (cwatch.slice) ; sinon seule l'étape échoue. */
+type Step = { run: () => Promise<void>; critical?: boolean };
 
 const trim = (p: string) => (p.length > 1 ? p.replace(/\/+$/, '') : p);
 const kb = (b: number) => Math.round(b / 1024);
@@ -124,8 +130,15 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
   const posed = new Map<string, number | null>();
   const lastEvents = new Map<string, MemoryEvents>();
   const throttledUntil = new Map<string, number>();
+  /** Événements de cwatch.slice au tick précédent : le plafond global qui freine compte son « high » sur elle seule. */
+  let lastRootEvents: MemoryEvents | null = null;
+  let rootThrottledUntil = -Infinity;
+  /** Slices de projet inconnues de systemd (« no-unit ») : leur budget repasse par ensureProjectSlice. */
+  const lost = new Set<string>();
+  /** Budget en échec : pas de nouvel essai avant cette heure (horloge monotone). */
+  const retryAt = new Map<string, number>();
   const cgCache = new Map<string, { cg: string | null; at: number }>();
-  const workMemo = new Map<string, boolean>();
+  const workMemo = deps.workMemo ?? new Map<string, boolean>();
   let inFlight: Promise<void> | null = null;
   let lastError: string | null = null;
   let tickMs = 0;
@@ -148,6 +161,8 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
     posed.delete(slice);
     lastEvents.delete(slice);
     throttledUntil.delete(slice);
+    lost.delete(slice);
+    retryAt.delete(slice);
   };
 
   /** `<n>` d'un scope neuf : base 36 de l'horloge murale (8 chiffres) + compteur (4 chiffres), [a-z0-9]{12}. */
@@ -162,17 +177,18 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
     if (msg !== lastError) deps.log(`anti-gel: ${msg}`);
     lastError = msg;
   };
+  /** cwatch.slice en échec dans cet enchaînement (aussi quand elle est assurée depuis l'étape d'un projet) : arrêt. */
+  let rootFailed = false;
   const run = (steps: Step[]) => {
     if (!steps.length) return;
+    let failed = false;
+    rootFailed = false;
     inFlight = (async () => {
-      for (const s of steps) await s();
-    })()
-      .then(
-        () => {
-          if (lastError !== null) deps.log('anti-gel: appels systemd rétablis');
-          lastError = null;
-        },
-        (e: unknown) => {
+      for (const s of steps) {
+        try {
+          await s.run();
+        } catch (e) {
+          failed = true;
           const code = e instanceof BusctlError ? e.code : 'other';
           const msg = e instanceof Error ? e.message : String(e);
           if (code === 'denied' || code === 'unreachable' || code === 'timeout') {
@@ -181,10 +197,19 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
             applied = null;
             ensured.clear();
             posed.clear();
+            report(msg);
+            return;
           }
           report(msg);
-        },
-      )
+          if (s.critical || rootFailed) return;
+        }
+      }
+    })()
+      .then(() => {
+        if (failed) return;
+        if (lastError !== null) deps.log('anti-gel: appels systemd rétablis');
+        lastError = null;
+      })
       .finally(() => {
         inFlight = null;
       });
@@ -192,18 +217,31 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
 
   /** Budget d'une slice de projet à poser ? Ce que ce processus a posé fait foi ; sinon (redémarrage) ce que montre sysfs. */
   const needsHigh = (slice: string, want: number | null, s: CgroupStats) => (posed.has(slice) ? posed.get(slice) !== want : s.highBytes !== want);
-  const setHigh = (slice: string, want: number | null): Step => async () => {
-    try {
-      await client.setProjectHigh(slice, want);
-    } catch (e) {
-      if (e instanceof BusctlError && e.code === 'no-unit') {
-        ensured.delete(slice);
-        posed.delete(slice);
+  /**
+   * Budget d'une slice de projet. Après un « no-unit » (systemd ne connaît plus la slice), repassage par
+   * ensureProjectSlice ; après un autre échec, recul de BUDGET_RETRY_MS (voir `budgetDue`).
+   */
+  const setHigh = (slice: string, want: number | null): Step => ({
+    run: async () => {
+      try {
+        if (lost.has(slice)) {
+          await client.ensureProjectSlice(slice, want);
+          ensured.add(slice);
+          lost.delete(slice);
+        } else await client.setProjectHigh(slice, want);
+      } catch (e) {
+        if (e instanceof BusctlError && e.code === 'no-unit') {
+          ensured.delete(slice);
+          posed.delete(slice);
+          lost.add(slice);
+        } else retryAt.set(slice, deps.monoNow() + BUDGET_RETRY_MS);
+        throw e;
       }
-      throw e;
-    }
-    posed.set(slice, want);
-  };
+      posed.set(slice, want);
+      retryAt.delete(slice);
+    },
+  });
+  const budgetDue = (slice: string, now: number) => (retryAt.get(slice) ?? -Infinity) <= now;
 
   const step = (i: AntigelTickInput): AntigelOom[] => {
     const now = deps.monoNow();
@@ -225,10 +263,12 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
     // Décision (pure) ; cgroups mis en cache par pid:startTicks (60 s). Éteint, elle sert seulement à retrouver les
     // slices de projet déjà peuplées (budgets à retirer) : aucun déplacement.
     const byPid = new Map(i.procs.map((p) => [p.pid, p]));
-    if (cgCache.size > 4 * i.procs.length + 100) {
+    // caches élagués chacun sur son propre seuil (workMemo grossit avec chaque commande vue sous une ancre, cgCache non)
+    const cacheMax = 4 * i.procs.length + 100;
+    if (cgCache.size > cacheMax || workMemo.size > cacheMax) {
       const alive = new Set(i.procs.map((p) => `${p.pid}:${p.startTicks}`));
-      for (const k of cgCache.keys()) if (!alive.has(k)) cgCache.delete(k);
-      for (const k of workMemo.keys()) if (!alive.has(k)) workMemo.delete(k);
+      if (cgCache.size > cacheMax) for (const k of cgCache.keys()) if (!alive.has(k)) cgCache.delete(k);
+      if (workMemo.size > cacheMax) for (const k of workMemo.keys()) if (!alive.has(k)) workMemo.delete(k);
     }
     const cgroupOf = (pid: number): string | null => {
       const key = `${pid}:${byPid.get(pid)?.startTicks ?? -1}`;
@@ -272,16 +312,21 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
       // processus ressorti.
       lastEvents.clear();
       throttledUntil.clear();
+      lastRootEvents = null;
+      rootThrottledUntil = -Infinity;
       if (!inFlight) {
         const steps: Step[] = [];
         if (applied !== null || (!rootReset && capped(rootStats))) {
-          steps.push(async () => {
-            await client.setSlice(ROOT_SLICE, null);
-            applied = null;
-            rootReset = true;
+          steps.push({
+            critical: true,
+            run: async () => {
+              await client.setSlice(ROOT_SLICE, null);
+              applied = null;
+              rootReset = true;
+            },
           });
         }
-        for (const [s, v] of sliceStats) if (needsHigh(s, null, v)) steps.push(setHigh(s, null));
+        for (const [s, v] of sliceStats) if (needsHigh(s, null, v) && budgetDue(s, now)) steps.push(setHigh(s, null));
         run(steps);
       }
       const reason = i.config.enabled ? RESERVE_TOO_BIG : null;
@@ -315,7 +360,16 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
       return n;
     };
 
-    // OOM et ralentissements, lus sur la slice du projet (memory.events, hiérarchique : ses scopes compris).
+    // Ralentissement par le plafond global : le noyau compte « high » sur cwatch.slice elle-même (le cgroup dont la limite
+    // est dépassée), jamais sur ses enfants. Tous les projets peuplés sont alors ralentis.
+    if (rootStats) {
+      if (lastRootEvents && rootStats.events.high > lastRootEvents.high) rootThrottledUntil = now + THROTTLE_HOLD_MS;
+      lastRootEvents = rootStats.events;
+    } else lastRootEvents = null;
+    const rootThrottled = rootThrottledUntil > now;
+
+    // OOM et ralentissements par le budget, lus sur la slice du projet (memory.events, hiérarchique : ses scopes compris).
+    // Une slice vide (plus aucun processus) reste suivie (budget, OOM, extinction) mais n'est pas publiée : ni badge ni compte.
     const budgetOf = (root: string | null): number | null => (root !== null ? (i.config.budgets[root] ?? null) : null);
     const ooms: AntigelOom[] = [];
     const projects: AntigelProjectState[] = [];
@@ -326,10 +380,10 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
       if (prev && s.events.high > prev.high) throttledUntil.set(unit, now + THROTTLE_HOLD_MS);
       if (prev && s.events.oomKill > prev.oomKill) ooms.push({ unit, root, kills: s.events.oomKill - prev.oomKill });
       lastEvents.set(unit, s.events);
-      if (projects.length < MAX_UNITS) {
+      if (s.populated && projects.length < MAX_UNITS) {
         projects.push({
           unit, root, procs: procsIn(unit), currentKB: kb(s.currentBytes), budgetMB: budgetOf(root),
-          throttled: (throttledUntil.get(unit) ?? -Infinity) > now,
+          throttled: rootThrottled || (throttledUntil.get(unit) ?? -Infinity) > now,
         });
       }
     }
@@ -347,20 +401,36 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
     // cwatch.slice en place avec nos plafonds : sinon (premier tick, plafonds changés, slice disparue) assurée d'abord.
     let rootReady = sameLimits(applied, limits) && rootStats !== null;
     const ensureRoot = async () => {
-      if (applied === null || rootStats === null) await client.ensureSlice(ROOT_SLICE, limits);
-      else await client.setSlice(ROOT_SLICE, limits);
+      try {
+        if (applied === null || rootStats === null) await client.ensureSlice(ROOT_SLICE, limits);
+        else await client.setSlice(ROOT_SLICE, limits);
+      } catch (e) {
+        rootFailed = true;
+        throw e;
+      }
       applied = limits;
       rootReset = false;
       rootReady = true;
     };
-    if (!sameLimits(applied, limits)) steps.push(ensureRoot);
-    // Budgets des slices existantes : un appel par changement.
-    for (const [s, v] of sliceStats) if (needsHigh(s, want(slices.get(s) ?? null), v)) steps.push(setHigh(s, want(slices.get(s) ?? null)));
+    if (!sameLimits(applied, limits)) steps.push({ critical: true, run: ensureRoot });
+    // Budgets des slices existantes : un appel par changement (recul après un échec).
+    for (const [s, v] of sliceStats) {
+      const w = want(slices.get(s) ?? null);
+      if (needsHigh(s, w, v) && budgetDue(s, now)) steps.push(setHigh(s, w));
+    }
 
     // Déplacements regroupés par slice de projet : un seul scope neuf par projet et par tick.
     const bySlice = new Map<string, PlanMove[]>();
+    /** Le cgroup de cette slice existe-t-il déjà (sysfs) ? */
+    const present = (s: string) => sliceStats.has(s) || deps.stats(cgOfSlice(s)) !== null;
     for (const m of plan.moves) {
-      const s = projectSliceFor(m.root, slices);
+      let s = projectSliceFor(m.root, slices);
+      if (m.root !== null && !slices.has(s) && present(s)) {
+        // slice déjà là sans attribution dans ce processus (état perdu, processus d'une autre racine hors de toute ancre) :
+        // considérée comme prise, jamais réattribuée ; nom haché, et s'il existe aussi, pas de déplacement
+        s = projectSliceFor(m.root, new Map([...slices, [s, null]]));
+        if (!slices.has(s) && present(s)) continue;
+      }
       if (slices.has(s) && slices.get(s) !== m.root) continue; // collision de hachage : jamais la slice d'une autre racine
       slices.set(s, m.root);
       bySlice.set(s, [...(bySlice.get(s) ?? []), m]);
@@ -368,14 +438,16 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
     for (const [s, moves] of bySlice) {
       const w = want(slices.get(s) ?? null);
       const exists = sliceStats.has(s);
-      steps.push(async () => {
+      steps.push({ run: async () => {
         // rien de vivant : aucun appel (ni slice de projet, ni scope)
         if (moves.every((m) => deps.reverify(m.targets, m.anchorCgroup).length === 0)) return;
         if (!rootReady) await ensureRoot();
-        if (!ensured.has(s) || !exists) {
+        if (!ensured.has(s) || !exists || lost.has(s)) {
           await client.ensureProjectSlice(s, w);
           ensured.add(s);
+          lost.delete(s);
           posed.set(s, w);
+          retryAt.delete(s);
         }
         // Revérification juste avant l'appel. Au-delà de MAX_PIDS, la racine d'un sous-arbre coupé reste dehors : elle
         // reste racine au tick suivant, et le reste de son sous-arbre (encore dans l'unité de l'ancre) suit avec elle.
@@ -393,7 +465,7 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
         if (!batch.size) return;
         await client.startScope(newScopeName(s, nextN(i.ts)), s, [...batch.keys()]);
         for (const t of batch.values()) cgCache.delete(`${t.pid}:${t.startTicks}`);
-      });
+      } });
     }
     run(steps);
     return ooms;

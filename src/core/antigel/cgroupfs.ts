@@ -84,7 +84,14 @@ export function parseLimit(text: string): number | null {
   return Number.isSafeInteger(n) ? n : null;
 }
 
-export interface CgroupStats { currentBytes: number; highBytes: number | null; maxBytes: number | null; swapMaxBytes: number | null; events: MemoryEvents; procs: number }
+/** `populated` : au moins un processus dans le cgroup ou ses descendants (cgroup.events « populated 1 »). */
+export interface CgroupStats { currentBytes: number; highBytes: number | null; maxBytes: number | null; swapMaxBytes: number | null; events: MemoryEvents; populated: boolean }
+
+/** cgroup.events : ligne « populated 0|1 » ; illisible ou absente → true (dans le doute, la slice reste affichée). */
+export function parsePopulated(text: string): boolean {
+  const m = /^populated\s+([01])\s*$/m.exec(text);
+  return m ? m[1] === '1' : true;
+}
 
 /** Mémoire d'un cgroup (chemin absolu dans la hiérarchie : « /user.slice/… ») ; null s'il n'existe pas. */
 export function readCgroupStats(sysfsRoot: string, cgroupPath: string): CgroupStats | null {
@@ -96,6 +103,13 @@ export function readCgroupStats(sysfsRoot: string, cgroupPath: string): CgroupSt
     if (!/^\d+$/.test(currentText)) return null; // illisible : pas de 0 silencieux
     const current = Number(currentText);
     if (!Number.isSafeInteger(current)) return null;
+    const populated = () => {
+      try {
+        return parsePopulated(read('cgroup.events'));
+      } catch {
+        return true;
+      }
+    };
     let swapMax: number | null = null;
     try {
       swapMax = parseLimit(read('memory.swap.max'));
@@ -108,7 +122,7 @@ export function readCgroupStats(sysfsRoot: string, cgroupPath: string): CgroupSt
       maxBytes: parseLimit(read('memory.max')),
       swapMaxBytes: swapMax,
       events: parseMemoryEvents(read('memory.events')),
-      procs: read('cgroup.procs').split('\n').filter(Boolean).length,
+      populated: populated(),
     };
   } catch {
     return null;

@@ -59,7 +59,7 @@ describe('fenêtre : plafond de travail', () => {
     expect(antigelCard(fresh({ status: 'off', enabled: false }))).toMatchObject({ tone: 'off', title: 'Plafond de travail éteint' });
     const c = antigelCard(fresh());
     expect(c).toMatchObject({ tone: 'ok', title: 'Plafond de travail actif', usedKB: 2 * 1024 * 1024, highKB: 12 * 1024 * 1024, fillPercent: 17 });
-    expect(c.lines).toEqual(['1 projet plafonné', '3 ralentissements · 0 arrêt par le noyau dans la slice']);
+    expect(c.lines).toEqual(['1 projet plafonné', '3 ralentissements · 0 arrêt par le noyau sous le plafond']);
     expect(antigelCard(fresh({ projects: [{ unit: 'cwatch-p-alpha.slice', root: '/a', procs: 1, currentKB: 1, budgetMB: null, throttled: true }] })))
       .toMatchObject({ tone: 'warn', title: 'Plafond de travail atteint : travail ralenti' });
     expect(antigelCard(fresh({ status: 'off' })).lines).toEqual(['Réglages → Plafond de travail pour le rallumer.']);
@@ -67,5 +67,16 @@ describe('fenêtre : plafond de travail', () => {
     expect(antigelStatusLine(null, true)).toMatch(/applique le plafond de travail/);
     expect(antigelStatusLine(fresh({ status: 'unavailable', reason: 'x' }), true)).toBe('Plafond de travail indisponible : x.');
     expect(antigelStatusLine(fresh({ status: 'off' }), false)).toMatch(/^Éteint/);
+  });
+  test('carte : aucun jargon « slice » ; la slice « autres » (vérifications hors projet) ne compte pas comme un projet', () => {
+    const alpha = { unit: 'cwatch-p-alpha.slice', root: '/home/u/alpha', procs: 3, currentKB: 1, budgetMB: null, throttled: false };
+    const autres = { unit: 'cwatch-p-autres.slice', root: null, procs: 1, currentKB: 1, budgetMB: null, throttled: false };
+    const both = fresh({ projects: [alpha, autres] });
+    expect(antigelCard(both).lines).toEqual(['1 projet plafonné, plus des vérifications hors projet', '3 ralentissements · 0 arrêt par le noyau sous le plafond']);
+    expect(antigelStatusLine(both, true)).toMatch(/^Actif : 1 projet plafonné,/);
+    const only = fresh({ projects: [autres] });
+    expect(antigelCard(only).lines[0]).toBe('0 projet plafonné, plus des vérifications hors projet');
+    expect(antigelStatusLine(only, true)).toMatch(/^Actif : 0 projet plafonné,/);
+    for (const v of [both, only, fresh()]) expect(antigelCard(v).lines.join(' ')).not.toMatch(/slice/);
   });
 });

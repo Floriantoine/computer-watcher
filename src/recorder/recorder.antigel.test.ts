@@ -1,6 +1,7 @@
 // Anti-gel dans le service : faux /proc (avec cgroups), faux sysfs et faux client systemd (fakeSystemd : aucun busctl).
 // Aucun appel D-Bus réel, aucun vrai processus déplacé.
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -119,6 +120,42 @@ test('redémarrage du service : attribution relue dans antigel-state.json, plafo
   expect(JSON.parse(readFileSync(s.statePath, 'utf8'))).toMatchObject({ slices: { [PS]: s.A }, projects: [{ unit: PS, root: s.A }] });
   rec2.stop();
 });
+
+test('redémarrage : antigel-state.json remplacé par un lien symbolique → refusé (lecture bornée, O_NOFOLLOW), attribution vide', async () => {
+  const s = setup();
+  s.rec.start();
+  await s.tick();
+  s.rec.stop();
+  rmSync(join(s.procRoot, '700'), { recursive: true });
+  rmSync(join(s.procRoot, '701'), { recursive: true });
+  const elsewhere = join(s.dataDir, 'ailleurs.json');
+  renameSync(s.statePath, elsewhere);
+  symlinkSync(elsewhere, s.statePath);
+  const fake2 = fakeSystemd({ userBase: BASE });
+  fake2.sys.set(PSCG, stats());
+  const rec2 = s.recorder(fake2);
+  rec2.start();
+  rec2.tick();
+  await rec2.antigelIdle();
+  expect(JSON.parse(readFileSync(s.statePath, 'utf8')).slices).toEqual({});
+  rec2.stop();
+});
+
+test('redémarrage : antigel-state.json remplacé par un FIFO → le service démarre sans bloquer, attribution vide', async () => {
+  const s = setup();
+  s.rec.start();
+  await s.tick();
+  s.rec.stop();
+  rmSync(s.statePath);
+  execFileSync('mkfifo', [s.statePath]);
+  const fake2 = fakeSystemd({ userBase: BASE });
+  const rec2 = s.recorder(fake2);
+  rec2.start();
+  rec2.tick();
+  await rec2.antigelIdle();
+  expect(JSON.parse(readFileSync(s.statePath, 'utf8')).slices).toEqual({ [PS]: s.A }); // attribution non relue ; processus encore sous le terminal : rangés de nouveau
+  rec2.stop();
+}, 5000);
 
 test('budget du projet : posé à la création de sa slice ; interrupteur éteint (config rechargée) : tout remis à infinity', async () => {
   const s = setup({ antigel: { enabled: true, reserveMB: null, budgets: {} } });

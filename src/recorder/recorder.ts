@@ -7,6 +7,7 @@ import { appFocused, desktopMessage, desktopAllowed, parseFocusState, type Alert
 import { createAntigel, type AntigelController, type AntigelDeps } from '../core/antigel/controller';
 import type { AntigelConfig } from '../core/antigel/config';
 import { parseAntigelState, type AntigelState } from '../core/antigel/state';
+import { readStateFileBounded } from '../core/antigel/stateFile';
 import { classifyGroups, type InstanceDecision } from '../core/classify/classify';
 import { readPackageHints } from '../core/classify/packageJson';
 import { CpuTracker } from '../core/collector/cpuTracker';
@@ -568,7 +569,9 @@ export function createRecorder(deps: RecorderDeps): Recorder {
   let antigel: AntigelController | null = null;
   const readAntigelSlices = (): Record<string, string | null> => {
     try {
-      return parseAntigelState(readFileSync(antigelStatePath(deps.dataDir), 'utf8'))?.slices ?? {};
+      // même lecture bornée que le main : jamais un lien symbolique suivi, jamais bloqué sur un FIFO
+      const text = readStateFileBounded(antigelStatePath(deps.dataDir));
+      return (text === null ? null : parseAntigelState(text))?.slices ?? {};
     } catch {
       return {};
     }

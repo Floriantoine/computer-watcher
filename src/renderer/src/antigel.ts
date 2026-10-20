@@ -71,6 +71,12 @@ export function reserveHint(memTotalKB: number | null): string {
 }
 
 const plural = (n: number, w: string) => `${n} ${w}${n > 1 ? 's' : ''}`;
+/** « N projets plafonnés » : la slice « autres » (vérifications hors projet, racine null) n'est pas un projet. */
+function cappedLine(projects: readonly { root: string | null }[]): string {
+  const n = projects.filter((p) => p.root !== null).length;
+  const others = projects.some((p) => p.root === null);
+  return `${plural(n, 'projet')} plafonné${n > 1 ? 's' : ''}${others ? ', plus des vérifications hors projet' : ''}`;
+}
 
 export function antigelStatusLine(v: AntigelView | null, enabled: boolean): string {
   if (!v || !v.state) return 'En attente du service d’enregistrement (c’est lui qui applique le plafond de travail).';
@@ -79,7 +85,7 @@ export function antigelStatusLine(v: AntigelView | null, enabled: boolean): stri
   if (s.status === 'unavailable') return `Plafond de travail indisponible : ${s.reason ?? 'raison inconnue'}.`;
   if (s.status === 'off' || !enabled) return 'Éteint : aucun déplacement, plafonds levés.';
   const high = s.slice?.highKB ?? null;
-  return `Actif : ${plural(s.projects.length, 'projet')} plafonné${s.projects.length > 1 ? 's' : ''}${high !== null ? `, travail ralenti au-delà de ${formatKB(high)}` : ''}.`;
+  return `Actif : ${cappedLine(s.projects)}${high !== null ? `, travail ralenti au-delà de ${formatKB(high)}` : ''}.`;
 }
 
 export interface AntigelCardModel { tone: 'ok' | 'warn' | 'off' | 'na'; title: string; usedKB: number | null; highKB: number | null; maxKB: number | null; fillPercent: number | null; lines: string[] }
@@ -93,7 +99,6 @@ export function antigelCard(v: AntigelView | null): AntigelCardModel {
   if (s.status === 'off') return { tone: 'off', title: 'Plafond de travail éteint', ...none, lines: ['Réglages → Plafond de travail pour le rallumer.'] };
   const sl = s.slice;
   const throttled = s.projects.some((p) => p.throttled);
-  const n = s.projects.length;
   return {
     tone: throttled ? 'warn' : 'ok',
     title: throttled ? 'Plafond de travail atteint : travail ralenti' : 'Plafond de travail actif',
@@ -102,8 +107,8 @@ export function antigelCard(v: AntigelView | null): AntigelCardModel {
     maxKB: sl?.maxKB ?? null,
     fillPercent: sl && sl.highKB ? Math.min(100, Math.round((100 * sl.currentKB) / sl.highKB)) : null,
     lines: [
-      `${plural(n, 'projet')} plafonné${n > 1 ? 's' : ''}`,
-      `${plural(sl?.throttles ?? 0, 'ralentissement')} · ${plural(sl?.oomKills ?? 0, 'arrêt')} par le noyau dans la slice`,
+      cappedLine(s.projects),
+      `${plural(sl?.throttles ?? 0, 'ralentissement')} · ${plural(sl?.oomKills ?? 0, 'arrêt')} par le noyau sous le plafond`,
     ],
   };
 }

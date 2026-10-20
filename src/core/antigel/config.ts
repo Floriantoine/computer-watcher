@@ -6,7 +6,7 @@ export interface AntigelConfig {
   enabled: boolean;
   /** Réserve pour le bureau, en Mo ; null : automatique, max(4 Go, 15 % de la RAM). */
   reserveMB: number | null;
-  /** Budget mémoire (MemoryHigh du scope du projet) par racine de projet, en Mo ; aucun par défaut. */
+  /** Budget mémoire (MemoryHigh de la slice du projet) par racine de projet, en Mo ; aucun par défaut. */
   budgets: Record<string, number>;
 }
 

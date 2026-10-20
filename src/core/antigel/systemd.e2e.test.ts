@@ -49,7 +49,7 @@ function systemctlRead(bin: string, args: string[]): Promise<string> {
 }
 
 test.skipIf(!RUN)(
-  'slice de test plafonnée → slice de projet (budget) → deux scopes neufs : chemins réels, OOMPolicy, ralentissement, retrait, nettoyage',
+  'slice de test plafonnée → slice de projet (budget) → deux scopes neufs : chemins réels, OOMPolicy, CollectMode, ralentissement, retrait, nettoyage',
   async () => {
     const uid = process.getuid!();
     const busctl = systemBin('busctl', existsSync);
@@ -128,11 +128,14 @@ test.skipIf(!RUN)(
       // 7a) PID « recyclé » : starttime différent → écarté avant tout appel
       expect(reverify('/proc', uid, [{ pid: tail.pid!, startTicks: startTicks(tail.pid!) + 1 }], scopeCg(scope1))).toEqual([]);
 
-      // 4) OOMPolicy=continue conservé sur les deux scopes (lecture seule)
+      // 4) OOMPolicy=continue et CollectMode=inactive-or-failed conservés sur les deux scopes (lecture seule)
       for (const s of [scope1, scope2]) {
         const v = (await systemctlRead(systemctl!, ['show', '-p', 'OOMPolicy', '--value', s])).trim();
         expect(v, `OOMPolicy de ${s}`).toBe('continue');
         seen.push(`systemctl --user show -p OOMPolicy --value ${s} : ${v}`);
+        const c = (await systemctlRead(systemctl!, ['show', '-p', 'CollectMode', '--value', s])).trim();
+        expect(c, `CollectMode de ${s}`).toBe('inactive-or-failed');
+        seen.push(`systemctl --user show -p CollectMode --value ${s} : ${c}`);
       }
 
       // 5) le plafond global s'applique au-dessus : chaque scope est descendant de la slice de test plafonnée ; le budget

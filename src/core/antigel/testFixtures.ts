@@ -13,7 +13,7 @@ export const sampleState = (o: Partial<AntigelState> = {}): AntigelState => ({
 
 /** Statistiques de cgroup d'exemple (1 Gio, sans plafond, aucun événement). */
 export const sampleStats = (o: Partial<CgroupStats> = {}): CgroupStats => ({
-  currentBytes: 1024 ** 3, highBytes: null, maxBytes: null, swapMaxBytes: null, events: { high: 0, max: 0, oom: 0, oomKill: 0 }, procs: 0, ...o,
+  currentBytes: 1024 ** 3, highBytes: null, maxBytes: null, swapMaxBytes: null, events: { high: 0, max: 0, oom: 0, oomKill: 0 }, populated: true, ...o,
 });
 
 export interface FakeSystemd {
@@ -60,7 +60,9 @@ export function fakeSystemd(o: {
     setSlice: (s, l) =>
       act('setSlice', [s, l ? l.highBytes : null], () => setSliceArgv(s, l), () =>
         put(path(s), { highBytes: l ? l.highBytes : null, maxBytes: l ? l.maxBytes : null, swapMaxBytes: l ? l.swapMaxBytes : null })),
-    ensureProjectSlice: (s, h) => act('ensureProjectSlice', [s, h], () => startProjectSliceArgv(s, h), () => put(path(s), { highBytes: h })),
+    // une slice de projet neuve est vide ; un scope la peuple
+    ensureProjectSlice: (s, h) =>
+      act('ensureProjectSlice', [s, h], () => startProjectSliceArgv(s, h), () => put(path(s), { highBytes: h, populated: sys.get(path(s))?.populated ?? false })),
     setProjectHigh: (s, h) =>
       act('setProjectHigh', [s, h], () => setProjectHighArgv(s, h), () => {
         if (!sys.has(path(s))) throw new BusctlError(`Unit ${s} not loaded.`, 'no-unit');
@@ -70,6 +72,7 @@ export function fakeSystemd(o: {
       act('startScope', [scope, s, [...pids]], () => startScopeArgv(scope, s, pids), () => {
         if (started.has(scope)) throw new BusctlError(`Unit ${scope} was already loaded or has a fragment file.`, 'exists');
         started.add(scope);
+        put(path(s), { populated: true });
         for (const pid of pids) cg.set(pid, `${o.userBase}/${scopePath(scope, s)}`);
       }),
     stopTestUnit: async () => {

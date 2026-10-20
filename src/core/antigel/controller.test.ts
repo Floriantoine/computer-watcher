@@ -4,7 +4,7 @@ import { buildGroups } from '../grouping/buildGroups';
 import type { ProcInfo, SystemInfo } from '../types';
 import type { Availability, CgroupStats } from './cgroupfs';
 import type { AntigelConfig } from './config';
-import { PROBE_EVERY_MS, THROTTLE_HOLD_MS, createAntigel, type AntigelDeps } from './controller';
+import { BUDGET_RETRY_MS, PROBE_EVERY_MS, THROTTLE_HOLD_MS, createAntigel, type AntigelDeps } from './controller';
 import { GiB } from './limits';
 import { BusctlError, MAX_PIDS } from './systemd';
 import { fakeSystemd, sampleStats as stats } from './testFixtures';
@@ -39,7 +39,7 @@ const vitest = (pid: number) => p(pid, 601, 'MainThread', `node ${NM}/vitest/vit
 
 function harness(o: {
   avail?: Availability; reverify?: AntigelDeps['reverify']; fail?: (method: string, args: readonly unknown[]) => BusctlError | null;
-  hang?: boolean; initialSlices?: Record<string, string | null>; roots?: Record<string, string>;
+  hang?: boolean; initialSlices?: Record<string, string | null>; roots?: Record<string, string>; workMemo?: Map<string, boolean>;
 } = {}) {
   const fake = fakeSystemd({ userBase: BASE, fail: o.fail, hang: () => !!o.hang });
   const logs: string[] = [];
@@ -47,7 +47,7 @@ function harness(o: {
   const probe = vi.fn(() => o.avail ?? ({ ok: true, userBase: BASE, busctl: '/usr/bin/busctl' } as Availability));
   const reverify = vi.fn(o.reverify ?? ((t) => [...t]));
   const ag = createAntigel({
-    client: fake.client, probe, reverify, log: (m) => logs.push(m), monoNow: () => mono, perfNow: () => 0, initialSlices: o.initialSlices,
+    client: fake.client, probe, reverify, log: (m) => logs.push(m), monoNow: () => mono, perfNow: () => 0, initialSlices: o.initialSlices, workMemo: o.workMemo,
     stats: (path) => fake.sys.get(path) ?? null, cgroupOf: (pid) => fake.cg.get(pid) ?? WARP,
   });
   const rootOf = (c: string) => Object.entries({ [A]: A, ...o.roots }).find(([k]) => c === k || c.startsWith(`${k}/`))?.[1] ?? null;
@@ -444,5 +444,92 @@ describe('orchestrateur anti-gel', () => {
     expect(scopes).toHaveLength(2);
     expect(new Set(scopes).size).toBe(2);
     for (const s of scopes) expect(s).toMatch(SCOPE);
+  });
+
+  test('plafond global qui freine (high de cwatch.slice) : projets peuplés « ralentis » 15 s, même sans budget', async () => {
+    const h = harness();
+    await h.step();
+    h.sys.set(ROOT, { ...h.sys.get(ROOT)!, events: ev({ high: 2 }) });
+    await h.step(); // première lecture : référence
+    expect(h.ag.state().projects).toMatchObject([{ unit: PS, throttled: false }]);
+    h.sys.set(ROOT, { ...h.sys.get(ROOT)!, events: ev({ high: 9 }) });
+    await h.step();
+    expect(h.ag.state().projects).toMatchObject([{ unit: PS, throttled: true }]);
+    await h.step(ON, THROTTLE_HOLD_MS + 1000);
+    expect(h.ag.state().projects).toMatchObject([{ unit: PS, throttled: false }]);
+  });
+
+  test('slice de projet vide (aucun processus) : ni « plafonnée » ni comptée ; gardée pour son budget', async () => {
+    const h = harness({ initialSlices: { [PS]: A } });
+    h.sys.set(PSCG, stats({ populated: false, highBytes: 4 * GiB }));
+    h.setProcs(world().slice(0, 2));
+    await h.step();
+    expect(h.ag.state().projects).toEqual([]);
+    expect(h.ag.state().slices).toEqual({ [PS]: A });
+    expect(h.calls).toEqual([ROOT_CALL, ['setProjectHigh', PS, null]]);
+    h.sys.set(PSCG, { ...h.sys.get(PSCG)!, populated: true });
+    await h.step();
+    expect(h.ag.state().projects).toMatchObject([{ unit: PS, root: A }]);
+  });
+
+  test('budget en échec persistant sur un projet : les déplacements des autres projets partent quand même, sans nouvel essai à chaque tick', async () => {
+    const B = '/home/u/beta';
+    const h = harness({ roots: { [B]: B }, fail: (m, a) => (m === 'setProjectHigh' && a[0] === PS ? new BusctlError('Call failed: boom', 'other') : null) });
+    await h.step();
+    h.calls.length = 0;
+    const withBudget = { ...ON, budgets: { [A]: 4096 } };
+    h.setProcs([...world(), p(730, 601, 'MainThread', `node ${B}/node_modules/vitest/vitest.mjs run`, B)]);
+    await h.step(withBudget);
+    expect(h.calls).toEqual([
+      ['setProjectHigh', PS, 4 * GiB],
+      ['ensureProjectSlice', 'cwatch-p-beta.slice', null],
+      ['startScope', expect.stringMatching(/^cwatch-p-beta-[a-z0-9]+\.scope$/), 'cwatch-p-beta.slice', [730]],
+    ]);
+    expect(h.ag.state().lastError).toMatch(/boom/);
+    h.calls.length = 0;
+    await h.step(withBudget);
+    expect(h.calls).toEqual([]); // recul : pas un busctl par tick
+    await h.step(withBudget, BUDGET_RETRY_MS);
+    expect(h.calls).toEqual([['setProjectHigh', PS, 4 * GiB]]);
+  });
+
+  test('budget refusé en no-unit (slice inconnue de systemd) : repassage par ensureProjectSlice, puis plus aucun appel', async () => {
+    const h = harness({ fail: (m) => (m === 'setProjectHigh' ? new BusctlError(`Call failed: Unit ${PS} not loaded.`, 'no-unit') : null) });
+    await h.step();
+    h.calls.length = 0;
+    const withBudget = { ...ON, budgets: { [A]: 4096 } };
+    await h.step(withBudget);
+    expect(h.calls).toEqual([['setProjectHigh', PS, 4 * GiB]]);
+    h.calls.length = 0;
+    await h.step(withBudget);
+    expect(h.calls).toEqual([['ensureProjectSlice', PS, 4 * GiB]]);
+    h.calls.length = 0;
+    await h.step(withBudget);
+    expect(h.calls).toEqual([]);
+  });
+
+  test('slice de projet dont le cgroup existe déjà sans être attribuée ici : jamais réattribuée à une autre racine (nom haché)', async () => {
+    const h = harness();
+    h.sys.set(PSCG, stats()); // processus d'une racine perdue (état illisible), plus sous aucune ancre
+    await h.step();
+    const hashed = `cwatch-p-alpha_${shortHash(A)}.slice`;
+    expect(h.calls).toEqual([
+      ROOT_CALL,
+      ['ensureProjectSlice', hashed, null],
+      ['startScope', expect.stringMatching(/^cwatch-p-alpha_[0-9a-f]{6}-[a-z0-9]+\.scope$/), hashed, [700, 701, 702, 703, 704]],
+    ]);
+    expect(h.ag.state().slices).toEqual({ [hashed]: A });
+  });
+
+  test('workMemo élagué sur son propre seuil (commandes non déplacées à fort roulement)', async () => {
+    const memo = new Map<string, boolean>();
+    const h = harness({ workMemo: memo });
+    let pid = 5000;
+    for (let k = 0; k < 60; k++) {
+      h.setProcs([...world().slice(0, 2), ...Array.from({ length: 20 }, () => p(pid++, 601, 'git', 'git status'))]);
+      await h.step();
+    }
+    expect(memo.size).toBeGreaterThan(0);
+    expect(memo.size).toBeLessThanOrEqual(4 * 22 + 100 + 20);
   });
 });

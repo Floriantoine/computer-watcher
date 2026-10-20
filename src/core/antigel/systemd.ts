@@ -41,12 +41,15 @@ const sliceProps = (l: SliceLimits | null): string[][] => [
   ['MemorySwapMax', 't', l ? swapBytes(l.swapMaxBytes) : INFINITY_T],
 ];
 
-/** Scope neuf d'un lot de déplacement : PIDs, Slice, OOMPolicy=continue, Description ; aucune limite propre. */
+/**
+ * Scope neuf d'un lot de déplacement : PIDs, Slice, OOMPolicy=continue, CollectMode=inactive-or-failed (un scope en échec
+ * est déchargé au lieu de rester chargé dans le gestionnaire), Description ; aucune limite propre.
+ */
 export function startScopeArgv(scope: string, projectSlice: string, pids: number[]): string[] {
   unit(scope, isScopeName);
   unit(projectSlice, isProjectSliceName);
   if (!scopeBelongs(scope, projectSlice)) throw new Error(`scope refusé pour ${projectSlice} : ${scope}`);
-  const props = [['PIDs', 'au', ...pidList(pids)], ['Slice', 's', projectSlice], ['OOMPolicy', 's', 'continue'], ['Description', 's', DESCRIPTION]];
+  const props = [['PIDs', 'au', ...pidList(pids)], ['Slice', 's', projectSlice], ['OOMPolicy', 's', 'continue'], ['CollectMode', 's', 'inactive-or-failed'], ['Description', 's', DESCRIPTION]];
   return [...head('StartTransientUnit', 'ssa(sv)a(sa(sv))'), scope, 'fail', String(props.length), ...props.flat(), '0'];
 }
 
