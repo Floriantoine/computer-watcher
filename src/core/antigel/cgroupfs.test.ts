@@ -88,4 +88,39 @@ describe('cgroups', () => {
     expect(stillSame(proc, 1000, { pid: 22, startTicks: 820 }, WARP)).toBe(false);
     expect(reverify(proc, 1000, [{ pid: 20, startTicks: 800 }, { pid: 21, startTicks: 810 }, { pid: 22, startTicks: 820 }], WARP)).toEqual([{ pid: 20, startTicks: 800 }]);
   });
+  test('revérification : uid effectif, sauvé ou fs différent écarté (binaire setuid)', () => {
+    const proc = makeProcRoot();
+    addProc(proc, { pid: 30, comm: 'su', starttime: 900, cgroup: WARP });
+    writeFileSync(join(proc, '30', 'status'), 'Name:\tsu\nUid:\t1000\t0\t0\t0\n');
+    addProc(proc, { pid: 31, comm: 'alpha', starttime: 910, cgroup: WARP });
+    writeFileSync(join(proc, '31', 'status'), 'Name:\talpha\nUid:\t1000\t1000\t0\t1000\n');
+    addProc(proc, { pid: 32, comm: 'beta', starttime: 920, cgroup: WARP });
+    writeFileSync(join(proc, '32', 'status'), 'Name:\tbeta\n');
+    addProc(proc, { pid: 33, comm: 'demo', starttime: 930, cgroup: WARP });
+    expect(stillSame(proc, 1000, { pid: 30, startTicks: 900 }, WARP)).toBe(false);
+    expect(stillSame(proc, 1000, { pid: 31, startTicks: 910 }, WARP)).toBe(false);
+    expect(stillSame(proc, 1000, { pid: 32, startTicks: 920 }, WARP)).toBe(false); // ligne absente
+    expect(stillSame(proc, 1000, { pid: 33, startTicks: 930 }, WARP)).toBe(true);
+  });
+  test('cgroup : segments « .. » ou « . » et lignes « 0:: » multiples refusés', () => {
+    expect(parseCgroupFile('0::/a/../b\n')).toBeNull();
+    expect(parseCgroupFile('0::/a/./b\n')).toBeNull();
+    expect(parseCgroupFile('0::/a\n0::/b\n')).toBeNull();
+    expect(userBaseOf(`${BASE}/../../x`, 1000)).toBeNull();
+  });
+  test('revérification : comm piégée (parenthèses, « Z ») lue après la dernière « ) »', () => {
+    const proc = makeProcRoot();
+    addProc(proc, { pid: 40, comm: 'a) Z (b', starttime: 1000, cgroup: WARP, state: 'S' });
+    addProc(proc, { pid: 41, comm: 'x) S (y', starttime: 1010, cgroup: WARP, state: 'Z' });
+    expect(stillSame(proc, 1000, { pid: 40, startTicks: 1000 }, WARP)).toBe(true);
+    expect(stillSame(proc, 1000, { pid: 41, startTicks: 1010 }, WARP)).toBe(false);
+  });
+  test('readCgroupStats : memory.current illisible → null (pas de 0 silencieux)', () => {
+    const sys = mkdtempSync(join(tmpdir(), 'pw-sysfs-'));
+    const dir = join(sys, BASE, 'cwatch.slice');
+    mkdirSync(dir, { recursive: true });
+    for (const f of ['memory.high', 'memory.max', 'memory.swap.max', 'memory.events', 'cgroup.procs']) writeFileSync(join(dir, f), 'max\n');
+    writeFileSync(join(dir, 'memory.current'), 'abc\n');
+    expect(readCgroupStats(sys, `${BASE}/cwatch.slice`)).toBeNull();
+  });
 });

@@ -1,17 +1,18 @@
 // Anti-gel : lectures de /proc/<pid>/cgroup et de /sys/fs/cgroup (lecture seule), disponibilité, revérification.
+// Limite connue : entre `reverify` et l'appel busctl, un PID peut encore être recyclé (fenêtre très courte, très
+// improbable) ; systemd ne permet pas de passer un pidfd, cette fenêtre ne peut pas être éliminée côté service.
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { parseStat, parseStatus } from '../collector/parse';
+import { parseStat } from '../collector/parse';
 import type { PlanTarget } from './plan';
 
 /** Ligne « 0::/chemin » (cgroups v2) ; null sinon. */
 export function parseCgroupFile(text: string): string | null {
-  for (const line of text.split('\n')) {
-    if (!line.startsWith('0::')) continue;
-    const p = line.slice(3).trim();
-    return p.startsWith('/') ? p : null;
-  }
-  return null;
+  const lines = text.split('\n').filter((l) => l.startsWith('0::'));
+  if (lines.length !== 1) return null; // absent ou ambigu
+  const p = lines[0].slice(3).trim();
+  if (!p.startsWith('/') || p.split('/').some((s) => s === '..' || s === '.')) return null;
+  return p;
 }
 
 export function readCgroup(procRoot: string, pid: number): string | null {
@@ -24,7 +25,7 @@ export function readCgroup(procRoot: string, pid: number): string | null {
 
 /** Préfixe « /user.slice/user-<uid>.slice/user@<uid>.service » d'un cgroup ; null s'il est hors du gestionnaire utilisateur. */
 export function userBaseOf(cgroup: string | null, uid: number): string | null {
-  if (!cgroup) return null;
+  if (!cgroup || cgroup.split('/').some((s) => s === '..' || s === '.')) return null;
   const m = /^\/user\.slice\/user-(\d+)\.slice\/user@(\d+)\.service(\/|$)/.exec(cgroup);
   if (!m || m[1] !== String(uid) || m[2] !== String(uid)) return null;
   return `/user.slice/user-${uid}.slice/user@${uid}.service`;
@@ -91,7 +92,10 @@ export function readCgroupStats(sysfsRoot: string, cgroupPath: string): CgroupSt
   const dir = join(sysfsRoot, cgroupPath);
   const read = (f: string) => readFileSync(join(dir, f), 'utf8');
   try {
-    const current = Number(read('memory.current').trim());
+    const currentText = read('memory.current').trim();
+    if (!/^\d+$/.test(currentText)) return null; // illisible : pas de 0 silencieux
+    const current = Number(currentText);
+    if (!Number.isSafeInteger(current)) return null;
     let swapMax: number | null = null;
     try {
       swapMax = parseLimit(read('memory.swap.max'));
@@ -99,7 +103,7 @@ export function readCgroupStats(sysfsRoot: string, cgroupPath: string): CgroupSt
       swapMax = null; // pas de swap compté (swapaccount=0)
     }
     return {
-      currentBytes: Number.isFinite(current) && current >= 0 ? current : 0,
+      currentBytes: current,
       highBytes: parseLimit(read('memory.high')),
       maxBytes: parseLimit(read('memory.max')),
       swapMaxBytes: swapMax,
@@ -120,7 +124,9 @@ export function stillSame(procRoot: string, uid: number, t: PlanTarget, cgroup: 
     // État (champ 3, juste après la dernière « ) ») : un zombie (Z) ou un processus mort (X) n'est jamais déplacé.
     const state = stat.slice(stat.lastIndexOf(')') + 1).trim().charAt(0);
     if (state === 'Z' || state === 'X') return false;
-    if (parseStatus(readFileSync(join(dir, 'status'), 'utf8')).uid !== uid) return false;
+    // Ligne « Uid: » : les quatre champs (réel, effectif, sauvé, fs) doivent valoir `uid` (écarte les binaires setuid).
+    const m = /^Uid:\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*$/m.exec(readFileSync(join(dir, 'status'), 'utf8'));
+    if (!m || m.slice(1).some((v) => Number(v) !== uid)) return false;
     return readCgroup(procRoot, t.pid) === cgroup;
   } catch {
     return false;
