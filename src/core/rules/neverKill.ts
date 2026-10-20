@@ -22,13 +22,24 @@ export const SESSION_SERVICES: readonly (string | RegExp)[] = [
   /^systemd/, /^dbus/, /^pipewire/,
 ];
 
+/** Terminaux (comm exact, 15 caractères au plus) : jamais tués ; pour l'anti-gel, ce qu'ils lancent est du travail. */
+export const TERMINAL_NAMES: readonly string[] = [
+  'warp', 'warp-terminal', 'konsole', 'yakuake', 'gnome-terminal-', 'gnome-terminal', 'gnome-terminal-server', 'kitty', 'alacritty', 'wezterm',
+  'wezterm-gui', 'ghostty', 'foot', 'xterm', 'tilix', 'terminator', 'tmux: server', 'tmux', 'screen',
+];
+
+/** Éditeurs et IDE (anti-gel : jamais déplacés ; ce qu'ils lancent, tsserver ou tests, est du travail). */
+export const IDE_NAMES: readonly string[] = [
+  'code', 'code-oss', 'codium', 'vscodium', 'cursor', 'zed', 'zed-editor', 'windsurf', 'sublime_text', 'kate',
+  'idea', 'webstorm', 'pycharm', 'phpstorm', 'goland', 'clion', 'rider', 'rustrover', 'android-studio',
+];
+
 /** Liste « jamais tuer » des règles : services de session, plus Claude, terminaux, shells et l'app (nouveau et ancien nom). */
 export const NEVER_KILL: readonly (string | RegExp)[] = [
   // Claude
   'claude', 'claude-desktop',
   // terminaux
-  'warp', 'warp-terminal', 'konsole', 'yakuake', 'gnome-terminal-', 'gnome-terminal', 'gnome-terminal-server', 'kitty', 'alacritty', 'wezterm',
-  'wezterm-gui', 'ghostty', 'foot', 'xterm', 'tilix', 'terminator', 'tmux: server', 'tmux', 'screen',
+  ...TERMINAL_NAMES,
   // shells
   'bash', 'zsh', 'fish', 'sh', 'dash', 'ksh', 'tcsh', 'csh', 'nu',
   ...SESSION_SERVICES,
@@ -54,6 +65,14 @@ export const CLAUDE_NAMES: ReadonlySet<string> = new Set(['claude', 'claude-desk
 export const APP_PATH = /(^|[\s/=])(computer-watcher|proc-watch)[^\s/]*(\/|\s|$)/;
 const RECORDER_SCRIPT = /(^|[\s/])recorder\.js(\s|$)/;
 const CLAUDE_CMD = /(^|[\s/])(claude|claude-desktop)(\s|$)/;
+
+const terminalName = matcher(TERMINAL_NAMES);
+const ideName = matcher(IDE_NAMES);
+export const isTerminalName = (name: string): boolean => terminalName(name);
+export const isIdeName = (name: string): boolean => ideName(name);
+/** Claude, d'après son nom ou le programme lancé (premier mot de la ligne de commande). */
+export const isClaudeProc = (p: { name: string; cmdline: string }): boolean =>
+  CLAUDE_NAMES.has(p.name) || CLAUDE_CMD.test(p.cmdline.split(/\s+/, 1)[0] ?? '');
 
 const neverKillName = matcher(NEVER_KILL);
 const sessionServiceName = matcher(SESSION_SERVICES);
@@ -107,7 +126,7 @@ export interface GuardContext {
 export type GuardReason = 'never-kill' | 'claude' | 'protected' | 'root' | 'uid' | 'self' | 'unknown' | 'launcher';
 
 const isClaude = (p: GuardProc, ctx: GuardContext) =>
-  CLAUDE_NAMES.has(p.name) || CLAUDE_CMD.test(p.cmdline.split(/\s+/, 1)[0] ?? '') || !!ctx.claudePids?.has(p.pid) ||
+  isClaudeProc(p) || !!ctx.claudePids?.has(p.pid) ||
   (!!ctx.claudeDirs?.length && !!p.cwd && isUnderAny(p.cwd, ctx.claudeDirs));
 
 /** Raison propre au processus lui-même (sans regarder ses descendants). */

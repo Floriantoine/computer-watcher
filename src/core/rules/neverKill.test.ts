@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'vitest';
-import { APP_PATH, filterTargets, isNeverKill, NEVER_KILL, type GuardContext, type GuardProc } from './neverKill';
+import {
+  APP_PATH, filterTargets, isClaudeProc, isIdeName, isNeverKill, isNeverKillName, isTerminalName, NEVER_KILL, TERMINAL_NAMES,
+  type GuardContext, type GuardProc,
+} from './neverKill';
 
 const p = (name: string, cmdline = name) => ({ name, cmdline });
 
@@ -113,5 +116,20 @@ describe('renommage : l’app se reconnaît sous ses deux noms', () => {
     const OLD_PROC_WATCH_PATH = /(^|[\s/=])proc-watch[^\s/]*(\/|\s|$)/;
     for (const s of ['/usr/bin/proc-watch-evil', '/usr/bin/computer-watcher-evil', '/x/proc-watch.AppImage', '/x/computer-watcher.AppImage', '/x/computer-watcherx y', '/x/xcomputer-watcher', '/x/computer-watch'])
       expect(APP_PATH.test(s), s).toBe(OLD_PROC_WATCH_PATH.test(s.replace('computer-watcher', 'proc-watch')));
+  });
+});
+
+describe('anti-gel : terminaux, éditeurs, Claude', () => {
+  test('terminaux, éditeurs, Claude (anti-gel) ; NEVER_KILL contient toujours les terminaux', () => {
+    for (const t of TERMINAL_NAMES) expect(isNeverKillName(t), t).toBe(true);
+    expect(isTerminalName('warp')).toBe(true);
+    expect(isTerminalName('gnome-terminal-')).toBe(true);
+    expect(isTerminalName('zsh')).toBe(false);
+    expect(isIdeName('code')).toBe(true);
+    expect(isIdeName('cursor')).toBe(true);
+    expect(isIdeName('node')).toBe(false);
+    expect(isClaudeProc({ name: 'claude', cmdline: 'claude' })).toBe(true);
+    expect(isClaudeProc({ name: 'node', cmdline: '/home/u/.local/bin/claude --resume' })).toBe(true);
+    expect(isClaudeProc({ name: 'node', cmdline: 'node server.js claude' })).toBe(false);
   });
 });
