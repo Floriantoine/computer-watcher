@@ -18,6 +18,8 @@ export const DESK_RETRY_MS = 300_000;
 export const DESK_RECHECK_MS = 30_000;
 /** Unités dont l'origine est gardée au plus (bureau, applications, 6 terminaux et leurs slices, cwatch.slice). */
 export const MAX_ORIGINALS = 32;
+/** Unités dont le nom ne revient jamais : scopes, instances aléatoires de service. */
+const ONE_SHOT_UNIT = /(\.scope|@[0-9a-f]{32}\.service)$/;
 const KEYS = ['memoryLow', 'cpuWeight', 'ioWeight'] as const;
 type Key = (typeof KEYS)[number];
 
@@ -127,11 +129,14 @@ export function createDeskPriority(deps: DeskDeps): DeskController {
     lastError = msg;
   };
   const snapshot = (): DeskOriginals => Object.fromEntries([...originals].map(([u, o]) => [u, { ...o }]));
-  const save = () => {
+  /** false : origines non enregistrées (aucune valeur ne doit alors être posée). */
+  const save = (): boolean => {
     try {
       deps.saveOriginals?.(snapshot());
+      return true;
     } catch (e) {
       report(`origines non enregistrées : ${e instanceof Error ? e.message : String(e)}`);
+      return false;
     }
   };
 
@@ -140,14 +145,14 @@ export function createDeskPriority(deps: DeskDeps): DeskController {
     const words = new Set((sub ?? '').trim().split(/\s+/));
     const cpu = words.has('cpu');
     const io = words.has('io');
-    // Protection mémoire : bornée par celle de chaque ancêtre (memory_recursiveprot) ; sans protection sur user.slice,
-    // user-<uid>.slice et user@<uid>.service (unités système), une MemoryLow posée dans la session n'agit pas.
+    // Protection mémoire : bornée par la protection « low » effective de chaque ancêtre ; sans memory.low sur user.slice,
+    // user-<uid>.slice et user@<uid>.service (unités système), une MemoryLow posée dans la session n'agit pas. memory.min
+    // n'entre pas en compte (le noyau borne elow par l'elow du parent seulement). Critère prudent : chaque niveau > 0.
     const parts = userBase.split('/').filter(Boolean);
     const chain = parts.map((_, k) => `/${parts.slice(0, k + 1).join('/')}`);
     const prot = (cg: string) => {
       const l = memValue(deps.readCg(cg, 'memory.low'));
-      const m = memValue(deps.readCg(cg, 'memory.min'));
-      return l === null || m === null || (l ?? 0) > 0 || (m ?? 0) > 0;
+      return l === null || (l ?? 0) > 0;
     };
     const memory = words.has('memory') && chain.length > 0 && chain.every(prot);
     const reason = sub === null ? 'contrôleurs de la session illisibles' : null;
@@ -163,7 +168,8 @@ export function createDeskPriority(deps: DeskDeps): DeskController {
     };
   };
 
-  type Step = { unit: string; props: DeskProps; restored: Key[]; key: string };
+  /** `applies` : pose au moins une valeur voulue (pas seulement un retour à l'origine). */
+  type Step = { unit: string; props: DeskProps; restored: Key[]; key: string; applies: boolean };
   const runSteps = (steps: Step[]) => {
     if (!steps.length) return;
     inFlight = (async () => {
@@ -186,11 +192,11 @@ export function createDeskPriority(deps: DeskDeps): DeskController {
           report(msg);
           if (code === 'denied' || code === 'unreachable' || code === 'timeout') {
             downUntil = deps.monoNow() + DESK_PROBE_MS;
-            downReason = `gestionnaire systemd injoignable : ${msg}`;
+            downReason = `gestionnaire systemd injoignable : ${msg}`.slice(0, 280); // borne de parseDeskState
             return;
           }
           if (code === 'no-unit' && !s.unit.endsWith('.slice')) {
-            originals.delete(s.unit); // service ou scope disparu : plus rien à restaurer
+            originals.delete(s.unit); // service ou scope inconnu de systemd : plus rien à restaurer
             save();
           }
         }
@@ -221,7 +227,7 @@ export function createDeskPriority(deps: DeskDeps): DeskController {
     const memory = !i.on ? 'off' : caps.memory ? 'on' : 'ineffective';
     st = {
       status: i.on ? (caps.reason ? 'unavailable' : 'active') : 'off', reason: i.on ? caps.reason : null, cpu: i.on && caps.cpu, io: i.on && caps.io,
-      memory, units: [...want.keys()], truncated: t?.truncated ?? false, restoring: [...originals.keys()].filter((u) => !want.has(u)).length,
+      memory, units: [...want.keys()].slice(0, 32), truncated: t?.truncated ?? false, restoring: [...originals.keys()].filter((u) => !want.has(u)).length,
     };
     if (inFlight) return;
 
@@ -231,6 +237,12 @@ export function createDeskPriority(deps: DeskDeps): DeskController {
       const w = want.get(unit);
       const o = originals.get(unit);
       const cgroup = w?.cgroup ?? o!.cgroup;
+      if (!w && !cgroup.startsWith(`${i.userBase}/`)) {
+        // origine relue hors du gestionnaire utilisateur : jamais suivie
+        originals.delete(unit);
+        dirty = true;
+        continue;
+      }
       // déjà conforme il y a moins de 30 s, mêmes valeurs voulues, rien à restaurer : aucune lecture
       const wantKey = w ? JSON.stringify(w) : '';
       const restorable = !!o && KEYS.some((k) => o[k] !== undefined && (!w || w[k] === undefined));
@@ -238,9 +250,10 @@ export function createDeskPriority(deps: DeskDeps): DeskController {
       if (w && !restorable && s && s.key === wantKey && now - s.at < DESK_RECHECK_MS && now >= s.at) continue;
       const exists = deps.readCg(cgroup, 'cgroup.controllers') !== null;
       if (!exists) {
-        // Unité disparue : un service ou un scope ne revient pas sous ce nom (rien à restaurer) ; une slice peut revenir et
-        // reprendrait nos valeurs runtime : ses origines sont restaurées malgré tout.
-        if (o && !unit.endsWith('.slice')) {
+        // Unité disparue : un scope ou une instance aléatoire (app-…@<32 hex>.service, lanceur du bureau) ne revient jamais
+        // sous ce nom (rien à restaurer) ; une slice ou un service à nom stable (app-com.mitchellh.ghostty.service) peut
+        // revenir et reprendrait nos valeurs runtime : origines restaurées malgré tout.
+        if (o && ONE_SHOT_UNIT.test(unit)) {
           originals.delete(unit);
           dirty = true;
         } else if (o && !w) {
@@ -248,7 +261,7 @@ export function createDeskPriority(deps: DeskDeps): DeskController {
           const props: DeskProps = Object.fromEntries(restored.map((k) => [k, o[k]]));
           if ((retryAt.get(unit) ?? -Infinity) <= now) {
             retryAt.set(unit, now + DESK_RETRY_MS);
-            steps.push({ unit, props, restored, key: '' });
+            steps.push({ unit, props, restored, key: '', applies: false });
           }
         }
         continue;
@@ -296,14 +309,15 @@ export function createDeskPriority(deps: DeskDeps): DeskController {
       if (posed.get(unit) === key && (retryAt.get(unit) ?? -Infinity) > now) continue; // pas encore pris : recul
       posed.set(unit, key);
       retryAt.set(unit, now + DESK_RETRY_MS);
-      steps.push({ unit, props, restored, key });
+      steps.push({ unit, props, restored, key, applies: KEYS.some((k) => props[k] !== undefined && !restored.includes(k)) });
     }
     for (const u of [...posed.keys()]) if (!want.has(u) && !originals.has(u)) posed.delete(u);
     for (const u of [...steady.keys()]) if (!want.has(u)) steady.delete(u);
     for (const u of [...retryAt.keys()]) if (!want.has(u) && !originals.has(u)) retryAt.delete(u);
-    if (dirty) save(); // origines enregistrées AVANT tout appel qui modifie une unité
+    // origines enregistrées AVANT tout appel qui pose une valeur ; échec : seulement les retours à l'origine
+    const ok = !dirty || save();
     st.restoring = [...originals.keys()].filter((u) => !want.has(u)).length;
-    runSteps(steps);
+    runSteps(ok ? steps : steps.filter((x) => !x.applies));
   };
 
   return {

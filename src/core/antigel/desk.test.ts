@@ -6,7 +6,7 @@ import { createDeskClient } from './deskSystemd';
 import { BusctlError } from './systemd';
 
 const BASE = '/user.slice/user-1000.slice/user@1000.service';
-const WARP_UNIT = 'app-dev.warp.Warp@1.service';
+const WARP_UNIT = 'app-dev.warp.Warp@bee3f2ded2d04c3db563057c8e73379d.service';
 const WARP = `${BASE}/app.slice/${WARP_UNIT}`;
 const SESSION = `${BASE}/session.slice`;
 const APP = `${BASE}/app.slice`;
@@ -269,6 +269,65 @@ describe('bureau prioritaire', () => {
     d.tick(w.input(true));
     await d.idle();
     expect(w.calls.filter((c) => !c.unit.startsWith('app-x'))).toEqual([]);
+  });
+
+  test('service à nom stable arrêté : ses origines sont restaurées (il reprendrait nos valeurs en revenant)', async () => {
+    const w = world();
+    const ghost = `${BASE}/app.slice/app-com.mitchellh.ghostty.service`;
+    w.sys.delete(WARP);
+    const d = w.make({ 'app-com.mitchellh.ghostty.service': { cgroup: ghost, memoryLow: 0 }, [WARP_UNIT]: { cgroup: WARP, memoryLow: 0 } });
+    d.tick(w.input(false));
+    await d.idle();
+    expect(w.calls).toEqual([{ unit: 'app-com.mitchellh.ghostty.service', props: { MemoryLow: '0' } }]); // instance aléatoire de Warp : oubliée
+    expect(w.saved.at(-1)).toEqual({});
+  });
+
+  test('origines non enregistrées (écriture en échec) : aucune valeur posée, retours à l’origine permis', async () => {
+    const w = world();
+    let fail = true;
+    const d = createDeskPriority({
+      client: createDeskClient(async (argv) => void w.calls.push({ unit: argv[8]!, props: {} })),
+      readCg: (path, file) => w.sys.get(path)?.[file] ?? null,
+      saveOriginals: () => {
+        if (fail) throw new Error('disque plein');
+      },
+      monoNow: () => 0,
+      log: (m) => w.logs.push(m),
+    });
+    d.tick(w.input(true));
+    await d.idle();
+    expect(w.calls).toEqual([]);
+    expect(w.logs.some((l) => l.includes('disque plein'))).toBe(true);
+    fail = false;
+  });
+
+  test('protection : memory.min des niveaux système ne compte pas (seul memory.low borne la protection low)', async () => {
+    const w = world();
+    for (const p of ['/user.slice', '/user.slice/user-1000.slice', BASE]) w.sys.get(p)!['memory.min'] = String(1024 ** 3);
+    const d = w.make();
+    d.tick(w.input(true));
+    await d.idle();
+    expect(d.state().memory).toBe('ineffective');
+    expect(w.calls.some((c) => 'MemoryLow' in c.props)).toBe(false);
+  });
+
+  test('origine relue hors du gestionnaire utilisateur : oubliée sans appel', async () => {
+    const w = world();
+    w.sys.set('/system.slice/x.slice', { 'cgroup.controllers': 'cpu', 'cpu.weight': '50' });
+    const d = w.make({ 'x.slice': { cgroup: '/system.slice/x.slice', cpuWeight: 30 } });
+    d.tick(w.input(false));
+    await d.idle();
+    expect(w.calls).toEqual([]);
+    expect(w.saved.at(-1)).toEqual({});
+  });
+
+  test('gestionnaire injoignable avec un long message : raison bornée (état publiable)', async () => {
+    const w = world({ fail: () => new BusctlError('x'.repeat(300), 'unreachable') });
+    const d = w.make();
+    d.tick(w.input(true));
+    await d.idle();
+    d.tick(w.input(true));
+    expect(d.state().reason!.length).toBeLessThanOrEqual(300);
   });
 
   test('origines relues filtrées : noms, cgroups et valeurs invalides ignorés', () => {

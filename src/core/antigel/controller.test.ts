@@ -590,6 +590,20 @@ describe('bureau prioritaire branché sur l’orchestrateur', () => {
     expect(h.deskCalls.map((c) => c[0])).toEqual(['session.slice', 'app.slice', 'cwatch.slice']);
   });
 
+  test('erreur du bureau prioritaire : le plafond de travail continue', async () => {
+    const fake = fakeSystemd({ userBase: BASE });
+    const logs: string[] = [];
+    const ag = createAntigel({
+      client: fake.client, probe: () => ({ ok: true, userBase: BASE, busctl: '/usr/bin/busctl' }), reverify: (t) => [...t], log: (m) => logs.push(m),
+      monoNow: () => 0, perfNow: () => 0, stats: (path) => fake.sys.get(path) ?? null, cgroupOf: () => WARP,
+      desk: { client: { setProps: async () => {}, calls: () => 0 }, readCg: () => { throw new Error('sysfs cassé'); } },
+    });
+    expect(() => ag.tick({ ts: 1, procs: world(), system: SYS, config: ON, currentUid: 1000, selfPid: 900, appRoot: null, home: '/home/u', isProtected: () => false, groups: [] })).not.toThrow();
+    await ag.idle();
+    expect(names(fake.calls)).toContain('ensureSlice');
+    expect(logs.some((l) => l.includes('sysfs cassé'))).toBe(true);
+  });
+
   test('sans dépendances du bureau : aucun champ desk', async () => {
     const h = harness();
     await h.step();

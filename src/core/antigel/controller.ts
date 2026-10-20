@@ -289,10 +289,15 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
       isProtected: i.isProtected, cgroupOf, userBase, claudeDirs: i.claudeDirs, workMemo,
     });
     // Bureau prioritaire (lot 2) : seulement sous un plafond actif ; éteint, valeurs d'origine restaurées.
-    desk?.tick({
-      on: active && i.config.desk !== false, userBase, procs: i.procs, uid: i.currentUid, cgroupOf,
-      reserveBytes: limits?.reserveBytes ?? null, rootExists: rootStats !== null,
-    });
+    // (une erreur du bureau prioritaire ne casse jamais le plafond de travail)
+    try {
+      desk?.tick({
+        on: active && i.config.desk !== false, userBase, procs: i.procs, uid: i.currentUid, cgroupOf,
+        reserveBytes: limits?.reserveBytes ?? null, rootExists: rootStats !== null,
+      });
+    } catch (e) {
+      deps.log(`anti-gel (bureau prioritaire) : ${e instanceof Error ? e.message : String(e)}`);
+    }
 
     // Attribution reconstruite depuis les processus déjà rangés : segment cwatch-p-<clé>.slice de leur cgroup.
     const sliceRoot = `${userBase}/${ROOT_SLICE}/cwatch-p.slice/`;
