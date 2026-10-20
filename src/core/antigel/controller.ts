@@ -57,6 +57,8 @@ export interface AntigelTickInput {
   home: string;
   /** Dossiers de config de Claude (comme pour buildGroups) : shells de l'outil Bash. */
   claudeDirs?: readonly string[];
+  /** Lot 3 : slices de projet au frigo (gelées) : rien n'y est rangé, systemd refuserait le scope (« Cannot start frozen unit »). */
+  frozenSlices?: ReadonlySet<string>;
 }
 
 /** `unit` : slice du projet (cwatch-p-<clé>.slice). */
@@ -432,6 +434,7 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
         if (!slices.has(s) && present(s)) continue;
       }
       if (slices.has(s) && slices.get(s) !== m.root) continue; // collision de hachage : jamais la slice d'une autre racine
+      if (i.frozenSlices?.has(s)) continue; // projet au frigo : ses nouveaux processus restent où ils sont jusqu'au réveil
       slices.set(s, m.root);
       bySlice.set(s, [...(bySlice.get(s) ?? []), m]);
     }
