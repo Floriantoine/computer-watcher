@@ -44,7 +44,7 @@ try {
 
   const env = {
     ...process.env, HOME: home, XDG_CONFIG_HOME: cfg, XDG_DATA_HOME: data, XDG_CACHE_HOME: join(home, '.cache'), XDG_STATE_HOME: join(base, 'state'),
-    PROC_WATCH_NO_RECORDER_SYNC: '1', PROC_WATCH_EARLYOOM_FAKE: eo,
+    PROC_WATCH_NO_RECORDER_SYNC: '1', PROC_WATCH_NO_ANTIGEL: '1', PROC_WATCH_EARLYOOM_FAKE: eo,
   };
   app = await electron.launch({ args: ['.'], env });
   const win = await app.firstWindow();

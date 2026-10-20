@@ -77,7 +77,7 @@ export function antigelStatusLine(v: AntigelView | null, enabled: boolean): stri
   if (!v.fresh) return 'Service d’enregistrement arrêté : plus aucun déplacement (les plafonds déjà posés restent).';
   const s = v.state;
   if (s.status === 'unavailable') return `Plafond de travail indisponible : ${s.reason ?? 'raison inconnue'}.`;
-  if (s.status === 'off' || !enabled) return 'Éteint : aucun déplacement, plafonds remis à « infinity ».';
+  if (s.status === 'off' || !enabled) return 'Éteint : aucun déplacement, plafonds levés.';
   const high = s.slice?.highKB ?? null;
   return `Actif : ${plural(s.projects.length, 'projet')} plafonné${s.projects.length > 1 ? 's' : ''}${high !== null ? `, travail ralenti au-delà de ${formatKB(high)}` : ''}.`;
 }

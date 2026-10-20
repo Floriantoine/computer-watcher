@@ -22,7 +22,7 @@ export function AntigelSettingsCard({ config, onSave }: { config: Config; onSave
   return (
     <Card title="Plafond de travail" icon={<Snowflake size={14} strokeWidth={2} />} testid="antigel-settings">
       <p className="sub" data-testid="antigel-settings-status">{antigelStatusLine(view, ag.enabled)}</p>
-      <Row label="Plafonner le travail" help="Tests, compilations et serveurs lancés depuis un terminal, un éditeur ou Claude passent dans une slice systemd dont la somme est plafonnée ; le bureau, les terminaux et Claude gardent leur réserve. Éteint : plus aucun déplacement, plafonds remis à « infinity ».">
+      <Row label="Plafonner le travail" help="Tests, compilations et serveurs lancés depuis un terminal, un éditeur ou Claude passent dans une slice systemd dont la somme est plafonnée ; le bureau, les terminaux et Claude gardent leur réserve. Éteint : plus aucun déplacement, plafonds levés.">
         {(id) => <Switch id={id} checked={ag.enabled} label="Plafond de travail" onToggle={() => onSave({ ...config, antigel: { ...ag, enabled: !ag.enabled } })} />}
       </Row>
       <Row label="Réserve pour le bureau" error={v.ok ? null : v.error} help={reserveHint(memTotalKB)}>

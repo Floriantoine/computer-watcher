@@ -24,7 +24,7 @@ const calm: AttentionInput = {
 };
 
 describe('SETTINGS_SECTIONS', () => {
-  test('onze sections, dans l’ordre de la barre latérale, chacune avec un libellé et une description', () => {
+  test('douze sections, dans l’ordre de la barre latérale, chacune avec un libellé et une description', () => {
     expect(SETTINGS_SECTIONS.map((s) => s.id)).toEqual(['protected', 'others', 'display', 'classify', 'alerts', 'rules', 'antigel', 'recorder', 'disk', 'earlyoom', 'desktop', 'about']);
     for (const s of SETTINGS_SECTIONS) {
       expect(s.label.length).toBeGreaterThan(0);

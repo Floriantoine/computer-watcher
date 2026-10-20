@@ -1,0 +1,188 @@
+// Plafond de travail (anti-gel), fenêtre de bout en bout. Usage : npm run test:antigel-ui
+//
+// État du service SIMULÉ : ce script écrit lui-même antigel-state.json (le main ne fait que le lire ; aucun busctl, aucun
+// appel systemd nulle part). HOME et XDG temporaires sous ~/.cache/pw-antigel-ui-* (jamais la vraie config ni la vraie
+// metrics.db), PROC_WATCH_NO_RECORDER_SYNC=1 (service d'enregistrement réel laissé tranquille), PROC_WATCH_NO_KILL=1,
+// PROC_WATCH_NO_ANTIGEL=1, earlyoom simulé (PROC_WATCH_EARLYOOM_FAKE). Seul processus créé : un node inactif à nous, dans
+// un faux projet « alpha ». Il est détaché (double fork) : sinon, lancé sous Claude, il suivrait `npm run` dans la carte du
+// dépôt (règle « lancé par Claude » du regroupement). Il s'arrête seul (toutes les 300 ms) dès que ce script n'existe plus
+// (kill(pid, 0) : aucun signal envoyé), que le dossier temporaire disparaît ou que le fichier `.stop` du faux projet
+// apparaît ; à la fin, le script pose `.stop` et attend sa sortie, sans aucun signal (pas de pkill). Aucun
+// bouton Tuer ni confirmation n'est cliqué (la carte est ouverte par son libellé). Captures seulement si ANTIGEL_SHOTS
+// désigne un dossier (hors du dépôt).
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { _electron as electron } from 'playwright';
+
+mkdirSync(join(homedir(), '.cache'), { recursive: true });
+const base = realpathSync(mkdtempSync(join(homedir(), '.cache', 'pw-antigel-ui-')));
+let app = null;
+let timer = null;
+const cleanup = () => {
+  clearInterval(timer);
+  // le dossier temporaire disparu, le node du faux projet s'arrête seul (aucun signal envoyé)
+  rmSync(base, { recursive: true, force: true });
+};
+for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { cleanup(); process.exit(130); });
+const waitFor = async (fn, what, ms = 20000) => {
+  const t0 = Date.now();
+  for (;;) {
+    const v = await fn();
+    if (v) return v;
+    if (Date.now() - t0 > ms) throw new Error(`délai dépassé : ${what}`);
+    await new Promise((r) => setTimeout(r, 200));
+  }
+};
+try {
+  const home = join(base, 'home');
+  const cfg = join(base, 'cfg');
+  const data = join(base, 'data');
+  const proj = join(home, 'projets', 'alpha');
+  mkdirSync(proj, { recursive: true });
+  writeFileSync(join(proj, 'package.json'), '{"name":"alpha"}\n');
+  mkdirSync(join(cfg, 'computer-watcher'), { recursive: true });
+  writeFileSync(join(cfg, 'computer-watcher', 'onboarding.json'), '{"version":1,"done":true}\n');
+  const dataApp = join(data, 'computer-watcher');
+  mkdirSync(dataApp, { recursive: true });
+  // double fork : l'intermédiaire lance le node inactif (détaché), écrit son PID et se termine
+  const idle = `const fs = require('node:fs'); const MARQUE = 'pw-antigel-ui-idle'; setInterval(() => { let parent = true; try { process.kill(${process.pid}, 0); } catch { parent = false; } if (!parent || !fs.existsSync('package.json') || fs.existsSync('.stop')) process.exit(0); }, 300);`;
+  const spawnIdle = `const c = require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(idle)}], { detached: true, stdio: 'ignore' }); process.stdout.write(String(c.pid)); c.unref();`;
+  const launcher = spawn(process.execPath, ['-e', spawnIdle], { cwd: proj, stdio: ['ignore', 'pipe', 'ignore'] });
+  let out = '';
+  launcher.stdout.on('data', (b) => { out += b; });
+  await new Promise((r) => launcher.once('exit', r));
+  const idlePid = Number(out);
+  assert.ok(Number.isInteger(idlePid) && idlePid > 1, `PID du node inactif : ${out}`);
+  // marque dans sa ligne de commande : un PID réutilisé par un autre processus n'est pas pris pour lui
+  const idleAlive = () => {
+    try {
+      return readFileSync(`/proc/${idlePid}/cmdline`, 'utf8').includes('pw-antigel-ui-idle');
+    } catch {
+      return false;
+    }
+  };
+  assert.ok(idleAlive(), 'node inactif lancé');
+
+  // état simulé : `unit` = slice de projet (amendement A1), racine = le faux projet
+  const G = 1024 * 1024; // Go en Ko
+  const unit = 'cwatch-p-alpha.slice';
+  let over = {};
+  const state = () => ({
+    version: 1, at: Date.now(), enabled: true, status: 'active', reason: null, memTotalKB: 32 * G, reserveKB: 5 * G,
+    slice: { currentKB: 9 * G, highKB: 27 * G, maxKB: 29 * G, swapMaxKB: 10 * G, throttles: 3, oomKills: 1 },
+    projects: [{ unit, root: proj, procs: 1, currentKB: 2 * G, budgetMB: null, throttled: true }],
+    scopes: { [unit]: proj }, lastError: null, tickMs: 0.4, dbusCalls: 2, ...over,
+  });
+  const writeState = () => {
+    const p = join(dataApp, 'antigel-state.json');
+    writeFileSync(`${p}.tmp`, JSON.stringify(state()), { mode: 0o600 });
+    renameSync(`${p}.tmp`, p);
+  };
+  writeState();
+  timer = setInterval(writeState, 1000);
+  const config = () => {
+    try {
+      return JSON.parse(readFileSync(join(cfg, 'computer-watcher', 'config.json'), 'utf8'));
+    } catch {
+      return {};
+    }
+  };
+
+  const env = {
+    ...process.env, HOME: home, XDG_CONFIG_HOME: cfg, XDG_DATA_HOME: data, XDG_CACHE_HOME: join(home, '.cache'), XDG_STATE_HOME: join(base, 'state'),
+    PROC_WATCH_NO_RECORDER_SYNC: '1', PROC_WATCH_NO_KILL: '1', PROC_WATCH_NO_ANTIGEL: '1', PROC_WATCH_EARLYOOM_FAKE: join(base, 'earlyoom'),
+  };
+  mkdirSync(env.PROC_WATCH_EARLYOOM_FAKE);
+  app = await electron.launch({ args: ['.'], env });
+  const win = await app.firstWindow();
+  await win.setViewportSize({ width: 1280, height: 900 }).catch(() => {});
+  await win.waitForSelector('[data-testid="snapshot-ready"]', { timeout: 20000 });
+  const shots = process.env.ANTIGEL_SHOTS;
+  if (shots) mkdirSync(shots, { recursive: true });
+  // fenêtre entière hors de l'onglet Processus ; là, la carte du faux projet seule (jamais les groupes réels)
+  const shot = async (name, el = win) => { if (shots) await el.screenshot({ path: join(shots, `${name}.png`) }); };
+
+  // 1) Processus : la carte du projet porte le badge « ralenti »
+  const card = win.locator('[data-testid="group-card"]', { hasText: 'alpha' }).first();
+  await card.waitFor({ timeout: 30000 });
+  const badge = card.locator('[data-testid="antigel-badge"]');
+  await badge.waitFor();
+  assert.match(await badge.innerText(), /ralenti/);
+  assert.equal(await badge.getAttribute('title'), 'Plafond de travail atteint : ce projet est ralenti');
+  await shot('antigel-processus', card);
+
+  // 2) Détail du projet (ouvert par son libellé, jamais par un bouton) : « Budget mémoire… » → 6 Go → config.antigel.budgets
+  await card.locator('.card-title .label').click();
+  const budgetBtn = win.locator('[data-testid="antigel-budget-button"]');
+  await budgetBtn.waitFor();
+  assert.match(await budgetBtn.innerText(), /Budget mémoire…/);
+  assert.match(await win.locator('h2 [data-testid="antigel-badge"]').innerText(), /ralenti/);
+  await budgetBtn.click();
+  await win.locator('[data-testid="antigel-budget-input"]').fill('6');
+  await win.locator('[data-testid="antigel-budget-save"]').click();
+  await waitFor(() => config().antigel?.budgets?.[proj] === 6144, 'budget 6144 Mo dans config.json');
+  await win.locator('[data-testid="antigel-budget-dialog"]').waitFor({ state: 'detached' });
+  await waitFor(async () => /Budget : 6 Go/.test(await budgetBtn.innerText()), 'bouton « Budget : 6 Go »');
+  await shot('antigel-budget');
+
+  // 3) Métriques : carte Plafond de travail (ralenti, mémoire face au plafond, arrêts par le noyau)
+  await win.locator('[data-testid="tab-metrics"]').click();
+  const agCard = win.locator('[data-testid="antigel-card"]');
+  await agCard.waitFor();
+  const agText = await agCard.innerText();
+  assert.match(agText, /Plafond de travail atteint : travail ralenti/);
+  assert.match(agText, /1 projet plafonné/);
+  assert.match(agText, /3 ralentissements · 1 arrêt par le noyau/);
+  assert.match(await win.locator('[data-testid="antigel-mem"]').innerText(), /arrêt au-delà de/);
+  await shot('antigel-metriques');
+
+  // 4) Réglages → Plafond de travail : état, budget listé puis retiré ; interrupteur éteint
+  await win.locator('button[aria-label="Réglages"]').click();
+  await win.locator('#settings-tab-antigel').click();
+  assert.match(await win.locator('#settings-tab-antigel').innerText(), /Plafond de travail/);
+  const status = win.locator('[data-testid="antigel-settings-status"]');
+  await waitFor(async () => /^Actif : 1 projet plafonné/.test(await status.innerText()), 'ligne d’état « Actif »');
+  const row = win.locator(`[data-testid="antigel-budget-row"][data-root="${proj}"]`);
+  await row.waitFor();
+  assert.match(await row.innerText(), /6 Go/);
+  await row.locator('button', { hasText: 'Retirer' }).click();
+  await waitFor(() => Object.keys(config().antigel?.budgets ?? { x: 1 }).length === 0, 'budget retiré de config.json');
+  await row.waitFor({ state: 'detached' });
+  const sw = win.locator('#settings-panel-antigel button[role="switch"]');
+  assert.equal(await sw.getAttribute('aria-label'), 'Plafond de travail');
+  assert.equal(await sw.getAttribute('aria-checked'), 'true', 'allumé par défaut');
+  await sw.click();
+  await waitFor(() => config().antigel?.enabled === false, 'enabled: false dans config.json');
+  await waitFor(async () => /plafonds levés/.test(await status.innerText()), 'ligne d’état « Éteint »');
+  await shot('antigel-reglages');
+
+  // 5) Projet dans la slice sans ralentissement : badge « plafonné », carte « actif »
+  over = { projects: [{ unit, root: proj, procs: 1, currentKB: 2 * G, budgetMB: null, throttled: false }] };
+  writeState();
+  await win.locator('[data-testid="tab-main"]').click();
+  await waitFor(async () => (await badge.count()) === 1 && /plafonné/.test(await badge.innerText()), 'badge « plafonné »');
+  await win.locator('[data-testid="tab-metrics"]').click();
+  await waitFor(async () => /Plafond de travail actif/.test(await agCard.innerText()), 'carte « Plafond de travail actif »');
+
+  // 6) Indisponible : la carte donne la raison, plus aucun badge
+  over = { status: 'unavailable', reason: 'contrôleur mémoire non délégué à la session (memory absent de cgroup.subtree_control)', slice: null, projects: [], scopes: {}, reserveKB: null };
+  writeState();
+  await waitFor(async () => /Plafond de travail indisponible : contrôleur mémoire non délégué/.test(await agCard.innerText()), 'carte « indisponible »');
+  assert.equal(await win.locator('[data-testid="antigel-mem"]').count(), 0);
+  await shot('antigel-indisponible');
+  await win.locator('[data-testid="tab-main"]').click();
+  await card.waitFor();
+  await waitFor(async () => (await win.locator('[data-testid="antigel-badge"]').count()) === 0, 'plus aucun badge', 10000);
+
+  // le node du faux projet s'arrête seul en voyant `.stop`
+  writeFileSync(join(proj, '.stop'), '');
+  await waitFor(() => !idleAlive(), 'arrêt du node inactif', 10000);
+
+  console.log('ANTIGEL UI E2E OK');
+} finally {
+  await app?.close().catch(() => {});
+  cleanup();
+}
