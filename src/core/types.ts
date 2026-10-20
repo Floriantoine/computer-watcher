@@ -2,6 +2,7 @@ import type { AlertsConfig } from './alerts';
 import type { EarlyoomSettings } from './earlyoom';
 import type { EarlyoomEnabled, EarlyoomReminderConfig } from './earlyoomSetup';
 import type { RuleIssue, RulesConfig } from './rules/types';
+import type { AntigelConfig } from './antigel/config';
 import type { OpenPortsInfo } from './openPorts';
 
 export interface ProcSample {
@@ -183,6 +184,8 @@ export interface Config {
   alerts: AlertsConfig;
   /** Règles automatiques (⑥) : éteintes par défaut. */
   rules: RulesConfig;
+  /** Anti-gel (cgroups) : travail plafonné dans cwatch.slice ; allumé par défaut. */
+  antigel: AntigelConfig;
   /** « Ne plus rappeler pendant 7 jours » du pop-up earlyoom (horodatage du main) ; absent : rappel au lancement. */
   earlyoomReminder?: EarlyoomReminderConfig;
 }

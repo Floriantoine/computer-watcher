@@ -7,6 +7,7 @@ import { DEFAULT_CLASSIFY, DEFAULT_CONFIG, DEFAULT_RECORDER, DEFAULT_UI } from '
 import { inBounds, RECORDER_BOUNDS, type RecorderNumField } from './recorderBounds';
 import { isCategory } from './classify/categories';
 import { validateAlerts } from './alerts';
+import { validateAntigel } from './antigel/config';
 import { validateEarlyoomReminder } from './earlyoomSetup';
 import { RULES_OFF, validateRulesDetailed } from './rules/config';
 import { normalizeProjectRoots } from './disk/projects';
@@ -118,10 +119,12 @@ export function validateConfig(raw: unknown): Config | null {
   const alerts = validateAlerts(r.alerts);
   if (!alerts) return null;
   const { rules } = validateRulesDetailed(r.rules);
+  const antigel = validateAntigel(r.antigel);
+  if (!antigel) return null;
   // Rappel earlyoom illisible : simplement absent (le pop-up revient), jamais une raison de réinitialiser la config.
   const earlyoomReminder = validateEarlyoomReminder(r.earlyoomReminder);
   return {
-    version: 1, protected: [...r.protected], othersThreshold: { memMB: t.memMB, cpuPercent: t.cpuPercent }, recorder, ui, classify, alerts, rules,
+    version: 1, protected: [...r.protected], othersThreshold: { memMB: t.memMB, cpuPercent: t.cpuPercent }, recorder, ui, classify, alerts, rules, antigel,
     ...(earlyoomReminder ? { earlyoomReminder } : {}),
   };
 }
@@ -138,7 +141,11 @@ export function saveConfig(dir: string, config: Config): void {
  * Config de repli quand config.json existe mais est illisible ou invalide : les défauts, règles automatiques éteintes
  * (jamais l'anti-gel Actif sur un fichier que l'utilisateur avait peut-être réglé autrement).
  */
-const fallbackConfig = (): Config => ({ ...structuredClone(DEFAULT_CONFIG), rules: structuredClone(RULES_OFF) });
+const fallbackConfig = (): Config => ({
+  ...structuredClone(DEFAULT_CONFIG), rules: structuredClone(RULES_OFF),
+  // jamais l'anti-gel rallumé en silence sur un fichier que l'utilisateur avait peut-être réglé autrement
+  antigel: { enabled: false, reserveMB: null, budgets: {} },
+});
 
 export function loadConfig(dir: string): { config: Config; warning: string | null; ruleIssues?: RuleIssue[] } {
   const file = join(dir, FILE);
