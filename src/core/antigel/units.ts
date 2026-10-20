@@ -24,6 +24,8 @@ const str = (s: unknown, re: RegExp): s is string => typeof s === 'string' && re
 /** cwatch.slice ou slice de test racine (les seules à porter MemoryMax / MemorySwapMax). */
 export const isRootSliceName = (s: unknown): s is string => s === ROOT_SLICE || str(s, TEST_SLICE_RE);
 export const isProjectSliceName = (s: unknown): s is string => str(s, PROJECT_SLICE_RE) || str(s, TEST_PROJECT_SLICE_RE);
+/** Slice de projet de production seulement (état relu au redémarrage : jamais un nom de test). */
+export const isProdProjectSliceName = (s: unknown): s is string => str(s, PROJECT_SLICE_RE);
 export const isScopeName = (s: unknown): s is string => str(s, SCOPE_RE) || str(s, TEST_SCOPE_RE);
 export const isTestUnitName = (s: unknown): s is string => str(s, TEST_SLICE_RE) || str(s, TEST_PROJECT_SLICE_RE) || str(s, TEST_SCOPE_RE);
 const isAnySlice = (s: unknown): s is string => isRootSliceName(s) || isProjectSliceName(s);

@@ -33,6 +33,51 @@ describe('antigel-state.json', () => {
     expect(parseAntigelState(JSON.stringify(sampleState({ scopes: { 'cwatch-p-alpha-1.scope': null } })))).toBeNull();
     expect(parseAntigelState(JSON.stringify(sampleState({ scopes: { 'cwatch-p-alpha.slice': 'relatif' } })))).toBeNull();
   });
+  test('noms de test cwatch-e2e jamais acceptés dans l\'état de production', () => {
+    for (const unit of ['cwatch-e2eabc.slice', 'cwatch-e2eabc-x.slice', 'cwatch-e2eabc-x.scope']) {
+      expect(parseAntigelState(JSON.stringify(sampleState({ projects: [proj(unit)] }))), unit).toBeNull();
+      expect(parseAntigelState(JSON.stringify(sampleState({ scopes: { [unit]: null } }))), unit).toBeNull();
+    }
+  });
+  test('racines : forme normalisée, sans caractère de contrôle', () => {
+    for (const r of ['/a/../b', '/a//b', '/a/./b', '/a/', '/a\nb', '/a\tb', '/a\u0001']) {
+      expect(parseAntigelState(JSON.stringify(sampleState({ projects: [proj('cwatch-p-a.slice', r)] }))), JSON.stringify(r)).toBeNull();
+    }
+    expect(parseAntigelState(JSON.stringify(sampleState({ projects: [proj('cwatch-p-a.slice', '/home/u/a b')] })))).not.toBeNull();
+  });
+  test('nombres : entiers pour les compteurs, plafond plausible', () => {
+    const p = (o: object) => JSON.stringify(sampleState({ projects: [{ ...proj('cwatch-p-a.slice'), ...o }] }));
+    expect(parseAntigelState(p({ procs: 1.5 }))).toBeNull();
+    expect(parseAntigelState(p({ currentKB: 2 ** 53 }))).toBeNull();
+    const sl = sampleState().slice!;
+    expect(parseAntigelState(JSON.stringify(sampleState({ slice: { ...sl, throttles: 0.5 } })))).toBeNull();
+    expect(parseAntigelState(JSON.stringify(sampleState({ slice: { ...sl, oomKills: 1.2 } })))).toBeNull();
+    expect(parseAntigelState(JSON.stringify(sampleState({ tickMs: 2 ** 60 })))).toBeNull();
+  });
+  test('__proto__, propriétés en plus, bornes de tailles', () => {
+    const base = JSON.parse(JSON.stringify(sampleState()));
+    expect(parseAntigelState(JSON.stringify(base).replace('"scopes":{', '"scopes":{"__proto__":null,'))).toBeNull();
+    const withExtra = JSON.parse(JSON.stringify(base));
+    withExtra.projects[0].extra = 'x';
+    withExtra.slice.extra = 'y';
+    const out = parseAntigelState(JSON.stringify(withExtra))!;
+    expect(out).toEqual(sampleState());
+    expect(Object.keys(out.projects[0]!)).not.toContain('extra');
+    expect(Object.keys(out.slice!)).not.toContain('extra');
+    const protoProj = JSON.stringify(base).replace('"unit":', '"__proto__":{"x":1},"unit":');
+    expect(Object.prototype.hasOwnProperty.call(parseAntigelState(protoProj)!.projects[0], '__proto__')).toBe(false);
+    const many = (n: number) => Array.from({ length: n }, (_, i) => proj(`cwatch-p-p${i}.slice`));
+    expect(parseAntigelState(JSON.stringify(sampleState({ projects: many(200) })))).not.toBeNull();
+    expect(parseAntigelState(JSON.stringify(sampleState({ projects: many(201) })))).toBeNull();
+    expect(parseAntigelState(JSON.stringify(sampleState({ reason: 'x'.repeat(300), lastError: 'y'.repeat(300) })))).not.toBeNull();
+    expect(parseAntigelState(JSON.stringify(sampleState({ lastError: 'y'.repeat(301) })))).toBeNull();
+    // octets et non unités UTF-16 : 100 000 « é » = 200 000 o ; 140 000 = 280 000 o > 256 Kio
+    const pad = (n: number) => JSON.stringify({ ...base, pad: 'é'.repeat(n) });
+    expect(pad(100_000).length).toBeLessThan(MAX_STATE_BYTES);
+    expect(parseAntigelState(pad(100_000))).not.toBeNull();
+    expect(pad(140_000).length).toBeLessThan(MAX_STATE_BYTES);
+    expect(parseAntigelState(pad(140_000))).toBeNull();
+  });
   test('fraîcheur : moins de 3 intervalles (+ 5 s), jamais dans le futur lointain', () => {
     const text = JSON.stringify(sampleState({ at: 1_000_000 }));
     expect(antigelView(text, 1_000_000 + 20_000, 5)).toMatchObject({ fresh: true });
