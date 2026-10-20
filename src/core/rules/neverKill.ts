@@ -34,6 +34,9 @@ export const IDE_NAMES: readonly string[] = [
   'idea', 'webstorm', 'pycharm', 'phpstorm', 'goland', 'clion', 'rider', 'rustrover', 'android-studio',
 ];
 
+/** Shells (comm exact) : jamais tués ; pour l'anti-gel, jamais racine déplacée mais ils suivent leur parent. */
+export const SHELL_COMMS: readonly string[] = ['bash', 'zsh', 'fish', 'sh', 'dash', 'ksh', 'tcsh', 'csh', 'nu'];
+
 /** Liste « jamais tuer » des règles : services de session, plus Claude, terminaux, shells et l'app (nouveau et ancien nom). */
 export const NEVER_KILL: readonly (string | RegExp)[] = [
   // Claude
@@ -41,7 +44,7 @@ export const NEVER_KILL: readonly (string | RegExp)[] = [
   // terminaux
   ...TERMINAL_NAMES,
   // shells
-  'bash', 'zsh', 'fish', 'sh', 'dash', 'ksh', 'tcsh', 'csh', 'nu',
+  ...SHELL_COMMS,
   ...SESSION_SERVICES,
   // l'app elle-même : computer-watcher, son comm tronqué computer-watche, et l'ancien nom proc-watch
   ...APP_SELF_NAMES,
@@ -70,6 +73,20 @@ const terminalName = matcher(TERMINAL_NAMES);
 const ideName = matcher(IDE_NAMES);
 export const isTerminalName = (name: string): boolean => terminalName(name);
 export const isIdeName = (name: string): boolean => ideName(name);
+/**
+ * Éditeur basé sur Electron qui exécute un script Node (ELECTRON_RUN_AS_NODE : tsserver, serveurs de langage de VS Code,
+ * comm « code ») : premier argument en .js, .mjs ou .cjs. Ce n'est pas l'éditeur, c'est du travail.
+ */
+export const isIdeNodeScript = (p: { name: string; cmdline: string }): boolean =>
+  ideName(p.name) && /\.[cm]?js$/.test(p.cmdline.split(/\s+/)[1] ?? '');
+/** IntelliJ (ancien lancement) : java dont la commande contient `com.intellij.` ou, hors de l'exécutable, un chemin JetBrains. */
+const isJetBrainsJava = (p: { name: string; cmdline: string }): boolean => {
+  const [exe = '', ...args] = p.cmdline.split(/\s+/);
+  if (p.name !== 'java' && exe.slice(exe.lastIndexOf('/') + 1) !== 'java') return false;
+  return args.some((a) => /(^|[=:])com\.intellij\./.test(a) || /\/jetbrains\//i.test(a));
+};
+/** Éditeur ou IDE (anti-gel : ancre, jamais déplacé), d'après son nom, ou IntelliJ lancé par java ; jamais un script Node qu'il exécute. */
+export const isIdeProc = (p: { name: string; cmdline: string }): boolean => (ideName(p.name) && !isIdeNodeScript(p)) || isJetBrainsJava(p);
 /** Claude, d'après son nom ou le programme lancé (premier mot de la ligne de commande). */
 export const isClaudeProc = (p: { name: string; cmdline: string }): boolean =>
   CLAUDE_NAMES.has(p.name) || CLAUDE_CMD.test(p.cmdline.split(/\s+/, 1)[0] ?? '');

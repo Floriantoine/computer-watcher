@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import {
-  APP_PATH, filterTargets, isClaudeProc, isIdeName, isNeverKill, isNeverKillName, isTerminalName, NEVER_KILL, TERMINAL_NAMES,
+  APP_PATH, filterTargets, isClaudeProc, isIdeName, isIdeNodeScript, isIdeProc, isNeverKill, isNeverKillName, isTerminalName, NEVER_KILL, SHELL_COMMS, TERMINAL_NAMES,
   type GuardContext, type GuardProc,
 } from './neverKill';
 
@@ -131,5 +131,19 @@ describe('anti-gel : terminaux, éditeurs, Claude', () => {
     expect(isClaudeProc({ name: 'claude', cmdline: 'claude' })).toBe(true);
     expect(isClaudeProc({ name: 'node', cmdline: '/home/u/.local/bin/claude --resume' })).toBe(true);
     expect(isClaudeProc({ name: 'node', cmdline: 'node server.js claude' })).toBe(false);
+  });
+  test('shells : une seule liste, toujours dans NEVER_KILL', () => {
+    for (const sh of SHELL_COMMS) expect(isNeverKillName(sh), sh).toBe(true);
+    expect(SHELL_COMMS).toEqual(expect.arrayContaining(['bash', 'zsh', 'sh', 'tcsh', 'csh', 'nu']));
+  });
+  test('IDE : VS Code, IntelliJ lancé par java ; le tsserver lancé par code (ELECTRON_RUN_AS_NODE) n’est pas l’éditeur', () => {
+    expect(isIdeProc({ name: 'code', cmdline: '/usr/share/code/code --type=renderer' })).toBe(true);
+    const tsserver = { name: 'code', cmdline: '/usr/share/code/code /usr/share/code/resources/app/extensions/node_modules/typescript/lib/tsserver.js --serverMode partialSemantic' };
+    expect(isIdeNodeScript(tsserver)).toBe(true);
+    expect(isIdeProc(tsserver)).toBe(false);
+    expect(isIdeProc({ name: 'java', cmdline: '/usr/lib/jvm/java-17/bin/java -Xmx2g -cp /opt/idea/lib/app.jar com.intellij.idea.Main' })).toBe(true);
+    expect(isIdeProc({ name: 'java', cmdline: '/usr/bin/java -Didea.home.path=/home/u/.local/share/JetBrains/Toolbox/apps/idea -jar x.jar' })).toBe(true);
+    expect(isIdeProc({ name: 'java', cmdline: '/home/u/.local/share/JetBrains/Toolbox/apps/idea/jbr/bin/java -cp g.jar org.gradle.launcher.daemon.bootstrap.GradleDaemon' })).toBe(false);
+    expect(isIdeProc({ name: 'java', cmdline: 'java -jar demo.jar' })).toBe(false);
   });
 });

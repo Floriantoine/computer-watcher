@@ -29,6 +29,15 @@ export function appLabel(name: string): string {
 /** Shells (nom du processus) : ceux de l'outil Bash, enfants directs de claude, ne sont pas des outils Claude. */
 export const SHELL_NAMES = new Set(['sh', 'bash', 'dash', 'zsh', 'fish', 'ksh']);
 
+/**
+ * Shell de l'outil Bash de Claude : un shell connu dont la ligne de commande charge `<config Claude>/shell-snapshots/…`
+ * (`~/.claude` ou un des dossiers de config `dirs`). Tout autre enfant direct de claude, shell compris (serveur MCP lancé
+ * par `bash -c`), est un outil Claude.
+ */
+export function isBashToolShell(p: { name: string; cmdline: string }, dirs: readonly string[]): boolean {
+  return SHELL_NAMES.has(p.name) && (p.cmdline.includes('/.claude/shell-snapshots/') || dirs.some((d) => p.cmdline.includes(`${d}/shell-snapshots/`)));
+}
+
 const TEST_BROWSER_FLAG = /(^|\s)(--enable-automation|--remote-debugging-pipe|--headless(=\S*)?|-juggler-pipe)(\s|$)/;
 const TEST_BROWSER_EXE = /\/(ms-playwright|\.cache\/puppeteer)\//;
 

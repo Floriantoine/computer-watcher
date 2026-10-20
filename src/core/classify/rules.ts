@@ -83,6 +83,19 @@ export function isMcpServer(name: string, cmdline: string): boolean {
   return pkgs !== null && pkgs.some((p) => MCP_PACKAGE.test(stripVersion(p)));
 }
 
+const CLAUDE_PACKAGE = /^(claude|claude-desktop|@anthropic-ai\/claude-code)$/;
+
+/**
+ * Lanceur d'une session Claude : `npx claude`, `npm exec @anthropic-ai/claude-code`, `pnpm dlx …`, `bunx …` (version ôtée).
+ * Seul le paquet lancé compte, jamais les arguments ni la ligne de commande d'un shell.
+ */
+export function launchesClaude(name: string, cmdline: string): boolean {
+  const c = ctxOf(name, cmdline);
+  if (SHELLS.has(c.cmd)) return false;
+  const pkgs = launchedPackages(c);
+  return pkgs !== null && pkgs.some((p) => CLAUDE_PACKAGE.test(stripVersion(p)));
+}
+
 /**
  * Vérification ponctuelle visée par la règle anti-gel : `tsc` (hors `--watch`) ou `eslint`, reconnus au programme
  * significatif de la ligne de commande comme le classement (jamais au comm, `MainThread` pour Node). Jamais un shell

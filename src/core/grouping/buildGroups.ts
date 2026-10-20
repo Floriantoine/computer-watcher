@@ -4,7 +4,7 @@ import { baseName, programIndex, splitArgs } from '../classify/argv';
 import { isMcpServer } from '../classify/rules';
 import { isUnderAny } from './claudeDirs';
 import { projectLabel } from './projectRoot';
-import { APP_NAMES, CLAUDE_NAME, SHELL_NAMES, appLabel, isDevTool, isTestBrowser } from './rules';
+import { APP_NAMES, CLAUDE_NAME, appLabel, isBashToolShell, isDevTool, isTestBrowser } from './rules';
 
 export interface GroupingOptions {
   home: string;
@@ -81,12 +81,6 @@ export function buildGroups(procs: ProcInfo[], opts: GroupingOptions): Group[] {
     const raw = splitArgs(p.cmdline);
     return isUnderAny(raw[Math.max(0, programIndex(raw.map(baseName)))] ?? null, dirs);
   };
-  /**
-   * Shell de l'outil Bash : un shell connu dont la ligne de commande charge `<config Claude>/shell-snapshots/…`. Tout autre
-   * shell enfant direct de claude (serveur MCP lancé par `bash -c`, shell inconnu) est un outil Claude et y reste.
-   */
-  const isBashToolShell = (p: ProcInfo): boolean =>
-    SHELL_NAMES.has(p.name) && (p.cmdline.includes('/.claude/shell-snapshots/') || dirs.some((d) => p.cmdline.includes(`${d}/shell-snapshots/`)));
   // Ancêtres d'un claude (lanceur npx, script Agent SDK…) : jamais déplacés, sinon « Tuer le groupe » de leur carte
   // projet atteindrait la session imbriquée (npm transmet SIGTERM à son enfant).
   const aboveClaude = new Set<number>();
@@ -133,7 +127,7 @@ export function buildGroups(procs: ProcInfo[], opts: GroupingOptions): Group[] {
       let inTool = tool;
       if (c !== p && !inTool) {
         const directChild = byPid.get(c.ppid)?.name === CLAUDE_NAME;
-        inTool = (directChild && !isBashToolShell(c)) || isClaudeTool(c);
+        inTool = (directChild && !isBashToolShell(c, dirs)) || isClaudeTool(c);
         if (!inTool && !aboveClaude.has(c.pid) && isDevTool(c.name, c.cmdline) && inRealProject(c)) {
           movedRoots.push(c);
           continue;

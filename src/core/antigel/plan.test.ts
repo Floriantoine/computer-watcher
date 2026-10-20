@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { ProcInfo } from '../types';
-import { planMoves, type PlanMove } from './plan';
+import { MIN_ROOT_AGE_SEC, planMoves, type PlanMove } from './plan';
 
 const BASE = '/user.slice/user-1000.slice/user@1000.service';
 const WARP = `${BASE}/app.slice/app-dev.warp.Warp@1.service`;
@@ -146,6 +146,13 @@ describe('décisions du contrôleur (A à D)', () => {
     expect(r.moves).toEqual([]);
   });
 
+  test('A : shell enfant direct de Claude hors outil Bash (MCP local « bash -c node …/dist/index.js ») : jamais déplacé', () => {
+    const procs = [...warp(), p(800, 601, 'claude', 'claude'),
+      p(850, 800, 'bash', 'bash -c node /home/u/alpha/mcp/dist/index.js', { cwd: A }),
+      p(851, 850, 'MainThread', 'node /home/u/alpha/mcp/dist/index.js', { cwd: A })];
+    expect(run(procs, { project: { 850: A, 851: A } }).moves).toEqual([]);
+  });
+
   test('A : claude → zsh → jest (outil Bash) : jest est déplacé, ni claude ni le shell', () => {
     const procs = [...warp(), p(800, 601, 'claude', 'claude'),
       p(801, 800, 'zsh', '/bin/zsh -c source /home/u/.claude/shell-snapshots/s.sh && npx jest'),
@@ -223,5 +230,62 @@ describe('décisions du contrôleur (A à D)', () => {
       p(700, 601, 'MainThread', `node ${NM}/jest/bin/jest.js`)];
     const r = run(procs, { project: { 700: A } });
     expect(r.moves.map((m) => [m.rootPid, pidsOf(m)])).toEqual([[700, [700]]]);
+  });
+});
+
+describe('course au lancement et intouchables (relecture, correction 1)', () => {
+  test('a : racine trop jeune (lanceur seul, sans enfant encore visible) : pas déplacée à ce tick, refus « young »', () => {
+    const procs = [...warp(), p(700, 601, 'npm run test', 'npm run test', { ageSec: 3 }),
+      p(710, 601, 'MainThread', `node ${NM}/vite/bin/vite.js --open`, { ageSec: MIN_ROOT_AGE_SEC - 1 })];
+    const r = run(procs, { project: { 700: A, 710: A } });
+    expect(r.moves).toEqual([]);
+    expect(r.refused).toContainEqual({ pid: 700, reason: 'young' });
+    expect(r.refused).toContainEqual({ pid: 710, reason: 'young' });
+  });
+
+  test('a : à partir de MIN_ROOT_AGE_SEC, la racine est déplacée', () => {
+    const r = run([...warp(), p(700, 601, 'npm run test', 'npm run test', { ageSec: MIN_ROOT_AGE_SEC })], { project: { 700: A } });
+    expect(r.moves.map(pidsOf)).toEqual([[700]]);
+  });
+
+  test('b : lanceur d’une session Claude seul (npm exec, npx, pnpm dlx, bunx), même ancien : jamais déplacé', () => {
+    const procs = [...warp(),
+      p(700, 601, 'npm exec @anth', 'npm exec @anthropic-ai/claude-code', { ageSec: 60 }),
+      p(701, 601, 'npx', 'npx claude --resume', { ageSec: 60 }),
+      p(702, 601, 'pnpm', 'pnpm dlx @anthropic-ai/claude-code@2.1.0', { ageSec: 60 }),
+      p(703, 601, 'bunx', 'bunx claude', { ageSec: 60 })];
+    const r = run(procs, { project: { 700: A, 701: A, 702: A, 703: A } });
+    expect(r.moves).toEqual([]);
+    for (const pid of [700, 701, 702, 703]) expect(r.refused).toContainEqual({ pid, reason: 'blocked' });
+  });
+
+  test('c : processus dont le dossier de travail est dans l’app (n’importe quel worktree), seul : jamais déplacé', () => {
+    const procs = [...warp(),
+      p(700, 601, 'npm run dev', 'npm run dev', { ageSec: 60, cwd: '/home/u/dev/proc-watch/.worktrees/demo' }),
+      p(701, 601, 'npm run dev', 'npm run dev', { ageSec: 60, cwd: '/home/u/computer-watcher' })];
+    expect(run(procs, { project: { 700: '/home/u/dev/proc-watch', 701: '/home/u/computer-watcher' } }).moves).toEqual([]);
+  });
+
+  test('c : un lanceur au-dessus d’un processus travaillant dans l’app est bloqué', () => {
+    const procs = [...warp(), p(700, 601, 'MainThread', `node ${NM}/concurrently/index.js`, { cwd: A }),
+      p(701, 700, 'npm run dev', 'npm run dev', { cwd: '/home/u/computer-watcher' })];
+    const r = run(procs, { project: { 700: A, 701: '/home/u/computer-watcher' } });
+    expect(r.moves).toEqual([]);
+    expect(r.refused).toContainEqual({ pid: 700, reason: 'blocked' });
+  });
+
+  test('IntelliJ lancé par java : ancre jamais déplacée, ce qu’il lance (jest) est déplacé', () => {
+    const IDEA = `${BASE}/app.slice/app-idea-7.scope`;
+    const procs = [p(450, 1, 'java', '/usr/lib/jvm/java-17/bin/java -Xmx2g -cp /opt/idea/lib/app.jar com.intellij.idea.Main'),
+      p(451, 450, 'MainThread', `node ${NM}/jest/bin/jest.js`)];
+    const r = run(procs, { project: { 450: A, 451: A }, cg: { 450: IDEA, 451: IDEA } });
+    expect(r.moves.map((m) => [m.rootPid, m.anchorCgroup, pidsOf(m)])).toEqual([[451, IDEA, [451]]]);
+  });
+
+  test('VS Code : tsserver lancé par code (comm « code », ELECTRON_RUN_AS_NODE) : déplacé, jamais code', () => {
+    const procs = [p(400, 1, 'code', '/usr/share/code/code'),
+      p(401, 400, 'code', '/usr/share/code/code /usr/share/code/resources/app/extensions/node_modules/typescript/lib/tsserver.js --serverMode partialSemantic')];
+    const r = run(procs, { cg: { 400: CODE, 401: CODE } });
+    expect(r.moves.map((m) => [m.rootPid, m.anchorCgroup, pidsOf(m)])).toEqual([[401, CODE, [401]]]);
   });
 });

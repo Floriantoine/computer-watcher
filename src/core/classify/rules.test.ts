@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { checkCommand, classifyByName, isMcpServer, matchCommand } from './rules';
+import { checkCommand, classifyByName, isMcpServer, launchesClaude, matchCommand } from './rules';
 
 const P = '/home/u/acme/node_modules/.bin';
 type C = { name: string; cmdline: string };
@@ -145,5 +145,20 @@ describe('checkCommand (vérifications visées par la règle anti-gel)', () => {
     ['éditeur avec tsc en argument', 'code', '/usr/lib/code/code --open tsc'],
   ])('jamais : %s', (_l, name, cmdline) => {
     expect(checkCommand(name, cmdline)).toBeNull();
+  });
+});
+
+describe('launchesClaude', () => {
+  test.each([
+    ['npm exec @anth', 'npm exec @anthropic-ai/claude-code', true],
+    ['npm exec @anth', 'npm exec --yes -- @anthropic-ai/claude-code@2.1.0 --resume', true],
+    ['npx', 'npx claude', true],
+    ['pnpm', 'pnpm dlx @anthropic-ai/claude-code', true],
+    ['bunx', 'bunx claude', true],
+    ['npx', 'npx vitest run claude', false],
+    ['npm run test', 'npm run test', false],
+    ['zsh', 'zsh -c npx claude', false],
+  ])('%s « %s » → %s', (name, cmdline, want) => {
+    expect(launchesClaude(name, cmdline)).toBe(want);
   });
 });

@@ -1,15 +1,20 @@
 // Anti-gel (lot 1) : qui ranger dans cwatch.slice (décision pure). Spec, « Qui est déplacé » ; décisions 1 à 3 du plan.
 import type { Category } from '../classify/categories';
-import { checkCommand, matchCommand } from '../classify/rules';
-import { APP_NAMES, SHELL_NAMES, isTestBrowser } from '../grouping/rules';
-import { isClaudeProc, isIdeName, isNeverKill, isTerminalName } from '../rules/neverKill';
+import { checkCommand, launchesClaude, matchCommand } from '../classify/rules';
+import { APP_NAMES, isBashToolShell, isTestBrowser } from '../grouping/rules';
+import { APP_PATH, SHELL_COMMS, isClaudeProc, isIdeNodeScript, isIdeProc, isNeverKill, isTerminalName } from '../rules/neverKill';
 import type { ProcInfo } from '../types';
 import { ROOT_SLICE } from './units';
 
 /** Catégories de travail (classement par ligne de commande, jamais par le comm). */
 export const WORK_CATEGORIES: ReadonlySet<Category> = new Set<Category>(['test', 'build', 'front', 'back', 'worker', 'db']);
-/** Shells (ceux du regroupement, plus ceux de la liste « jamais tuer ») : jamais racine déplacée, mais ils suivent leur parent dans un sous-arbre de travail. */
-const SHELLS: ReadonlySet<string> = new Set([...SHELL_NAMES, 'tcsh', 'csh', 'nu']);
+/** Shells (liste « jamais tuer ») : jamais racine déplacée, mais ils suivent leur parent dans un sous-arbre de travail. */
+const SHELLS: ReadonlySet<string> = new Set(SHELL_COMMS);
+/**
+ * Âge minimal (s) d'une racine déplacée : un lanceur tout juste né n'a peut-être pas encore lancé l'intouchable qui le
+ * bloquerait (claude, l'app, un navigateur) ; or un processus déplacé n'est jamais ressorti, ni ses futurs enfants.
+ */
+export const MIN_ROOT_AGE_SEC = 10;
 
 export interface PlanTarget { pid: number; startTicks: number }
 
@@ -25,11 +30,13 @@ export interface PlanInput {
   cgroupOf: (pid: number) => string | null;
   /** Unité du gestionnaire utilisateur : « /user.slice/user-1000.slice/user@1000.service ». */
   userBase: string;
+  /** Dossiers de config de Claude (chemins réels), pour reconnaître les shells de l'outil Bash (`<dir>/shell-snapshots/`). */
+  claudeDirs?: readonly string[];
   /** Cache facultatif « pid:startTicks » → travail d'après la ligne de commande (elle ne change pas). */
   workMemo?: Map<string, boolean>;
 }
 
-export type PlanRefusal = 'uid' | 'blocked' | 'moved' | 'outside-user' | 'other-unit' | 'cgroup' | 'anchor-cgroup';
+export type PlanRefusal = 'uid' | 'blocked' | 'moved' | 'outside-user' | 'other-unit' | 'cgroup' | 'anchor-cgroup' | 'young';
 export interface PlanMove { rootPid: number; root: string | null; anchorCgroup: string; targets: PlanTarget[] }
 export interface PlanResult {
   moves: PlanMove[];
@@ -40,8 +47,16 @@ export interface PlanResult {
 
 const under = (path: string, base: string) => path === base || path.startsWith(`${base}/`);
 
-/** Vraie appli (navigateur ouvert par `vite --open`…) : le regroupement s'y arrête aussi ; un navigateur de test suit son test. */
-const isRealApp = (p: ProcInfo) => APP_NAMES.has(p.name) && !isTestBrowser(p.cmdline);
+/**
+ * Vraie appli (navigateur ouvert par `vite --open`…) : le regroupement s'y arrête aussi ; un navigateur de test suit son
+ * test, un script Node exécuté par l'éditeur (tsserver, comm « code ») n'est pas l'éditeur.
+ */
+const isRealApp = (p: ProcInfo) => APP_NAMES.has(p.name) && !isTestBrowser(p.cmdline) && !isIdeNodeScript(p);
+/** Dossier de travail dans l'app (n'importe quel worktree, sous ses deux noms) : `npm run dev` de l'app avant qu'electron ne naisse. */
+const inAppDir = (p: ProcInfo) => p.cwd !== null && APP_PATH.test(p.cwd);
+/** Ligne de commande vue par le classement : le script d'un éditeur lancé en Node (ELECTRON_RUN_AS_NODE) est lu comme `node <script>`. */
+const asNode = (p: ProcInfo): { name: string; cmdline: string } =>
+  isIdeNodeScript(p) ? { name: 'node', cmdline: `node ${p.cmdline.split(/\s+/).slice(1).join(' ')}` } : p;
 /** Ligne de commande vide, « [nom] » : processus zombie (ou thread noyau). Ni racine, ni cible (l'attacher échouerait). */
 const isZombieLike = (p: ProcInfo) => p.cmdline.startsWith('[');
 
@@ -63,16 +78,18 @@ export function planMoves(input: PlanInput): PlanResult {
     return cgMemo.get(pid)!;
   };
   const cwatch = `${input.userBase}/${ROOT_SLICE}`;
-  const isAnchor = (p: ProcInfo) => isTerminalName(p.name) || isIdeName(p.name) || isClaudeProc(p);
+  const isAnchor = (p: ProcInfo) => isTerminalName(p.name) || isIdeProc(p) || isClaudeProc(p);
   const neverMove = (p: ProcInfo) =>
-    p.pid <= 1 || p.pid === input.selfPid || isNeverKill(p, input.appRoot) || isIdeName(p.name) || isRealApp(p) || input.isProtected(p.name);
+    p.pid <= 1 || p.pid === input.selfPid || isNeverKill(p, input.appRoot) || isIdeProc(p) || isRealApp(p) || inAppDir(p) ||
+    launchesClaude(p.name, p.cmdline) || input.isProtected(p.name);
   const isWork = (p: ProcInfo): boolean => {
     if (input.projectOf(p.pid) !== null) return true;
     const key = `${p.pid}:${p.startTicks}`;
     let v = input.workMemo?.get(key);
     if (v === undefined) {
-      const cat = matchCommand([p])?.category;
-      v = (cat !== undefined && WORK_CATEGORIES.has(cat)) || checkCommand(p.name, p.cmdline) !== null;
+      const q = asNode(p);
+      const cat = matchCommand([q])?.category;
+      v = (cat !== undefined && WORK_CATEGORIES.has(cat)) || checkCommand(q.name, q.cmdline) !== null;
       input.workMemo?.set(key, v);
     }
     return v;
@@ -91,12 +108,14 @@ export function planMoves(input: PlanInput): PlanResult {
     return false;
   };
 
-  // Partie de Claude (serveurs MCP, hooks, LSP) : ses enfants directs autres qu'un shell, et tout leur sous-arbre. Jamais
-  // déplacés, et aucune ancre là-dessous. Le travail lancé par Claude passe par un shell (outil Bash) et reste déplaçable.
+  // Partie de Claude (serveurs MCP, hooks, LSP, `bash -c` d'un MCP local) : ses enfants directs autres que les shells de
+  // l'outil Bash, et tout leur sous-arbre. Jamais déplacés, et aucune ancre là-dessous. Le travail lancé par Claude passe
+  // par l'outil Bash (`zsh -c source …/shell-snapshots/… && …`) et reste déplaçable.
+  const dirs = input.claudeDirs ?? [];
   const claudeOwned = new Set<number>();
   for (const c of input.procs) {
     if (c.uid !== me || !isClaudeProc(c)) continue;
-    const stack = kids(c).filter((k) => !SHELLS.has(k.name) && !isAnchor(k));
+    const stack = kids(c).filter((k) => !isBashToolShell(k, dirs));
     while (stack.length) {
       const k = stack.pop()!;
       if (k.pid === c.pid || claudeOwned.has(k.pid)) continue;
@@ -168,6 +187,8 @@ export function planMoves(input: PlanInput): PlanResult {
       }
       if (neverMove(p)) {
         if (SHELLS.has(p.name)) stack.push(...kids(p)); // shell : on regarde ce qu'il lance ; autre intouchable : on s'arrête
+        // lanceur de Claude ou de l'app, même sans enfant encore visible : refusé comme un lanceur bloqué
+        else if (launchesClaude(p.name, p.cmdline) || inAppDir(p)) refused.push({ pid: p.pid, reason: 'blocked' });
         continue;
       }
       if (isZombieLike(p) || !isWork(p)) {
@@ -177,6 +198,10 @@ export function planMoves(input: PlanInput): PlanResult {
       if (blocked(p)) {
         refused.push({ pid: p.pid, reason: 'blocked' });
         stack.push(...kids(p));
+        continue;
+      }
+      if (p.ageSec < MIN_ROOT_AGE_SEC) {
+        refused.push({ pid: p.pid, reason: 'young' }); // revu au prochain tick, avec ses enfants
         continue;
       }
       move(p, a);
