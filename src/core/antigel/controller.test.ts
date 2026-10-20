@@ -1,0 +1,448 @@
+// Orchestrateur anti-gel : faux client systemd (testFixtures, aucun busctl), faux sysfs et faux cgroups. Noms neutres.
+import { describe, expect, test, vi } from 'vitest';
+import { buildGroups } from '../grouping/buildGroups';
+import type { ProcInfo, SystemInfo } from '../types';
+import type { Availability, CgroupStats } from './cgroupfs';
+import type { AntigelConfig } from './config';
+import { PROBE_EVERY_MS, THROTTLE_HOLD_MS, createAntigel, type AntigelDeps } from './controller';
+import { GiB } from './limits';
+import { BusctlError, MAX_PIDS } from './systemd';
+import { fakeSystemd, sampleStats as stats } from './testFixtures';
+import { shortHash } from './units';
+
+const BASE = '/user.slice/user-1000.slice/user@1000.service';
+const WARP = `${BASE}/app.slice/app-dev.warp.Warp@1.service`;
+const ROOT = `${BASE}/cwatch.slice`;
+const PS = 'cwatch-p-alpha.slice';
+const PSCG = `${ROOT}/cwatch-p.slice/${PS}`;
+const SCOPE = /^cwatch-p-alpha-[a-z0-9]{1,12}\.scope$/;
+const A = '/home/u/alpha';
+const NM = `${A}/node_modules`;
+const ON: AntigelConfig = { enabled: true, reserveMB: null, budgets: {} };
+const OFF: AntigelConfig = { ...ON, enabled: false };
+const SYS: SystemInfo = { memTotalKB: 16 * 1024 * 1024, memAvailableKB: 8 * 1024 * 1024, swapTotalKB: 8 * 1024 * 1024, swapFreeKB: 8 * 1024 * 1024, load1: 1, psiSome10: null, shmemKB: null };
+const ROOT_CALL = ['ensureSlice', 'cwatch.slice', 12 * GiB, 14 * GiB, 4 * GiB];
+const ev = (o: Partial<CgroupStats['events']> = {}) => ({ high: 0, max: 0, oom: 0, oomKill: 0, ...o });
+
+let stc = 1;
+const p = (pid: number, ppid: number, name: string, cmdline: string, cwd: string | null = null): ProcInfo => ({
+  pid, ppid, name, cmdline, uid: 1000, startTicks: stc++, ageSec: 10, cpuTicks: 0, cpuPercent: 0, rssKB: 100_000, swapKB: 0, cwd, cwdDeleted: false,
+});
+const world = () => [
+  p(600, 500, 'warp', 'warp'), p(601, 600, 'zsh', 'zsh', A),
+  p(700, 601, 'npm run test', 'npm run test', A), p(701, 700, 'sh', 'sh -c jest', A),
+  p(702, 701, 'MainThread', `node ${NM}/jest/bin/jest.js`, A),
+  p(703, 702, 'MainThread', `node ${NM}/jest-worker/build/workers/processChild.js`, A),
+  p(704, 702, 'MainThread', `node ${NM}/jest-worker/build/workers/processChild.js`, A),
+];
+const vitest = (pid: number) => p(pid, 601, 'MainThread', `node ${NM}/vitest/vitest.mjs run`, A);
+
+function harness(o: {
+  avail?: Availability; reverify?: AntigelDeps['reverify']; fail?: (method: string, args: readonly unknown[]) => BusctlError | null;
+  hang?: boolean; initialScopes?: Record<string, string | null>; roots?: Record<string, string>;
+} = {}) {
+  const fake = fakeSystemd({ userBase: BASE, fail: o.fail, hang: () => !!o.hang });
+  const logs: string[] = [];
+  let mono = 0;
+  const probe = vi.fn(() => o.avail ?? ({ ok: true, userBase: BASE, busctl: '/usr/bin/busctl' } as Availability));
+  const reverify = vi.fn(o.reverify ?? ((t) => [...t]));
+  const ag = createAntigel({
+    client: fake.client, probe, reverify, log: (m) => logs.push(m), monoNow: () => mono, perfNow: () => 0, initialScopes: o.initialScopes,
+    stats: (path) => fake.sys.get(path) ?? null, cgroupOf: (pid) => fake.cg.get(pid) ?? WARP,
+  });
+  const rootOf = (c: string) => Object.entries({ [A]: A, ...o.roots }).find(([k]) => c === k || c.startsWith(`${k}/`))?.[1] ?? null;
+  let procs = world();
+  let claudeDirs: string[] | undefined;
+  const input = (config: AntigelConfig) => ({
+    ts: 1_000_000 + mono, procs, system: SYS, config, currentUid: 1000, selfPid: 900, appRoot: null, home: '/home/u', claudeDirs,
+    isProtected: (n: string) => ['zsh', 'warp'].includes(n),
+    groups: buildGroups(procs, { home: '/home/u', currentUid: 1000, isProtected: () => false, othersThreshold: { memMB: 0, cpuPercent: 0 }, projectRootOf: rootOf }),
+  });
+  const step = async (config: AntigelConfig = ON, ms = 5000) => {
+    mono += ms;
+    const out = ag.tick(input(config));
+    await ag.idle();
+    return out;
+  };
+  return {
+    ag, calls: fake.calls, cg: fake.cg, sys: fake.sys, logs, probe, reverify, step, input,
+    setProcs: (x: ProcInfo[]) => { procs = x; },
+    setClaudeDirs: (d: string[]) => { claudeDirs = d; },
+  };
+}
+const names = (calls: unknown[][]) => calls.map((c) => c[0]);
+
+describe('orchestrateur anti-gel', () => {
+  test('premier tick : cwatch.slice plafonnée, puis slice du projet, puis un scope neuf (npm et tout son sous-arbre) ; ensuite aucun appel', async () => {
+    const h = harness();
+    await h.step();
+    expect(h.calls).toEqual([
+      ROOT_CALL,
+      ['ensureProjectSlice', PS, null],
+      ['startScope', expect.stringMatching(SCOPE), PS, [700, 701, 702, 703, 704]],
+    ]);
+    expect(h.reverify).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ pid: 700 })]), WARP);
+    expect(h.cg.get(704)).toMatch(new RegExp(`^${PSCG}/cwatch-p-alpha-[a-z0-9]+\\.scope$`));
+    h.calls.length = 0;
+    for (let k = 0; k < 5; k++) await h.step();
+    expect(h.calls).toEqual([]);
+    expect(h.ag.state()).toMatchObject({
+      status: 'active', enabled: true, reserveKB: 4 * 1024 * 1024, dbusCalls: 3, lastError: null,
+      projects: [{ unit: PS, root: A, procs: 5, budgetMB: null, throttled: false }], scopes: { [PS]: A },
+    });
+  });
+
+  test('PID recyclé ou disparu avant l’appel (revérification vide) : ni slice de projet ni scope', async () => {
+    const h = harness({ reverify: () => [] });
+    await h.step();
+    expect(names(h.calls)).toEqual(['ensureSlice']);
+  });
+
+  test('revérification juste avant le scope : seuls les PIDs encore valides partent', async () => {
+    const h = harness({ reverify: (t) => t.filter((x) => x.pid !== 703) });
+    await h.step();
+    expect(h.calls.at(-1)).toEqual(['startScope', expect.stringMatching(SCOPE), PS, [700, 701, 702, 704]]);
+  });
+
+  test('deux lots successifs d’un même projet : deux scopes distincts dans la même slice, slice assurée une seule fois', async () => {
+    const h = harness();
+    await h.step();
+    const first = h.calls.at(-1)![1];
+    h.calls.length = 0;
+    h.setProcs([...world(), vitest(720)]);
+    await h.step();
+    expect(h.calls).toEqual([['startScope', expect.stringMatching(SCOPE), PS, [720]]]);
+    expect(h.calls[0]![1]).not.toBe(first);
+    h.calls.length = 0;
+    await h.step();
+    expect(h.calls).toEqual([]);
+    expect(h.ag.state().projects).toMatchObject([{ unit: PS, root: A, procs: 6 }]);
+  });
+
+  test('deux racines du même projet au même tick : un seul scope avec tous leurs PIDs', async () => {
+    const h = harness();
+    h.setProcs([...world(), vitest(720), p(721, 720, 'MainThread', `node ${NM}/vitest/dist/worker.js`, A)]);
+    await h.step();
+    expect(names(h.calls)).toEqual(['ensureSlice', 'ensureProjectSlice', 'startScope']);
+    expect((h.calls[2]![3] as number[]).sort((a, b) => a - b)).toEqual([700, 701, 702, 703, 704, 720, 721]);
+  });
+
+  test(`plus de ${MAX_PIDS} PIDs : la racine reste dehors jusqu’au dernier lot, le reste suit au tick suivant`, async () => {
+    const h = harness();
+    const kids = Array.from({ length: 300 }, (_, k) => p(1000 + k, 700, 'MainThread', `node ${NM}/jest-worker/build/workers/processChild.js`, A));
+    h.setProcs([...world().slice(0, 3), ...kids]);
+    await h.step();
+    const lot1 = h.calls.at(-1)![3] as number[];
+    expect(lot1).toHaveLength(MAX_PIDS);
+    expect(lot1).not.toContain(700);
+    h.calls.length = 0;
+    await h.step();
+    expect(names(h.calls)).toEqual(['startScope']);
+    const lot2 = h.calls[0]![3] as number[];
+    expect(lot2).toContain(700);
+    expect(new Set([...lot1, ...lot2]).size).toBe(301);
+    h.calls.length = 0;
+    await h.step();
+    expect(h.calls).toEqual([]);
+  });
+
+  test('scope déjà connu de systemd (exists) : erreur journalisée une fois, autre nom au tick suivant', async () => {
+    let n = 0;
+    const h = harness({ fail: (m) => (m === 'startScope' && n++ === 0 ? new BusctlError('Call failed: Unit x was already loaded or has a fragment file.', 'exists') : null) });
+    await h.step();
+    const first = h.calls.at(-1)![1];
+    expect(h.ag.state().lastError).toMatch(/already loaded/);
+    h.calls.length = 0;
+    await h.step();
+    expect(h.calls).toEqual([['startScope', expect.stringMatching(SCOPE), PS, [700, 701, 702, 703, 704]]]);
+    expect(h.calls[0]![1]).not.toBe(first);
+    expect(h.logs.filter((l) => /already loaded/.test(l))).toHaveLength(1);
+    expect(h.ag.state()).toMatchObject({ status: 'active', lastError: null });
+  });
+
+  test('slice de projet disparue : assurée de nouveau avant le scope suivant (jamais de scope vers une slice non assurée)', async () => {
+    const h = harness();
+    await h.step();
+    h.sys.delete(PSCG);
+    h.calls.length = 0;
+    await h.step();
+    expect(h.calls).toEqual([]); // rien à déplacer : aucun appel
+    h.setProcs([...world(), vitest(720)]);
+    await h.step();
+    expect(h.calls).toEqual([['ensureProjectSlice', PS, null], ['startScope', expect.stringMatching(SCOPE), PS, [720]]]);
+  });
+
+  test('cwatch.slice disparue : plafonds reposés avant toute slice de projet', async () => {
+    const h = harness();
+    await h.step();
+    h.sys.delete(ROOT);
+    h.sys.delete(PSCG);
+    h.calls.length = 0;
+    await h.step();
+    expect(h.calls).toEqual([]);
+    h.setProcs([...world(), vitest(720)]);
+    await h.step();
+    expect(names(h.calls)).toEqual(['ensureSlice', 'ensureProjectSlice', 'startScope']);
+  });
+
+  test('échec de cwatch.slice : aucune slice de projet ni aucun scope dans le même enchaînement', async () => {
+    let fail = true;
+    const h = harness({ fail: (m) => (m === 'ensureSlice' && fail ? new BusctlError('Call failed: boom', 'other') : null) });
+    await h.step();
+    expect(names(h.calls)).toEqual(['ensureSlice']);
+    fail = false;
+    h.calls.length = 0;
+    await h.step();
+    expect(names(h.calls)).toEqual(['ensureSlice', 'ensureProjectSlice', 'startScope']);
+  });
+
+  test('budget : posé à la création de la slice du projet, changé, retiré ; un seul appel par changement', async () => {
+    const h = harness();
+    await h.step({ ...ON, budgets: { [A]: 4096 } });
+    expect(h.calls[1]).toEqual(['ensureProjectSlice', PS, 4 * GiB]);
+    h.calls.length = 0;
+    await h.step({ ...ON, budgets: { [A]: 4096 } });
+    expect(h.calls).toEqual([]);
+    expect(h.ag.state().projects).toMatchObject([{ unit: PS, budgetMB: 4096 }]);
+    await h.step({ ...ON, budgets: { [A]: 6144 } });
+    expect(h.calls).toEqual([['setProjectHigh', PS, 6 * GiB]]);
+    h.calls.length = 0;
+    await h.step({ ...ON, budgets: { [A]: 6144 } });
+    expect(h.calls).toEqual([]);
+    await h.step(ON);
+    expect(h.calls).toEqual([['setProjectHigh', PS, null]]);
+    h.calls.length = 0;
+    await h.step(ON);
+    expect(h.calls).toEqual([]);
+  });
+
+  test('interrupteur éteint : cwatch.slice et slices de projet remises à infinity une seule fois, aucun déplacement', async () => {
+    const h = harness();
+    await h.step({ ...ON, budgets: { [A]: 4096 } });
+    h.calls.length = 0;
+    await h.step(OFF);
+    expect(h.calls).toEqual([['setSlice', 'cwatch.slice', null], ['setProjectHigh', PS, null]]);
+    h.calls.length = 0;
+    h.setProcs([...world().slice(0, 2), vitest(720)]);
+    for (let k = 0; k < 3; k++) await h.step(OFF);
+    expect(h.calls).toEqual([]);
+    expect(h.ag.state()).toMatchObject({ status: 'off', enabled: false, projects: [], scopes: { [PS]: A } });
+    expect(h.cg.has(720)).toBe(false);
+  });
+
+  test('rallumé après extinction : plafonds reposés, budget reposé', async () => {
+    const h = harness();
+    await h.step({ ...ON, budgets: { [A]: 4096 } });
+    await h.step(OFF);
+    h.calls.length = 0;
+    await h.step({ ...ON, budgets: { [A]: 4096 } });
+    expect(h.calls).toEqual([ROOT_CALL, ['setProjectHigh', PS, 4 * GiB]]);
+  });
+
+  test('éteint au démarrage (service redémarré) : plafonds et budgets encore posés remis à infinity, une seule fois', async () => {
+    const h = harness({ initialScopes: { [PS]: A } });
+    h.sys.set(ROOT, stats({ highBytes: 12 * GiB, maxBytes: 14 * GiB, swapMaxBytes: 4 * GiB }));
+    h.sys.set(PSCG, stats({ highBytes: 4 * GiB }));
+    for (const pid of [700, 701, 702, 703, 704]) h.cg.set(pid, `${PSCG}/cwatch-p-alpha-old.scope`);
+    await h.step(OFF);
+    expect(h.calls).toEqual([['setSlice', 'cwatch.slice', null], ['setProjectHigh', PS, null]]);
+    h.calls.length = 0;
+    for (let k = 0; k < 3; k++) await h.step(OFF);
+    expect(h.calls).toEqual([]);
+  });
+
+  test('éteint : sysfs qui montre encore un plafond après la remise à infinity → aucun appel en boucle', async () => {
+    const h = harness();
+    await h.step();
+    await h.step(OFF);
+    h.sys.set(ROOT, stats({ highBytes: 12 * GiB }));
+    h.calls.length = 0;
+    for (let k = 0; k < 3; k++) await h.step(OFF);
+    expect(h.calls).toEqual([]);
+  });
+
+  test('éteint au démarrage sans état : slice de projet retrouvée par les processus déjà rangés, budget retiré', async () => {
+    const h = harness();
+    h.sys.set(PSCG, stats({ highBytes: 4 * GiB }));
+    for (const pid of [700, 701, 702, 703, 704]) h.cg.set(pid, `${PSCG}/cwatch-p-alpha-old.scope`);
+    await h.step(OFF);
+    expect(h.calls).toEqual([['setProjectHigh', PS, null]]);
+  });
+
+  test('éteint, rien de posé : aucun appel', async () => {
+    const h = harness();
+    for (let k = 0; k < 3; k++) await h.step(OFF);
+    expect(h.calls).toEqual([]);
+    expect(h.ag.state()).toMatchObject({ status: 'off' });
+  });
+
+  test('indisponible : aucun appel, raison dans l’état, nouvelle sonde après 5 min seulement', async () => {
+    const h = harness({ avail: { ok: false, reason: 'busctl introuvable (/usr/bin/busctl)' } });
+    for (let k = 0; k < 10; k++) await h.step();
+    expect(h.calls).toEqual([]);
+    expect(h.probe).toHaveBeenCalledTimes(1);
+    expect(h.ag.state()).toMatchObject({ status: 'unavailable', reason: 'busctl introuvable (/usr/bin/busctl)' });
+    await h.step(ON, PROBE_EVERY_MS);
+    expect(h.probe).toHaveBeenCalledTimes(2);
+  });
+
+  test('accès refusé par systemd : indisponible 5 min, une seule ligne de journal, puis nouvelle sonde', async () => {
+    const h = harness({ fail: (m) => (m === 'ensureSlice' ? new BusctlError('Call failed: Access denied', 'denied') : null) });
+    await h.step();
+    for (let k = 0; k < 5; k++) await h.step();
+    expect(h.calls).toEqual([ROOT_CALL]);
+    expect(h.ag.state()).toMatchObject({ status: 'unavailable', reason: expect.stringMatching(/injoignable : Call failed: Access denied/) });
+    expect(h.logs.filter((l) => /Access denied/.test(l))).toHaveLength(1);
+    await h.step(ON, PROBE_EVERY_MS);
+    expect(h.probe).toHaveBeenCalledTimes(2);
+    expect(h.calls).toEqual([ROOT_CALL, ROOT_CALL]);
+  });
+
+  test('busctl qui ne répond pas : le tick n’attend pas, aucun nouvel appel tant que l’enchaînement est en vol', () => {
+    const h = harness({ hang: true });
+    for (let k = 0; k < 3; k++) h.ag.tick(h.input(ON));
+    expect(h.calls).toEqual([ROOT_CALL]);
+    expect(h.ag.state()).toMatchObject({ status: 'active' });
+  });
+
+  test('OOM dans la slice du projet : renvoyé pour l’historique ; ralentissement : « ralenti » 15 s', async () => {
+    const h = harness();
+    await h.step();
+    h.sys.set(PSCG, stats({ events: ev({ high: 2, oomKill: 1 }) }));
+    expect(await h.step()).toEqual([]); // première lecture : référence
+    h.sys.set(PSCG, stats({ events: ev({ high: 5, oomKill: 3 }) }));
+    expect(await h.step()).toEqual([{ unit: PS, root: A, kills: 2 }]);
+    expect(h.ag.state().projects[0]).toMatchObject({ throttled: true });
+    await h.step(ON, THROTTLE_HOLD_MS + 1000);
+    expect(h.ag.state().projects[0]).toMatchObject({ throttled: false });
+    h.sys.set(PSCG, stats({ events: ev({ high: 0, oomKill: 0 }) })); // slice recréée : compteurs repartis de zéro
+    expect(await h.step()).toEqual([]);
+  });
+
+  test('redémarrage sans état : processus déjà sous la slice du projet → attribution reconstruite, aucun déplacement', async () => {
+    const h = harness();
+    h.sys.set(PSCG, stats());
+    for (const pid of [700, 701, 702, 703, 704]) h.cg.set(pid, `${PSCG}/cwatch-p-alpha-old.scope`);
+    await h.step();
+    await h.step();
+    expect(names(h.calls)).toEqual(['ensureSlice']);
+    expect(h.ag.state().scopes).toEqual({ [PS]: A });
+    expect(h.ag.state().projects).toMatchObject([{ unit: PS, root: A, procs: 5 }]);
+  });
+
+  test('redémarrage : attribution relue sans doublon ; une entrée invraisemblable est écartée', async () => {
+    const other = '/srv/alpha';
+    const hashed = `cwatch-p-alpha_${shortHash(A)}.slice`;
+    const h = harness({
+      roots: { [other]: other },
+      initialScopes: { [PS]: other, 'cwatch-p-beta.slice': A, 'cwatch-e2eabc-x.slice': A, 'cwatch-p-autres.slice': A, 'cwatch-p-gamma.slice': null },
+    });
+    const HCG = `${ROOT}/cwatch-p.slice/${hashed}`;
+    h.sys.set(PSCG, stats());
+    h.sys.set(HCG, stats());
+    for (const pid of [700, 701, 702, 703, 704]) h.cg.set(pid, `${HCG}/cwatch-p-alpha_${shortHash(A)}-old.scope`);
+    await h.step();
+    expect(h.ag.state().scopes).toEqual({ [PS]: other, [hashed]: A });
+    expect(names(h.calls)).toEqual(['ensureSlice']);
+    // un nouveau lot du projet va dans sa slice (hachée), jamais dans celle de l'autre racine
+    h.calls.length = 0;
+    h.setProcs([...world(), vitest(720)]);
+    await h.step();
+    expect(h.calls).toEqual([['ensureProjectSlice', hashed, null], ['startScope', expect.stringMatching(/^cwatch-p-alpha_[0-9a-f]{6}-[a-z0-9]+\.scope$/), hashed, [720]]]);
+  });
+
+  test('redémarrage : deux slices relues pour la même racine → une seule gardée', async () => {
+    const hashed = `cwatch-p-alpha_${shortHash(A)}.slice`;
+    const h = harness({ initialScopes: { [PS]: A, [hashed]: A } });
+    h.sys.set(PSCG, stats());
+    h.sys.set(`${ROOT}/cwatch-p.slice/${hashed}`, stats());
+    await h.step();
+    expect(h.ag.state().scopes).toEqual({ [PS]: A });
+  });
+
+  test('processus comptés dans la slice : seulement ceux qui y sont vraiment', async () => {
+    const h = harness();
+    h.sys.set(PSCG, stats());
+    for (const pid of [700, 701, 702, 703]) h.cg.set(pid, `${PSCG}/cwatch-p-alpha-old.scope`);
+    await h.step();
+    expect(h.ag.state().projects).toMatchObject([{ unit: PS, procs: 4 }]);
+  });
+
+  test('redémarrage : processus rangés dans la slice d’une autre racine → aucune attribution, aucun doublon', async () => {
+    const other = '/srv/alpha';
+    const h = harness({ roots: { [other]: other }, initialScopes: { [PS]: other } });
+    h.sys.set(PSCG, stats());
+    for (const pid of [700, 701, 702, 703, 704]) h.cg.set(pid, `${PSCG}/cwatch-p-alpha-old.scope`);
+    await h.step();
+    expect(h.ag.state().scopes).toEqual({ [PS]: other });
+  });
+
+  test('slice de projet relue mais disparue (session redémarrée) : attribution oubliée', async () => {
+    const h = harness({ initialScopes: { 'cwatch-p-beta.slice': '/home/u/beta' } });
+    await h.step();
+    expect(h.ag.state().scopes).toEqual({ [PS]: A });
+  });
+
+  test('réserve trop grande : aucun plafond, aucune slice de projet, aucun déplacement ; raison dans l’état', async () => {
+    const h = harness();
+    await h.step({ ...ON, reserveMB: 16_000 });
+    expect(h.calls).toEqual([]);
+    expect(h.cg.size).toBe(0);
+    expect(h.ag.state()).toMatchObject({ status: 'unavailable', reason: 'réserve trop grande : moins de 1 Go laissé au travail', projects: [] });
+  });
+
+  test('réserve devenue trop grande : plafonds et budgets retirés une fois, plus aucun déplacement', async () => {
+    const h = harness();
+    await h.step({ ...ON, budgets: { [A]: 4096 } });
+    h.calls.length = 0;
+    const big = { ...ON, reserveMB: 16_000, budgets: { [A]: 4096 } };
+    await h.step(big);
+    expect(h.calls).toEqual([['setSlice', 'cwatch.slice', null], ['setProjectHigh', PS, null]]);
+    h.calls.length = 0;
+    h.setProcs([...world(), vitest(720)]);
+    for (let k = 0; k < 3; k++) await h.step(big);
+    expect(h.calls).toEqual([]);
+  });
+
+  test('vérification hors projet (tsc lancé depuis /) : slice « autres »', async () => {
+    const h = harness();
+    h.setProcs([...world().slice(0, 2), p(810, 601, 'MainThread', 'node /usr/lib/node_modules/typescript/bin/tsc --noEmit', '/')]);
+    await h.step();
+    expect(h.calls.slice(1)).toEqual([
+      ['ensureProjectSlice', 'cwatch-p-autres.slice', null],
+      ['startScope', expect.stringMatching(/^cwatch-p-autres-[a-z0-9]+\.scope$/), 'cwatch-p-autres.slice', [810]],
+    ]);
+    expect(h.ag.state().scopes).toEqual({ 'cwatch-p-autres.slice': null });
+  });
+
+  test('dossiers de config de Claude transmis au plan : le shell de l’outil Bash d’un dossier personnalisé n’est pas à Claude', async () => {
+    const dir = '/home/u/.config/claude-alt';
+    const procs = [...world().slice(0, 2), p(800, 601, 'claude', 'claude'),
+      p(801, 800, 'zsh', `/bin/zsh -c source ${dir}/shell-snapshots/s.sh && tsc --noEmit`),
+      p(810, 801, 'MainThread', 'node /usr/lib/node_modules/typescript/bin/tsc --noEmit', '/')];
+    const without = harness();
+    without.setProcs(procs);
+    await without.step();
+    expect(names(without.calls)).toEqual(['ensureSlice']);
+    const h = harness();
+    h.setProcs(procs);
+    h.setClaudeDirs([dir]);
+    await h.step();
+    expect(h.calls.at(-1)).toEqual(['startScope', expect.stringMatching(/^cwatch-p-autres-/), 'cwatch-p-autres.slice', [810]]);
+  });
+
+  test('noms de scope : uniques et valides même avec une horloge murale absurde', async () => {
+    const h = harness();
+    h.setProcs([...world().slice(0, 2), vitest(720)]);
+    const i = h.input(ON);
+    h.ag.tick({ ...i, ts: Number.NaN });
+    await h.ag.idle();
+    h.setProcs([...world().slice(0, 2), vitest(720), vitest(721)]);
+    h.ag.tick({ ...h.input(ON), ts: -5 });
+    await h.ag.idle();
+    const scopes = h.calls.filter((c) => c[0] === 'startScope').map((c) => c[1]);
+    expect(scopes).toHaveLength(2);
+    expect(new Set(scopes).size).toBe(2);
+    for (const s of scopes) expect(s).toMatch(SCOPE);
+  });
+});
