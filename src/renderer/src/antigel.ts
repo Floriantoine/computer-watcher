@@ -2,6 +2,7 @@
 import { BUDGET_MAX_MB, BUDGET_MIN_MB, RESERVE_MAX_MB, RESERVE_MIN_MB, budgetKey } from '../../core/antigel/config';
 import { MiB, autoReserveBytes } from '../../core/antigel/limits';
 import type { AntigelView } from '../../core/antigel/state';
+import { deskLine } from './antigelDesk';
 import { formatKB } from './format';
 
 export interface AntigelMark { throttled: boolean; budgetMB: number | null }
@@ -109,6 +110,7 @@ export function antigelCard(v: AntigelView | null): AntigelCardModel {
     lines: [
       cappedLine(s.projects),
       `${plural(sl?.throttles ?? 0, 'ralentissement')} · ${plural(sl?.oomKills ?? 0, 'arrêt')} par le noyau sous le plafond`,
+      ...(deskLine(s.desk) ? [deskLine(s.desk)!] : []),
     ],
   };
 }
