@@ -5,6 +5,7 @@ import { HOLD_MS, MIN_DECLINING, type Forecast } from '../forecast/forecast';
 import { flattenGroup, type Classification } from '../snapshot';
 import type { Group, KillTarget, ProcInfo } from '../types';
 import { filterTargets, type GuardContext } from './neverKill';
+import { verificationKind, verificationPids } from './verification';
 import type { Rule, RuleCondition, RuleMode } from './types';
 
 export const RULE_COOLDOWN_MS = 300_000;
@@ -40,6 +41,8 @@ export interface RuleTarget {
   memKBs: number[];
   /** Processus de la cible retirés par la liste « jamais tuer » / protégés / autre uid. */
   excluded: number;
+  /** Règle anti-gel : cible « vérification » (voir verification.ts), revérifiée comme telle avant chaque signal. */
+  verification?: boolean;
 }
 
 export interface RuleState {
@@ -150,6 +153,8 @@ interface Candidate {
   key: string; kind: 'instance' | 'group'; group: Group; label: string; pids: number[]; sizeKB: number; growthKB?: number;
   /** Cible entière ou rien : écartée si un de ses processus est refusé (croissance attribuée à l'instance). */
   attributable?: boolean;
+  /** Vérification (règle anti-gel) : lancée par Claude, elle reste visable (voir verification.ts). */
+  verification?: boolean;
 }
 
 export function evaluateRules(input: EvalInput, state: RuleState): RuleDecision[] {
@@ -203,8 +208,11 @@ export function evaluateRules(input: EvalInput, state: RuleState): RuleDecision[
     claudePids: (claudePids ??= new Set(input.groups.filter((g) => g.kind === 'claude').flatMap((g) => flattenGroup(g).map((p) => p.pid)))),
   });
 
+  let verifPids: Set<number> | null = null;
   const toTarget = (c: Candidate): RuleTarget => {
-    const { kept, refused } = filterTargets(c.pids, guard());
+    const ctx = guard();
+    if (c.verification) ctx.verification = (verifPids ??= verificationPids(procs()));
+    const { kept, refused } = filterTargets(c.pids, ctx);
     const all = procs();
     const keptProcs = kept.map((pid) => all.get(pid)!);
     return {
@@ -214,6 +222,7 @@ export function evaluateRules(input: EvalInput, state: RuleState): RuleDecision[
       names: keptProcs.map((p) => p.name),
       memKBs: keptProcs.map(mem),
       excluded: refused.size,
+      ...(c.verification ? { verification: true } : {}),
     };
   };
 
@@ -503,11 +512,12 @@ function candidatesFor(rule: Rule, input: EvalInput, groups: readonly Group[], s
       }
       if (!(memHeld || cpuHeld)) return [];
       const skip = state.systemStuck.get(rule.id) ?? new Set<string>();
-      // Tous les processus connus (hors Claude) : une vérification emmène ses descendants rangés ailleurs (workers
+      // Tous les processus connus hors « Autres », Claude compris (accord de l'utilisateur du 2026-10-19 : une vérification
+      // lancée par Claude est visable par cette règle) : une vérification emmène ses descendants rangés ailleurs (workers
       // Node au comm « MainThread », rangés dans leur propre groupe de commande).
       const byPid = new Map<number, ProcInfo>();
       const groupOf = new Map<number, Group>();
-      for (const g of groups) for (const p of flattenGroup(g)) {
+      for (const g of input.groups) if (g.kind !== 'others') for (const p of flattenGroup(g)) {
         byPid.set(p.pid, p);
         groupOf.set(p.pid, g);
       }
@@ -530,12 +540,11 @@ function candidatesFor(rule: Rule, input: EvalInput, groups: readonly Group[], s
       // Cibles « vérifications », reconnues processus par processus à leur ligne de commande, comme le classement
       // (jamais au comm « MainThread » de Node ≥ 24, jamais d'après la racine d'une instance ou d'un groupe) : lanceur de
       // tests (vitest, jest, pytest, playwright test…) ou tsc (hors --watch) / eslint ; le plus haut seulement, avec ses
-      // descendants. Dans tous les groupes sauf Claude et « Autres » ; les garde-fous filtrent ensuite (Claude et ce
-      // qu'il a lancé, shells, protégés…).
+      // descendants. Dans tous les groupes sauf « Autres » ; les garde-fous filtrent ensuite (Claude lui-même, shells,
+      // protégés…).
       const kinds = new Map<number, string>();
       for (const p of byPid.values()) {
-        const m = matchCommand([p]);
-        const k = m?.category === 'test' ? m.label : checkCommand(p.name, p.cmdline);
+        const k = verificationKind(p);
         if (k) kinds.set(p.pid, k);
       }
       // seuil de contribution : la victime doit peser dans la saturation (sinon, rien à arrêter)
@@ -563,7 +572,7 @@ function candidatesFor(rule: Rule, input: EvalInput, groups: readonly Group[], s
         if (!((memHeld && sizeKB >= minMemKB) || (cpuHeld && cpuShare(pids) >= SYSTEM_MIN_CPU_SHARE))) continue;
         const p = byPid.get(pid)!;
         const g = groupOf.get(pid)!;
-        out.push({ key: `check:${p.pid}:${p.startTicks}`, kind: 'instance', group: g, label: label(k, g), pids, sizeKB });
+        out.push({ key: `check:${p.pid}:${p.startTicks}`, kind: 'instance', group: g, label: label(k, g), pids, sizeKB, verification: true });
       }
       if (!out.length) state.systemNoTarget.add(rule.id);
       return out;

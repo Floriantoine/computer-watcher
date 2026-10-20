@@ -102,13 +102,20 @@ export interface GuardContext {
   claudeDirs?: readonly string[];
   /** Pids du groupe Claude du dernier instantané (outils détachés compris). */
   claudePids?: ReadonlySet<number>;
+  /**
+   * Règle anti-gel (saturation) seulement : vérifications (tests, tsc, eslint) et leurs descendants, voir verification.ts.
+   * Pour ces pids, être lancé par Claude ou rangé dans son groupe n'est plus un refus (accord de l'utilisateur du
+   * 2026-10-19) ; Claude lui-même, un dossier de travail sous ses dossiers et toutes les autres raisons restent des refus.
+   */
+  verification?: ReadonlySet<number>;
 }
 
 export type GuardReason = 'never-kill' | 'claude' | 'protected' | 'root' | 'uid' | 'self' | 'unknown' | 'launcher';
 
-const isClaude = (p: GuardProc, ctx: GuardContext) =>
-  CLAUDE_NAMES.has(p.name) || CLAUDE_CMD.test(p.cmdline.split(/\s+/, 1)[0] ?? '') || !!ctx.claudePids?.has(p.pid) ||
+const isClaudeItself = (p: GuardProc, ctx: GuardContext) =>
+  CLAUDE_NAMES.has(p.name) || CLAUDE_CMD.test(p.cmdline.split(/\s+/, 1)[0] ?? '') ||
   (!!ctx.claudeDirs?.length && !!p.cwd && isUnderAny(p.cwd, ctx.claudeDirs));
+const isClaude = (p: GuardProc, ctx: GuardContext) => isClaudeItself(p, ctx) || !!ctx.claudePids?.has(p.pid);
 
 /** Raison propre au processus lui-même (sans regarder ses descendants). */
 function ownReason(pid: number, ctx: GuardContext, selfChain: ReadonlySet<number>): GuardReason | null {
@@ -120,7 +127,8 @@ function ownReason(pid: number, ctx: GuardContext, selfChain: ReadonlySet<number
   if (selfChain.has(pid)) return 'self';
   if (isNeverKill(p, ctx.appRoot)) return 'never-kill';
   if (ctx.isProtected(p.name)) return 'protected';
-  if (isClaude(p, ctx)) return 'claude';
+  const verification = !!ctx.verification?.has(pid);
+  if (verification ? isClaudeItself(p, ctx) : isClaude(p, ctx)) return 'claude';
   // ancêtre Claude (session, outil, outil de dev lancé par Claude) ou l'app (fenêtres de l'app, sous ses deux noms) ; un ancêtre absent
   // de la lecture (course, entrée illisible) : refus, on ne sait pas qui est au-dessus
   const seen = new Set<number>([pid]);
@@ -130,7 +138,7 @@ function ownReason(pid: number, ctx: GuardContext, selfChain: ReadonlySet<number
     if (!parent) return 'unknown';
     if (seen.has(parent.pid)) return 'unknown';
     seen.add(parent.pid);
-    if (isClaude(parent, ctx)) return 'claude';
+    if (!verification && isClaude(parent, ctx)) return 'claude';
     if (parent.pid === ctx.selfPid || APP_SELF_NAMES.includes(parent.name) || APP_PATH.test(parent.cmdline)) return 'self';
     cur = parent;
   }
