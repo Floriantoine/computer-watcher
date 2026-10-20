@@ -588,7 +588,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
     try {
       const ooms = antigel.tick({
         ts, procs, groups, system, config: antigelCfg, currentUid, selfPid, appRoot, isProtected: protection.isProtected, home: homedir(),
-        claudeDirs: claudeConfigDirs,
+        claudeDirs: claudeConfigDirs, projectRootOf,
       });
       for (const o of ooms) insertEvent(d, ts, 'antigel_oom', o.root ? `project:${o.root}` : null, { unit: o.unit, root: o.root, kills: o.kills });
       writeAntigelState(antigel.state());

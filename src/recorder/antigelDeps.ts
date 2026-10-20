@@ -3,6 +3,7 @@
 // Rien n'est lancé ni lu à la construction : busctl ne part qu'à un appel du client, depuis l'orchestrateur du service.
 import { existsSync } from 'node:fs';
 import { probeAvailability, readCgroup, readCgroupStats, reverify } from '../core/antigel/cgroupfs';
+import { runScopeDeps } from '../core/antigel/runScopesFs';
 import { BusctlError, createBusctl, createSystemdClient } from '../core/antigel/systemd';
 import { systemBin } from '../core/childEnv';
 import type { RecorderDeps } from './recorder';
@@ -23,5 +24,7 @@ export function antigelDepsFor(o: {
     stats: (cg) => readCgroupStats(sysfsRoot, cg),
     cgroupOf: (pid) => readCgroup(procRoot, pid),
     reverify: (targets, cg) => reverify(procRoot, o.uid, targets, cg),
+    // lot 4 : scopes ouverts par `computer-watcher run` (comptés, slice attribuée ; jamais déplacés)
+    run: runScopeDeps(procRoot, sysfsRoot),
   };
 }

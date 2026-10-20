@@ -13,6 +13,7 @@ import { budgetBytes, sameLimits, sliceLimits, type SliceLimits } from './limits
 import { planMoves, type PlanMove, type PlanTarget } from './plan';
 import type { AntigelProjectState, AntigelSliceState, AntigelState } from './state';
 import { BusctlError, MAX_PIDS, type SystemdClient } from './systemd';
+import { RUN_RETRY_MS, runPidsOf, runSliceRoot, type RunScopeDeps } from './runScopes';
 import { OTHERS_SLICE, ROOT_SLICE, isProdProjectSliceName, newScopeName, projectSliceFor, shortHash, slicePath, slugOf } from './units';
 
 export const PROBE_EVERY_MS = 300_000;
@@ -42,6 +43,8 @@ export interface AntigelDeps {
   initialSlices?: Record<string, string | null>;
   /** Cache « pid:startTicks » → travail (défaut : neuf) ; injecté par les tests pour en suivre la taille. */
   workMemo?: Map<string, boolean>;
+  /** Lot 4 (`computer-watcher run`) : entrées d'un dossier de cgroup, PIDs d'un cgroup (cgroup.procs), dossier courant d'un PID. */
+  run?: RunScopeDeps;
 }
 
 export interface AntigelTickInput {
@@ -57,6 +60,8 @@ export interface AntigelTickInput {
   home: string;
   /** Dossiers de config de Claude (comme pour buildGroups) : shells de l'outil Bash. */
   claudeDirs?: readonly string[];
+  /** Racine de projet d'un dossier (comme le regroupement) : attribution des slices ouvertes par `computer-watcher run`. */
+  projectRootOf?: (cwd: string) => string | null;
 }
 
 /** `unit` : slice du projet (cwatch-p-<clé>.slice). */
@@ -139,6 +144,8 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
   const retryAt = new Map<string, number>();
   const cgCache = new Map<string, { cg: string | null; at: number }>();
   const workMemo = deps.workMemo ?? new Map<string, boolean>();
+  /** Slices inconnues ouvertes par `computer-watcher run` dont la racine n'a pas été trouvée : pas de nouvel essai avant. */
+  const runTried = new Map<string, number>();
   let inFlight: Promise<void> | null = null;
   let lastError: string | null = null;
   let tickMs = 0;
@@ -298,6 +305,18 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
       attribute(s, x.root);
       insideBySlice.set(s, [...(insideBySlice.get(s) ?? []), x.pid]);
     }
+    // Slices ouvertes par `computer-watcher run` (lot 4) et inconnues : attribuées d'après le dossier courant de leurs
+    // processus, seulement si le nom a pu être donné à cette racine (plausible) ; jamais redéplacées (elles sont sous cwatch).
+    if (deps.run) {
+      const run = deps.run;
+      if (runTried.size > MAX_UNITS) runTried.clear();
+      for (const name of (run.listDir(`${userBase}/${ROOT_SLICE}/cwatch-p.slice`) ?? []).slice(0, MAX_UNITS)) {
+        if (!isProdProjectSliceName(name) || slices.has(name) || (runTried.get(name) ?? -Infinity) > now) continue;
+        const r = runSliceRoot(name, cgOfSlice(name), run, byPid, i.projectRootOf, i.home, plausible);
+        if (r !== undefined) attribute(name, r);
+        if (!slices.has(name)) runTried.set(name, now + RUN_RETRY_MS);
+      }
+    }
     // Slices de projet connues : statistiques ; une slice disparue que ce processus n'a pas assurée est oubliée.
     const sliceStats = new Map<string, CgroupStats>();
     for (const s of [...slices.keys()]) {
@@ -347,7 +366,9 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
     }
     const procsIn = (s: string): number => {
       const prefix = `${cgOfSlice(s)}/`;
-      const seen = new Set<number>();
+      // processus des scopes « run » (lot 4) : comptés par cgroup.procs, une seule fois
+      const run = deps.run ? runPidsOf(cgOfSlice(s), deps.run) : new Set<number>();
+      const seen = new Set<number>(run);
       const stack = [...(insideBySlice.get(s) ?? [])];
       let n = 0;
       while (stack.length) {
@@ -357,7 +378,7 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
         if (cgroupOf(pid)?.startsWith(prefix)) n++;
         stack.push(...(children.get(pid) ?? []));
       }
-      return n;
+      return n + run.size;
     };
 
     // Ralentissement par le plafond global : le noyau compte « high » sur cwatch.slice elle-même (le cgroup dont la limite
