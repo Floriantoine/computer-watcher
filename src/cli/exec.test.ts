@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
 import { describe, expect, test, vi } from 'vitest';
-import { closeInheritedFds, execCommand, type ProcLike } from './exec';
+import { closeInheritedFds, execCommand, isNonBlocking, restoreBlocking, type ProcLike } from './exec';
 
 function fakeProc(withExecve: boolean) {
   const ev = new EventEmitter();
@@ -34,15 +34,40 @@ describe('closeInheritedFds', () => {
   });
 });
 
+describe('restoreBlocking', () => {
+  test('O_NONBLOCK lu dans fdinfo ; seules les poignées des descripteurs qui l’ont sont remises en bloquant', () => {
+    expect(isNonBlocking('pos:\t0\nflags:\t04002\nmnt_id:\t15\n')).toBe(true);
+    expect(isNonBlocking('pos:\t0\nflags:\t02000001\n')).toBe(false);
+    expect(isNonBlocking(null)).toBe(false);
+    const set: number[] = [];
+    const info: Record<number, string> = { 0: 'flags:\t02100000\n', 1: 'flags:\t02\n', 2: 'flags:\t04002\n' };
+    restoreBlocking((fd) => info[fd] ?? null, (fd) => ({ _handle: { setBlocking: (b: boolean) => { if (b) set.push(fd); } } }));
+    expect(set).toEqual([2]);
+    expect(() => restoreBlocking(() => 'flags:\t04001\n', () => ({ _handle: null }))).not.toThrow();
+  });
+});
+
 describe('execCommand', () => {
   test('execve disponible : descripteurs fermés puis execve(fichier, argv, env)', () => {
     const p = fakeProc(true);
     const closeFds = vi.fn();
     const sp = vi.fn();
-    void execCommand('/usr/bin/sh', ['sh', '-c', 'exit 3'], { A: '1' }, p as unknown as ProcLike, sp, closeFds);
+    const blocking = vi.fn();
+    void execCommand('/usr/bin/sh', ['sh', '-c', 'exit 3'], { A: '1' }, p as unknown as ProcLike, sp, closeFds, blocking);
+    expect(blocking).toHaveBeenCalledOnce();
     expect(closeFds).toHaveBeenCalledOnce();
     expect(p.execve).toHaveBeenCalledWith('/usr/bin/sh', ['sh', '-c', 'exit 3'], { A: '1' });
     expect(closeFds.mock.invocationCallOrder[0]).toBeLessThan((p.execve as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!);
+  });
+
+  test('SIGPIPE et SIGXFSZ (ignorés par Node) reçoivent un gestionnaire avant execve : action par défaut dans la commande', () => {
+    const p = fakeProc(true);
+    let atExec: number[] = [];
+    (p.execve as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      atExec = [p.count('SIGPIPE'), p.count('SIGXFSZ')];
+    });
+    void execCommand('/usr/bin/yes', ['yes'], {}, p as unknown as ProcLike, vi.fn(), vi.fn(), vi.fn());
+    expect(atExec).toEqual([1, 1]);
   });
 
   test('repli sans execve : enfant (argv0, stdio hérités), SIGTERM/SIGHUP transmis, SIGINT attendu, code renvoyé', async () => {

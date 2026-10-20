@@ -43,6 +43,9 @@ const cgroupOfPid = (pid: number) => {
   }
 };
 
+/** Lignes « …fdinfo/N:flags: <octal> » dont le drapeau O_NONBLOCK (04000) est posé. */
+const nonBlocking = (out: string) => out.split('\n').filter((l) => /fdinfo\/\d:flags:/.test(l) && (parseInt(l.split(/\s+/).pop()!, 8) & 0o4000) !== 0);
+
 interface Done { code: number | null; signal: NodeJS.Signals | null; out: string; err: string; pid: number }
 
 function systemctlRead(bin: string, args: string[]): Promise<string> {
@@ -75,8 +78,8 @@ test.skipIf(!RUN)(
     const proj = join(home, 'demo');
     mkdirSync(join(proj, '.git'), { recursive: true });
     mkdirSync(join(proj, 'src'), { recursive: true });
-    const projSlice = runProjectSlice({ root: proj, taken: new Map(), present: () => false, test: slice });
-    const othersSlice = runProjectSlice({ root: null, taken: new Map(), present: () => false, test: slice });
+    const projSlice = runProjectSlice({ root: proj, taken: new Map(), test: slice });
+    const othersSlice = runProjectSlice({ root: null, taken: new Map(), test: slice });
     for (const u of [slice, projSlice, othersSlice]) expect(isTestUnitName(u), u).toBe(true);
     const projCg = `${avail.userBase}/${slicePath(projSlice)}`;
     expect(projCg).toBe(`${avail.userBase}/cwatch.slice/${slice}/${projSlice}`);
@@ -115,7 +118,7 @@ test.skipIf(!RUN)(
 
       // 1) même PID que le processus lancé (execve), cgroup réel du scope « run », --mem → memory.high du scope,
       //    argument transmis tel quel (aucun shell, aucune expansion), code de sortie de la commande
-      const sh = 'echo "pid=$$"; cat /proc/self/cgroup; cat "/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)/memory.high"; printf "%s\\n" "$1"; ls /proc/self/fd | tr "\\n" " "; exit 3';
+      const sh = 'echo "pid=$$"; cat /proc/self/cgroup; cat "/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)/memory.high"; printf "%s\\n" "$1"; ls /proc/self/fd | tr "\\n" " "; echo; grep "^SigIgn" /proc/self/status; exit 3';
       const r1 = await runCli(['--mem', '512M', '--', '/bin/sh', '-c', sh, 'sh', 'lit$HOME `id` ;'], {}).done;
       const lines = r1.out.trim().split('\n');
       seen.push(`1) code=${r1.code} stdout=${JSON.stringify(lines)} stderr=${JSON.stringify(r1.err)}`);
@@ -128,6 +131,8 @@ test.skipIf(!RUN)(
       expect(lines[3]).toBe('lit$HOME `id` ;');
       // descripteurs hérités fermés : 0, 1, 2 (et celui de ls lui-même)
       expect(lines[4]!.trim().split(' ').filter((fd) => Number(fd) > 3)).toEqual([]);
+      // aucun signal ignoré hérité de Node (SIGPIPE, SIGXFSZ) : `… | head` finit comme lancé directement (revue I2)
+      expect(lines[5]).toBe('SigIgn:\t0000000000000000');
 
       // 2) entrée standard transmise
       const r2 = await runCli(['--', 'cat'], { stdin: 'bonjour\n' }).done;
@@ -166,26 +171,43 @@ test.skipIf(!RUN)(
       } else seen.push('4) script(1) absent : TTY non vérifié');
 
       // 5) entrée de l'app (index.js en mode Electron complet → execve en mode Node), hors projet : slice « autres »
-      const r5 = await launch([electron, APP, 'run', '--', '/bin/sh', '-c', 'cat /proc/self/cgroup; exit 6'], { env, cwd: '/' }).done;
+      // options de type Electron/Node APRÈS « -- » : à la commande, jamais lues par Electron (revue I3)
+      const r5 = await launch([electron, APP, 'run', '--', '/bin/sh', '-c', 'cat /proc/self/cgroup; grep "^flags" /proc/self/fdinfo/0 /proc/self/fdinfo/1 /proc/self/fdinfo/2; exit 6', 'sh', '--type=x', '--inspect-brk=0'], { env, cwd: '/' }).done;
       seen.push(`5) app : code=${r5.code} stdout=${JSON.stringify(r5.out.trim())}`);
       expect(r5.code).toBe(6);
       const cg5 = r5.out.trim().split('\n').find((l) => l.startsWith('0::')) ?? '';
       expect(cg5.startsWith(`0::${avail.userBase}/cwatch.slice/${slice}/${othersSlice}/cwatch-e2e${id}-r`)).toBe(true);
       note(cg5);
+      expect(nonBlocking(r5.out)).toEqual([]);
 
       // 6) plafond éteint (slice de test remise à infinity) : avertissement, commande lancée quand même, hors cwatch
       await client.setSlice(slice, null);
-      const r6 = await runCli(['--mem', '1G', '--', '/bin/sh', '-c', 'cat /proc/self/cgroup; exit 5']).done;
+      const r6 = await runCli(['--mem', '1G', '--', '/bin/sh', '-c', 'cat /proc/self/cgroup; grep "^flags" /proc/self/fdinfo/1 /proc/self/fdinfo/2; exit 5']).done;
       seen.push(`6) éteint : code=${r6.code} stderr=${JSON.stringify(r6.err)} stdout=${JSON.stringify(r6.out.trim())}`);
       expect(r6.code).toBe(5);
       expect(r6.err).toMatch(/^computer-watcher : plafond de travail éteint .*commande lancée sans plafond \(--mem ignoré\)\.\n$/);
       expect(r6.out).not.toContain('cwatch');
+      // l'avertissement n'a pas rendu la sortie d'erreur non bloquante pour la commande (revue I1)
+      expect(r6.out).toMatch(/fdinfo\/2:flags/);
+      expect(nonBlocking(r6.out)).toEqual([]);
 
-      // 7) commande introuvable : 127, aucune unité créée
-      const before = scopes.size;
+      // 7) commande introuvable : 127 ; « -- » oublié : 2 ; aucune unité créée (plafond remis pour que l'essai compte)
+      await client.setSlice(slice, { reserveBytes: GiB, highBytes: 512 * MiB, maxBytes: GiB, swapMaxBytes: 0 });
+      const runUnits = async () => (await systemctlRead(systemctl!, ['list-units', `cwatch-e2e${id}-r*`, '--all', '--plain', '--no-legend'])).trim();
+      const t = runCli(['--', 'tail', '-f', '/dev/null']);
+      await wait(() => SCOPE_RE.test(cgroupOfPid(t.k.pid!)), 10_000, 'tail témoin dans son scope');
+      note(cgroupOfPid(t.k.pid!));
+      const before = await runUnits();
+      expect(before).toMatch(/cwatch-e2e[a-z0-9]+-r[a-z0-9]{10}\.scope/); // la liste voit bien les scopes « run »
       const r7 = await runCli(['--', `introuvable-${id}`]).done;
       expect(r7.code).toBe(127);
-      expect(scopes.size).toBe(before);
+      const r8 = await runCli(['/bin/sh', '-c', 'exit 7']).done;
+      seen.push(`7) introuvable : code=${r7.code} ; sans -- : code=${r8.code} stderr=${JSON.stringify(r8.err)}`);
+      expect(r8.code).toBe(2);
+      expect(r8.err).toMatch(/« -- » manquant/);
+      expect(await runUnits()).toBe(before);
+      t.k.kill('SIGTERM');
+      await t.done;
     } catch (e) {
       bodyErr = { e };
     }

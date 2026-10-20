@@ -30,27 +30,31 @@ export function runPidsOf(sliceCgroup: string, d: RunScopeDeps): Set<number> {
 
 const trim = (p: string) => (p.length > 1 ? p.replace(/\/+$/, '') : p);
 
+export type RunSliceRoot = { root: string | null } | 'none' | 'pending';
+
 /**
  * Racine d'une slice inconnue qui contient des scopes « run » : « autres » → null ; sinon la racine de projet du dossier
  * courant d'un de ses processus (les plus anciens d'abord : le lanceur, devenu la commande), retenue seulement si ce nom
- * de slice a pu être donné à cette racine (`plausible`). undefined : aucune (pas de scope « run », racine introuvable).
+ * de slice est exactement celui que `computer-watcher run` donne à cette racine (`owns` : nom haché, propre à elle).
+ * 'none' : pas de scope « run », ou racine introuvable ; 'pending' : processus pas encore dans l'instantané du tick.
  */
 export function runSliceRoot(
   slice: string, sliceCgroup: string, d: RunScopeDeps, byPid: ReadonlyMap<number, ProcInfo>,
-  projectRootOf: ((cwd: string) => string | null) | undefined, home: string, plausible: (slice: string, root: string | null) => boolean,
-): string | null | undefined {
+  projectRootOf: ((cwd: string) => string | null) | undefined, home: string, owns: (slice: string, root: string) => boolean,
+): RunSliceRoot {
   const pids = runPidsOf(sliceCgroup, d);
-  if (pids.size === 0) return undefined;
-  if (slice === OTHERS_SLICE) return null;
-  if (!projectRootOf) return undefined;
+  if (pids.size === 0) return 'none';
+  if (slice === OTHERS_SLICE) return { root: null };
+  if (!projectRootOf) return 'none';
   const procs = [...pids].map((pid) => byPid.get(pid)).filter((p): p is ProcInfo => p !== undefined).sort((a, b) => a.startTicks - b.startTicks);
+  if (procs.length === 0) return 'pending';
   for (const p of procs.slice(0, MAX_CWD_READS)) {
     if (p.cwdDeleted) continue;
     const cwd = p.cwd ?? d.cwdOf(p.pid);
     if (cwd === null) continue;
     const r = projectRootOf(cwd);
     if (r === null || trim(r) === '/' || trim(r) === trim(home)) continue;
-    if (plausible(slice, r)) return r;
+    if (owns(slice, r)) return { root: r };
   }
-  return undefined;
+  return 'none';
 }

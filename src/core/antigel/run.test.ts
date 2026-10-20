@@ -30,15 +30,16 @@ describe('parseRunArgs', () => {
     expect(parseRunArgs(['--mem', '6G', '--', 'sh', '-c', 'exit 3'])).toEqual({ kind: 'run', memBytes: 6 * GiB, command: ['sh', '-c', 'exit 3'] });
     expect(parseRunArgs(['--mem=512m', '--', 'x'])).toEqual({ kind: 'run', memBytes: 512 * MiB, command: ['x'] });
   });
-  test('sans -- : la commande commence au premier argument qui n’est pas une option ; la suite est intacte', () => {
-    expect(parseRunArgs(['make', '-j8', '--help'])).toEqual({ kind: 'run', memBytes: null, command: ['make', '-j8', '--help'] });
-    expect(parseRunArgs(['--mem', '1G', 'tail', '--', 'x'])).toEqual({ kind: 'run', memBytes: GiB, command: ['tail', '--', 'x'] });
+  test('« -- » obligatoire (depuis l’app, Electron lit ce qui le précède) ; après lui, tout est à la commande', () => {
+    expect(parseRunArgs(['make', '-j8'])).toMatchObject({ kind: 'error', message: expect.stringMatching(/« -- » manquant.*-- make/) });
+    expect(parseRunArgs(['--mem', '1G', 'tail', '--', 'x'])).toMatchObject({ kind: 'error' });
+    expect(parseRunArgs(['--mem', '1G', '--', 'tail', '--', 'x'])).toEqual({ kind: 'run', memBytes: GiB, command: ['tail', '--', 'x'] });
   });
   test('aide', () => {
     expect(parseRunArgs(['--help'])).toEqual({ kind: 'help' });
     expect(parseRunArgs(['-h', '--', 'x'])).toEqual({ kind: 'help' });
     expect(parseRunArgs(['--', '--help'])).toEqual({ kind: 'run', memBytes: null, command: ['--help'] });
-    expect(USAGE).toMatch(/computer-watcher run \[--mem <taille>\] \[--\] <commande>/);
+    expect(USAGE).toMatch(/computer-watcher run \[--mem <taille>\] -- <commande>/);
   });
   test('erreurs d’usage', () => {
     const err = (a: string[]) => parseRunArgs(a).kind;
@@ -113,28 +114,24 @@ describe('slice racine et slice de projet', () => {
     expect(workRoot('/', find('/'), '/home/u')).toBeNull();
     expect(workRoot('/tmp', find(null), '/home/u')).toBeNull();
   });
-  const none = () => false;
-  test('production : même règle que le contrôleur', () => {
+  test('production : slice attribuée à la racine, sinon toujours le nom haché (jamais le nom simple)', () => {
     const taken = new Map<string, string | null>();
-    expect(runProjectSlice({ root: null, taken, present: none, test: null })).toBe(OTHERS_SLICE);
-    expect(runProjectSlice({ root: '/home/u/demo', taken, present: none, test: null })).toBe('cwatch-p-demo.slice');
-    // déjà attribuée à cette racine (antigel-state.json) : réutilisée, présente ou non
-    const mine = new Map([['cwatch-p-demo_abcdef.slice', '/home/u/demo']]);
-    expect(runProjectSlice({ root: '/home/u/demo', taken: mine, present: () => true, test: null })).toBe('cwatch-p-demo_abcdef.slice');
+    const H = `cwatch-p-demo_${shortHash('/home/u/demo')}.slice`;
+    expect(runProjectSlice({ root: null, taken, test: null })).toBe(OTHERS_SLICE);
+    expect(runProjectSlice({ root: '/home/u/demo', taken, test: null })).toBe(H);
+    // déjà attribuée à cette racine (antigel-state.json), nom simple ou haché : réutilisée
+    expect(runProjectSlice({ root: '/home/u/demo', taken: new Map([['cwatch-p-demo.slice', '/home/u/demo']]), test: null })).toBe('cwatch-p-demo.slice');
     // nom simple pris par une autre racine : haché
-    const other = new Map([['cwatch-p-demo.slice', '/home/u/b/demo']]);
-    expect(runProjectSlice({ root: '/home/u/demo', taken: other, present: none, test: null })).toBe(`cwatch-p-demo_${shortHash('/home/u/demo')}.slice`);
-    // présent sans attribution (état perdu, autre racine) : jamais réutilisé → haché ; haché aussi présent → « autres »
-    const plainOnly = (s: string) => s === 'cwatch-p-demo.slice';
-    expect(runProjectSlice({ root: '/home/u/demo', taken, present: plainOnly, test: null })).toBe(`cwatch-p-demo_${shortHash('/home/u/demo')}.slice`);
-    expect(runProjectSlice({ root: '/home/u/demo', taken, present: () => true, test: null })).toBe(OTHERS_SLICE);
+    expect(runProjectSlice({ root: '/home/u/demo', taken: new Map([['cwatch-p-demo.slice', '/home/u/b/demo']]), test: null })).toBe(H);
+    // haché attribué à une autre racine (collision) : « autres »
+    expect(runProjectSlice({ root: '/home/u/demo', taken: new Map([[H, '/home/u/x/demo']]), test: null })).toBe(OTHERS_SLICE);
     // projet nommé « autres »
-    expect(runProjectSlice({ root: '/home/u/autres', taken, present: none, test: null })).toBe(`cwatch-p-autres_${shortHash('/home/u/autres')}.slice`);
+    expect(runProjectSlice({ root: '/home/u/autres', taken, test: null })).toBe(`cwatch-p-autres_${shortHash('/home/u/autres')}.slice`);
   });
   test('test : slices cwatch-e2e<id>-<clé>.slice seulement', () => {
     const taken = new Map<string, string | null>();
-    expect(runProjectSlice({ root: null, taken, present: none, test: 'cwatch-e2eab12.slice' })).toBe('cwatch-e2eab12-autres.slice');
-    expect(runProjectSlice({ root: '/home/u/demo', taken, present: none, test: 'cwatch-e2eab12.slice' })).toBe(`cwatch-e2eab12-p${shortHash('/home/u/demo')}.slice`);
+    expect(runProjectSlice({ root: null, taken, test: 'cwatch-e2eab12.slice' })).toBe('cwatch-e2eab12-autres.slice');
+    expect(runProjectSlice({ root: '/home/u/demo', taken, test: 'cwatch-e2eab12.slice' })).toBe(`cwatch-e2eab12-p${shortHash('/home/u/demo')}.slice`);
   });
 });
 

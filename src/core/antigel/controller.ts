@@ -13,6 +13,7 @@ import { budgetBytes, sameLimits, sliceLimits, type SliceLimits } from './limits
 import { planMoves, type PlanMove, type PlanTarget } from './plan';
 import type { AntigelProjectState, AntigelSliceState, AntigelState } from './state';
 import { BusctlError, MAX_PIDS, type SystemdClient } from './systemd';
+import { hashedProjectSlice } from './run';
 import { RUN_RETRY_MS, runPidsOf, runSliceRoot, type RunScopeDeps } from './runScopes';
 import { OTHERS_SLICE, ROOT_SLICE, isProdProjectSliceName, newScopeName, projectSliceFor, shortHash, slicePath, slugOf } from './units';
 
@@ -306,14 +307,16 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
       insideBySlice.set(s, [...(insideBySlice.get(s) ?? []), x.pid]);
     }
     // Slices ouvertes par `computer-watcher run` (lot 4) et inconnues : attribuées d'après le dossier courant de leurs
-    // processus, seulement si le nom a pu être donné à cette racine (plausible) ; jamais redéplacées (elles sont sous cwatch).
+    // processus, seulement si c'est le nom haché de cette racine (run n'ouvre jamais un nom simple non attribué) ;
+    // jamais redéplacées (elles sont sous cwatch).
     if (deps.run) {
       const run = deps.run;
       if (runTried.size > MAX_UNITS) runTried.clear();
       for (const name of (run.listDir(`${userBase}/${ROOT_SLICE}/cwatch-p.slice`) ?? []).slice(0, MAX_UNITS)) {
         if (!isProdProjectSliceName(name) || slices.has(name) || (runTried.get(name) ?? -Infinity) > now) continue;
-        const r = runSliceRoot(name, cgOfSlice(name), run, byPid, i.projectRootOf, i.home, plausible);
-        if (r !== undefined) attribute(name, r);
+        const r = runSliceRoot(name, cgOfSlice(name), run, byPid, i.projectRootOf, i.home, (s, root) => s === hashedProjectSlice(root));
+        if (r === 'pending') continue; // revue au tick suivant, sans recul
+        if (r !== 'none') attribute(name, r.root);
         if (!slices.has(name)) runTried.set(name, now + RUN_RETRY_MS);
       }
     }

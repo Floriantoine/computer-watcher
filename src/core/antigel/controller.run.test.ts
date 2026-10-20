@@ -6,6 +6,7 @@ import type { AntigelConfig } from './config';
 import { createAntigel } from './controller';
 import type { RunScopeDeps } from './runScopes';
 import { fakeSystemd, sampleStats } from './testFixtures';
+import { hashedProjectSlice } from './run';
 import { shortHash } from './units';
 
 const BASE = '/user.slice/user-1000.slice/user@1000.service';
@@ -62,20 +63,22 @@ function harness(o: { procs: ProcInfo[]; cg: Record<number, string>; dirs: Recor
 }
 
 const scopeCg = (slice: string, scope: string) => `${PARENT}/${slice}/${scope}`;
+const HS = hashedProjectSlice(A);
+const HRUN = `${HS.slice(0, -'.slice'.length)}-r0000000001.scope`;
 
 describe('scopes « run » vus par le contrôleur', () => {
   test('commande quelconque lancée par run : jamais redéplacée, slice attribuée par son dossier courant, processus comptés, budget posé', async () => {
     // warp → zsh → tail (le lanceur devenu la commande) → sleep, dans le scope « run » ; aucun n'est du « travail »
     const procs = [p(600, 500, 'warp', 'warp'), p(601, 600, 'zsh', 'zsh', A), p(800, 601, 'tail', 'tail -f /dev/null'), p(801, 800, 'sleep', 'sleep 60')];
     const h = harness({
-      procs, cg: { 800: scopeCg(PS, RUN), 801: scopeCg(PS, RUN) }, cwds: { 800: `${A}/src` },
-      dirs: { [PARENT]: [PS, 'cgroup.procs', 'memory.current'], [PSCG]: [RUN, 'memory.current'] },
+      procs, cg: { 800: scopeCg(HS, HRUN), 801: scopeCg(HS, HRUN) }, cwds: { 800: `${A}/src` },
+      dirs: { [PARENT]: [HS, 'cgroup.procs', 'memory.current'], [`${PARENT}/${HS}`]: [HRUN, 'memory.current'] },
       config: { ...ON, budgets: { [A]: 2048 } },
     });
     await h.step();
     expect(h.fake.calls.map((c) => c[0])).toEqual(['ensureSlice', 'setProjectHigh']);
-    expect(h.fake.calls[1]).toEqual(['setProjectHigh', PS, 2048 * 1024 * 1024]);
-    expect(h.ag.state()).toMatchObject({ slices: { [PS]: A }, projects: [{ unit: PS, root: A, procs: 2, budgetMB: 2048 }] });
+    expect(h.fake.calls[1]).toEqual(['setProjectHigh', HS, 2048 * 1024 * 1024]);
+    expect(h.ag.state()).toMatchObject({ slices: { [HS]: A }, projects: [{ unit: HS, root: A, procs: 2, budgetMB: 2048 }] });
     // ensuite : rien de plus, ni déplacement ni nouvelle lecture de dossier courant
     h.fake.calls.length = 0;
     const cwdReads = h.reads.cwd;
@@ -135,6 +138,23 @@ describe('scopes « run » vus par le contrôleur', () => {
     });
     await ok.step();
     expect(ok.ag.state().slices).toEqual({ [hashed]: '/home/u/b/alpha' });
+  });
+
+  test('nom simple non attribué avec un scope « run » : jamais attribué (run ne l’ouvre jamais ; même slug, autre racine possible)', async () => {
+    const procs = [p(600, 500, 'warp', 'warp'), p(601, 600, 'zsh', 'zsh'), p(800, 601, 'tail', 'tail -f /dev/null')];
+    const h = harness({ procs, cg: { 800: scopeCg(PS, RUN) }, cwds: { 800: A }, dirs: { [PARENT]: [PS], [PSCG]: [RUN] } });
+    await h.step();
+    expect(h.ag.state().slices).toEqual({});
+  });
+
+  test('processus « run » pas encore dans l’instantané : réexaminée au tick suivant, sans recul (revue m4)', async () => {
+    const procs = [p(600, 500, 'warp', 'warp'), p(601, 600, 'zsh', 'zsh', A)];
+    const h = harness({ procs, cg: { 800: scopeCg(HS, HRUN) }, cwds: { 800: A }, dirs: { [PARENT]: [HS], [`${PARENT}/${HS}`]: [HRUN] } });
+    await h.step();
+    expect(h.ag.state().slices).toEqual({});
+    procs.push(p(800, 601, 'tail', 'tail -f /dev/null'));
+    await h.step();
+    expect(h.ag.state().slices).toEqual({ [HS]: A });
   });
 
   test('sans dépendances « run » : comportement du lot 1 inchangé', async () => {

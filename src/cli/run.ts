@@ -61,12 +61,12 @@ async function enterScope(d: CliDeps, memBytes: number | null): Promise<string |
   const slice = runProjectSlice({
     root: d.cwd === null ? null : workRoot(d.cwd, d.findRoot, d.home),
     taken: rootSlice.test ? new Map() : d.attribution(),
-    present: (s) => d.stats(cg(s)) !== null,
     test: rootSlice.test ? rootSlice.slice : null,
   });
   let scope = '';
   for (let attempt = 0; ; attempt++) {
-    scope = runScopeName(slice, runScopeN(d.pid, d.now(), attempt));
+    // horloge murale pour le nom (performance.now() vaut à peu près pareil à chaque lancement)
+    scope = runScopeName(slice, runScopeN(d.pid, Date.now(), attempt));
     try {
       await d.busctl(startRunScopeArgv(scope, slice, d.pid, memBytes));
       break;
@@ -118,16 +118,20 @@ export async function runCli(args: readonly string[], d: CliDeps): Promise<numbe
 export interface FsLike {
   kind: (p: string) => 'file' | 'dir' | 'other' | null;
   executable: (p: string) => boolean;
-  /** Quatre premiers octets (null : illisible). */
+  /** Premiers octets (au plus HEAD_BYTES ; null : illisible, comme un exécutable en exécution seule). */
   head: (p: string) => Buffer | null;
 }
 
 const DEFAULT_PATH = '/usr/local/bin:/usr/bin:/bin';
+/** Octets lus en tête d'un exécutable (ligne « #! » comprise : le noyau en lit 256 au plus). */
+export const HEAD_BYTES = 256;
 
 /**
  * Comme execvp, mais vérifié AVANT l'exec (un execve raté abat le processus Node) : commande avec « / » relative au
- * dossier courant, sinon recherche dans le PATH de la commande (entrée vide : dossier courant) ; sans « #! » ni ELF :
- * /bin/sh <fichier>. Introuvable : 127 ; trouvé mais non exécutable : 126.
+ * dossier courant, sinon recherche dans le PATH de la commande (entrée vide : dossier courant). Introuvable : 127 ;
+ * trouvé mais non exécutable : 126. Script « #! » : son interpréteur doit exister et être exécutable (sinon 127 / 126).
+ * ELF, binaire (octet nul : binfmt_misc…) ou en-tête illisible (exécution seule) : exec direct. Texte sans « #! » :
+ * /bin/sh <fichier>, comme execvp.
  */
 export function resolveCommand(command: readonly string[], env: NodeJS.ProcessEnv, cwd: string | null, fs: FsLike): ResolvedCommand | ResolveError {
   const [name, ...rest] = command;
@@ -144,12 +148,18 @@ export function resolveCommand(command: readonly string[], env: NodeJS.ProcessEn
       continue;
     }
     const h = fs.head(p);
-    if (h === null) {
-      denied ??= p;
-      continue;
+    const direct = { file: p, argv: [name, ...rest] };
+    if (h === null || h.includes(0) || (h[0] === 0x7f && h.subarray(1, 4).toString('latin1') === 'ELF')) return direct;
+    if (h[0] === 0x23 && h[1] === 0x21) {
+      const line = h.subarray(2).toString('latin1').split('\n', 1)[0]!.trim();
+      const interp = line.split(/[ \t]/, 1)[0] ?? '';
+      const ip = interp === '' ? null : isAbsolute(interp) ? interp : cwd !== null ? resolvePath(cwd, interp) : null;
+      const k2 = ip === null ? null : fs.kind(ip);
+      if (ip === null || k2 === null) return { code: 127, message: `interpréteur introuvable pour ${p} : ${interp || '(vide)'}` };
+      if (k2 !== 'file' || !fs.executable(ip)) return { code: 126, message: `interpréteur non exécutable pour ${p} : ${ip}` };
+      return direct;
     }
-    const direct = (h[0] === 0x23 && h[1] === 0x21) || (h[0] === 0x7f && h.subarray(1, 4).toString('latin1') === 'ELF');
-    return direct ? { file: p, argv: [name, ...rest] } : { file: '/bin/sh', argv: ['/bin/sh', p, ...rest] };
+    return { file: '/bin/sh', argv: ['/bin/sh', p, ...rest] };
   }
   return denied !== null ? { code: 126, message: `permission refusée : ${denied}` } : { code: 127, message: `commande introuvable : ${name}` };
 }

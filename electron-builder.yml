@@ -29,3 +29,7 @@ artifactName: ${productName}-${version}-${arch}.${ext}
 publish:
   provider: github
   releaseType: release
+# computer-watcher run (anti-gel, lot 4) : Electron lit lui-même les options placées avant « -- » ; sans cette fuse, un
+# `run node --inspect-brk …` oublié ouvrirait l'inspecteur du processus principal. Jamais utilisé en production.
+electronFuses:
+  enableNodeCliInspectArguments: false

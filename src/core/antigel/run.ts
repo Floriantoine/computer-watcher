@@ -7,14 +7,14 @@ import { cleanEnv } from '../childEnv';
 import { BUDGET_MAX_MB, BUDGET_MIN_MB } from './config';
 import { MiB } from './limits';
 import { BUSCTL_TIMEOUT_S, DESCRIPTION } from './systemd';
-import { OTHERS_KEY, ROOT_SLICE, TEST_SLICE_RE, isProjectSliceName, isScopeName, newScopeName, projectSliceFor, scopeBelongs, shortHash } from './units';
+import { OTHERS_KEY, OTHERS_SLICE, ROOT_SLICE, TEST_SLICE_RE, isProdProjectSliceName, isProjectSliceName, isScopeName, newScopeName, scopeBelongs, shortHash, slugOf } from './units';
 
 export const RUN_DESCRIPTION = `${DESCRIPTION} (computer-watcher run)`;
 export const MEM_MIN_BYTES = BUDGET_MIN_MB * MiB;
 export const MEM_MAX_BYTES = BUDGET_MAX_MB * MiB;
 const PID_MAX = 4_194_304;
 
-export const USAGE = `Usage : computer-watcher run [--mem <taille>] [--] <commande> [arguments…]
+export const USAGE = `Usage : computer-watcher run [--mem <taille>] -- <commande> [arguments…]
 
 Lance <commande> sous le plafond de travail (cwatch.slice), dans la slice du projet du dossier courant
 (« autres » hors projet), dans un scope dédié. Entrée, sorties, terminal, signaux et code de sortie
@@ -24,6 +24,9 @@ Options :
   --mem <taille>  budget mémoire de la commande (MemoryHigh de son scope) : un entier suivi de K, M ou G
                   (puissances de 1024), de 256M à 1024G. Exemple : --mem 6G
   -h, --help      affiche cette aide
+
+« -- » est obligatoire : depuis l'AppImage ou le .deb, Electron lit lui-même les options placées avant
+(--inspect…, --type=…) avant que Computer Watcher ne démarre.
 
 Plafond de travail éteint ou indisponible : la commande est lancée quand même, sans plafond, avec un
 avertissement sur la sortie d'erreur.
@@ -42,17 +45,19 @@ export function parseMem(s: string): number | null {
 export type RunArgs = { kind: 'help' } | { kind: 'run'; memBytes: number | null; command: string[] } | { kind: 'error'; message: string };
 
 /**
- * Arguments après « run ». Les options s'arrêtent à « -- » ou au premier argument qui n'est pas une option : tout ce qui
- * suit appartient à la commande, tel quel.
+ * Arguments après « run » : `[--mem <taille>] [-h|--help] -- <commande…>`. « -- » est obligatoire (depuis l'app, Electron
+ * interprète tout ce qui le précède) ; tout ce qui le suit appartient à la commande, tel quel.
  */
 export function parseRunArgs(args: readonly string[]): RunArgs {
   let mem: number | null = null;
   let seenMem = false;
   let i = 0;
+  let sep = false;
   for (; i < args.length; i++) {
     const a = args[i]!;
     if (a === '--') {
       i++;
+      sep = true;
       break;
     }
     if (a === '-h' || a === '--help') return { kind: 'help' };
@@ -66,8 +71,9 @@ export function parseRunArgs(args: readonly string[]): RunArgs {
       continue;
     }
     if (a.startsWith('-') && a !== '-') return { kind: 'error', message: `option inconnue : ${a}` };
-    break;
+    return { kind: 'error', message: `« -- » manquant avant la commande (computer-watcher run [--mem <taille>] -- ${a} …)` };
   }
+  if (!sep) return { kind: 'error', message: '« -- » et la commande manquent' };
   const command = args.slice(i);
   if (command.length === 0) return { kind: 'error', message: 'commande manquante' };
   if (command[0] === '') return { kind: 'error', message: 'commande vide' };
@@ -132,25 +138,24 @@ export function workRoot(cwd: string, findRoot: (cwd: string) => string | null, 
   return r;
 }
 
+/** Nom haché de la slice d'un projet : propre à sa racine (le contrôleur ne le donne jamais à une autre). */
+export const hashedProjectSlice = (root: string): string => `cwatch-p-${slugOf(root)}_${shortHash(root)}.slice`;
+
 /**
- * Slice du projet. Production : attribution relue (antigel-state.json, slice → racine) et même règle que le contrôleur ;
- * une slice déjà là sans attribution n'est jamais réutilisée (nom haché ; haché aussi là : « autres »).
+ * Slice du projet. Production : la slice attribuée à cette racine (antigel-state.json, slice → racine) ; sinon toujours
+ * le nom haché de la racine, même s'il existe déjà (il ne peut être qu'à elle) : jamais le nom simple, qu'une autre
+ * racine au même nom pourrait prendre entre-temps. Haché attribué à une autre racine (collision) : « autres ».
  * Test : cwatch-e2e<id>-autres.slice ou cwatch-e2e<id>-p<hachage>.slice.
  */
-export function runProjectSlice(i: {
-  root: string | null; taken: ReadonlyMap<string, string | null>; present: (slice: string) => boolean; test: string | null;
-}): string {
+export function runProjectSlice(i: { root: string | null; taken: ReadonlyMap<string, string | null>; test: string | null }): string {
   if (i.test !== null) {
     const base = i.test.slice(0, -'.slice'.length);
     return `${base}-${i.root === null ? OTHERS_KEY : `p${shortHash(i.root)}`}.slice`;
   }
-  const others = projectSliceFor(null, i.taken);
-  if (i.root === null) return others;
-  const usable = (s: string) => i.taken.get(s) === i.root || (!i.taken.has(s) && !i.present(s));
-  const s = projectSliceFor(i.root, i.taken);
-  if (usable(s)) return s;
-  const h = projectSliceFor(i.root, new Map([...i.taken, [s, null]]));
-  return h !== s && usable(h) ? h : others;
+  if (i.root === null) return OTHERS_SLICE;
+  for (const [unit, r] of i.taken) if (r === i.root && isProdProjectSliceName(unit)) return unit;
+  const h = hashedProjectSlice(i.root);
+  return i.taken.has(h) ? OTHERS_SLICE : h;
 }
 
 /** Environnement de la commande : sans le runtime AppImage (cleanEnv), sans le mode Node d'Electron ni la variable de test. */

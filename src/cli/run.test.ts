@@ -3,6 +3,7 @@ import type { Availability, CgroupStats } from '../core/antigel/cgroupfs';
 import { GiB } from '../core/antigel/limits';
 import { USAGE, startRunScopeArgv } from '../core/antigel/run';
 import { BusctlError } from '../core/antigel/systemd';
+import { shortHash } from '../core/antigel/units';
 import { CONFIRM_TIMEOUT_MS, resolveCommand, runCli, type CliDeps, type FsLike } from './run';
 
 const BASE = '/user.slice/user-1000.slice/user@1000.service';
@@ -94,8 +95,9 @@ describe('runCli', () => {
     expect(await runCli(['--mem', '6G', '--', 'sh', '-c', 'exit 3'], h.deps)).toBe(0);
     expect(h.calls).toHaveLength(1);
     const scope = h.calls[0]![h.calls[0]!.indexOf('StartTransientUnit') + 2]!;
-    expect(scope).toMatch(/^cwatch-p-demo-r[a-z0-9]{10}\.scope$/);
-    expect(h.calls[0]).toEqual(startRunScopeArgv(scope, 'cwatch-p-demo.slice', 4242, 6 * GiB));
+    const H = `cwatch-p-demo_${shortHash('/home/u/demo')}`;
+    expect(scope.startsWith(`${H}-r`) && scope.length === `${H}-r0123456789.scope`.length).toBe(true);
+    expect(h.calls[0]).toEqual(startRunScopeArgv(scope, `${H}.slice`, 4242, 6 * GiB));
     expect(h.execs).toEqual([{ file: '/usr/bin/sh', argv: ['sh', '-c', 'exit 3'], env: { PATH: '/usr/bin', HOME: '/home/u' } }]);
     expect(h.err).toEqual([]);
     expect(h.polls()).toBeGreaterThanOrEqual(2);
@@ -179,11 +181,11 @@ describe('resolveCommand', () => {
     head: (p) => (files[p] ? Buffer.from(files[p]!.head ?? '\x7fELF') : null),
   });
   test('recherche dans le PATH de la commande, dans l’ordre ; argv[0] tel que tapé', () => {
-    const fs = fsFake({ '/usr/bin/npm': { exec: true, head: '#!/usr/bin/env node' }, '/bin/npm': { exec: true } });
+    const fs = fsFake({ '/usr/bin/npm': { exec: true, head: '#!/usr/bin/env node' }, '/bin/npm': { exec: true }, '/usr/bin/env': { exec: true } });
     expect(resolveCommand(['npm', 'test'], { PATH: '/opt/x:/usr/bin:/bin' }, '/home/u', fs)).toEqual({ file: '/usr/bin/npm', argv: ['npm', 'test'] });
   });
   test('chemin avec « / » : relatif au dossier courant, PATH ignoré', () => {
-    const fs = fsFake({ '/home/u/demo/run.sh': { exec: true, head: '#!/bin/sh' } });
+    const fs = fsFake({ '/home/u/demo/run.sh': { exec: true, head: '#!/bin/sh' }, '/bin/sh': { exec: true } });
     expect(resolveCommand(['./run.sh', 'a'], { PATH: '/usr/bin' }, '/home/u/demo', fs)).toEqual({ file: '/home/u/demo/run.sh', argv: ['./run.sh', 'a'] });
   });
   test('sans « #! » ni ELF : /bin/sh <fichier> (comme execvp)', () => {
@@ -212,5 +214,24 @@ describe('dossier courant supprimé', () => {
     h.deps.cwd = null;
     await runCli(['--', 'tail'], h.deps);
     expect(h.calls[0]).toContain('cwatch-p-autres.slice');
+  });
+});
+
+describe('resolveCommand : en-tête (revue m1, m2)', () => {
+  const fsH = (files: Record<string, { head: string | null; exec?: boolean; dir?: boolean }>): FsLike => ({
+    kind: (p) => (files[p] ? (files[p]!.dir ? 'dir' : 'file') : null),
+    executable: (p) => files[p]?.exec !== false,
+    head: (p) => (files[p]?.head == null ? null : Buffer.from(files[p]!.head!, 'latin1')),
+  });
+  test('« #! » : interpréteur absent → 127, non exécutable → 126, présent → exec direct', () => {
+    expect(resolveCommand(['/w/s'], {}, '/', fsH({ '/w/s': { head: '#!/nonexistent/interp -x\nfoo' } }))).toEqual({ code: 127, message: 'interpréteur introuvable pour /w/s : /nonexistent/interp' });
+    expect(resolveCommand(['/w/s'], {}, '/', fsH({ '/w/s': { head: '#!\n' } }))).toMatchObject({ code: 127 });
+    expect(resolveCommand(['/w/s'], {}, '/', fsH({ '/w/s': { head: '#! /usr/bin/py\n' }, '/usr/bin/py': { head: '\x7fELF', exec: false } }))).toMatchObject({ code: 126 });
+    expect(resolveCommand(['/w/s', 'a'], {}, '/', fsH({ '/w/s': { head: '#!/usr/bin/env node\n' }, '/usr/bin/env': { head: '\x7fELF' } }))).toEqual({ file: '/w/s', argv: ['/w/s', 'a'] });
+  });
+  test('binaire non ELF (octet nul : binfmt_misc) et exécutable illisible (exécution seule) : exec direct, jamais /bin/sh', () => {
+    expect(resolveCommand(['/w/a.exe'], {}, '/', fsH({ '/w/a.exe': { head: 'MZ\x90\x00\x03' } }))).toEqual({ file: '/w/a.exe', argv: ['/w/a.exe'] });
+    expect(resolveCommand(['/w/mount.x'], {}, '/', fsH({ '/w/mount.x': { head: null } }))).toEqual({ file: '/w/mount.x', argv: ['/w/mount.x'] });
+    expect(resolveCommand(['/w/t'], {}, '/', fsH({ '/w/t': { head: 'echo x\n' } }))).toEqual({ file: '/bin/sh', argv: ['/bin/sh', '/w/t'] });
   });
 });
