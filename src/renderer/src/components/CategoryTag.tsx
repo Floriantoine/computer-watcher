@@ -1,7 +1,9 @@
 import type { CSSProperties } from 'react';
-import { Copy, Snowflake } from 'lucide-react';
+import { Copy, Refrigerator, Snowflake } from 'lucide-react';
+import type { FridgePhase } from '../../../core/antigel/fridgeState';
 import type { Category } from '../../../core/types';
 import { CATEGORY_META } from '../categories';
+import { fridgeBadgeText, fridgeBadgeTitle } from '../fridge';
 
 /** Étiquette colorée d'une catégorie, avec le port principal (« Front :5173 »). */
 export function CategoryTag({ category, port }: { category: Category; port?: number | null }) {
@@ -38,8 +40,19 @@ export function ClaudeLaunchedBadge({ title }: { title?: string } = {}) {
   );
 }
 
-/** Projet dans cwatch.slice (plafond de travail) : « plafonné », ou « ralenti » quand son plafond mémoire est atteint. */
-export function AntigelBadge({ throttled }: { throttled: boolean }) {
+/**
+ * Projet dans cwatch.slice (plafond de travail) : « plafonné », ou « ralenti » quand son plafond mémoire est atteint ;
+ * lot 3 : « au frigo » (gelé), qui prime.
+ */
+export function AntigelBadge({ throttled, frozen }: { throttled: boolean; frozen?: FridgePhase }) {
+  if (frozen) {
+    return (
+      <span className="antigel-badge frozen" data-testid="antigel-badge" data-frozen={frozen} title={fridgeBadgeTitle(frozen)}>
+        <Refrigerator size={10} strokeWidth={2.4} />
+        {fridgeBadgeText(frozen)}
+      </span>
+    );
+  }
   return (
     <span
       className={throttled ? 'antigel-badge throttled' : 'antigel-badge'}

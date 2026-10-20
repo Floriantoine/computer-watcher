@@ -34,6 +34,7 @@ import { leakTimes } from './recorderForm';
 import { antigelMarks, withBudget } from './antigel';
 import { budgetKey } from '../../core/antigel/config';
 import { useAntigel } from './useAntigel';
+import { fridgeEntry, newFridgeNotice } from './fridge';
 import { findGroup, sortForTile, tileForSort, visibleGroups, ipcErrorMessage, killResultMessages, killRequestForGroup, killRequestForProc, trackKills, type KillRequest, type ViewFilter } from './viewModel';
 
 export type Route = { view: 'main' } | { view: 'detail'; groupId: string } | { view: 'settings'; section?: SettingsSection } | { view: 'metrics'; at?: number } | { view: 'tmp' } | { view: 'disk' };
@@ -321,6 +322,14 @@ export function App() {
   // Plafond de travail : état relu toutes les 5 s (hooks avant les retours anticipés).
   const antigel = useAntigel();
   const marks = useMemo(() => antigelMarks(antigel), [antigel]);
+  // Frigo (lot 3) : résultat d'une demande annoncé par un toast (jamais à la première lecture de l'état)
+  const fridgeSeen = useRef<number | null>(null);
+  useEffect(() => {
+    if (!antigel?.state) return;
+    const n = newFridgeNotice(antigel, fridgeSeen.current);
+    fridgeSeen.current = Math.max(fridgeSeen.current ?? 0, antigel.state.fridgeNotice?.at ?? 0);
+    if (n) pushToast(n.text, n.ok ? 'info' : 'error');
+  }, [antigel]);
 
   if (configError) return <p className="empty">Impossible de charger la configuration : {configError}</p>;
   if (!snapshot || !configState) return <p className="empty">Chargement…</p>;
@@ -442,6 +451,12 @@ export function App() {
   };
 
   const projectRoot = (groupId: string | null) => (groupId?.startsWith('project:') ? groupId.slice('project:'.length) : null);
+  function requestFridge(groupId: string, action: 'freeze' | 'thaw') {
+    window.procWatch.antigel.fridge(groupId, action).then(
+      () => pushToast(action === 'freeze' ? 'Mise au frigo demandée : le service s’en charge dans quelques secondes.' : 'Réveil demandé : le service s’en charge dans quelques secondes.', 'info'),
+      (e: unknown) => pushToast(ipcErrorMessage(e)),
+    );
+  }
   function setBudget(root: string, mb: number | null) {
     const c = configState!.config;
     void saveConfig({ ...c, antigel: { ...c.antigel, budgets: withBudget(c.antigel.budgets, root, mb) } });
@@ -538,6 +553,9 @@ export function App() {
                   return k ? configState.config.antigel.budgets[k] ?? null : null;
                 })()}
                 onSetBudget={projectRoot(route.groupId) ? (mb) => setBudget(projectRoot(route.groupId)!, mb) : undefined}
+                fridge={fridgeEntry(antigel, projectRoot(route.groupId))}
+                fridgeProcs={antigel?.state?.projects.find((p) => p.root !== null && p.root === projectRoot(route.groupId))?.procs ?? null}
+                onFridge={projectRoot(route.groupId) ? (action) => requestFridge(route.groupId, action) : undefined}
               />
             )}
             {route.view === 'metrics' && (

@@ -88,7 +88,7 @@ function GroupRowImpl({ group, spark, stuck, pending, leak, antigel, layoutKey, 
           {tag && <CategoryTag category={tag.category} port={tag.port} />}
           {hasDuplicate(group) && <DuplicateBadge />}
           {leak && <LeakBadge onClick={stop(() => actions.leak(group.id))} />}
-          {antigel && <AntigelBadge throttled={antigel.throttled} />}
+          {antigel && <AntigelBadge throttled={antigel.throttled} frozen={antigel.frozen} />}
         </span>
       </td>
       <td className="num">{group.procCount}</td>
