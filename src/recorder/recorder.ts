@@ -8,6 +8,8 @@ import { createAntigel, type AntigelController, type AntigelDeps } from '../core
 import type { AntigelConfig } from '../core/antigel/config';
 import { parseAntigelState, type AntigelState } from '../core/antigel/state';
 import { readStateFileBounded } from '../core/antigel/stateFile';
+import { createFridge, type Fridge, type FridgeDeps } from '../core/antigel/fridge';
+import { takeFridgeRequests } from '../core/antigel/fridgeRequest';
 import { classifyGroups, type InstanceDecision } from '../core/classify/classify';
 import { readPackageHints } from '../core/classify/packageJson';
 import { CpuTracker } from '../core/collector/cpuTracker';
@@ -93,6 +95,8 @@ export interface RecorderDeps {
    * appel D-Bus, aucun fichier d'état.
    */
   antigel?: Omit<AntigelDeps, 'log' | 'monoNow' | 'initialSlices'>;
+  /** Anti-gel lot 3 (« mettre au frigo ») : FreezeUnit / ThawUnit et memory.reclaim. Actif seulement avec `antigel`. */
+  fridge?: Omit<FridgeDeps, 'log' | 'monoNow'>;
 }
 
 /** statfs(2) en Ko : taille totale et place disponible pour un utilisateur ordinaire (f_bavail). */
@@ -449,6 +453,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       notify: (e) => notifyAlert(e, e.type === 'rule_action'),
       setTimeout: (fn, ms) => (deps.ruleTimers ?? { setTimeout: (f: () => void, t: number) => setTimeout(f, t) }).setTimeout(fn, ms),
       now, monoNow: mono, log, ruleRevision: currentRevision, claudeDirs: claudeConfigDirs, claudePids: () => claudePids,
+      frozenPids: () => fridge?.frozenPids() ?? noPids,
     }));
 
   const classifyForRules = (groups: Group[], ts: number) => {
@@ -556,7 +561,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
         system: { memUsedPercent: memUsedPercent(system), cpuPercent: Number.isFinite(cpuPercent) ? cpuPercent : null, memTotalKB: system.memTotalKB, cpuCount: ncpu },
         // sans historique couvrant toute la période (service récent, trou d'enregistrement) : null, rien n'est « inactif »
         inactive: (targets, since) => (historyCovers(d, since, ts) ? queryInactive(d, targets, since, opts, inactiveCpuThreshold(cfg)) : null),
-        isProtected: protection.isProtected, appRoot, currentUid, selfPid,
+        isProtected: protection.isProtected, appRoot, currentUid, selfPid, frozenPids: fridge?.frozenPids() ?? noPids,
       }, ruleState);
       ruleRunner(d).run(out);
       if (jobErrors.rules) ok('rules');
@@ -567,6 +572,8 @@ export function createRecorder(deps: RecorderDeps): Recorder {
 
   // Anti-gel (lot 1) : plafond global du travail, budgets, déplacements ; état écrit pour la fenêtre (0600).
   let antigel: AntigelController | null = null;
+  let fridge: Fridge | null = null;
+  const noPids: ReadonlySet<number> = new Set();
   const readAntigelSlices = (): Record<string, string | null> => {
     try {
       // même lecture bornée que le main : jamais un lien symbolique suivi, jamais bloqué sur un FIFO
@@ -588,10 +595,18 @@ export function createRecorder(deps: RecorderDeps): Recorder {
     try {
       const ooms = antigel.tick({
         ts, procs, groups, system, config: antigelCfg, currentUid, selfPid, appRoot, isProtected: protection.isProtected, home: homedir(),
-        claudeDirs: claudeConfigDirs,
+        claudeDirs: claudeConfigDirs, frozenSlices: fridge?.frozenSlices(),
       });
+      // lot 3 : demandes de la fenêtre prises et revalidées, gel / réveil en arrière-plan ; jamais bloquant
+      if (fridge) {
+        try {
+          fridge.tick({ ts, antigel: antigel.state(), swapFreeKB: system.swapFreeKB, requests: takeFridgeRequests(deps.dataDir, ts) });
+        } catch (e) {
+          log(`anti-gel (frigo) : ${(e as Error).message}`);
+        }
+      }
       for (const o of ooms) insertEvent(d, ts, 'antigel_oom', o.root ? `project:${o.root}` : null, { unit: o.unit, root: o.root, kills: o.kills });
-      writeAntigelState(antigel.state());
+      writeAntigelState(fridge ? { ...antigel.state(), ...fridge.publish() } : antigel.state());
       if (jobErrors.antigel) ok('antigel');
     } catch (e) {
       // texte affiché dans Réglages (erreurs du service) : nom de la fonctionnalité dans l'interface
@@ -605,7 +620,10 @@ export function createRecorder(deps: RecorderDeps): Recorder {
     forecast: () => lastForecast,
     status: () => ({ ...st }),
     stats: () => ({ ...counters }),
-    antigelIdle: () => antigel?.idle() ?? Promise.resolve(),
+    antigelIdle: async () => {
+      await antigel?.idle();
+      await fridge?.idle();
+    },
 
     start() {
       mkdirSync(deps.dataDir, { recursive: true, mode: 0o700 });
@@ -657,6 +675,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
         log(`règles: état non restauré : ${(e as Error).message}`);
       }
       if (deps.antigel) antigel = createAntigel({ ...deps.antigel, log, monoNow: mono, initialSlices: readAntigelSlices() });
+      if (deps.antigel && deps.fridge) fridge = createFridge({ ...deps.fridge, log, monoNow: mono });
       writeStatus();
     },
 
@@ -840,6 +859,13 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       writer = null;
       runner = null;
       antigel = null;
+      // lot 3 : rien ne reste au frigo quand le service s'arrête (dégel synchrone, borné)
+      try {
+        fridge?.thawAllSync();
+      } catch (e) {
+        log(`anti-gel (frigo) : ${(e as Error).message}`);
+      }
+      fridge = null;
       saveSim(true);
     },
   };
