@@ -4,7 +4,7 @@ import { baseName, programIndex, splitArgs } from '../classify/argv';
 import { isMcpServer } from '../classify/rules';
 import { isUnderAny } from './claudeDirs';
 import { projectLabel } from './projectRoot';
-import { APP_NAMES, CLAUDE_NAME, DEV_TOOL, SHELL_NAMES, appLabel, isTestBrowser } from './rules';
+import { APP_NAMES, CLAUDE_NAME, SHELL_NAMES, appLabel, isDevTool, isTestBrowser } from './rules';
 
 export interface GroupingOptions {
   home: string;
@@ -134,7 +134,7 @@ export function buildGroups(procs: ProcInfo[], opts: GroupingOptions): Group[] {
       if (c !== p && !inTool) {
         const directChild = byPid.get(c.ppid)?.name === CLAUDE_NAME;
         inTool = (directChild && !isBashToolShell(c)) || isClaudeTool(c);
-        if (!inTool && !aboveClaude.has(c.pid) && DEV_TOOL.test(c.name) && inRealProject(c)) {
+        if (!inTool && !aboveClaude.has(c.pid) && isDevTool(c.name, c.cmdline) && inRealProject(c)) {
           movedRoots.push(c);
           continue;
         }
@@ -167,7 +167,7 @@ export function buildGroups(procs: ProcInfo[], opts: GroupingOptions): Group[] {
     if (!APP_NAMES.has(p.name) || keyOf.has(p.pid) || hasAncestor(p, (a) => a.name === p.name)) continue;
     const key = `app:${p.name}`;
     meta.set(key, { kind: 'app', label: appLabel(p.name) });
-    assignTree(p, key, (c) => DEV_TOOL.test(c.name) || c.name === CLAUDE_NAME);
+    assignTree(p, key, (c) => isDevTool(c.name, c.cmdline) || c.name === CLAUDE_NAME);
   }
 
   // 2 bis. Outils Claude détachés (serveur du compagnon visuel, MCP, outils de plugins lancés à part) : dossier de
@@ -183,7 +183,7 @@ export function buildGroups(procs: ProcInfo[], opts: GroupingOptions): Group[] {
 
   // 3. Outils de dev : par projet
   for (const p of procs) {
-    if (keyOf.has(p.pid) || !DEV_TOOL.test(p.name)) continue;
+    if (keyOf.has(p.pid) || !isDevTool(p.name, p.cmdline)) continue;
     keyOf.set(p.pid, devToolKey(p));
   }
 

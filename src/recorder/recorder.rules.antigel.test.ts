@@ -116,7 +116,8 @@ test('RAM à 70 % : rien, jamais', () => {
   s.rec.start();
   s.run(10 * 60_000);
   expect(s.kill).not.toHaveBeenCalled();
-  expect(s.events()).toEqual([]);
+  // jest (5,4 Go, reconnu à sa ligne de commande malgré le comm MainThread) déclenche légitimement la règle « Test > 4 Go » en simulation : seul l'anti-gel doit rester muet
+  expect(s.events().filter((e) => e.ruleId === 'rec-antigel')).toEqual([]);
   s.rec.stop();
 });
 

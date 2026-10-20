@@ -2,6 +2,7 @@ import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test } from 'vitest';
 import { addProc, makeProcRoot } from './fakeProc';
+import { isDevTool } from '../grouping/rules';
 import { readProcesses, type CwdEntry, type StatusEntry } from './readProcesses';
 
 test('lit un processus complet', () => {
@@ -118,4 +119,13 @@ test('statusCache : status relu seulement si le RSS de stat change, ou après ma
   rmSync(join(root, '51'), { recursive: true });
   pass(12_000);
   expect([...entries.keys()]).toEqual(['50:3:node']);
+});
+
+test('wantCwd reçoit aussi la ligne de commande (Node ≥ 24 : comm MainThread)', () => {
+  const root = makeProcRoot();
+  addProc(root, { pid: 10, comm: 'MainThread', cmdline: ['node', '/p/node_modules/jest/bin/jest.js'], cwd: '/p' });
+  addProc(root, { pid: 11, comm: 'MainThread', cmdline: ['/opt/app/app'], cwd: '/q' });
+  const procs = readProcesses(root, { wantCwd: isDevTool });
+  expect(procs.find((p) => p.pid === 10)?.cwd).toBe('/p');
+  expect(procs.find((p) => p.pid === 11)?.cwd).toBeNull();
 });

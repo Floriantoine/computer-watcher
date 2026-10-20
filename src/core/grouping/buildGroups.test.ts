@@ -445,3 +445,33 @@ describe('règle 1 ter : outils de dev lancés par Claude dans un projet', () =>
     expect(project.launchedByClaude).toBeUndefined();
   });
 });
+
+describe('Node ≥ 24 : comm « MainThread »', () => {
+  test('jest, ses workers et tsc au comm MainThread restent dans leur projet (ligne de commande)', () => {
+    const groups = buildGroups([
+      proc({ pid: 10, name: 'warp' }),
+      proc({ pid: 11, name: 'zsh', ppid: 10 }),
+      proc({ pid: 20, name: 'MainThread', ppid: 11, cwd: '/home/u/proj', cmdline: 'node /home/u/proj/node_modules/jest/bin/jest.js' }),
+      proc({ pid: 21, name: 'MainThread', ppid: 20, cwd: '/home/u/proj', cmdline: '/usr/bin/node /home/u/proj/node_modules/jest-worker/build/workers/processChild.js' }),
+      proc({ pid: 30, name: 'MainThread', ppid: 11, cwd: '/home/u/proj', cmdline: 'node /home/u/proj/node_modules/typescript/bin/tsc --noEmit' }),
+    ], opts());
+    expect(byId(groups, 'project:/home/u/proj').pids.sort((a, b) => a - b)).toEqual([20, 21, 30]);
+    expect(groups.some((g) => g.id === 'command:MainThread')).toBe(false);
+  });
+
+  test('tsc au comm MainThread lancé par Claude dans un projet : sorti de la carte Claude, « lancé par Claude »', () => {
+    const groups = buildGroups([
+      proc({ pid: 10, name: 'warp' }),
+      proc({ pid: 11, name: 'zsh', ppid: 10 }),
+      proc({ pid: 20, name: 'claude', ppid: 11 }),
+      proc({ pid: 21, name: 'zsh', ppid: 20, cmdline: 'zsh -c source /home/u/.claude/shell-snapshots/s.sh && tsc' }),
+      proc({ pid: 22, name: 'MainThread', ppid: 21, cwd: '/home/u/proj', cmdline: 'node /home/u/proj/node_modules/typescript/bin/tsc --noEmit' }),
+    ], opts());
+    expect(byId(groups, 'project:/home/u/proj')).toMatchObject({ pids: [22], launchedByClaude: [22] });
+  });
+
+  test('un MainThread qui n’est pas lancé par un outil de dev reste rangé par nom', () => {
+    const groups = buildGroups([proc({ pid: 5, name: 'MainThread', cmdline: '/opt/app/bin/app --x', cwd: '/home/u/proj' })], opts());
+    expect(byId(groups, 'command:MainThread').kind).toBe('command');
+  });
+});

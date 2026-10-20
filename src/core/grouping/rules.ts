@@ -10,6 +10,18 @@ export const APP_NAMES = new Set([
 /** Outils de dev regroupés par projet. Couvre aussi "node (vitest)", "node-MainThread", "npm exec vitest", "python3.12". */
 export const DEV_TOOL = /^(node|npm|pnpm|yarn|bun|deno|vite|esbuild|uv|java|cargo|go|python[\d.]*)\b/;
 
+/**
+ * Outil de dev, reconnu au nom (comm) OU au programme lancé (premier mot de la ligne de commande). Sous Node ≥ 24 le comm
+ * d'un processus node (jest et ses workers, tsc, eslint…) est « MainThread » : jamais de décision sur le comm seul.
+ */
+export function isDevTool(name: string, cmdline: string): boolean {
+  if (DEV_TOOL.test(name)) return true;
+  if (cmdline.startsWith('[')) return false; // thread noyau ou ligne de commande vide : « [nom] »
+  const first = cmdline.split(/\s+/, 1)[0] ?? '';
+  const base = first.slice(first.lastIndexOf('/') + 1);
+  return base !== '' && DEV_TOOL.test(base);
+}
+
 export function appLabel(name: string): string {
   return name.charAt(0).toUpperCase() + name.slice(1);
 }

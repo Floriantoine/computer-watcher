@@ -14,7 +14,7 @@ import { loadConfig } from '../core/config';
 import { buildGroups } from '../core/grouping/buildGroups';
 import { claudeDirs } from '../core/grouping/claudeDirs';
 import { createProjectRootCache } from '../core/grouping/projectRootCache';
-import { DEV_TOOL } from '../core/grouping/rules';
+import { isDevTool } from '../core/grouping/rules';
 import { readEarlyoomThresholds } from '../core/forecast/earlyoom';
 import { diskThresholdKB, initialDiskAlertState, shouldRecordDiskLow, type DiskAlertState } from '../core/disk/alert';
 import { watchedPartitions, type Partition } from '../core/disk/partitions';
@@ -152,7 +152,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
   const tracker = new CpuTracker();
   const cmdlineCache = new Map<string, string>();
   const projectRootOf = createProjectRootCache();
-  const wantCwd = (name: string) => DEV_TOOL.test(name);
+  const wantCwd = (name: string, cmdline: string) => isDevTool(name, cmdline);
   // Outils Claude détachés : rangés dans Claude (seuls les outils de dev ont leur dossier de travail lu ici).
   const claudeConfigDirs = claudeDirs();
   const loadedInitial = loadConfig(deps.configDir);

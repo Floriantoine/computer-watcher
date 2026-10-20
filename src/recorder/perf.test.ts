@@ -4,7 +4,7 @@ import { CpuTracker } from '../core/collector/cpuTracker';
 import { readProcesses } from '../core/collector/readProcesses';
 import { buildGroups } from '../core/grouping/buildGroups';
 import { createProjectRootCache } from '../core/grouping/projectRootCache';
-import { DEV_TOOL } from '../core/grouping/rules';
+import { isDevTool } from '../core/grouping/rules';
 
 // Mesure la vraie machine, sensible au timing : lancé par `npm run test:recorder` (PROC_WATCH_PERF=1)
 test.skipIf(process.env.PROC_WATCH_PERF !== '1')('un tick de collecte sur le vrai /proc reste rapide', () => {
@@ -12,7 +12,7 @@ test.skipIf(process.env.PROC_WATCH_PERF !== '1')('un tick de collecte sur le vra
   const cmdlineCache = new Map<string, string>();
   const projectRootOf = createProjectRootCache();
   const run = () =>
-    buildGroups(tracker.update(readProcesses('/proc', { wantCwd: (n) => DEV_TOOL.test(n), cmdlineCache }), Date.now()), {
+    buildGroups(tracker.update(readProcesses('/proc', { wantCwd: isDevTool, cmdlineCache }), Date.now()), {
       home: '/home/x', currentUid: process.getuid!(), isProtected: () => false, othersThreshold: { memMB: 0, cpuPercent: 0 }, projectRootOf,
     });
   run(); // chauffe
