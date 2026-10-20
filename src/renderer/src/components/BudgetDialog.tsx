@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { motion, useIsPresent } from 'motion/react';
 import { Snowflake } from 'lucide-react';
 import { formatGoInput, validateBudget } from '../antigel';
@@ -14,6 +14,14 @@ export function BudgetDialog({ label, currentMB, onSave, onCancel }: { label: st
   const guard = (fn: () => void) => () => {
     if (isPresent) fn();
   };
+  useEffect(() => {
+    const esc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isPresent) onCancel();
+    };
+    document.addEventListener('keydown', esc);
+    return () => document.removeEventListener('keydown', esc);
+  }, [isPresent, onCancel]);
+  const showError = !v.ok && text.trim() !== '';
   return (
     <motion.div className="overlay" onClick={guard(onCancel)} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.18 }}
       style={{ pointerEvents: isPresent ? undefined : 'none' }}>
@@ -27,10 +35,10 @@ export function BudgetDialog({ label, currentMB, onSave, onCancel }: { label: st
         <p className="sub">Au-delà, la mémoire de ce projet est ralentie (MemoryHigh de sa slice de projet). Le plafond de travail global s’applique toujours.</p>
         <label className="budget-field">
           En Go
-          <input data-testid="antigel-budget-input" autoFocus inputMode="decimal" value={text} onChange={(e) => setText(e.target.value)}
+          <input data-testid="antigel-budget-input" autoFocus aria-describedby={showError ? 'budget-error' : undefined} aria-invalid={showError} inputMode="decimal" value={text} onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && v.ok && isPresent) onSave(v.mb); }} />
         </label>
-        {!v.ok && text.trim() !== '' && <p className="warn-line">{v.error}</p>}
+        {!v.ok && showError && <p id="budget-error" role="alert" className="warn-line">{v.error}</p>}
         <div className="actions">
           {currentMB !== null && <button data-testid="antigel-budget-remove" onClick={guard(() => onSave(null))}>Retirer le budget</button>}
           <button onClick={guard(onCancel)}>Annuler</button>

@@ -75,8 +75,8 @@ export function DetailView(props: Props) {
   const ticksOf = useMemo(() => (ticksRef.current = ticksIndex(props.roots, ticksRef.current)), [props.roots]);
   // Menu « Reclasser » de l'en-tête : ouvert pour un groupe précis, donc fermé dès que le groupe affiché change.
   const [reclassOpenFor, setReclassOpenFor] = useState<string | null>(null);
-  // Dialogue « Budget mémoire… » (hook placé avant les retours anticipés).
-  const [budgetOpen, setBudgetOpen] = useState(false);
+  // Dialogue « Budget mémoire… » ouvert pour un groupe précis (hook placé avant les retours anticipés).
+  const [budgetOpenFor, setBudgetOpenFor] = useState<string | null>(null);
   // Retour du rejeu au direct : l'arbre en direct (avec ses boutons de kill) apparaît sous la souris ; ses kills sont
   // ignorés pendant KILL_GUARD_MS (avant la peinture : useLayoutEffect).
   const returnedAt = useRef<number | null>(null);
@@ -158,7 +158,7 @@ export function DetailView(props: Props) {
           </span>
         )}
         {group.kind === 'project' && props.onSetBudget && (
-          <button data-testid="antigel-budget-button" onClick={() => setBudgetOpen(true)} title="Plafond mémoire propre à ce projet (en plus du plafond de travail)">
+          <button data-testid="antigel-budget-button" onClick={() => setBudgetOpenFor(group.id)} title="Plafond mémoire propre à ce projet (en plus du plafond de travail)">
             <Snowflake size={14} strokeWidth={2} /> {props.budgetMB ? `Budget : ${formatGo(props.budgetMB)}` : 'Budget mémoire…'}
           </button>
         )}
@@ -228,9 +228,9 @@ export function DetailView(props: Props) {
         />
       )}
       <AnimatePresence>
-        {budgetOpen && group.kind === 'project' && props.onSetBudget && (
-          <BudgetDialog label={group.label} currentMB={props.budgetMB ?? null} onCancel={() => setBudgetOpen(false)}
-            onSave={(mb) => { setBudgetOpen(false); props.onSetBudget!(mb); }} />
+        {budgetOpenFor === group.id && group.kind === 'project' && props.onSetBudget && (
+          <BudgetDialog label={group.label} currentMB={props.budgetMB ?? null} onCancel={() => setBudgetOpenFor(null)}
+            onSave={(mb) => { setBudgetOpenFor(null); props.onSetBudget!(mb); }} />
         )}
       </AnimatePresence>
     </>

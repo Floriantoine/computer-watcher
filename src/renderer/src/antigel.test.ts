@@ -31,6 +31,11 @@ describe('fenêtre : plafond de travail', () => {
     expect(validateBudget('6')).toEqual({ ok: true, mb: 6144 });
     expect(validateBudget('0,2')).toMatchObject({ ok: false, error: 'Entre 0,25 Go et 1024 Go.' });
     expect(validateBudget('')).toMatchObject({ ok: false });
+    expect(validateBudget('0,25')).toEqual({ ok: true, mb: 256 });
+    expect(validateBudget('1024')).toEqual({ ok: true, mb: 1_048_576 });
+    expect(validateBudget('1025')).toMatchObject({ ok: false, error: 'Entre 0,25 Go et 1024 Go.' });
+    expect(validateBudget('1,5')).toEqual({ ok: true, mb: 1536 });
+    expect(parseGo('1,234')).toBeUndefined();
   });
   test('réserve : vide = automatique ; au moins 1 Go laissé au travail', () => {
     expect(validateReserve('', 16 * 1024 * 1024)).toEqual({ ok: true, mb: null });
