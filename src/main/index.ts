@@ -85,6 +85,11 @@ import {
 } from './historyIpc';
 import { readAntigelView } from './antigelIpc';
 import { autoManageService, defaultSystemctl, recorderSyncDisabled, ensureRecorderService, recorderAppImage, recorderExecArgs, systemctlAvailable, unitPath } from './recorderService';
+import { reexecAsCli, runArgsFromArgv } from './runEntry';
+
+// `computer-watcher run -- <commande>` (anti-gel, lot 4) : avant tout le reste, l'exécutable se remplace par son mode Node.
+const cliRun = runArgsFromArgv(process.argv, process.defaultApp === true);
+if (cliRun) reexecAsCli(cliRun, { execPath: process.execPath, dir: __dirname, env: process.env, execve: process.execve });
 
 // Service réseau dans le processus main : l'app ne charge que des fichiers locaux, un processus de moins (~20 Mo).
 app.commandLine.appendSwitch('enable-features', 'NetworkServiceInProcess2');
