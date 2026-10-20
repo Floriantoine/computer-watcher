@@ -306,6 +306,11 @@ export function createFridge(deps: FridgeDeps): Fridge {
       for (const e of [...entries.values()]) {
         if (e.phase !== 'frozen' && e.phase !== 'reclaiming') continue;
         const f = deps.read(cgOf(b, e.unit), 'cgroup.freeze')?.trim();
+        // plus aucun processus (tous arrêtés, « Forcer ») : réveillé, sinon le projet resterait invisible et fermé au plafond
+        if (f === '1' && /^populated 0$/m.test(deps.read(cgOf(b, e.unit), 'cgroup.events') ?? '')) {
+          queueThaw(e.unit, e.root, 'plus aucun processus');
+          continue;
+        }
         if (f === '1') continue;
         entries.delete(e.unit);
         e.abort = true;

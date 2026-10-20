@@ -203,6 +203,19 @@ describe('mettre au frigo', () => {
 });
 
 describe('réveiller', () => {
+  test('projet au frigo vidé de ses processus : réveillé seul (sinon invisible et fermé au plafond)', async () => {
+    const s = setup();
+    s.addSlice(ALPHA);
+    await s.tick([freezeReq()]);
+    s.put(`${P}/${ALPHA}`, 'cgroup.events', 'populated 1\nfrozen 1\n');
+    await s.tick();
+    expect(s.calls).toEqual([`freeze ${ALPHA}`]);
+    s.put(`${P}/${ALPHA}`, 'cgroup.events', 'populated 0\nfrozen 1\n');
+    await s.tick();
+    expect(s.calls).toEqual([`freeze ${ALPHA}`, `thaw ${ALPHA}`]);
+    expect(s.fridge.publish().fridge).toEqual([]);
+  });
+
   test('ThawUnit, sorti du frigo, plus de pids gelés', async () => {
     const s = setup();
     s.addSlice(ALPHA);

@@ -13,7 +13,7 @@ import { BusctlError, createBusctl } from '../core/antigel/systemd';
 import { ROOT_SLICE, isProjectSliceName, slicePath } from '../core/antigel/units';
 import { systemBin } from '../core/childEnv';
 
-const READABLE = new Set(['cgroup.freeze', 'cgroup.procs', 'memory.current', 'memory.stat', 'memory.swap.max', 'memory.swap.current']);
+const READABLE = new Set(['cgroup.freeze', 'cgroup.events', 'cgroup.procs', 'memory.current', 'memory.stat', 'memory.swap.max', 'memory.swap.current']);
 const MAX_READ = 256 * 1024;
 
 /** Chemin de cgroup sous cwatch.slice de cet utilisateur (« /user.slice/…/cwatch.slice[/…] »), sinon null. */
