@@ -1,10 +1,14 @@
 // Plafond de travail (anti-gel), fenêtre (logique pure) : marques des projets, carte Métriques, formulaires (Go).
 import { BUDGET_MAX_MB, BUDGET_MIN_MB, RESERVE_MAX_MB, RESERVE_MIN_MB, budgetKey } from '../../core/antigel/config';
 import { MiB, autoReserveBytes } from '../../core/antigel/limits';
+import type { FridgePhase } from '../../core/antigel/fridgeState';
 import type { AntigelView } from '../../core/antigel/state';
+import { deskLine } from './antigelDesk';
+import { fridgeCardLine } from './fridge';
 import { formatKB } from './format';
 
-export interface AntigelMark { throttled: boolean; budgetMB: number | null }
+/** `frozen` (lot 3) : phase du frigo, absente si le projet n'y est pas. */
+export interface AntigelMark { throttled: boolean; budgetMB: number | null; frozen?: FridgePhase }
 
 const active = (v: AntigelView | null) => (v && v.fresh && v.state && v.state.status === 'active' ? v.state : null);
 
@@ -18,11 +22,15 @@ export function antigelMarks(v: AntigelView | null): Map<string, AntigelMark> {
     const prev = out.get(id);
     out.set(id, { throttled: (prev?.throttled ?? false) || p.throttled, budgetMB: prev?.budgetMB ?? p.budgetMB });
   }
+  for (const e of s.fridge ?? []) {
+    const m = out.get(`project:${e.root}`);
+    if (m) m.frozen = e.phase;
+  }
   return out;
 }
 
 export const sameMark = (a?: AntigelMark, b?: AntigelMark): boolean =>
-  a === b || (!!a && !!b && a.throttled === b.throttled && a.budgetMB === b.budgetMB);
+  a === b || (!!a && !!b && a.throttled === b.throttled && a.budgetMB === b.budgetMB && a.frozen === b.frozen);
 
 export function parseGo(text: string): number | null | undefined {
   const t = text.trim().replace(/\s*go$/i, '').replace(',', '.');
@@ -109,6 +117,8 @@ export function antigelCard(v: AntigelView | null): AntigelCardModel {
     lines: [
       cappedLine(s.projects),
       `${plural(sl?.throttles ?? 0, 'ralentissement')} · ${plural(sl?.oomKills ?? 0, 'arrêt')} par le noyau sous le plafond`,
+      ...(deskLine(s.desk) ? [deskLine(s.desk)!] : []),
+      ...[fridgeCardLine(v)].filter((l): l is string => l !== null),
     ],
   };
 }

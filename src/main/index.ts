@@ -84,6 +84,7 @@ import {
   applyOverride, checkConfigSet, classifySetKey, swapSettingsChanged, isGroupKeys, noKill, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState as computeRecorderState,
 } from './historyIpc';
 import { readAntigelView } from './antigelIpc';
+import { requestFridge } from './fridgeIpc';
 import { autoManageService, defaultSystemctl, recorderSyncDisabled, ensureRecorderService, recorderAppImage, recorderExecArgs, systemctlAvailable, unitPath } from './recorderService';
 import { reexecAsCli, runArgsFromArgv } from './runEntry';
 
@@ -1019,6 +1020,8 @@ ipcMain.handle('disk:clean', async (e, raw: unknown): Promise<DiskCleanAllResult
 ipcMain.handle('recorder:status', () => recorderState());
 // Plafond de travail (anti-gel) : état écrit par le service (aucun argument venu du renderer, aucun appel systemd ici)
 ipcMain.handle('antigel:state', () => readAntigelView(data, Date.now(), config.recorder.intervalSec));
+// Frigo (anti-gel lot 3) : identifiant du groupe de projet et action seulement ; demande déposée pour le service
+ipcMain.handle('antigel:fridge', (_e, groupId: unknown, action: unknown) => requestFridge(data, Date.now(), config.recorder.intervalSec, groupId, action));
 ipcMain.handle('recorder:setEnabled', async (_e, enabled: unknown) => {
   if (typeof enabled !== 'boolean') throw new Error('Valeur invalide');
   const next = { ...config, recorder: { ...config.recorder, enabled } };

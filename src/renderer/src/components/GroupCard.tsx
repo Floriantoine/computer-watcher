@@ -125,7 +125,7 @@ function GroupCardImpl({ group, memTotalKB, spark, stuck, pending, leak, antigel
             {!line && hasDuplicate(group) && <DuplicateBadge />}
             {!line && hasClaudeLaunched(group) && <ClaudeLaunchedBadge />}
             {leak && <LeakBadge onClick={stop(() => actions.leak(group.id))} />}
-            {antigel && <AntigelBadge throttled={antigel.throttled} />}
+            {antigel && <AntigelBadge throttled={antigel.throttled} frozen={antigel.frozen} />}
           </div>
           <div className="sub" title={sub}>{sub}</div>
         </div>

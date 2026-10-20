@@ -9,6 +9,7 @@
 import type { Group, ProcInfo, SystemInfo } from '../types';
 import type { Availability, CgroupStats, MemoryEvents } from './cgroupfs';
 import type { AntigelConfig } from './config';
+import { createDeskPriority, type DeskDeps } from './desk';
 import { budgetBytes, sameLimits, sliceLimits, type SliceLimits } from './limits';
 import { planMoves, type PlanMove, type PlanTarget } from './plan';
 import type { AntigelProjectState, AntigelSliceState, AntigelState } from './state';
@@ -46,6 +47,8 @@ export interface AntigelDeps {
   workMemo?: Map<string, boolean>;
   /** Lot 4 (`computer-watcher run`) : entrées d'un dossier de cgroup, PIDs d'un cgroup (cgroup.procs), dossier courant d'un PID. */
   run?: RunScopeDeps;
+  /** Bureau prioritaire (lot 2) : poids et protection des unités du bureau ; absent : rien. */
+  desk?: Omit<DeskDeps, 'monoNow' | 'log'>;
 }
 
 export interface AntigelTickInput {
@@ -63,6 +66,8 @@ export interface AntigelTickInput {
   claudeDirs?: readonly string[];
   /** Racine de projet d'un dossier (comme le regroupement) : attribution des slices ouvertes par `computer-watcher run`. */
   projectRootOf?: (cwd: string) => string | null;
+  /** Lot 3 : slices de projet au frigo (gelées) : rien n'y est rangé, systemd refuserait le scope (« Cannot start frozen unit »). */
+  frozenSlices?: ReadonlySet<string>;
 }
 
 /** `unit` : slice du projet (cwatch-p-<clé>.slice). */
@@ -122,6 +127,8 @@ function plausible(slice: string, root: string | null): boolean {
 export function createAntigel(deps: AntigelDeps): AntigelController {
   const perfNow = deps.perfNow ?? (() => performance.now());
   const client = deps.client;
+  const desk = deps.desk ? createDeskPriority({ ...deps.desk, monoNow: deps.monoNow, log: deps.log }) : null;
+  const dbusCalls = () => client.calls() + (desk?.calls() ?? 0);
   let avail: Availability | null = null;
   let probedAt = 0;
   /** Plafonds posés sur cwatch.slice par ce processus (null : rien posé depuis le démarrage, ou remis à infinity). */
@@ -291,6 +298,16 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
       procs: i.procs, projectOf: (pid) => projectOf.get(pid) ?? null, currentUid: i.currentUid, selfPid: i.selfPid, appRoot: i.appRoot,
       isProtected: i.isProtected, cgroupOf, userBase, claudeDirs: i.claudeDirs, workMemo,
     });
+    // Bureau prioritaire (lot 2) : seulement sous un plafond actif ; éteint, valeurs d'origine restaurées.
+    // (une erreur du bureau prioritaire ne casse jamais le plafond de travail)
+    try {
+      desk?.tick({
+        on: active && i.config.desk !== false, userBase, procs: i.procs, uid: i.currentUid, cgroupOf,
+        reserveBytes: limits?.reserveBytes ?? null, rootExists: rootStats !== null,
+      });
+    } catch (e) {
+      deps.log(`anti-gel (bureau prioritaire) : ${e instanceof Error ? e.message : String(e)}`);
+    }
 
     // Attribution reconstruite depuis les processus déjà rangés : segment cwatch-p-<clé>.slice de leur cgroup.
     const sliceRoot = `${userBase}/${ROOT_SLICE}/cwatch-p.slice/`;
@@ -456,6 +473,7 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
         if (!slices.has(s) && present(s)) continue;
       }
       if (slices.has(s) && slices.get(s) !== m.root) continue; // collision de hachage : jamais la slice d'une autre racine
+      if (i.frozenSlices?.has(s)) continue; // projet au frigo : ses nouveaux processus restent où ils sont jusqu'au réveil
       slices.set(s, m.root);
       bySlice.set(s, [...(bySlice.get(s) ?? []), m]);
     }
@@ -504,13 +522,14 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
       } finally {
         const ms = Math.max(0, perfNow() - t0);
         tickMs = tickMs === 0 ? ms : tickMs * 0.9 + ms * 0.1;
-        st = { ...st, slices: slicesOut(), lastError, tickMs: Math.round(tickMs * 100) / 100, dbusCalls: client.calls() };
+        st = { ...st, slices: slicesOut(), lastError, tickMs: Math.round(tickMs * 100) / 100, dbusCalls: dbusCalls(), ...(desk ? { desk: desk.state() } : {}) };
       }
     },
     // Champs vivants (fin de l'enchaînement en vol comprise) : erreur, attribution, nombre d'appels.
-    state: () => ({ ...st, slices: slicesOut(), lastError, dbusCalls: client.calls() }),
+    state: () => ({ ...st, slices: slicesOut(), lastError, dbusCalls: dbusCalls(), ...(desk ? { desk: desk.state() } : {}) }),
     async idle() {
       while (inFlight) await inFlight;
+      await desk?.idle();
     },
   };
 }

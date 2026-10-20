@@ -8,6 +8,8 @@ export interface AntigelConfig {
   reserveMB: number | null;
   /** Budget mémoire (MemoryHigh de la slice du projet) par racine de projet, en Mo ; aucun par défaut. */
   budgets: Record<string, number>;
+  /** Bureau prioritaire (lot 2) : poids CPU du bureau, protection mémoire si elle peut agir ; absent : allumé. */
+  desk?: boolean;
 }
 
 export const RESERVE_MIN_MB = 1024;
@@ -44,5 +46,6 @@ export function validateAntigel(raw: unknown): AntigelConfig | null {
     if (key === null || !isMB(v, BUDGET_MIN_MB, BUDGET_MAX_MB)) return null;
     budgets[key] = v;
   }
-  return { enabled: r.enabled, reserveMB: reserve as number | null, budgets };
+  if (r.desk !== undefined && typeof r.desk !== 'boolean') return null;
+  return { enabled: r.enabled, reserveMB: reserve as number | null, budgets, ...(r.desk === undefined ? {} : { desk: r.desk }) };
 }

@@ -30,3 +30,40 @@ test('busctl présent : dépendances construites (chemin de systemBin), aucun ap
   expect(d.probe()).toMatchObject({ ok: false });
   expect(d.client.calls()).toBe(0);
 });
+
+test('bureau prioritaire : lecture sysfs bornée à une liste de fichiers, chemins « .. » refusés ; origines 0600 relues filtrées', async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, statSync, symlinkSync, rmSync } = await import('node:fs');
+  const { homedir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { readDeskFile, loadDeskOriginals, saveDeskOriginals, antigelDeskPath } = await import('./antigelDeps');
+  mkdirSync(join(homedir(), '.cache'), { recursive: true });
+  const root = mkdtempSync(join(homedir(), '.cache', 'pw-desk-'));
+  try {
+    mkdirSync(join(root, 'sys', 'a.slice'), { recursive: true });
+    writeFileSync(join(root, 'sys', 'a.slice', 'cpu.weight'), '100\n');
+    writeFileSync(join(root, 'sys', 'a.slice', 'memory.max'), '1\n');
+    expect(readDeskFile(join(root, 'sys'), '/a.slice', 'cpu.weight')).toBe('100\n');
+    expect(readDeskFile(join(root, 'sys'), '/a.slice', 'memory.max' as never)).toBeNull();
+    expect(readDeskFile(join(root, 'sys'), '/a.slice/../a.slice', 'cpu.weight')).toBeNull();
+    expect(readDeskFile(join(root, 'sys'), 'a.slice', 'cpu.weight')).toBeNull();
+    expect(readDeskFile(join(root, 'sys'), '/absent.slice', 'cpu.weight')).toBeNull();
+
+    const data = join(root, 'data');
+    mkdirSync(data);
+    expect(loadDeskOriginals(data)).toEqual({});
+    const BASE = '/user.slice/user-1000.slice/user@1000.service';
+    saveDeskOriginals(data, { 'session.slice': { cgroup: `${BASE}/session.slice`, cpuWeight: null } });
+    expect(statSync(antigelDeskPath(data)).mode & 0o777).toBe(0o600);
+    expect(loadDeskOriginals(data)).toEqual({ 'session.slice': { cgroup: `${BASE}/session.slice`, cpuWeight: null } });
+    writeFileSync(antigelDeskPath(data), JSON.stringify({ version: 1, units: { 'cwatch-p-a.slice': { cgroup: '/x/cwatch-p-a.slice', cpuWeight: 1 } } }));
+    expect(loadDeskOriginals(data)).toEqual({});
+    writeFileSync(antigelDeskPath(data), '{');
+    expect(loadDeskOriginals(data)).toEqual({});
+    rmSync(antigelDeskPath(data));
+    writeFileSync(join(data, 'cible.json'), JSON.stringify({ version: 1, units: { 'session.slice': { cgroup: `${BASE}/session.slice`, cpuWeight: 5 } } }));
+    symlinkSync(join(data, 'cible.json'), antigelDeskPath(data));
+    expect(loadDeskOriginals(data)).toEqual({}); // lien symbolique jamais suivi
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

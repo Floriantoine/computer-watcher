@@ -124,6 +124,8 @@ export interface EvalInput {
   appRoot: string | null;
   currentUid: number;
   selfPid: number;
+  /** Anti-gel lot 3 : processus des projets au frigo, jamais visés (raison `frozen`). */
+  frozenPids?: ReadonlySet<number>;
 }
 
 /** `culprit-protected` : (c) le plus gros responsable de la croissance est intouchable, rien n'est visé. */
@@ -206,6 +208,7 @@ export function evaluateRules(input: EvalInput, state: RuleState): RuleDecision[
   const guard = (): GuardContext => ({
     byPid: procs(), currentUid: input.currentUid, selfPid: input.selfPid, appRoot: input.appRoot, isProtected: input.isProtected,
     claudePids: (claudePids ??= new Set(input.groups.filter((g) => g.kind === 'claude').flatMap((g) => flattenGroup(g).map((p) => p.pid)))),
+    frozen: input.frozenPids,
   });
 
   let verifPids: Set<number> | null = null;

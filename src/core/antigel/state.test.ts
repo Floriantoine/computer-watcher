@@ -9,6 +9,14 @@ describe('antigel-state.json', () => {
     expect(parseAntigelState(JSON.stringify(sampleState()))).toEqual(sampleState());
     expect(parseAntigelState(JSON.stringify(sampleState({ status: 'unavailable', reason: 'busctl introuvable (/usr/bin/busctl)', slice: null, projects: [], reserveKB: null })))?.reason).toMatch(/busctl/);
   });
+  test('bureau prioritaire : aller-retour, absent toléré, refusé si invalide (unité, statut, champ manquant)', () => {
+    const desk = { status: 'active', reason: null, cpu: true, io: false, memory: 'ineffective', units: ['session.slice', 'app.slice', 'cwatch.slice'], truncated: false, restoring: 0 } as const;
+    expect(parseAntigelState(JSON.stringify(sampleState({ desk: { ...desk, units: [...desk.units] } })))?.desk).toEqual(desk);
+    expect(parseAntigelState(JSON.stringify(sampleState()))).not.toHaveProperty('desk');
+    for (const bad of [{ ...desk, units: ['cwatch-p-a.slice'] }, { ...desk, units: ['../x.slice'] }, { ...desk, status: 'gelé' }, { ...desk, memory: 'oui' }, { ...desk, restoring: -1 }, { ...desk, cpu: undefined }]) {
+      expect(parseAntigelState(JSON.stringify(sampleState({ desk: bad as never }))), JSON.stringify(bad)).toBeNull();
+    }
+  });
   test('attribution slice de projet → racine : champ « slices » (l’ancien nom « scopes » est refusé)', () => {
     const t = JSON.parse(JSON.stringify(sampleState()));
     expect(t.slices).toEqual({ 'cwatch-p-alpha.slice': '/home/u/alpha', 'cwatch-p-autres.slice': null });

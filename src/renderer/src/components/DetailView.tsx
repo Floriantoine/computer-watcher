@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { ArrowLeft, ChevronRight, Lock, PenLine, Shield, ShieldOff, Snowflake, X } from 'lucide-react';
+import { ArrowLeft, ChevronRight, Lock, PenLine, Refrigerator, Shield, ShieldOff, Snowflake, Sunrise, X } from 'lucide-react';
 import type { Category, GroupSummary as Group, InstanceSummary, MemoryMetric, ProcNode } from '../../../core/types';
 import { formatAge, formatKB } from '../format';
 import { formatGo, type AntigelMark } from '../antigel';
@@ -13,6 +13,9 @@ import { useReplaySelect, useReplayStore } from '../useReplay';
 import { DetailTilesLive } from './DetailTiles';
 import { AntigelBadge, CategoryTag } from './CategoryTag';
 import { BudgetDialog } from './BudgetDialog';
+import { FridgeDialog } from './FridgeDialog';
+import type { FridgeEntryState } from '../../../core/antigel/fridgeState';
+import { fridgeDetailLine } from '../fridge';
 import { InstancesPanel } from './InstancesPanel';
 import { ReclassMenu } from './ReclassMenu';
 import { ProcTree } from './ProcTree';
@@ -47,6 +50,11 @@ interface Props {
   budgetMB?: number | null;
   /** « Budget mémoire… » (projets seulement) ; absent : bouton caché. */
   onSetBudget?: (mb: number | null) => void;
+  /** Lot 3 : entrée du frigo de ce projet (null : pas au frigo) et nombre de ses processus sous le plafond. */
+  fridge?: FridgeEntryState | null;
+  fridgeProcs?: number | null;
+  /** « Mettre au frigo… » / « Réveiller » (projet plafonné seulement) ; absent : boutons cachés. */
+  onFridge?: (action: 'freeze' | 'thaw') => void;
 }
 
 function BackButton({ onBack }: { onBack: () => void }) {
@@ -77,6 +85,8 @@ export function DetailView(props: Props) {
   const [reclassOpenFor, setReclassOpenFor] = useState<string | null>(null);
   // Dialogue « Budget mémoire… » ouvert pour un groupe précis (hook placé avant les retours anticipés).
   const [budgetOpenFor, setBudgetOpenFor] = useState<string | null>(null);
+  // Dialogue « Mettre au frigo… » ouvert pour un groupe précis.
+  const [fridgeOpenFor, setFridgeOpenFor] = useState<string | null>(null);
   // Retour du rejeu au direct : l'arbre en direct (avec ses boutons de kill) apparaît sous la souris ; ses kills sont
   // ignorés pendant KILL_GUARD_MS (avant la peinture : useLayoutEffect).
   const returnedAt = useRef<number | null>(null);
@@ -134,7 +144,7 @@ export function DetailView(props: Props) {
               <Lock size={14} strokeWidth={2.4} />
             </span>
           )}
-          {props.antigel && <AntigelBadge throttled={props.antigel.throttled} />}
+          {props.antigel && <AntigelBadge throttled={props.antigel.throttled} frozen={props.antigel.frozen} />}
         </h2>
         <span className="spacer" />
         {reclass && (
@@ -162,6 +172,17 @@ export function DetailView(props: Props) {
             <Snowflake size={14} strokeWidth={2} /> {props.budgetMB ? `Budget : ${formatGo(props.budgetMB)}` : 'Budget mémoire…'}
           </button>
         )}
+        {group.kind === 'project' && props.onFridge && (props.fridge ? (
+          <button data-testid="antigel-fridge-thaw" disabled={props.fridge.phase === 'thawing'} onClick={() => props.onFridge!('thaw')}
+            title="Relance les processus gelés là où ils en étaient">
+            <Sunrise size={14} strokeWidth={2} /> {props.fridge.phase === 'thawing' ? 'Réveil…' : 'Réveiller'}
+          </button>
+        ) : props.antigel && (
+          <button data-testid="antigel-fridge-button" onClick={() => setFridgeOpenFor(group.id)}
+            title="Suspendre les processus de ce projet rangés sous le plafond de travail et pousser leur mémoire en swap">
+            <Refrigerator size={14} strokeWidth={2} /> Mettre au frigo…
+          </button>
+        ))}
         {group.kind !== 'others' && (
           <button onClick={() => props.onToggleProtect(group)}>
             {props.rootProtectedByName ? <ShieldOff size={14} strokeWidth={2} /> : <Shield size={14} strokeWidth={2} />}
@@ -183,6 +204,7 @@ export function DetailView(props: Props) {
             </motion.button>
           ))}
       </div>
+      {group.kind === 'project' && props.fridge && <p className="fridge-line" data-testid="antigel-fridge-line">{fridgeDetailLine(props.fridge)}</p>}
       <DetailTilesLive store={replay} group={group} memMetric={memMetric} />
       {(group.kind === 'project' || group.kind === 'deleted') && group.instances.length > 0 && (
         <InstancesPanel
@@ -231,6 +253,10 @@ export function DetailView(props: Props) {
         {budgetOpenFor === group.id && group.kind === 'project' && props.onSetBudget && (
           <BudgetDialog label={group.label} currentMB={props.budgetMB ?? null} onCancel={() => setBudgetOpenFor(null)}
             onSave={(mb) => { setBudgetOpenFor(null); props.onSetBudget!(mb); }} />
+        )}
+        {fridgeOpenFor === group.id && group.kind === 'project' && props.onFridge && !props.fridge && (
+          <FridgeDialog label={group.label} procs={props.fridgeProcs ?? null} onCancel={() => setFridgeOpenFor(null)}
+            onConfirm={() => { setFridgeOpenFor(null); props.onFridge!('freeze'); }} />
         )}
       </AnimatePresence>
     </>

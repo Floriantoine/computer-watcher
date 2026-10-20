@@ -242,6 +242,8 @@ const api = {
   antigel: {
     /** État du Plafond de travail (écrit par le service) ; `fresh` faux : service arrêté ou état trop vieux. */
     state: (): Promise<AntigelView> => ipcRenderer.invoke('antigel:state'),
+    /** « Mettre au frigo » / « Réveiller » un projet (identifiant de groupe « project:<racine> ») : demande au service. */
+    fridge: (groupId: string, action: 'freeze' | 'thaw'): Promise<{ queued: true }> => ipcRenderer.invoke('antigel:fridge', groupId, action),
   },
   recorder: {
     status: (): Promise<RecorderState> => ipcRenderer.invoke('recorder:status'),
