@@ -8,7 +8,8 @@ export default defineConfig({
     build: {
       rollupOptions: {
         // diskScanWorker : processus enfant du parcours du dossier personnel (page Disque)
-        input: { index: resolve('src/main/index.ts'), recorder: resolve('src/recorder/index.ts'), diskScanWorker: resolve('src/main/diskScanWorker.ts') },
+        // cli : `computer-watcher run -- <commande>` (anti-gel, lot 4), Node pur
+        input: { index: resolve('src/main/index.ts'), recorder: resolve('src/recorder/index.ts'), diskScanWorker: resolve('src/main/diskScanWorker.ts'), cli: resolve('src/cli/index.ts') },
         // module intégré d'Electron (fs sans la réécriture des archives .asar), fourni à l'exécution
         external: ['original-fs'],
       },
