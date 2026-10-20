@@ -1,4 +1,5 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'vitest';
@@ -32,4 +33,17 @@ test('ne lit pas au-delà de la borne : fichier géant (8 Mio) refusé', () => {
   const dir = mkdtempSync(join(tmpdir(), 'pw-antigel-ipc-'));
   writeFileSync(join(dir, 'antigel-state.json'), Buffer.alloc(8 * 1024 * 1024, 0x20));
   expect(readAntigelView(dir, 0, 5)).toEqual({ state: null, fresh: false });
+});
+
+test('un FIFO à la place du fichier ne bloque pas', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pw-antigel-ipc-'));
+  execFileSync('mkfifo', [join(dir, 'antigel-state.json')]);
+  expect(readAntigelView(dir, 0, 5)).toEqual({ state: null, fresh: false });
+}, 2000);
+
+test('un lien symbolique vers un état valide est refusé', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pw-antigel-ipc-'));
+  writeFileSync(join(dir, 'vrai.json'), JSON.stringify(sampleState({ at: 1000 })));
+  symlinkSync(join(dir, 'vrai.json'), join(dir, 'antigel-state.json'));
+  expect(readAntigelView(dir, 2000, 5)).toEqual({ state: null, fresh: false });
 });

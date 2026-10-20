@@ -132,7 +132,7 @@ function label(e: HistoryEvent): string {
     case 'antigel_oom': {
       const n = Math.max(0, Math.round(Number(d.kills) || 0));
       const who = e.groupLabel ?? (typeof d.root === 'string' ? d.root : 'vérifications hors projet');
-      return `Plafond de travail : ${n} processus arrêté${n > 1 ? 's' : ''} par le noyau dans ${who}`;
+      return `Plafond de travail : ${n} processus arrêté${n > 1 ? 's' : ''} par le noyau (${who})`;
     }
     default: return e.type;
   }

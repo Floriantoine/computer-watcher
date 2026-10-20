@@ -259,11 +259,11 @@ test('freeSpaceSeries : partition principale (« / », sinon la première), dern
 
 test('marqueur antigel_oom : libellé « Plafond de travail », au singulier et au pluriel', () => {
   const [m] = eventMarkers([{ ts: 1, type: 'antigel_oom', groupKey: 'project:/home/u/alpha', groupLabel: 'u / alpha', detail: { unit: 'cwatch-p-alpha.slice', root: '/home/u/alpha', kills: 2 } }]);
-  expect(m).toMatchObject({ color: '#ff8a3d', label: 'Plafond de travail : 2 processus arrêtés par le noyau dans u / alpha' });
+  expect(m).toMatchObject({ color: '#ff8a3d', label: 'Plafond de travail : 2 processus arrêtés par le noyau (u / alpha)' });
   const [n] = eventMarkers([{ ts: 1, type: 'antigel_oom', groupKey: null, groupLabel: null, detail: { unit: 'cwatch-p-autres.slice', root: null, kills: 1 } }]);
-  expect(n!.label).toBe('Plafond de travail : 1 processus arrêté par le noyau dans vérifications hors projet');
+  expect(n!.label).toBe('Plafond de travail : 1 processus arrêté par le noyau (vérifications hors projet)');
   const [o] = eventMarkers([{ ts: 1, type: 'antigel_oom', groupKey: null, groupLabel: null, detail: { unit: 'cwatch-p-beta.slice', root: '/home/u/beta', kills: 1 } }]);
-  expect(o!.label).toBe('Plafond de travail : 1 processus arrêté par le noyau dans /home/u/beta');
+  expect(o!.label).toBe('Plafond de travail : 1 processus arrêté par le noyau (/home/u/beta)');
 });
 
 test('antigel_oom figure dans la liste Alertes (pas une action de l’app)', () => {
