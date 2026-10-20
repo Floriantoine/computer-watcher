@@ -5,7 +5,7 @@
 //     └ cwatch-e2e<id>-a.slice                                slice de projet de test (budget MemoryHigh)
 //       ├ cwatch-e2e<id>-1.scope                              scope neuf : tail
 //       └ cwatch-e2e<id>-2.scope                              scope neuf : allocateur
-// Jamais d'appel sur cwatch.slice ni sur une unité cwatch-p-… ; tout est arrêté à la fin (finally).
+// Jamais d'appel sur cwatch.slice ni sur une unité cwatch-p-… ; tout est arrêté à la fin (nettoyage toujours exécuté).
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
@@ -54,8 +54,10 @@ test.skipIf(!RUN)(
     const uid = process.getuid!();
     const busctl = systemBin('busctl', existsSync);
     const systemctl = systemBin('systemctl', existsSync);
+    const tailBin = systemBin('tail', existsSync);
     expect(busctl, 'busctl').not.toBeNull();
     expect(systemctl, 'systemctl').not.toBeNull();
+    expect(tailBin, 'tail').not.toBeNull();
     const avail = probeAvailability({ procRoot: '/proc', sysfsRoot: SYSFS, uid, selfPid: process.pid, busctl });
     expect(avail).toMatchObject({ ok: true });
     if (!avail.ok) return;
@@ -76,8 +78,9 @@ test.skipIf(!RUN)(
     const client = createSystemdClient(createBusctl(busctl!, process.env));
     const kids: ChildProcess[] = [];
     const seen: string[] = [];
+    let bodyErr: { e: unknown } | null = null;
     try {
-      const tail = spawn('/usr/bin/tail', ['-f', '/dev/null'], { stdio: 'ignore' });
+      const tail = spawn(tailBin!, ['-f', '/dev/null'], { stdio: 'ignore' });
       kids.push(tail);
       const alloc = spawn(process.execPath, ['-e', ALLOC], { stdio: ['pipe', 'ignore', 'inherit'] });
       kids.push(alloc);
@@ -151,15 +154,25 @@ test.skipIf(!RUN)(
       await client.setSlice(slice, null);
       await wait(() => ['memory.high', 'memory.max', 'memory.swap.max'].every((f) => read(sliceDir, f).trim() === 'max'), 5000, 'plafonds retirés');
       seen.push(`${sliceDir} après extinction : memory.high=${read(sliceDir, 'memory.high').trim()} memory.max=${read(sliceDir, 'memory.max').trim()} memory.swap.max=${read(sliceDir, 'memory.swap.max').trim()}`);
-    } finally {
-      for (const k of kids) if (alive(k)) k.kill('SIGKILL'); // nos enfants seulement, par leur ChildProcess
-      await Promise.all(kids.map((k) => (alive(k) ? new Promise((r) => k.once('exit', r)) : null)));
-      console.log(`[antigel e2e]\n${seen.join('\n')}`);
-      // toutes les unités de test sont tentées, même si l'une échoue (l'erreur est remontée ensuite)
-      const errs: unknown[] = [];
-      for (const u of [scope1, scope2, projSlice, slice]) await client.stopTestUnit(u).catch(ignoreGone).catch((e) => errs.push(e));
-      if (errs.length > 0) throw errs[0];
+    } catch (e) {
+      bodyErr = { e }; // relancée en priorité après le nettoyage
     }
+    // Nettoyage (toujours exécuté) : nos enfants seulement, par leur ChildProcess ; un enfant sans pid n'a jamais démarré.
+    const started = kids.filter((k) => k.pid !== undefined);
+    for (const k of started) if (alive(k)) k.kill('SIGKILL');
+    await Promise.race([
+      Promise.all(started.map((k) => (alive(k) ? new Promise((r) => k.once('exit', r)) : null))),
+      new Promise((r) => setTimeout(r, 5000)),
+    ]);
+    console.log(`[antigel e2e]\n${seen.join('\n')}`);
+    // toutes les unités de test sont tentées, même si l'une échoue
+    const errs: unknown[] = [];
+    for (const u of [scope1, scope2, projSlice, slice]) await client.stopTestUnit(u).catch(ignoreGone).catch((e) => errs.push(e));
+    if (bodyErr) {
+      for (const e of errs) console.error('[antigel e2e] nettoyage :', e);
+      throw bodyErr.e;
+    }
+    if (errs.length > 0) throw errs[0];
     await wait(() => !existsSync(sliceDir), 10_000, 'slice de test retirée');
     // plus aucune unité de ce test (les slices arrêtées sont oubliées par systemd)
     const left = async () => (await systemctlRead(systemctl!, ['list-units', `cwatch-e2e${id}*`, '--all', '--plain', '--no-legend'])).trim();
