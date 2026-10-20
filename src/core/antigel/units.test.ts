@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { OTHERS_SCOPE, isScopeName, isSliceName, scopeNameFor, shortHash, slicePath, slugOf } from './units';
+import { OTHERS_SCOPE, TEST_SCOPE_RE, TEST_SLICE_RE, isScopeName, isSliceName, scopeNameFor, shortHash, slicePath, slugOf } from './units';
 
 describe('noms d’unités', () => {
   test('slug : dernier composant, minuscules sans accents, [a-z0-9], 40 caractères au plus', () => {
@@ -34,5 +34,15 @@ describe('noms d’unités', () => {
     expect(slicePath('cwatch.slice')).toBe('cwatch.slice');
     expect(slicePath('cwatch-e2eab12.slice')).toBe('cwatch.slice/cwatch-e2eab12.slice');
     expect(() => slicePath('app.slice')).toThrow();
+  });
+  test('motifs de test : e2e seulement, jamais un scope de projet haché', () => {
+    expect(TEST_SCOPE_RE.test('cwatch-p-e2eab12.scope')).toBe(true);
+    expect(TEST_SLICE_RE.test('cwatch-e2eab12.slice')).toBe(true);
+    expect(TEST_SLICE_RE.test('cwatch.slice')).toBe(false);
+    expect(TEST_SCOPE_RE.test('cwatch-p-alpha.scope')).toBe(false);
+    expect(TEST_SCOPE_RE.test('cwatch-p-autres.scope')).toBe(false);
+    const hashed = scopeNameFor('/home/u/e2etest', new Map());
+    expect(hashed).toBe(`cwatch-p-e2etest-${shortHash('/home/u/e2etest')}.scope`);
+    expect(TEST_SCOPE_RE.test(hashed)).toBe(false);
   });
 });

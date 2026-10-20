@@ -1,4 +1,6 @@
 // Anti-gel : plafonds de cwatch.slice (pur, sans import Node).
+import { RESERVE_MAX_MB, RESERVE_MIN_MB } from './config';
+
 export const MiB = 1024 * 1024;
 export const GiB = 1024 * MiB;
 const PAGE = 4096;
@@ -20,12 +22,14 @@ export function autoReserveBytes(memTotalBytes: number): number {
  */
 export function sliceLimits(memTotalKB: number, swapTotalKB: number, reserveMB: number | null): SliceLimits | null {
   if (!Number.isFinite(memTotalKB) || memTotalKB <= 0) return null;
+  if (reserveMB !== null && !(Number.isFinite(reserveMB) && reserveMB >= RESERVE_MIN_MB && reserveMB <= RESERVE_MAX_MB)) return null;
   const total = memTotalKB * 1024;
   const reserve = reserveMB === null ? autoReserveBytes(total) : reserveMB * MiB;
   const high = down(total - reserve);
   if (high < GiB) return null;
   const swap = Number.isFinite(swapTotalKB) && swapTotalKB > 0 ? swapTotalKB * 1024 : 0;
-  return { reserveBytes: reserve, highBytes: high, maxBytes: down(total - reserve / 2), swapMaxBytes: down(swap / 2) };
+  const limits = { reserveBytes: reserve, highBytes: high, maxBytes: down(total - reserve / 2), swapMaxBytes: down(swap / 2) };
+  return Object.values(limits).every(Number.isFinite) ? limits : null;
 }
 
 export function sameLimits(a: SliceLimits | null, b: SliceLimits | null): boolean {

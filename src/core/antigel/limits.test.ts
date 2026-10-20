@@ -37,3 +37,8 @@ test('sameLimits, budgetBytes', () => {
   expect(budgetBytes(4096)).toBe(4 * GiB);
   expect(MiB * 1024).toBe(GiB);
 });
+
+test('réserve invalide (NaN, négative, 0, hors bornes) → aucun plafond', () => {
+  for (const r of [Number.NaN, -1, -4096, 0, 1023, 1_048_577, Infinity]) expect(sliceLimits(KB(16 * GiB), 0, r), String(r)).toBeNull();
+  expect(sliceLimits(KB(16 * GiB), KB(8 * GiB), 1024)).not.toBeNull();
+});
