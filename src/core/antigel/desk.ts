@@ -14,6 +14,8 @@ import { ROOT_SLICE } from './units';
 
 export const DESK_PROBE_MS = 300_000;
 export const DESK_RETRY_MS = 300_000;
+/** Unité déjà conforme : relue dans sysfs au plus toutes les 30 s tant que la valeur voulue ne change pas. */
+export const DESK_RECHECK_MS = 30_000;
 /** Unités dont l'origine est gardée au plus (bureau, applications, 6 terminaux et leurs slices, cwatch.slice). */
 export const MAX_ORIGINALS = 32;
 const KEYS = ['memoryLow', 'cpuWeight', 'ioWeight'] as const;
@@ -114,6 +116,8 @@ export function createDeskPriority(deps: DeskDeps): DeskController {
   /** Dernières valeurs envoyées par unité, et prochain essai permis si elles n'ont pas pris. */
   const posed = new Map<string, string>();
   const retryAt = new Map<string, number>();
+  /** Unités trouvées conformes : valeurs voulues et heure de la dernière lecture. */
+  const steady = new Map<string, { key: string; at: number }>();
   let inFlight: Promise<void> | null = null;
   let lastError: string | null = null;
   let st: AntigelDeskState = { status: 'off', reason: null, cpu: false, io: false, memory: 'off', units: [], truncated: false, restoring: 0 };
@@ -227,6 +231,11 @@ export function createDeskPriority(deps: DeskDeps): DeskController {
       const w = want.get(unit);
       const o = originals.get(unit);
       const cgroup = w?.cgroup ?? o!.cgroup;
+      // déjà conforme il y a moins de 30 s, mêmes valeurs voulues, rien à restaurer : aucune lecture
+      const wantKey = w ? JSON.stringify(w) : '';
+      const restorable = !!o && KEYS.some((k) => o[k] !== undefined && (!w || w[k] === undefined));
+      const s = steady.get(unit);
+      if (w && !restorable && s && s.key === wantKey && now - s.at < DESK_RECHECK_MS && now >= s.at) continue;
       const exists = deps.readCg(cgroup, 'cgroup.controllers') !== null;
       if (!exists) {
         // Unité disparue : un service ou un scope ne revient pas sous ce nom (rien à restaurer) ; une slice peut revenir et
@@ -273,6 +282,7 @@ export function createDeskPriority(deps: DeskDeps): DeskController {
         for (const k of KEYS) if (props[k] !== undefined && w[k] !== undefined && entry?.[k] === undefined) delete props[k];
       }
       if (!Object.keys(props).length) {
+        if (w) steady.set(unit, { key: wantKey, at: now });
         if (restored.length) {
           // déjà à l'origine : rien à appeler
           for (const k of restored) delete o![k];
@@ -289,6 +299,7 @@ export function createDeskPriority(deps: DeskDeps): DeskController {
       steps.push({ unit, props, restored, key });
     }
     for (const u of [...posed.keys()]) if (!want.has(u) && !originals.has(u)) posed.delete(u);
+    for (const u of [...steady.keys()]) if (!want.has(u)) steady.delete(u);
     for (const u of [...retryAt.keys()]) if (!want.has(u) && !originals.has(u)) retryAt.delete(u);
     if (dirty) save(); // origines enregistrées AVANT tout appel qui modifie une unité
     st.restoring = [...originals.keys()].filter((u) => !want.has(u)).length;

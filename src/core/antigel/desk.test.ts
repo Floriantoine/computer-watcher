@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import type { ProcInfo } from '../types';
 import { INFINITY_T } from './limits';
-import { DESK_PROBE_MS, DESK_RETRY_MS, MAX_ORIGINALS, createDeskPriority, sanitizeOriginals, type DeskOriginals } from './desk';
+import { DESK_PROBE_MS, DESK_RECHECK_MS, DESK_RETRY_MS, MAX_ORIGINALS, createDeskPriority, sanitizeOriginals, type DeskOriginals } from './desk';
 import { createDeskClient } from './deskSystemd';
 import { BusctlError } from './systemd';
 
@@ -52,10 +52,14 @@ function world(o: { protectedChain?: boolean; io?: boolean; fail?: (unit: string
   let now = 1_000_000;
   const saved: DeskOriginals[] = [];
   const logs: string[] = [];
+  const reads = { n: 0 };
   const make = (originals?: DeskOriginals) =>
     createDeskPriority({
       client,
-      readCg: (path, file) => sys.get(path)?.[file] ?? null,
+      readCg: (path, file) => {
+        reads.n++;
+        return sys.get(path)?.[file] ?? null;
+      },
       loadOriginals: originals ? () => originals : undefined,
       saveOriginals: (x) => {
         saved.push(structuredClone(x));
@@ -67,7 +71,7 @@ function world(o: { protectedChain?: boolean; io?: boolean; fail?: (unit: string
   const input = (on: boolean, procs: ProcInfo[] = [proc(10, 'warp'), proc(11, 'claude')]) => ({
     on, userBase: BASE, procs, uid: 1000, cgroupOf: (pid: number) => (pid === 10 || pid === 11 ? WARP : null), reserveBytes: R, rootExists: true,
   });
-  return { sys, calls, order, saved, logs, make, input, advance: (ms: number) => (now += ms) };
+  return { sys, calls, order, saved, logs, reads, make, input, advance: (ms: number) => (now += ms) };
 }
 
 describe('bureau prioritaire', () => {
@@ -90,6 +94,29 @@ describe('bureau prioritaire', () => {
     await d.idle();
     expect(w.calls).toHaveLength(3);
     expect(d.state()).toMatchObject({ status: 'active', cpu: true, io: false, memory: 'ineffective', units: ['session.slice', 'app.slice', 'cwatch.slice'], restoring: 0 });
+  });
+
+  test('régime établi : unités conformes relues au plus toutes les 30 s, réaction immédiate si la valeur voulue change', async () => {
+    const w = world();
+    const d = w.make();
+    d.tick(w.input(true));
+    await d.idle();
+    d.tick(w.input(true)); // conformité constatée
+    w.reads.n = 0;
+    for (let k = 0; k < 5; k++) {
+      w.advance(5000);
+      d.tick(w.input(true));
+    }
+    expect(w.reads.n).toBe(0);
+    w.advance(DESK_RECHECK_MS);
+    d.tick(w.input(true));
+    expect(w.reads.n).toBeGreaterThan(0);
+    // valeur changée de l'extérieur : reposée au plus tard 30 s après
+    w.sys.get(SESSION)!['cpu.weight'] = '100';
+    w.advance(DESK_RECHECK_MS);
+    d.tick(w.input(true));
+    await d.idle();
+    expect(w.calls.at(-1)).toEqual({ unit: 'session.slice', props: { CPUWeight: '200' } });
   });
 
   test('éteint : valeurs d’origine restaurées (100 → non défini, valeur propre gardée), origines vidées', async () => {
