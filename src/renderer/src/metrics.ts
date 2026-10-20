@@ -84,6 +84,7 @@ export function breakdownAt(inv: { ts: number[]; layers: { key: string; values: 
 const COLORS: Record<string, string> = {
   earlyoom_kill: '#ff5c8a', pressure: '#ffb547', gap: '#8b91a0', app_kill: '#a07cff', leak: '#ff8a3d', tmpfs: REST_TONES.shmem, forecast: '#ffb547',
   rule_action: '#ff5c8a', rule_dry_run: '#8b91a0', earlyoom_setup: '#5ee0b8', tmp_clean: '#a07cff', disk_low: '#ffb547', disk_clean: '#a07cff',
+  antigel_oom: '#ff8a3d',
 };
 
 function label(e: HistoryEvent): string {
@@ -127,6 +128,11 @@ function label(e: HistoryEvent): string {
       if (d.ok === true) return install ? 'earlyoom installé et configuré' : 'earlyoom activé';
       const why = d.timedOut === true ? 'délai dépassé' : `code ${String(d.code ?? '?')}`;
       return `Échec de ${install ? 'l’installation' : 'l’activation'} d’earlyoom (${why})`;
+    }
+    case 'antigel_oom': {
+      const n = Math.max(0, Math.round(Number(d.kills) || 0));
+      const who = e.groupLabel ?? (typeof d.root === 'string' ? d.root : 'vérifications hors projet');
+      return `Plafond de travail : ${n} processus arrêté${n > 1 ? 's' : ''} par le noyau dans ${who}`;
     }
     default: return e.type;
   }
