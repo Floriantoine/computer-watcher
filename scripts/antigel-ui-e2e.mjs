@@ -6,7 +6,7 @@
 // PROC_WATCH_NO_ANTIGEL=1, earlyoom simulé (PROC_WATCH_EARLYOOM_FAKE). Seul processus créé : un node inactif à nous, dans
 // un faux projet « alpha ». Il est détaché (double fork) : sinon, lancé sous Claude, il suivrait `npm run` dans la carte du
 // dépôt (règle « lancé par Claude » du regroupement). Il s'arrête seul (toutes les 300 ms) dès que ce script n'existe plus
-// (kill(pid, 0) : aucun signal envoyé), que le dossier temporaire disparaît ou que le fichier `.stop` du faux projet
+// (même PID et même heure de démarrage dans /proc), que le dossier temporaire disparaît ou que le fichier `.stop` du faux projet
 // apparaît ; à la fin, le script pose `.stop` et attend sa sortie, sans aucun signal (pas de pkill). Aucun
 // bouton Tuer ni confirmation n'est cliqué (la carte est ouverte par son libellé). Captures seulement si ANTIGEL_SHOTS
 // désigne un dossier (hors du dépôt).
@@ -26,7 +26,14 @@ const cleanup = () => {
   // le dossier temporaire disparu, le node du faux projet s'arrête seul (aucun signal envoyé)
   rmSync(base, { recursive: true, force: true });
 };
-for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { cleanup(); process.exit(130); });
+// interruption : fermer l'app (2 s au plus), puis nettoyer
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(sig, async () => {
+    await Promise.race([app?.close().catch(() => {}), new Promise((r) => setTimeout(r, 2000))]);
+    cleanup();
+    process.exit(130);
+  });
+}
 const waitFor = async (fn, what, ms = 20000) => {
   const t0 = Date.now();
   for (;;) {
@@ -47,8 +54,17 @@ try {
   writeFileSync(join(cfg, 'computer-watcher', 'onboarding.json'), '{"version":1,"done":true}\n');
   const dataApp = join(data, 'computer-watcher');
   mkdirSync(dataApp, { recursive: true });
-  // double fork : l'intermédiaire lance le node inactif (détaché), écrit son PID et se termine
-  const idle = `const fs = require('node:fs'); const MARQUE = 'pw-antigel-ui-idle'; setInterval(() => { let parent = true; try { process.kill(${process.pid}, 0); } catch { parent = false; } if (!parent || !fs.existsSync('package.json') || fs.existsSync('.stop')) process.exit(0); }, 300);`;
+  // double fork : l'intermédiaire lance le node inactif (détaché), écrit son PID et se termine. « Script vivant » = même PID
+  // et même heure de démarrage (champ 22 de /proc/<pid>/stat) : un PID réutilisé n'est pas pris pour ce script.
+  const startOf = (pid) => {
+    const st = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    return st.slice(st.lastIndexOf(')') + 2).split(' ')[19];
+  };
+  const self = { pid: process.pid, start: startOf(process.pid) };
+  const idle = `const fs = require('node:fs'); const MARQUE = 'pw-antigel-ui-idle'; const self = ${JSON.stringify(self)};
+const startOf = (pid) => { const st = fs.readFileSync(\`/proc/\${pid}/stat\`, 'utf8'); return st.slice(st.lastIndexOf(')') + 2).split(' ')[19]; };
+const alive = () => { try { return startOf(self.pid) === self.start; } catch { return false; } };
+setInterval(() => { if (!alive() || !fs.existsSync('package.json') || fs.existsSync('.stop')) process.exit(0); }, 300);`;
   const spawnIdle = `const c = require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(idle)}], { detached: true, stdio: 'ignore' }); process.stdout.write(String(c.pid)); c.unref();`;
   const launcher = spawn(process.execPath, ['-e', spawnIdle], { cwd: proj, stdio: ['ignore', 'pipe', 'ignore'] });
   let out = '';
@@ -106,8 +122,10 @@ try {
   const shot = async (name, el = win) => { if (shots) await el.screenshot({ path: join(shots, `${name}.png`) }); };
 
   // 1) Processus : la carte du projet porte le badge « ralenti »
-  const card = win.locator('[data-testid="group-card"]', { hasText: 'alpha' }).first();
+  // carte du faux projet par son libellé exact (racine ~/projets/alpha du HOME temporaire)
+  const card = win.locator('[data-testid="group-card"]').filter({ has: win.locator('.card-title .label', { hasText: /^projets \/ alpha$/ }) });
   await card.waitFor({ timeout: 30000 });
+  assert.equal(await card.count(), 1, 'une seule carte « projets / alpha »');
   const badge = card.locator('[data-testid="antigel-badge"]');
   await badge.waitFor();
   assert.match(await badge.innerText(), /ralenti/);
@@ -159,7 +177,10 @@ try {
   await waitFor(async () => /plafonds levés/.test(await status.innerText()), 'ligne d’état « Éteint »');
   await shot('antigel-reglages');
 
-  // 5) Projet dans la slice sans ralentissement : badge « plafonné », carte « actif »
+  // 5) Rallumé, projet dans la slice sans ralentissement : badge « plafonné », carte « actif » (l'état simulé reste
+  // « active » : le service n'est pas lancé, c'est lui qui suivrait la config)
+  await sw.click();
+  await waitFor(() => config().antigel?.enabled === true, 'enabled: true dans config.json');
   over = { projects: [{ unit, root: proj, procs: 1, currentKB: 2 * G, budgetMB: null, throttled: false }] };
   writeState();
   await win.locator('[data-testid="tab-main"]').click();
