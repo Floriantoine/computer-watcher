@@ -2,7 +2,7 @@
 import { CATEGORIES, isCategory } from '../classify/categories';
 import { APP_NAMES } from '../grouping/rules';
 import { isNeverKillName } from './neverKill';
-import { isPreapproved, RECOMMENDED_RULES, SYSTEM_DEFAULTS } from './recommended';
+import { isPreapproved, RECOMMENDED_RULES, SYSTEM_DEFAULTS, withRecommendedActive } from './recommended';
 import { simulationCredit, type SimStats } from './simulation';
 import type { Rule, RuleCondition, RuleIssue, RuleMatch, RuleMode, RulesConfig } from './types';
 
@@ -29,9 +29,9 @@ export const MAX_RULE_ISSUES = 20;
  * Première installation seulement (config.json absent) : interrupteur allumé, les 3 règles recommandées. Jamais
  * appliqué à une config existante (section absente, fichier illisible ou invalide : RULES_OFF).
  */
-export const DEFAULT_RULES: RulesConfig = { enabled: true, list: RECOMMENDED_RULES.map((r) => structuredClone(r)) };
+export const DEFAULT_RULES: RulesConfig = { enabled: true, list: RECOMMENDED_RULES.map((r) => structuredClone(r)), recommendedActive: true };
 /** Config existante sans section « rules », section mal formée, fichier illisible ou invalide : tout éteint. */
-export const RULES_OFF: RulesConfig = { enabled: false, list: [] };
+export const RULES_OFF: RulesConfig = { enabled: false, list: [], recommendedActive: true };
 
 const CONTROL = /[\u0000-\u001f\u007f-\u009f‎‏‪-‮⁦-⁩]/;
 
@@ -134,8 +134,10 @@ export function validateRulesDetailed(raw: unknown): { rules: RulesConfig; issue
     ids.add((r as Rule).id);
     out.push(r as Rule);
   });
+  // migration unique : règles recommandées intactes en Active (accord de l'utilisateur du 2026-10-20)
+  const migrated = raw.recommendedActive === true ? out : withRecommendedActive(out);
   if (dropped) issues.push({ index: -1, id: null, name: null, error: `… et ${dropped} autre${dropped > 1 ? 's' : ''} règle${dropped > 1 ? 's' : ''} refusée${dropped > 1 ? 's' : ''}` });
-  return { rules: { enabled, list: out }, issues };
+  return { rules: { enabled, list: migrated, recommendedActive: true }, issues };
 }
 
 export function validateRules(raw: unknown): RulesConfig {
@@ -147,8 +149,8 @@ const sameCondition = (a: RuleCondition, b: RuleCondition) => JSON.stringify(a) 
 /**
  * Erreur (texte FR) si une règle absente de `prev` arrive en mode 'active', si une règle active change de condition
  * sans repasser en Simulation, si une règle passe en Active sans crédit de Simulation enregistré par le service
- * (≥ 10 min et ≥ 1 évaluation, même condition), ou si un id est dupliqué ; null sinon. Seule exception : la règle
- * anti-gel recommandée intacte (isPreapproved), approuvée telle quelle.
+ * (≥ 10 min et ≥ 1 évaluation, même condition), ou si un id est dupliqué ; null sinon. Seule exception : les règles
+ * recommandées intactes (isPreapproved), approuvées telles quelles.
  */
 export function checkRulesTransition(prev: RulesConfig, next: RulesConfig, sim: SimStats | null = null): string | null {
   const ids = new Set<string>();

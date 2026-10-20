@@ -115,9 +115,10 @@ test('RAM à 70 % : rien, jamais', () => {
   const s = setup({ availPercent: 30 });
   s.rec.start();
   s.run(10 * 60_000);
-  expect(s.kill).not.toHaveBeenCalled();
-  // jest (5,4 Go, reconnu à sa ligne de commande malgré le comm MainThread) déclenche légitimement la règle « Test > 4 Go » en simulation : seul l'anti-gel doit rester muet
-  expect(s.events().filter((e) => e.ruleId === 'rec-antigel')).toEqual([]);
+  // jest (5,4 Go, reconnu à sa ligne de commande malgré le comm MainThread) déclenche légitimement la règle « Test > 4 Go »,
+  // Active : seul jest est arrêté, jamais le tsc lancé par Claude ; l'anti-gel reste muet
+  expect(s.kill.mock.calls.map(([pid]) => pid).every((pid) => [700, 701, 702].includes(pid))).toBe(true);
+  expect(s.events().filter((e) => e.ruleId !== 'rec-test-memory')).toEqual([]);
   s.rec.stop();
 });
 
@@ -141,7 +142,7 @@ test('utilisateur existant (section rules présente, vide) : rien n’est ajout�
 
 test('anti-gel passé en Simulation : un rule_dry_run, aucun signal', () => {
   const rule = { ...DEFAULT_CONFIG.rules.list.find((r) => r.id === 'rec-antigel')!, mode: 'simulate' };
-  const s = setup({ rules: { enabled: true, list: [rule] } });
+  const s = setup({ rules: { enabled: true, list: [rule], recommendedActive: true } });
   s.rec.start();
   s.rec.tick();
   s.run(4 * 60_000);

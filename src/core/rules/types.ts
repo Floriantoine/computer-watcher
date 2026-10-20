@@ -36,6 +36,11 @@ export interface RulesConfig {
   /** Interrupteur général « Règles automatiques » : éteint, rien ne tourne (pas même les simulations). */
   enabled: boolean;
   list: Rule[];
+  /**
+   * Migration « règles recommandées en Active » (2026-10-20) déjà faite. Absent d'une config d'avant : la validation
+   * passe les règles recommandées intactes en Active, puis le pose (toujours vrai en sortie de validation).
+   */
+  recommendedActive?: boolean;
 }
 
 /** Règle du fichier refusée par la validation : ignorée (désactivée) seule, avec son erreur affichée. */

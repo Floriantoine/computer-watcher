@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { checkRulesTransition, DEFAULT_RULES, MAX_RULES, missingRecommended, validateRulesDetailed, withRecommendedRules } from './config';
 import { isPreapproved, REC_ANTIGEL_ID, REC_INACTIVE_ID, REC_TEST_MEMORY_ID, RECOMMENDED_RULES } from './recommended';
+import type { RuleCondition } from './types';
 import { simulationCredit } from './simulation';
 import type { Rule, RulesConfig } from './types';
 
@@ -16,9 +17,9 @@ describe('règles recommandées', () => {
     const r = validateRulesDetailed(DEFAULT_RULES);
     expect(r.issues).toEqual([]);
     expect(r.rules).toEqual(DEFAULT_RULES);
-    expect(byId(REC_INACTIVE_ID)).toMatchObject({ enabled: true, mode: 'simulate', condition: { kind: 'inactive', categories: ['front', 'back'], forHours: 24 } });
+    expect(byId(REC_INACTIVE_ID)).toMatchObject({ enabled: true, mode: 'active', condition: { kind: 'inactive', categories: ['front', 'back'], forHours: 24 } });
     expect(byId(REC_TEST_MEMORY_ID)).toMatchObject({
-      enabled: true, mode: 'simulate',
+      enabled: true, mode: 'active',
       condition: { kind: 'memory', target: 'instance', match: { by: 'category', value: 'test' }, overMB: 4096, forMin: 5 },
     });
     expect(byId(REC_ANTIGEL_ID)).toMatchObject({
@@ -31,32 +32,48 @@ describe('règles recommandées', () => {
     expect(DEFAULT_RULES.list[2]!.condition).not.toBe(RECOMMENDED_RULES[2]!.condition);
   });
 
-  test('pré-approbation : seulement l’anti-gel intact (même id ET même condition)', () => {
+  test('pré-approbation : les 3 recommandées intactes (même id ET même condition)', () => {
+    for (const r of RECOMMENDED_RULES) expect(isPreapproved(r)).toBe(true);
     const antigel = byId(REC_ANTIGEL_ID);
-    expect(isPreapproved(antigel)).toBe(true);
     expect(isPreapproved({ ...antigel, id: 'r-x' })).toBe(false);
-    expect(isPreapproved({ ...antigel, condition: { ...antigel.condition, memPercent: 90 } as Rule['condition'] })).toBe(false);
+    expect(isPreapproved({ ...antigel, condition: { ...antigel.condition, memPercent: 90 } as RuleCondition })).toBe(false);
     expect(isPreapproved({ ...byId(REC_TEST_MEMORY_ID), id: REC_ANTIGEL_ID })).toBe(false);
-    expect(isPreapproved(byId(REC_TEST_MEMORY_ID))).toBe(false);
+    expect(isPreapproved({ ...byId(REC_TEST_MEMORY_ID), condition: { ...byId(REC_TEST_MEMORY_ID).condition, overMB: 2048 } as RuleCondition })).toBe(false);
+    expect(isPreapproved({ ...byId(REC_INACTIVE_ID), condition: { kind: 'inactive', categories: ['front'], forHours: 24 } })).toBe(false);
   });
 
-  test('crédit de Simulation : l’anti-gel intact est accepté sans crédit, modifié il en redemande', () => {
+  test('crédit de Simulation : une recommandée intacte est acceptée sans crédit, modifiée elle en redemande', () => {
+    for (const r of RECOMMENDED_RULES) expect(simulationCredit(null, r).ok).toBe(true);
     const antigel = byId(REC_ANTIGEL_ID);
-    expect(simulationCredit(null, antigel).ok).toBe(true);
-    expect(simulationCredit(null, { ...antigel, condition: { ...antigel.condition, cpuForSec: 30 } as Rule['condition'] }).ok).toBe(false);
-    expect(simulationCredit(null, byId(REC_TEST_MEMORY_ID)).ok).toBe(false);
+    expect(simulationCredit(null, { ...antigel, condition: { ...antigel.condition, cpuForSec: 30 } as RuleCondition }).ok).toBe(false);
   });
 
-  test('transition : l’anti-gel intact peut arriver Actif ; modifié ou sous un autre id, refusé', () => {
+  test('transition : une recommandée intacte peut arriver Active ; modifiée ou sous un autre id, refusée', () => {
     const prev: RulesConfig = { enabled: true, list: [mine] };
     const antigel = byId(REC_ANTIGEL_ID);
     expect(checkRulesTransition(prev, { enabled: true, list: [mine, antigel] })).toBeNull();
-    const changed = { ...antigel, condition: { ...antigel.condition, memPercent: 80 } as Rule['condition'] };
+    expect(checkRulesTransition(prev, { enabled: true, list: [mine, ...RECOMMENDED_RULES] })).toBeNull();
+    const changed = { ...antigel, condition: { ...antigel.condition, memPercent: 80 } as RuleCondition };
     expect(checkRulesTransition(prev, { enabled: true, list: [mine, changed] })).toMatch(/nouvelle règle démarre en Simulation/);
     expect(checkRulesTransition({ enabled: true, list: [antigel] }, { enabled: true, list: [changed] })).toMatch(/repasse en Simulation/);
     expect(checkRulesTransition(prev, { enabled: true, list: [mine, { ...antigel, id: 'r-copie' }] })).toMatch(/nouvelle règle/);
-    // les deux recommandées en Simulation ne peuvent pas arriver Actives
-    expect(checkRulesTransition(prev, { enabled: true, list: [mine, { ...byId(REC_TEST_MEMORY_ID), mode: 'active' }] })).toMatch(/nouvelle règle/);
+    // une recommandée en Simulation repasse en Active sans attendre
+    const testSim = { ...byId(REC_TEST_MEMORY_ID), mode: 'simulate' as const };
+    expect(checkRulesTransition({ enabled: true, list: [testSim] }, { enabled: true, list: [byId(REC_TEST_MEMORY_ID)] })).toBeNull();
+  });
+
+  test('migration unique : config sans marqueur → recommandées intactes en Active ; marqueur posé, puis Simulation respectée', () => {
+    const sim = (r: Rule): Rule => ({ ...r, mode: 'simulate' });
+    const changedTest = { ...sim(byId(REC_TEST_MEMORY_ID)), condition: { ...byId(REC_TEST_MEMORY_ID).condition, overMB: 2048 } as RuleCondition };
+    const old = { enabled: true, list: [sim(byId(REC_INACTIVE_ID)), changedTest, sim(byId(REC_ANTIGEL_ID)), mine] };
+    const out = validateRulesDetailed(old);
+    expect(out.issues).toEqual([]);
+    expect(out.rules.recommendedActive).toBe(true);
+    expect(out.rules.list.map((r) => r.mode)).toEqual(['active', 'simulate', 'active', 'simulate']);
+    // migration déjà faite : un retour en Simulation choisi par l'utilisateur est gardé
+    const after = validateRulesDetailed({ ...old, recommendedActive: true });
+    expect(after.rules.list.map((r) => r.mode)).toEqual(['simulate', 'simulate', 'simulate', 'simulate']);
+    expect(validateRulesDetailed(out.rules).rules).toEqual(out.rules);
   });
 
   test('bouton « Ajouter les règles recommandées » : ajoute les manquantes, sans écraser ni dupliquer, idempotent', () => {

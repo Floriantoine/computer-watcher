@@ -1,5 +1,5 @@
 // src/core/rules/recommended.ts — règles recommandées (ids stables `rec-…`, pour détecter leur présence) et
-// pré-approbation de la règle anti-gel. Pur, sans dépendance (partagé par le main, le service et le renderer).
+// leur pré-approbation. Pur, sans dépendance (partagé par le main, le service et le renderer).
 import type { Rule, RuleCondition } from './types';
 
 export const REC_INACTIVE_ID = 'rec-inactive-front-back';
@@ -12,16 +12,16 @@ export const SYSTEM_DEFAULTS = { memPercent: 95, memForSec: 15, cpuPercent: 95, 
 const ANTIGEL_CONDITION: RuleCondition = { kind: 'system', ...SYSTEM_DEFAULTS };
 
 /**
- * Les 3 règles recommandées, activées : deux en Simulation, l'anti-gel en Active (approuvée telle quelle : voir
+ * Les 3 règles recommandées, activées et en Active (approuvées telles quelles par l'utilisateur, 2026-10-20 : voir
  * isPreapproved). `createdAt` : remplacé par l'instant d'ajout par le bouton « Ajouter les règles recommandées ».
  */
 export const RECOMMENDED_RULES: readonly Rule[] = [
   {
-    id: REC_INACTIVE_ID, name: 'Front/Back de projet inactif depuis 1 j', enabled: true, mode: 'simulate', createdAt: 0,
+    id: REC_INACTIVE_ID, name: 'Front/Back de projet inactif depuis 1 j', enabled: true, mode: 'active', createdAt: 0,
     condition: { kind: 'inactive', categories: ['front', 'back'], forHours: 24 },
   },
   {
-    id: REC_TEST_MEMORY_ID, name: 'Test > 4 Go pendant 5 min', enabled: true, mode: 'simulate', createdAt: 0,
+    id: REC_TEST_MEMORY_ID, name: 'Test > 4 Go pendant 5 min', enabled: true, mode: 'active', createdAt: 0,
     condition: { kind: 'memory', target: 'instance', match: { by: 'category', value: 'test' }, overMB: 4096, forMin: 5 },
   },
   {
@@ -31,9 +31,18 @@ export const RECOMMENDED_RULES: readonly Rule[] = [
 ];
 
 /**
- * Règle anti-gel recommandée, intacte (même id ET même condition, champ par champ) : elle peut être Active sans
- * crédit de Simulation (approuvée telle quelle). Toute modification de sa condition lui retire cette exception.
+ * Règle recommandée intacte (même id ET même condition, champ par champ) : elle peut être Active sans crédit de
+ * Simulation (approuvée telle quelle). Toute modification de sa condition lui retire cette exception.
  */
 export function isPreapproved(rule: Pick<Rule, 'id' | 'condition'>): boolean {
-  return rule.id === REC_ANTIGEL_ID && JSON.stringify(rule.condition) === JSON.stringify(ANTIGEL_CONDITION);
+  const rec = RECOMMENDED_RULES.find((r) => r.id === rule.id);
+  return !!rec && JSON.stringify(rule.condition) === JSON.stringify(rec.condition);
+}
+
+/**
+ * Migration unique (2026-10-20) d'une config d'avant `recommendedActive` : les règles recommandées intactes encore en
+ * Simulation passent en Active. Une fois faite (marqueur posé par la validation), un retour en Simulation est respecté.
+ */
+export function withRecommendedActive(list: readonly Rule[]): Rule[] {
+  return list.map((r) => (r.mode === 'simulate' && isPreapproved(r) ? { ...r, mode: 'active' } : r));
 }
