@@ -90,7 +90,10 @@ setInterval(() => { if (!alive() || !fs.existsSync('package.json') || fs.existsS
     version: 1, at: Date.now(), enabled: true, status: 'active', reason: null, memTotalKB: 32 * G, reserveKB: 5 * G,
     slice: { currentKB: 9 * G, highKB: 27 * G, maxKB: 29 * G, swapMaxKB: 10 * G, throttles: 3, oomKills: 1 },
     projects: [{ unit, root: proj, procs: 1, currentKB: 2 * G, budgetMB: null, throttled: true }],
-    slices: { [unit]: proj }, lastError: null, tickMs: 0.4, dbusCalls: 2, ...over,
+    slices: { [unit]: proj }, lastError: null, tickMs: 0.4, dbusCalls: 2,
+    // bureau prioritaire (lot 2) : poids posés, protection mémoire sans effet ici
+    desk: { status: 'active', reason: null, cpu: true, io: false, memory: 'ineffective', units: ['session.slice', 'app.slice', 'app-dev.warp.Warp@1.service', 'cwatch.slice'], truncated: false, restoring: 0 },
+    ...over,
   });
   const writeState = () => {
     const p = join(dataApp, 'antigel-state.json');
@@ -187,6 +190,7 @@ setInterval(() => { if (!alive() || !fs.existsSync('package.json') || fs.existsS
   assert.match(agText, /3 ralentissements · 1 arrêt par le noyau/);
   assert.match(agText, /1 projet au frigo · ≈ 1,5 Go sortis de la RAM/);
   assert.match(await win.locator('[data-testid="antigel-mem"]').innerText(), /arrêt au-delà de/);
+  assert.match(agText, /Bureau prioritaire : processeur : bureau 4× et applications 3× prioritaires sur le travail · protection mémoire sans effet ici/);
   await shot('antigel-metriques');
 
   // 4) Réglages → Plafond de travail : état, budget listé puis retiré ; interrupteur éteint
@@ -201,12 +205,23 @@ setInterval(() => { if (!alive() || !fs.existsSync('package.json') || fs.existsS
   await row.locator('button', { hasText: 'Retirer' }).click();
   await waitFor(() => Object.keys(config().antigel?.budgets ?? { x: 1 }).length === 0, 'budget retiré de config.json');
   await row.waitFor({ state: 'detached' });
-  const sw = win.locator('#settings-panel-antigel button[role="switch"]');
-  assert.equal(await sw.getAttribute('aria-label'), 'Plafond de travail');
+  // bureau prioritaire : ligne d'état, interrupteur allumé par défaut, éteint puis rallumé (config.antigel.desk)
+  assert.match(await win.locator('[data-testid="antigel-desk-status"]').innerText(), /^Bureau prioritaire : processeur/);
+  const deskSw = win.locator('#settings-panel-antigel button[role="switch"][aria-label="Bureau prioritaire"]');
+  assert.equal(await deskSw.getAttribute('aria-checked'), 'true', 'bureau prioritaire allumé par défaut');
+  await deskSw.click();
+  await waitFor(() => config().antigel?.desk === false, 'desk: false dans config.json');
+  await waitFor(async () => (await deskSw.getAttribute('aria-checked')) === 'false', 'interrupteur du bureau éteint');
+  await deskSw.click();
+  await waitFor(() => config().antigel?.desk === true, 'desk: true dans config.json');
+  const sw = win.locator('#settings-panel-antigel button[role="switch"][aria-label="Plafond de travail"]');
+  assert.equal(await sw.count(), 1);
   assert.equal(await sw.getAttribute('aria-checked'), 'true', 'allumé par défaut');
   await sw.click();
   await waitFor(() => config().antigel?.enabled === false, 'enabled: false dans config.json');
   await waitFor(async () => /plafonds levés/.test(await status.innerText()), 'ligne d’état « Éteint »');
+  assert.equal(await deskSw.isDisabled(), true, 'bureau prioritaire grisé quand le plafond est éteint');
+  assert.equal(await win.locator('[data-testid="antigel-desk-status"]').count(), 0);
   await shot('antigel-reglages');
 
   // 5) Rallumé, projet dans la slice sans ralentissement : badge « plafonné », carte « actif » (l'état simulé reste

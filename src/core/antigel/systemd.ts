@@ -13,7 +13,7 @@ export const MAX_PIDS = 256;
 const PID_MAX = 4_194_304;
 export const DESCRIPTION = 'Computer Watcher anti-gel';
 
-const head = (method: string, sig: string) => ['--user', `--timeout=${BUSCTL_TIMEOUT_S}`, 'call', DEST, OBJ, IFACE, method, sig];
+export const head = (method: string, sig: string) => ['--user', `--timeout=${BUSCTL_TIMEOUT_S}`, 'call', DEST, OBJ, IFACE, method, sig];
 
 function unit(name: string, ok: (s: unknown) => boolean): string {
   if (!ok(name)) throw new Error(`unité refusée : ${name}`);

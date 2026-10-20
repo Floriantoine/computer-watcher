@@ -533,3 +533,80 @@ describe('orchestrateur anti-gel', () => {
     expect(memo.size).toBeLessThanOrEqual(4 * 22 + 100 + 20);
   });
 });
+
+describe('bureau prioritaire branché sur l’orchestrateur', () => {
+  /** Faux sysfs du bureau (poids 100) et faux client du bureau : aucun busctl. */
+  function deskHarness() {
+    const files = new Map<string, Record<string, string>>();
+    for (const cg of ['/user.slice', '/user.slice/user-1000.slice', `${BASE}/session.slice`, `${BASE}/app.slice`, WARP, ROOT]) {
+      files.set(cg, { 'cgroup.controllers': 'cpu memory', 'cpu.weight': '100', 'memory.low': '0', 'memory.min': '0' });
+    }
+    files.set(BASE, { 'cgroup.subtree_control': 'cpu memory pids', 'memory.low': '0', 'memory.min': '0' });
+    const deskCalls: [string, unknown][] = [];
+    const fake = fakeSystemd({ userBase: BASE });
+    let mono = 0;
+    const ag = createAntigel({
+      client: fake.client, probe: () => ({ ok: true, userBase: BASE, busctl: '/usr/bin/busctl' }), reverify: (t) => [...t], log: () => {},
+      monoNow: () => mono, perfNow: () => 0, stats: (path) => fake.sys.get(path) ?? null, cgroupOf: (pid) => fake.cg.get(pid) ?? WARP,
+      desk: {
+        client: {
+          setProps: async (unit, props) => {
+            deskCalls.push([unit, props]);
+            const f = [...files].find(([k]) => k.endsWith(`/${unit}`))?.[1];
+            if (f && props.cpuWeight !== undefined) f['cpu.weight'] = String(props.cpuWeight ?? 100);
+          },
+          calls: () => deskCalls.length,
+        },
+        readCg: (cg, file) => files.get(cg)?.[file] ?? null,
+      },
+    });
+    const procs = world();
+    const step = async (config: AntigelConfig) => {
+      mono += 5000;
+      ag.tick({
+        ts: 1_000_000 + mono, procs, system: SYS, config, currentUid: 1000, selfPid: 900, appRoot: null, home: '/home/u',
+        isProtected: (n: string) => ['zsh', 'warp'].includes(n), groups: [],
+      });
+      await ag.idle();
+    };
+    return { ag, deskCalls, step };
+  }
+
+  test('actif : poids posés, état publié et appels comptés ; éteint ou interrupteur du bureau coupé : origines restaurées', async () => {
+    const h = deskHarness();
+    await h.step(ON);
+    await h.step(ON); // cwatch.slice créée au premier tick : son poids suit
+    expect(h.deskCalls.map((c) => c[0])).toEqual(['session.slice', 'app.slice', 'cwatch.slice']);
+    expect(h.ag.state().desk).toMatchObject({ status: 'active', cpu: true, memory: 'ineffective' });
+    expect(h.ag.state().dbusCalls).toBeGreaterThanOrEqual(3);
+    h.deskCalls.length = 0;
+    await h.step({ ...ON, desk: false });
+    expect(h.deskCalls).toEqual([['session.slice', { cpuWeight: null }], ['app.slice', { cpuWeight: null }], ['cwatch.slice', { cpuWeight: null }]]);
+    expect(h.ag.state().desk).toMatchObject({ status: 'off', restoring: 0 });
+    await h.step(ON);
+    await h.step(ON);
+    h.deskCalls.length = 0;
+    await h.step(OFF);
+    expect(h.deskCalls.map((c) => c[0])).toEqual(['session.slice', 'app.slice', 'cwatch.slice']);
+  });
+
+  test('erreur du bureau prioritaire : le plafond de travail continue', async () => {
+    const fake = fakeSystemd({ userBase: BASE });
+    const logs: string[] = [];
+    const ag = createAntigel({
+      client: fake.client, probe: () => ({ ok: true, userBase: BASE, busctl: '/usr/bin/busctl' }), reverify: (t) => [...t], log: (m) => logs.push(m),
+      monoNow: () => 0, perfNow: () => 0, stats: (path) => fake.sys.get(path) ?? null, cgroupOf: () => WARP,
+      desk: { client: { setProps: async () => {}, calls: () => 0 }, readCg: () => { throw new Error('sysfs cassé'); } },
+    });
+    expect(() => ag.tick({ ts: 1, procs: world(), system: SYS, config: ON, currentUid: 1000, selfPid: 900, appRoot: null, home: '/home/u', isProtected: () => false, groups: [] })).not.toThrow();
+    await ag.idle();
+    expect(names(fake.calls)).toContain('ensureSlice');
+    expect(logs.some((l) => l.includes('sysfs cassé'))).toBe(true);
+  });
+
+  test('sans dépendances du bureau : aucun champ desk', async () => {
+    const h = harness();
+    await h.step();
+    expect(h.ag.state()).not.toHaveProperty('desk');
+  });
+});

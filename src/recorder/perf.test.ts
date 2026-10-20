@@ -4,6 +4,7 @@ import { expect, test } from 'vitest';
 import { probeAvailability, readCgroup, readCgroupStats } from '../core/antigel/cgroupfs';
 import { createAntigel } from '../core/antigel/controller';
 import { fakeSystemd } from '../core/antigel/testFixtures';
+import { readDeskFile } from './antigelDeps';
 import { CpuTracker } from '../core/collector/cpuTracker';
 import { readProcesses } from '../core/collector/readProcesses';
 import { readSystem } from '../core/collector/readSystem';
@@ -38,9 +39,12 @@ test.skipIf(process.env.PROC_WATCH_PERF !== '1')('anti-gel : coût du tick en r�
   if (!real.ok) console.log(`anti-gel: disponibilité réelle absente (${real.reason}), mesure sur une base fictive`);
   const avail = real.ok ? real : { ok: true as const, userBase: `/user.slice/user-${uid}.slice/user@${uid}.service`, busctl: '/usr/bin/busctl' };
   const fake = fakeSystemd({ userBase: avail.userBase });
+  let deskCalls = 0;
   const ag = createAntigel({
     client: fake.client, probe: () => avail, stats: (p) => readCgroupStats('/sys/fs/cgroup', p), cgroupOf: (pid) => readCgroup('/proc', pid),
     reverify: () => [], monoNow: () => performance.now(), log: () => {},
+    // bureau prioritaire : vrai sysfs en lecture, faux client (aucun busctl) qui ne change rien
+    desk: { client: { setProps: async () => void deskCalls++, calls: () => deskCalls }, readCg: (cg, f) => readDeskFile('/sys/fs/cgroup', cg, f) },
   });
   const tracker = new CpuTracker();
   const cmdlineCache = new Map<string, string>();
@@ -56,6 +60,9 @@ test.skipIf(process.env.PROC_WATCH_PERF !== '1')('anti-gel : coût du tick en r�
   };
   ag.tick(input()); // chauffe (cwatch.slice « assurée » par le faux client)
   await ag.idle();
+  ag.tick(input()); // bureau prioritaire : premiers appels (faux), puis recul
+  await ag.idle();
+  const desk0 = deskCalls;
   const ins = Array.from({ length: 10 }, input);
   const t0 = performance.now();
   for (const i of ins) {
@@ -66,5 +73,7 @@ test.skipIf(process.env.PROC_WATCH_PERF !== '1')('anti-gel : coût du tick en r�
   console.log(`anti-gel: ${ms.toFixed(2)} ms par tick`);
   // aucun scope ni slice de projet : la revérification vide arrête tout avant l'appel
   expect(fake.calls.filter((c) => c[0] !== 'ensureSlice')).toEqual([]);
+  // bureau prioritaire en régime établi : lectures sysfs seulement, aucun appel
+  expect(deskCalls).toBe(desk0);
   expect(ms).toBeLessThan(5);
 });

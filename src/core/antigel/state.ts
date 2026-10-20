@@ -1,5 +1,6 @@
 // Anti-gel : état écrit par le service (antigel-state.json, 0600), lu par le main pour la fenêtre. Sans import Node.
 import { normalizePath } from '../disk/projects';
+import { parseDeskState, type AntigelDeskState } from './deskState';
 import { parseFridgeFields, type FridgeEntryState, type FridgeNotice } from './fridgeState';
 import { isProdProjectSliceName } from './units';
 
@@ -27,6 +28,8 @@ export interface AntigelState {
   tickMs: number;
   /** Appels busctl depuis le démarrage du service. */
   dbusCalls: number;
+  /** Bureau prioritaire (lot 2) ; absent : service sans ce lot. */
+  desk?: AntigelDeskState | null;
   /** Lot 3 : projets au frigo (absent : aucun) et dernier résultat d'une demande « frigo » / « réveiller ». */
   fridge?: FridgeEntryState[];
   fridgeNotice?: FridgeNotice | null;
@@ -77,12 +80,14 @@ export function parseAntigelState(t: string): AntigelState | null {
   if (typeof s.slices !== 'object' || s.slices === null || Array.isArray(s.slices)) return null;
   const slices = Object.entries(s.slices as Record<string, unknown>);
   if (slices.length > MAX_ITEMS || !slices.every(([u, r]) => isProdProjectSliceName(u) && root(r))) return null;
+  const desk = s.desk === undefined || s.desk === null ? null : parseDeskState(s.desk);
+  if (s.desk !== undefined && s.desk !== null && desk === null) return null;
   const fridge = parseFridgeFields(s);
   if (!fridge) return null;
   return {
     version: 1, at: s.at, enabled: s.enabled, status: s.status, reason: s.reason, memTotalKB: s.memTotalKB, reserveKB: s.reserveKB,
     slice: s.slice === null ? null : copySlice(s.slice), projects: s.projects.map(copyProject), slices: Object.fromEntries(slices) as Record<string, string | null>,
-    lastError: s.lastError, tickMs: s.tickMs, dbusCalls: s.dbusCalls, ...fridge,
+    lastError: s.lastError, tickMs: s.tickMs, dbusCalls: s.dbusCalls, ...(desk ? { desk } : {}), ...fridge,
   };
 }
 
