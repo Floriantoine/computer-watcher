@@ -31,6 +31,9 @@ import { parsePortQuery } from '../../core/portQuery';
 import { freePortCheck } from './ports';
 import type { SettingsSection } from './settingsNav';
 import { leakTimes } from './recorderForm';
+import { antigelMarks, withBudget } from './antigel';
+import { budgetKey } from '../../core/antigel/config';
+import { useAntigel } from './useAntigel';
 import { findGroup, sortForTile, tileForSort, visibleGroups, ipcErrorMessage, killResultMessages, killRequestForGroup, killRequestForProc, trackKills, type KillRequest, type ViewFilter } from './viewModel';
 
 export type Route = { view: 'main' } | { view: 'detail'; groupId: string } | { view: 'settings'; section?: SettingsSection } | { view: 'metrics'; at?: number } | { view: 'tmp' } | { view: 'disk' };
@@ -315,6 +318,10 @@ export function App() {
     else delete document.documentElement.dataset.effects;
   }, [reducedEffects]);
 
+  // Plafond de travail : état relu toutes les 5 s (hooks avant les retours anticipés).
+  const antigel = useAntigel();
+  const marks = useMemo(() => antigelMarks(antigel), [antigel]);
+
   if (configError) return <p className="empty">Impossible de charger la configuration : {configError}</p>;
   if (!snapshot || !configState) return <p className="empty">Chargement…</p>;
 
@@ -434,6 +441,12 @@ export function App() {
     );
   };
 
+  const projectRoot = (groupId: string | null) => (groupId?.startsWith('project:') ? groupId.slice('project:'.length) : null);
+  function setBudget(root: string, mb: number | null) {
+    const c = configState!.config;
+    void saveConfig({ ...c, antigel: { ...c.antigel, budgets: withBudget(c.antigel.budgets, root, mb) } });
+  }
+
   async function saveConfig(next: Config) {
     try {
       setConfigState(await window.procWatch.setConfig(next));
@@ -483,6 +496,7 @@ export function App() {
                 sparkOf={sparkOf}
                 leakAt={leakAt}
                 onLeak={(ts) => setRoute({ view: 'metrics', at: ts })}
+                antigelMarks={marks}
                 onKillInstances={killInstances}
                 othersOpen={othersOpen}
                 memMetric={snapshot.memMetric}
@@ -517,6 +531,13 @@ export function App() {
                 onKillInstance={killInstance}
                 onKillInstances={killInstances}
                 memMetric={snapshot.memMetric}
+                antigel={marks.get(route.groupId)}
+                budgetMB={(() => {
+                  const r = projectRoot(route.groupId);
+                  const k = r ? budgetKey(r) : null;
+                  return k ? configState.config.antigel.budgets[k] ?? null : null;
+                })()}
+                onSetBudget={projectRoot(route.groupId) ? (mb) => setBudget(projectRoot(route.groupId)!, mb) : undefined}
               />
             )}
             {route.view === 'metrics' && (

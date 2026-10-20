@@ -8,6 +8,7 @@ import { countByCategory, filterGroups, killCount, parseSelection, selectionCand
 import { CategoryFilter } from './CategoryFilter';
 import type { SortKey, ViewFilter } from '../viewModel';
 import { findGroup, visibleGroups } from '../viewModel';
+import type { AntigelMark } from '../antigel';
 import { GroupCard, type GroupActions } from './GroupCard';
 import { GroupList } from './GroupList';
 import { PortResults } from './PortResults';
@@ -29,6 +30,8 @@ interface Props {
   /** Groupes en fuite -> horodatage du dernier événement (Map stable, renouvelée au plus toutes les 60 s). */
   leakAt?: Map<string, number>;
   onLeak?: (ts: number) => void;
+  /** Projets dans cwatch.slice (id de groupe) : badge « plafonné » / « ralenti ». */
+  antigelMarks?: Map<string, AntigelMark>;
   /**
    * Dialogue de kill groupé (BulkKillDialog) ; absent → bouton « Tuer la sélection » désactivé. Reçoit toutes les instances candidates
    * (groupes projet / dossier supprimé des catégories choisies), protégées comprises avec leur drapeau : le dialogue les décoche.
@@ -153,7 +156,7 @@ export function MainView(props: Props) {
       {shown.length === 0 ? (
         port !== null ? null : <p className="empty">Aucun groupe ne correspond.</p>
       ) : view === 'list' ? (
-        <GroupList groups={shown} sparkOf={sparkOf} stuckPids={stuckPids} pendingPids={pendingPids} actions={actions} leakAt={leakAt} othersOpen={othersOpen} memMetric={memMetric} />
+        <GroupList groups={shown} sparkOf={sparkOf} stuckPids={stuckPids} pendingPids={pendingPids} actions={actions} leakAt={leakAt} antigelMarks={props.antigelMarks} othersOpen={othersOpen} memMetric={memMetric} />
       ) : (
         <div className="cards">
           <AnimatePresence mode="popLayout" initial={false}>
@@ -166,6 +169,7 @@ export function MainView(props: Props) {
                 stuck={g.pids.some((pid) => stuckPids.has(pid))}
                 pending={g.pids.some((pid) => pendingPids.has(pid))}
                 leak={leakAt?.has(g.id)}
+                antigel={props.antigelMarks?.get(g.id)}
                 layoutKey={layoutKey}
                 actions={actions}
                 othersOpen={g.kind === 'others' && othersOpen}
