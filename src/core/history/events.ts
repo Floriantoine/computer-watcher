@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
 
-export type EventType = 'earlyoom_kill' | 'pressure' | 'gap' | 'app_kill' | 'leak' | 'tmpfs' | 'forecast' | 'rule_action' | 'rule_dry_run' | 'earlyoom_setup' | 'tmp_clean' | 'disk_low' | 'disk_clean';
+export type EventType = 'earlyoom_kill' | 'pressure' | 'gap' | 'app_kill' | 'leak' | 'tmpfs' | 'forecast' | 'rule_action' | 'rule_dry_run' | 'earlyoom_setup' | 'tmp_clean' | 'disk_low' | 'disk_clean' | 'antigel_oom';
 
 const EARLYOOM = /sending (SIGTERM|SIGKILL) to process (\d+)(?: uid (\d+))? "([^"]*)"/;
 

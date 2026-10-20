@@ -4,6 +4,9 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, stat
 import { cpus, homedir } from 'node:os';
 import type { DatabaseSync } from 'node:sqlite';
 import { appFocused, desktopMessage, desktopAllowed, parseFocusState, type AlertEvent, type AlertsConfig } from '../core/alerts';
+import { createAntigel, type AntigelController, type AntigelDeps } from '../core/antigel/controller';
+import type { AntigelConfig } from '../core/antigel/config';
+import { parseAntigelState, type AntigelState } from '../core/antigel/state';
 import { classifyGroups, type InstanceDecision } from '../core/classify/classify';
 import { readPackageHints } from '../core/classify/packageJson';
 import { CpuTracker } from '../core/collector/cpuTracker';
@@ -40,7 +43,7 @@ import type { Group, RecorderConfig as RecCfg } from '../core/types';
 import { flattenGroup } from '../core/snapshot';
 import { aggregateHour, aggregateMinute, clearAll, leakCandidates, purge } from '../core/history/maintenance';
 import { HistoryWriter } from '../core/history/writer';
-import { appEventsPath, clearRequestPath, dbPath, diskFamiliesPath, diskMeasureRequestPath, focusStatePath, forecastSnoozePath, rulesSimulationPath, statusPath } from '../core/paths';
+import { antigelStatePath, appEventsPath, clearRequestPath, dbPath, diskFamiliesPath, diskMeasureRequestPath, focusStatePath, forecastSnoozePath, rulesSimulationPath, statusPath } from '../core/paths';
 import type { RecorderConfig, RecorderStatus, SystemInfo } from '../core/types';
 import type { Notifier } from './notify';
 import { createRuleRunner } from './ruleRunner';
@@ -84,6 +87,11 @@ export interface RecorderDeps {
   mountinfo?: () => string;
   /** Mesure des familles récupérables (défaut : du à basse priorité sous HOME / XDG). */
   diskMeasure?: () => Promise<FamilyMeasure[]>;
+  /**
+   * Anti-gel : client systemd et lectures de cgroups. Absent (tests, PROC_WATCH_NO_ANTIGEL=1) : anti-gel inactif, aucun
+   * appel D-Bus, aucun fichier d'état.
+   */
+  antigel?: Omit<AntigelDeps, 'log' | 'monoNow' | 'initialScopes'>;
 }
 
 /** statfs(2) en Ko : taille totale et place disponible pour un utilisateur ordinaire (f_bavail). */
@@ -117,6 +125,8 @@ export interface Recorder {
   forecast(): Forecast | null;
   /** Compteurs des règles (tests, mesures) : classements faits pour les règles, évaluations. */
   stats(): { classifyRuns: number; ruleEvaluations: number };
+  /** Attend la fin des appels systemd de l'anti-gel en vol (tests). */
+  antigelIdle(): Promise<void>;
 }
 
 const M = 60_000;
@@ -163,6 +173,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
   let overrides = initial.classify.overrides;
   let detectPorts = initial.classify.detectPorts;
   let protection: Protection = compileProtection(initial.protected);
+  let antigelCfg: AntigelConfig = initial.antigel;
   /** Une seule ligne par ensemble de règles invalides, et seulement quand il change (la config est relue à chaque écriture). */
   let lastIssues = '';
   const logRuleIssues = (issues: RuleIssue[] | undefined) => {
@@ -186,9 +197,9 @@ export function createRecorder(deps: RecorderDeps): Recorder {
   let purges = 0;
   const st: RecorderStatus = { pid: process.pid, startedAt: now(), lastSampleAt: null, lastError: null, earlyoomSource: 'unavailable', dbSizeBytes: 0, warning: null };
 
-  type Job = 'tick' | 'minute' | 'earlyoom' | 'rules';
-  const jobErrors: Record<Job, string | null> = { tick: null, minute: null, earlyoom: null, rules: null };
-  const errorAt: Record<Job, number> = { tick: 0, minute: 0, earlyoom: 0, rules: 0 };
+  type Job = 'tick' | 'minute' | 'earlyoom' | 'rules' | 'antigel';
+  const jobErrors: Record<Job, string | null> = { tick: null, minute: null, earlyoom: null, rules: null, antigel: null };
+  const errorAt: Record<Job, number> = { tick: 0, minute: 0, earlyoom: 0, rules: 0, antigel: 0 };
   let errSeq = 0;
   st.jobErrors = jobErrors;
   let lastPressureTs: number | null = null;
@@ -235,7 +246,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
   /** lastError = erreur non nulle la plus récente ; chaque travail n'efface que la sienne. */
   const refreshLastError = () => {
     let best: Job | null = null;
-    for (const j of ['tick', 'minute', 'earlyoom', 'rules'] as Job[]) if (jobErrors[j] && (!best || errorAt[j] > errorAt[best])) best = j;
+    for (const j of ['tick', 'minute', 'earlyoom', 'rules', 'antigel'] as Job[]) if (jobErrors[j] && (!best || errorAt[j] > errorAt[best])) best = j;
     st.lastError = best ? jobErrors[best] : null;
   };
   const ok = (job: Job) => {
@@ -553,12 +564,45 @@ export function createRecorder(deps: RecorderDeps): Recorder {
     }
   };
 
+  // Anti-gel (lot 1) : plafond global du travail, budgets, déplacements ; état écrit pour la fenêtre (0600).
+  let antigel: AntigelController | null = null;
+  const readAntigelScopes = (): Record<string, string | null> => {
+    try {
+      return parseAntigelState(readFileSync(antigelStatePath(deps.dataDir), 'utf8'))?.scopes ?? {};
+    } catch {
+      return {};
+    }
+  };
+  const writeAntigelState = (s: AntigelState) => {
+    const p = antigelStatePath(deps.dataDir);
+    const tmp = `${p}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify(s), { mode: 0o600 });
+    renameSync(tmp, p);
+  };
+  /** Après l'écriture du tick, dans son propre try : une erreur ici ne casse jamais l'échantillonnage. */
+  const runAntigel = (d: DatabaseSync, ts: number, procs: readonly ProcInfo[], groups: Group[], system: SystemInfo) => {
+    if (!antigel) return;
+    try {
+      const ooms = antigel.tick({
+        ts, procs, groups, system, config: antigelCfg, currentUid, selfPid, appRoot, isProtected: protection.isProtected, home: homedir(),
+        claudeDirs: claudeConfigDirs,
+      });
+      for (const o of ooms) insertEvent(d, ts, 'antigel_oom', o.root ? `project:${o.root}` : null, { unit: o.unit, root: o.root, kills: o.kills });
+      writeAntigelState(antigel.state());
+      if (jobErrors.antigel) ok('antigel');
+    } catch (e) {
+      // texte affiché dans Réglages (erreurs du service) : nom de la fonctionnalité dans l'interface
+      fail('antigel', 'Plafond de travail', e);
+    }
+  };
+
   return {
     config: () => cfg,
     notifyAlert: (e) => notifyAlert(e),
     forecast: () => lastForecast,
     status: () => ({ ...st }),
     stats: () => ({ ...counters }),
+    antigelIdle: () => antigel?.idle() ?? Promise.resolve(),
 
     start() {
       mkdirSync(deps.dataDir, { recursive: true, mode: 0o700 });
@@ -609,6 +653,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       } catch (e) {
         log(`règles: état non restauré : ${(e as Error).message}`);
       }
+      if (deps.antigel) antigel = createAntigel({ ...deps.antigel, log, monoNow: mono, initialScopes: readAntigelScopes() });
       writeStatus();
     },
 
@@ -643,6 +688,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
         tmpfs = r.state;
         runDisk(db, ts);
         runForecast(db, ts, system);
+        runAntigel(db, ts, procs, groups, system);
         runRules(db, ts, groups, procs, system, cpuPercent);
         st.lastSampleAt = ts;
         ok('tick');
@@ -761,6 +807,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       protection = compileProtection(c.protected);
       logRuleIssues(loaded.ruleIssues);
       rulesCfg = c.rules;
+      antigelCfg = c.antigel;
     },
 
     setEarlyoomSource(s) {
@@ -789,6 +836,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       db = null;
       writer = null;
       runner = null;
+      antigel = null;
       saveSim(true);
     },
   };

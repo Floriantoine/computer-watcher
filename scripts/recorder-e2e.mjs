@@ -26,8 +26,10 @@ writeFileSync(
     recorder: { enabled: true, intervalSec: 5, detailHours: 24, summaryDays: 30, procMinMemMB: 50, procMinCpuPercent: 1, groupMinMemMB: 20, leakMinMinutes: 60, leakMinGrowthMB: 300, tmpfsAlertMB: 100 },
   }),
 );
+// Le service lancé ici lit le vrai /proc : jamais d'anti-gel (PROC_WATCH_NO_ANTIGEL=1 : aucun busctl, aucun processus déplacé).
 const env = {
-  ...process.env, ELECTRON_RUN_AS_NODE: '1', XDG_DATA_HOME: join(base, 'data'), XDG_CONFIG_HOME: join(base, 'cfg'), PATH: `${fakeBin}:${process.env.PATH}`,
+  ...process.env, ELECTRON_RUN_AS_NODE: '1', PROC_WATCH_NO_ANTIGEL: '1',
+  XDG_DATA_HOME: join(base, 'data'), XDG_CONFIG_HOME: join(base, 'cfg'), PATH: `${fakeBin}:${process.env.PATH}`,
 };
 const child = spawn(electron, ['out/main/recorder.js'], { env, stdio: ['ignore', 'inherit', 'inherit'] });
 child.on('error', (e) => {
@@ -66,6 +68,11 @@ try {
   if (samples < 2 || groups < 5 || status.lastError) code = 1;
   if (pss / 1024 > 60) {
     console.error(`PSS trop élevée : ${Math.round(pss / 1024)} Mo`);
+    code = 1;
+  }
+  // anti-gel coupé : aucun état écrit (donc aucun appel systemd)
+  if (existsSync(join(base, 'data', 'computer-watcher', 'antigel-state.json'))) {
+    console.error('anti-gel actif dans le service de vérification (PROC_WATCH_NO_ANTIGEL=1 attendu)');
     code = 1;
   }
 } finally {
