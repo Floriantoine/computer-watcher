@@ -21,6 +21,10 @@ export interface FakeProc {
   cwd?: string | null;
   /** n'écrire que le fichier stat, pour simuler un processus mort en cours de lecture */
   partial?: boolean;
+  /** Écrit /proc/<pid>/cgroup (« 0::<chemin> ») */
+  cgroup?: string;
+  /** État de stat (défaut « S ») ; « Z » pour un zombie */
+  state?: string;
 }
 
 export function makeProcRoot(uptimeSec = 1000): string {
@@ -34,7 +38,7 @@ export function addProc(root: string, p: FakeProc): void {
   mkdirSync(dir);
   // Champs 3 à 22 de proc(5) : état, ppid, pgrp, session, tty, tpgid, flags,
   // minflt, cminflt, majflt, cmajflt, utime, stime, cutime, cstime, priority, nice, threads, itreal, starttime
-  const fields = ['S', p.ppid ?? 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, p.utime ?? 0, p.stime ?? 0, 0, 0, 20, 0, 1, 0, p.starttime ?? 0, 0, p.rssPages ?? 0];
+  const fields = [p.state ?? 'S', p.ppid ?? 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, p.utime ?? 0, p.stime ?? 0, 0, 0, 20, 0, 1, 0, p.starttime ?? 0, 0, p.rssPages ?? 0];
   writeFileSync(join(dir, 'stat'), `${p.pid} (${p.comm}) ${fields.join(' ')}\n`);
   if (p.partial) return;
   const uid = p.uid ?? 1000;
@@ -43,6 +47,7 @@ export function addProc(root: string, p: FakeProc): void {
   writeFileSync(join(dir, 'status'), status);
   const argv = p.cmdline ?? [p.comm];
   writeFileSync(join(dir, 'cmdline'), argv.length ? argv.join('\0') + '\0' : '');
+  if (p.cgroup !== undefined) writeFileSync(join(dir, 'cgroup'), `0::${p.cgroup}\n`);
   if (p.cwd !== null) symlinkSync(p.cwd ?? '/', join(dir, 'cwd'));
 }
 

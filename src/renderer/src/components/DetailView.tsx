@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { motion } from 'motion/react';
-import { ArrowLeft, ChevronRight, Lock, PenLine, Shield, ShieldOff, X } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
+import { ArrowLeft, ChevronRight, Lock, PenLine, Shield, ShieldOff, Snowflake, X } from 'lucide-react';
 import type { Category, GroupSummary as Group, InstanceSummary, MemoryMetric, ProcNode } from '../../../core/types';
 import { formatAge, formatKB } from '../format';
+import { formatGo, type AntigelMark } from '../antigel';
 import { procSparkMap, useHistory } from '../history';
 import { GroupHistoryPanel } from './GroupHistoryPanel';
 import { showRevertToAuto, ticksIndex } from '../instances';
@@ -10,7 +11,8 @@ import { headerReclassTarget } from '../reclassHeader';
 import { escapeUnpins, killAllowed } from '../replay';
 import { useReplaySelect, useReplayStore } from '../useReplay';
 import { DetailTilesLive } from './DetailTiles';
-import { CategoryTag } from './CategoryTag';
+import { AntigelBadge, CategoryTag } from './CategoryTag';
+import { BudgetDialog } from './BudgetDialog';
 import { InstancesPanel } from './InstancesPanel';
 import { ReclassMenu } from './ReclassMenu';
 import { ProcTree } from './ProcTree';
@@ -39,6 +41,12 @@ interface Props {
   onKillInstances?: (instances: InstanceSummary[], launchersOf?: string) => void;
   /** Mémoire affichée en direct (RSS ou PSS) ; l'historique reste en RSS (« RAM »). */
   memMetric?: MemoryMetric;
+  /** Plafond de travail : projet dans cwatch.slice (badge) ; absent sinon. */
+  antigel?: AntigelMark;
+  /** Budget mémoire du projet (Mo) ; null : aucun. */
+  budgetMB?: number | null;
+  /** « Budget mémoire… » (projets seulement) ; absent : bouton caché. */
+  onSetBudget?: (mb: number | null) => void;
 }
 
 function BackButton({ onBack }: { onBack: () => void }) {
@@ -67,6 +75,8 @@ export function DetailView(props: Props) {
   const ticksOf = useMemo(() => (ticksRef.current = ticksIndex(props.roots, ticksRef.current)), [props.roots]);
   // Menu « Reclasser » de l'en-tête : ouvert pour un groupe précis, donc fermé dès que le groupe affiché change.
   const [reclassOpenFor, setReclassOpenFor] = useState<string | null>(null);
+  // Dialogue « Budget mémoire… » ouvert pour un groupe précis (hook placé avant les retours anticipés).
+  const [budgetOpenFor, setBudgetOpenFor] = useState<string | null>(null);
   // Retour du rejeu au direct : l'arbre en direct (avec ses boutons de kill) apparaît sous la souris ; ses kills sont
   // ignorés pendant KILL_GUARD_MS (avant la peinture : useLayoutEffect).
   const returnedAt = useRef<number | null>(null);
@@ -124,6 +134,7 @@ export function DetailView(props: Props) {
               <Lock size={14} strokeWidth={2.4} />
             </span>
           )}
+          {props.antigel && <AntigelBadge throttled={props.antigel.throttled} />}
         </h2>
         <span className="spacer" />
         {reclass && (
@@ -145,6 +156,11 @@ export function DetailView(props: Props) {
               }}
             />
           </span>
+        )}
+        {group.kind === 'project' && props.onSetBudget && (
+          <button data-testid="antigel-budget-button" onClick={() => setBudgetOpenFor(group.id)} title="Plafond mémoire propre à ce projet (en plus du plafond de travail)">
+            <Snowflake size={14} strokeWidth={2} /> {props.budgetMB ? `Budget : ${formatGo(props.budgetMB)}` : 'Budget mémoire…'}
+          </button>
         )}
         {group.kind !== 'others' && (
           <button onClick={() => props.onToggleProtect(group)}>
@@ -211,6 +227,12 @@ export function DetailView(props: Props) {
           memMetric={memMetric}
         />
       )}
+      <AnimatePresence>
+        {budgetOpenFor === group.id && group.kind === 'project' && props.onSetBudget && (
+          <BudgetDialog label={group.label} currentMB={props.budgetMB ?? null} onCancel={() => setBudgetOpenFor(null)}
+            onSave={(mb) => { setBudgetOpenFor(null); props.onSetBudget!(mb); }} />
+        )}
+      </AnimatePresence>
     </>
   );
 }

@@ -22,15 +22,29 @@ export const SESSION_SERVICES: readonly (string | RegExp)[] = [
   /^systemd/, /^dbus/, /^pipewire/,
 ];
 
+/** Terminaux (comm exact, 15 caractères au plus) : jamais tués ; pour l'anti-gel, ce qu'ils lancent est du travail. */
+export const TERMINAL_NAMES: readonly string[] = [
+  'warp', 'warp-terminal', 'konsole', 'yakuake', 'gnome-terminal-', 'gnome-terminal', 'gnome-terminal-server', 'kitty', 'alacritty', 'wezterm',
+  'wezterm-gui', 'ghostty', 'foot', 'xterm', 'tilix', 'terminator', 'tmux: server', 'tmux', 'screen',
+];
+
+/** Éditeurs et IDE (anti-gel : jamais déplacés ; ce qu'ils lancent, tsserver ou tests, est du travail). */
+export const IDE_NAMES: readonly string[] = [
+  'code', 'code-oss', 'codium', 'vscodium', 'cursor', 'zed', 'zed-editor', 'windsurf', 'sublime_text', 'kate',
+  'idea', 'webstorm', 'pycharm', 'phpstorm', 'goland', 'clion', 'rider', 'rustrover', 'android-studio',
+];
+
+/** Shells (comm exact) : jamais tués ; pour l'anti-gel, jamais racine déplacée mais ils suivent leur parent. */
+export const SHELL_COMMS: readonly string[] = ['bash', 'zsh', 'fish', 'sh', 'dash', 'ksh', 'tcsh', 'csh', 'nu'];
+
 /** Liste « jamais tuer » des règles : services de session, plus Claude, terminaux, shells et l'app (nouveau et ancien nom). */
 export const NEVER_KILL: readonly (string | RegExp)[] = [
   // Claude
   'claude', 'claude-desktop',
   // terminaux
-  'warp', 'warp-terminal', 'konsole', 'yakuake', 'gnome-terminal-', 'gnome-terminal', 'gnome-terminal-server', 'kitty', 'alacritty', 'wezterm',
-  'wezterm-gui', 'ghostty', 'foot', 'xterm', 'tilix', 'terminator', 'tmux: server', 'tmux', 'screen',
+  ...TERMINAL_NAMES,
   // shells
-  'bash', 'zsh', 'fish', 'sh', 'dash', 'ksh', 'tcsh', 'csh', 'nu',
+  ...SHELL_COMMS,
   ...SESSION_SERVICES,
   // l'app elle-même : computer-watcher, son comm tronqué computer-watche, et l'ancien nom proc-watch
   ...APP_SELF_NAMES,
@@ -54,6 +68,43 @@ export const CLAUDE_NAMES: ReadonlySet<string> = new Set(['claude', 'claude-desk
 export const APP_PATH = /(^|[\s/=])(computer-watcher|proc-watch)[^\s/]*(\/|\s|$)/;
 const RECORDER_SCRIPT = /(^|[\s/])recorder\.js(\s|$)/;
 const CLAUDE_CMD = /(^|[\s/])(claude|claude-desktop)(\s|$)/;
+
+const terminalName = matcher(TERMINAL_NAMES);
+const ideName = matcher(IDE_NAMES);
+export const isTerminalName = (name: string): boolean => terminalName(name);
+export const isIdeName = (name: string): boolean => ideName(name);
+/** Éditeurs basés sur Electron, seuls à exécuter des scripts Node sous leur propre nom (ELECTRON_RUN_AS_NODE). */
+const ELECTRON_IDE = /^(code|code-oss|codium|vscodium|cursor|windsurf)$/;
+/** Script installé avec l'éditeur : `…/resources/app/…`, ou sous /usr/lib, /usr/share ou /opt dans un dossier de l'éditeur. */
+const IDE_SCRIPT_DIR = /(\/resources\/app\/|^\/(usr\/lib|usr\/share|opt)\/(code|code-oss|codium|vscodium|cursor|windsurf|visual-studio-code)[^/]*\/)/;
+/**
+ * Éditeur basé sur Electron qui exécute un script Node (ELECTRON_RUN_AS_NODE : tsserver, serveurs de langage de VS Code,
+ * comm « code ») : premier argument = chemin absolu en .js, .mjs ou .cjs, situé dans le dossier de l'éditeur, ou lancé
+ * directement par l'éditeur (`parent` : hôte d'extensions). Ce n'est pas l'éditeur, c'est du travail. Jamais kate, zed…,
+ * ni un éditeur ouvert sur un fichier (`code dist/server.js`, chemin relatif ou hors de l'éditeur, depuis un shell).
+ */
+export const isIdeNodeScript = (p: { name: string; cmdline: string }, parent?: { name: string; cmdline: string }): boolean => {
+  if (!ELECTRON_IDE.test(p.name)) return false;
+  const script = p.cmdline.split(/\s+/)[1] ?? '';
+  if (!script.startsWith('/') || script.split('/').includes('..') || !/\.[cm]?js$/.test(script)) return false;
+  return IDE_SCRIPT_DIR.test(script) || (parent !== undefined && isIdeProc(parent));
+};
+/** IntelliJ (ancien lancement) : java dont la commande contient `com.intellij.` ou, hors de l'exécutable, un chemin JetBrains. */
+const isJetBrainsJava = (p: { name: string; cmdline: string }): boolean => {
+  const [exe = '', ...args] = p.cmdline.split(/\s+/);
+  if (p.name !== 'java' && exe.slice(exe.lastIndexOf('/') + 1) !== 'java') return false;
+  return args.some((a) => /(^|[=:])com\.intellij\./.test(a) || /\/jetbrains\//i.test(a));
+};
+/**
+ * Éditeur ou IDE (anti-gel : ancre, jamais déplacé), d'après son nom, ou IntelliJ lancé par java ; jamais un script Node
+ * qu'il exécute (`parent` : processus parent, s'il est connu).
+ */
+export function isIdeProc(p: { name: string; cmdline: string }, parent?: { name: string; cmdline: string }): boolean {
+  return (ideName(p.name) && !isIdeNodeScript(p, parent)) || isJetBrainsJava(p);
+}
+/** Claude, d'après son nom ou le programme lancé (premier mot de la ligne de commande). */
+export const isClaudeProc = (p: { name: string; cmdline: string }): boolean =>
+  CLAUDE_NAMES.has(p.name) || CLAUDE_CMD.test(p.cmdline.split(/\s+/, 1)[0] ?? '');
 
 const neverKillName = matcher(NEVER_KILL);
 const sessionServiceName = matcher(SESSION_SERVICES);
@@ -113,8 +164,7 @@ export interface GuardContext {
 export type GuardReason = 'never-kill' | 'claude' | 'protected' | 'root' | 'uid' | 'self' | 'unknown' | 'launcher';
 
 const isClaudeItself = (p: GuardProc, ctx: GuardContext) =>
-  CLAUDE_NAMES.has(p.name) || CLAUDE_CMD.test(p.cmdline.split(/\s+/, 1)[0] ?? '') ||
-  (!!ctx.claudeDirs?.length && !!p.cwd && isUnderAny(p.cwd, ctx.claudeDirs));
+  isClaudeProc(p) || (!!ctx.claudeDirs?.length && !!p.cwd && isUnderAny(p.cwd, ctx.claudeDirs));
 const isClaude = (p: GuardProc, ctx: GuardContext) => isClaudeItself(p, ctx) || !!ctx.claudePids?.has(p.pid);
 
 /** Raison propre au processus lui-même (sans regarder ses descendants). */

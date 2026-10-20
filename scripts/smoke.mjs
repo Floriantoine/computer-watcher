@@ -12,7 +12,7 @@ if (!process.env.SMOKE_ONBOARDING) {
   mkdirSync(join(cfg, 'computer-watcher'), { recursive: true });
   writeFileSync(join(cfg, 'computer-watcher', 'onboarding.json'), '{"version":1,"done":true}\n');
 }
-const env = { ...process.env, XDG_CONFIG_HOME: cfg, PROC_WATCH_NO_RECORDER_SYNC: '1' };
+const env = { ...process.env, XDG_CONFIG_HOME: cfg, PROC_WATCH_NO_RECORDER_SYNC: '1', PROC_WATCH_NO_ANTIGEL: '1' };
 const app = await electron.launch(
   process.env.SMOKE_EXECUTABLE ? { executablePath: process.env.SMOKE_EXECUTABLE, args: [], env } : { args: ['.'], env },
 );

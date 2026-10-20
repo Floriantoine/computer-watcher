@@ -36,4 +36,5 @@ export const DEFAULT_CONFIG: Config = {
   classify: { ...DEFAULT_CLASSIFY, overrides: {} },
   alerts: DEFAULT_ALERTS,
   rules: DEFAULT_RULES,
+  antigel: { enabled: true, reserveMB: null, budgets: {} },
 };

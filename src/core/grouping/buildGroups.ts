@@ -4,7 +4,7 @@ import { baseName, programIndex, splitArgs } from '../classify/argv';
 import { isMcpServer } from '../classify/rules';
 import { isUnderAny } from './claudeDirs';
 import { projectLabel } from './projectRoot';
-import { APP_NAMES, CLAUDE_NAME, DEV_TOOL, SHELL_NAMES, appLabel, isTestBrowser } from './rules';
+import { APP_NAMES, CLAUDE_NAME, appLabel, isBashToolShell, isDevTool, isTestBrowser } from './rules';
 
 export interface GroupingOptions {
   home: string;
@@ -81,12 +81,6 @@ export function buildGroups(procs: ProcInfo[], opts: GroupingOptions): Group[] {
     const raw = splitArgs(p.cmdline);
     return isUnderAny(raw[Math.max(0, programIndex(raw.map(baseName)))] ?? null, dirs);
   };
-  /**
-   * Shell de l'outil Bash : un shell connu dont la ligne de commande charge `<config Claude>/shell-snapshots/…`. Tout autre
-   * shell enfant direct de claude (serveur MCP lancé par `bash -c`, shell inconnu) est un outil Claude et y reste.
-   */
-  const isBashToolShell = (p: ProcInfo): boolean =>
-    SHELL_NAMES.has(p.name) && (p.cmdline.includes('/.claude/shell-snapshots/') || dirs.some((d) => p.cmdline.includes(`${d}/shell-snapshots/`)));
   // Ancêtres d'un claude (lanceur npx, script Agent SDK…) : jamais déplacés, sinon « Tuer le groupe » de leur carte
   // projet atteindrait la session imbriquée (npm transmet SIGTERM à son enfant).
   const aboveClaude = new Set<number>();
@@ -133,8 +127,8 @@ export function buildGroups(procs: ProcInfo[], opts: GroupingOptions): Group[] {
       let inTool = tool;
       if (c !== p && !inTool) {
         const directChild = byPid.get(c.ppid)?.name === CLAUDE_NAME;
-        inTool = (directChild && !isBashToolShell(c)) || isClaudeTool(c);
-        if (!inTool && !aboveClaude.has(c.pid) && DEV_TOOL.test(c.name) && inRealProject(c)) {
+        inTool = (directChild && !isBashToolShell(c, dirs)) || isClaudeTool(c);
+        if (!inTool && !aboveClaude.has(c.pid) && isDevTool(c.name, c.cmdline) && inRealProject(c)) {
           movedRoots.push(c);
           continue;
         }
@@ -167,7 +161,7 @@ export function buildGroups(procs: ProcInfo[], opts: GroupingOptions): Group[] {
     if (!APP_NAMES.has(p.name) || keyOf.has(p.pid) || hasAncestor(p, (a) => a.name === p.name)) continue;
     const key = `app:${p.name}`;
     meta.set(key, { kind: 'app', label: appLabel(p.name) });
-    assignTree(p, key, (c) => DEV_TOOL.test(c.name) || c.name === CLAUDE_NAME);
+    assignTree(p, key, (c) => isDevTool(c.name, c.cmdline) || c.name === CLAUDE_NAME);
   }
 
   // 2 bis. Outils Claude détachés (serveur du compagnon visuel, MCP, outils de plugins lancés à part) : dossier de
@@ -183,7 +177,7 @@ export function buildGroups(procs: ProcInfo[], opts: GroupingOptions): Group[] {
 
   // 3. Outils de dev : par projet
   for (const p of procs) {
-    if (keyOf.has(p.pid) || !DEV_TOOL.test(p.name)) continue;
+    if (keyOf.has(p.pid) || !isDevTool(p.name, p.cmdline)) continue;
     keyOf.set(p.pid, devToolKey(p));
   }
 

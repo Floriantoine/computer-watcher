@@ -2,6 +2,7 @@ import type { AlertsConfig } from './alerts';
 import type { EarlyoomSettings } from './earlyoom';
 import type { EarlyoomEnabled, EarlyoomReminderConfig } from './earlyoomSetup';
 import type { RuleIssue, RulesConfig } from './rules/types';
+import type { AntigelConfig } from './antigel/config';
 import type { OpenPortsInfo } from './openPorts';
 
 export interface ProcSample {
@@ -183,6 +184,8 @@ export interface Config {
   alerts: AlertsConfig;
   /** Règles automatiques (⑥) : éteintes par défaut. */
   rules: RulesConfig;
+  /** Anti-gel (cgroups) : travail plafonné dans cwatch.slice ; allumé par défaut. */
+  antigel: AntigelConfig;
   /** « Ne plus rappeler pendant 7 jours » du pop-up earlyoom (horodatage du main) ; absent : rappel au lancement. */
   earlyoomReminder?: EarlyoomReminderConfig;
 }
@@ -281,7 +284,7 @@ export interface RecorderState {
   running: boolean; // statut écrit il y a moins de 3 intervalles
   status: RecorderStatus | null;
 }
-export interface RecorderStatus { pid: number; startedAt: number; lastSampleAt: number | null; lastError: string | null; earlyoomSource: 'ok' | 'unavailable'; dbSizeBytes: number; /** Avertissement non bloquant (ex. migration faite sans copie de sécurité) */ warning?: string | null; jobErrors?: Partial<Record<'tick' | 'minute' | 'earlyoom' | 'rules', string | null>>; /** Prévision ② : en préparation (moins de 6 min depuis le démarrage), calculée, ou indisponible (moins de 5 échantillons sur 5 min) */ forecast?: 'warming' | 'ok' | 'unavailable' }
+export interface RecorderStatus { pid: number; startedAt: number; lastSampleAt: number | null; lastError: string | null; earlyoomSource: 'ok' | 'unavailable'; dbSizeBytes: number; /** Avertissement non bloquant (ex. migration faite sans copie de sécurité) */ warning?: string | null; jobErrors?: Partial<Record<'tick' | 'minute' | 'earlyoom' | 'rules' | 'antigel', string | null>>; /** Prévision ② : en préparation (moins de 6 min depuis le démarrage), calculée, ou indisponible (moins de 5 échantillons sur 5 min) */ forecast?: 'warming' | 'ok' | 'unavailable' }
 
 /** État d'earlyoom vu par l'app (Réglages › earlyoom). */
 export interface EarlyoomStatus {

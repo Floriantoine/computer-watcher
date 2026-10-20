@@ -780,6 +780,10 @@ table.tree small.branch-total { display: block; white-space: nowrap; color: var(
   border: 1px solid color-mix(in srgb, var(--cat) 30%, transparent);
 }
 .cat-port { font-family: var(--font-mono); font-size: 10px; opacity: 0.85; }
+.antigel-badge { flex: none; display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px; border-radius: 999px; font-size: 10.5px; font-weight: 600; color: #3dd6ff; background: color-mix(in srgb, #3dd6ff 14%, transparent); white-space: nowrap; }
+.antigel-badge.throttled { color: #ffb547; background: color-mix(in srgb, #ffb547 16%, transparent); }
+.budget-field { display: flex; align-items: center; gap: 8px; margin: 10px 0; }
+.budget-field input { width: 8em; }
 .dup-badge { flex: none; display: inline-flex; align-items: center; gap: 3px; padding: 0 6px; height: 18px; border-radius: 99px; font-size: 10.5px; font-weight: 500; color: var(--amber); background: rgba(255, 181, 71, 0.1); border: 1px solid rgba(255, 181, 71, 0.28); }
 .claude-badge { flex: none; font-family: var(--font-sans); display: inline-flex; align-items: center; padding: 0 6px; height: 18px; border-radius: 99px; font-size: 10.5px; font-weight: 500; white-space: nowrap; color: var(--muted); background: var(--surface-2); border: 1px solid var(--border-2); }
 .instances-line { font-size: 11px; color: var(--label); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: -4px; }
@@ -1218,3 +1222,14 @@ button.primary:hover:not(:disabled) { background: rgba(124, 92, 255, 0.32); bord
 @media (max-width: 900px) {
   .disk-main { grid-template-columns: minmax(0, 1fr); }
 }
+
+.antigel-card { margin: 0 var(--gutter) 14px; padding: 10px 12px; border-radius: var(--r-lg); background: color-mix(in srgb, #3dd6ff 6%, var(--surface)); border: 1px solid color-mix(in srgb, #3dd6ff 22%, var(--border)); }
+.antigel-card.tone-warn { background: color-mix(in srgb, #ffb547 8%, var(--surface)); border-color: color-mix(in srgb, #ffb547 30%, var(--border)); }
+.antigel-card.tone-na, .antigel-card.tone-off { background: var(--surface); border-color: var(--border); border-style: dashed; }
+.antigel-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.antigel-head h3 { margin: 0; font-size: 12.5px; font-weight: 600; color: var(--text); }
+.antigel-head .spacer { flex: 1; }
+.antigel-mem { margin: 6px 0 4px; }
+.antigel-budgets { list-style: none; padding: 0; margin: 6px 0 0; display: grid; gap: 6px; }
+.antigel-budgets li { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 10px; }
+.antigel-budgets-title { margin: 16px 0 4px; font-size: 12.5px; }

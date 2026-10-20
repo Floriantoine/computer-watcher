@@ -6,7 +6,8 @@ import { hasDuplicate, primaryTag } from '../categoryFilter';
 import { formatAge, formatCpu, formatKB } from '../format';
 import { memLabel } from '../memMetric';
 import { othersPreview, othersPreviewEqual } from '../othersFold';
-import { CategoryTag, DuplicateBadge } from './CategoryTag';
+import { AntigelBadge, CategoryTag, DuplicateBadge } from './CategoryTag';
+import { sameMark, type AntigelMark } from '../antigel';
 import { sortForList, type ListColumn } from '../listSort';
 import { rowDisplayEqual, sameSeries } from '../renderEquality';
 import { OthersToggle, type GroupActions } from './GroupCard';
@@ -22,6 +23,8 @@ interface Props {
   pendingPids: Set<number>;
   actions: GroupActions;
   leakAt?: Map<string, number>;
+  /** Projets dans cwatch.slice (id de groupe) : badge « plafonné » / « ralenti ». */
+  antigelMarks?: Map<string, AntigelMark>;
   /** Ligne « Autres » dépliée : ses 10 plus gros sous-groupes en lignes, puis « Voir tout ». */
   othersOpen: boolean;
   /** Mémoire affichée : en-tête « RAM » ou « PSS ». */
@@ -43,6 +46,7 @@ interface RowProps {
   stuck: boolean;
   pending: boolean;
   leak?: boolean;
+  antigel?: AntigelMark;
   layoutKey: string;
   actions: GroupActions;
   /** Ligne « Autres » seulement. */
@@ -50,7 +54,7 @@ interface RowProps {
   ref?: Ref<HTMLTableRowElement>;
 }
 
-function GroupRowImpl({ group, spark, stuck, pending, leak, layoutKey, actions, othersOpen = false, ref }: RowProps) {
+function GroupRowImpl({ group, spark, stuck, pending, leak, antigel, layoutKey, actions, othersOpen = false, ref }: RowProps) {
   const isPresent = useIsPresent();
   const tag = primaryTag(group);
   const stop = (fn: () => void) => (e: MouseEvent) => {
@@ -84,6 +88,7 @@ function GroupRowImpl({ group, spark, stuck, pending, leak, layoutKey, actions, 
           {tag && <CategoryTag category={tag.category} port={tag.port} />}
           {hasDuplicate(group) && <DuplicateBadge />}
           {leak && <LeakBadge onClick={stop(() => actions.leak(group.id))} />}
+          {antigel && <AntigelBadge throttled={antigel.throttled} />}
         </span>
       </td>
       <td className="num">{group.procCount}</td>
@@ -114,6 +119,7 @@ const GroupRow = memo(
     a.stuck === b.stuck &&
     a.pending === b.pending &&
     a.leak === b.leak &&
+    sameMark(a.antigel, b.antigel) &&
     a.othersOpen === b.othersOpen &&
     sameSeries(a.spark, b.spark) &&
     rowDisplayEqual(a.group, b.group),
@@ -160,7 +166,7 @@ function OthersRowsImpl({ group, actions }: { group: Group; actions: GroupAction
 
 const OthersRows = memo(OthersRowsImpl, (a, b) => a.actions === b.actions && a.group.procCount === b.group.procCount && othersPreviewEqual(a.group, b.group));
 
-export function GroupList({ groups, sparkOf, stuckPids, pendingPids, actions, leakAt, othersOpen, memMetric = 'rss' }: Props) {
+export function GroupList({ groups, sparkOf, stuckPids, pendingPids, actions, leakAt, antigelMarks, othersOpen, memMetric = 'rss' }: Props) {
   const [sort, setSort] = useState<{ col: ListColumn; dir: 'asc' | 'desc' }>({ col: 'mem', dir: 'desc' });
   const order = useRef<{ key: string; ids: string[] }>({ key: '', ids: [] });
   const sortKey = `${sort.col}:${sort.dir}`;
@@ -214,6 +220,7 @@ export function GroupList({ groups, sparkOf, stuckPids, pendingPids, actions, le
                 stuck={g.pids.some((pid) => stuckPids.has(pid))}
                 pending={g.pids.some((pid) => pendingPids.has(pid))}
                 leak={leakAt?.has(g.id)}
+                antigel={antigelMarks?.get(g.id)}
                 layoutKey={layoutKey}
                 actions={actions}
                 othersOpen={g.kind === 'others' && othersOpen}

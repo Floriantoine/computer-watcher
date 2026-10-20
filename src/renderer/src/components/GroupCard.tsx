@@ -6,7 +6,8 @@ import { hasClaudeLaunched, hasDuplicate, instancesLine, primaryTag } from '../c
 import { formatAge, formatCpu, formatKB } from '../format';
 import { fallbackTitle, memLabel, memTileLabel } from '../memMetric';
 import { othersPreview, othersPreviewEqual } from '../othersFold';
-import { CategoryTag, ClaudeLaunchedBadge, DuplicateBadge } from './CategoryTag';
+import { AntigelBadge, CategoryTag, ClaudeLaunchedBadge, DuplicateBadge } from './CategoryTag';
+import { sameMark, type AntigelMark } from '../antigel';
 import { barWidth } from '../motionBudget';
 import { cardDisplayEqual, sameSeries } from '../renderEquality';
 import { cardTone } from '../theme';
@@ -32,6 +33,8 @@ interface Props {
   stuck: boolean;
   pending: boolean;
   leak?: boolean;
+  /** Projet dans cwatch.slice : badge « plafonné » / « ralenti ». */
+  antigel?: AntigelMark;
   /** Change seulement quand l'ordre des cartes change : seul cas où le layout s'anime. */
   layoutKey: string;
   actions: GroupActions;
@@ -78,7 +81,7 @@ function OthersPreview({ group, onOpen }: { group: Group; onOpen: (id: string) =
   );
 }
 
-function GroupCardImpl({ group, memTotalKB, spark, stuck, pending, leak, layoutKey, actions, othersOpen = false, memMetric = 'rss', ref }: Props) {
+function GroupCardImpl({ group, memTotalKB, spark, stuck, pending, leak, antigel, layoutKey, actions, othersOpen = false, memMetric = 'rss', ref }: Props) {
   const isPresent = useIsPresent();
   const total = group.rssKB + group.swapKB;
   const pct = Math.min(100, (total / memTotalKB) * 100);
@@ -122,6 +125,7 @@ function GroupCardImpl({ group, memTotalKB, spark, stuck, pending, leak, layoutK
             {!line && hasDuplicate(group) && <DuplicateBadge />}
             {!line && hasClaudeLaunched(group) && <ClaudeLaunchedBadge />}
             {leak && <LeakBadge onClick={stop(() => actions.leak(group.id))} />}
+            {antigel && <AntigelBadge throttled={antigel.throttled} />}
           </div>
           <div className="sub" title={sub}>{sub}</div>
         </div>
@@ -168,6 +172,7 @@ export const GroupCard = memo(
     a.stuck === b.stuck &&
     a.pending === b.pending &&
     a.leak === b.leak &&
+    sameMark(a.antigel, b.antigel) &&
     a.othersOpen === b.othersOpen &&
     a.memMetric === b.memMetric &&
     sameSeries(a.spark, b.spark) &&

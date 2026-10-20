@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react';
-import { Copy } from 'lucide-react';
+import { Copy, Snowflake } from 'lucide-react';
 import type { Category } from '../../../core/types';
 import { CATEGORY_META } from '../categories';
 
@@ -34,6 +34,20 @@ export function ClaudeLaunchedBadge({ title }: { title?: string } = {}) {
       title={title ?? 'Outil de dev lancé par une session Claude dans ce projet (compté ici, plus dans la carte Claude)'}
     >
       lancé par Claude
+    </span>
+  );
+}
+
+/** Projet dans cwatch.slice (plafond de travail) : « plafonné », ou « ralenti » quand son plafond mémoire est atteint. */
+export function AntigelBadge({ throttled }: { throttled: boolean }) {
+  return (
+    <span
+      className={throttled ? 'antigel-badge throttled' : 'antigel-badge'}
+      data-testid="antigel-badge"
+      title={throttled ? 'Plafond de travail atteint : ce projet est ralenti' : 'Plafonné : sa mémoire compte dans le plafond de travail'}
+    >
+      <Snowflake size={10} strokeWidth={2.4} />
+      {throttled ? 'ralenti' : 'plafonné'}
     </span>
   );
 }

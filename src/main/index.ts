@@ -83,6 +83,7 @@ import { closeAction, confirmTray, createTrayController, defaultRun, statusNotif
 import {
   applyOverride, checkConfigSet, classifySetKey, swapSettingsChanged, isGroupKeys, noKill, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState as computeRecorderState,
 } from './historyIpc';
+import { readAntigelView } from './antigelIpc';
 import { autoManageService, defaultSystemctl, recorderSyncDisabled, ensureRecorderService, recorderAppImage, recorderExecArgs, systemctlAvailable, unitPath } from './recorderService';
 
 // Service réseau dans le processus main : l'app ne charge que des fichiers locaux, un processus de moins (~20 Mo).
@@ -1011,6 +1012,8 @@ ipcMain.handle('disk:clean', async (e, raw: unknown): Promise<DiskCleanAllResult
 });
 
 ipcMain.handle('recorder:status', () => recorderState());
+// Plafond de travail (anti-gel) : état écrit par le service (aucun argument venu du renderer, aucun appel systemd ici)
+ipcMain.handle('antigel:state', () => readAntigelView(data, Date.now(), config.recorder.intervalSec));
 ipcMain.handle('recorder:setEnabled', async (_e, enabled: unknown) => {
   if (typeof enabled !== 'boolean') throw new Error('Valeur invalide');
   const next = { ...config, recorder: { ...config.recorder, enabled } };

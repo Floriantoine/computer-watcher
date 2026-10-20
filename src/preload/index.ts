@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import type { AlertEvent } from '../core/alerts';
+import type { AntigelView } from '../core/antigel/state';
 import type { EarlyoomSettings } from '../core/earlyoom';
 import type { SunNode } from '../core/disk/sunTree';
 import type { FamiliesFile, FamilyId } from '../core/disk/families';
@@ -237,6 +238,10 @@ const api = {
         ipcRenderer.removeListener('update:view', handler);
       };
     },
+  },
+  antigel: {
+    /** État du Plafond de travail (écrit par le service) ; `fresh` faux : service arrêté ou état trop vieux. */
+    state: (): Promise<AntigelView> => ipcRenderer.invoke('antigel:state'),
   },
   recorder: {
     status: (): Promise<RecorderState> => ipcRenderer.invoke('recorder:status'),

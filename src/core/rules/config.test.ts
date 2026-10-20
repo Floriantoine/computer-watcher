@@ -13,7 +13,7 @@ const one = (r: unknown) => validateRulesDetailed({ enabled: true, list: [r] });
 
 describe('validateRules', () => {
   test('section absente (config d’avant les règles) → éteint, liste vide ; les recommandées ne sont pas ajoutées', () => {
-    expect(validateRules(undefined)).toEqual({ enabled: false, list: [] });
+    expect(validateRules(undefined)).toEqual({ enabled: false, list: [], recommendedActive: true });
     expect(RECOMMENDED_RULES).toHaveLength(3);
     expect(validateRulesDetailed(undefined).issues).toEqual([]);
   });
@@ -109,7 +109,7 @@ describe('validateRules', () => {
   test('section mal formée → règles éteintes avec une erreur, jamais une exception', () => {
     for (const raw of ['oui', null, [], { enabled: 'yes', list: [] }, { enabled: true, list: {} }]) {
       const r = validateRulesDetailed(raw);
-      expect(r.rules).toEqual({ enabled: false, list: [] });
+      expect(r.rules).toEqual({ enabled: false, list: [], recommendedActive: true });
       expect(r.issues).toHaveLength(1);
     }
   });

@@ -1,7 +1,8 @@
 // scripts/measure-recorder.mjs — CPU et PSS du vrai service d'enregistrement, sans règle ou avec les modèles en Simulation.
 // Usage : node scripts/measure-recorder.mjs --rules none|templates   (après `npm run build`)
 // Sécurité : dossiers XDG temporaires, faux notify-send en tête du PATH, PROC_WATCH_NO_KILL=1 et règles en Simulation
-// seulement ; le service est toujours arrêté à la fin. Vérifie qu'aucun rule_action n'a été écrit.
+// seulement, PROC_WATCH_NO_ANTIGEL=1 (aucun appel systemd, aucun processus déplacé) ; le service est toujours arrêté à la
+// fin. Vérifie qu'aucun rule_action n'a été écrit.
 import { spawn } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -46,7 +47,7 @@ writeFileSync(
   JSON.stringify({ version: 1, protected: [], othersThreshold: { memMB: 100, cpuPercent: 1 }, rules }),
 );
 const env = {
-  ...process.env, ELECTRON_RUN_AS_NODE: '1', PROC_WATCH_NO_KILL: '1',
+  ...process.env, ELECTRON_RUN_AS_NODE: '1', PROC_WATCH_NO_KILL: '1', PROC_WATCH_NO_ANTIGEL: '1',
   XDG_DATA_HOME: join(base, 'data'), XDG_CONFIG_HOME: join(base, 'cfg'), PATH: `${fakeBin}:${process.env.PATH}`,
 };
 const child = spawn(electron, ['out/main/recorder.js'], { env, stdio: ['ignore', 'ignore', 'pipe'] });

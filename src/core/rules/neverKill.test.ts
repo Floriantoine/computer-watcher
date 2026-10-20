@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'vitest';
-import { APP_PATH, filterTargets, isNeverKill, NEVER_KILL, type GuardContext, type GuardProc } from './neverKill';
+import {
+  APP_PATH, filterTargets, isClaudeProc, isIdeName, isIdeNodeScript, isIdeProc, isNeverKill, isNeverKillName, isTerminalName, NEVER_KILL, SHELL_COMMS, TERMINAL_NAMES,
+  type GuardContext, type GuardProc,
+} from './neverKill';
 
 const p = (name: string, cmdline = name) => ({ name, cmdline });
 
@@ -113,5 +116,66 @@ describe('renommage : l’app se reconnaît sous ses deux noms', () => {
     const OLD_PROC_WATCH_PATH = /(^|[\s/=])proc-watch[^\s/]*(\/|\s|$)/;
     for (const s of ['/usr/bin/proc-watch-evil', '/usr/bin/computer-watcher-evil', '/x/proc-watch.AppImage', '/x/computer-watcher.AppImage', '/x/computer-watcherx y', '/x/xcomputer-watcher', '/x/computer-watch'])
       expect(APP_PATH.test(s), s).toBe(OLD_PROC_WATCH_PATH.test(s.replace('computer-watcher', 'proc-watch')));
+  });
+});
+
+describe('anti-gel : terminaux, éditeurs, Claude', () => {
+  test('terminaux, éditeurs, Claude (anti-gel) ; NEVER_KILL contient toujours les terminaux', () => {
+    for (const t of TERMINAL_NAMES) expect(isNeverKillName(t), t).toBe(true);
+    expect(isTerminalName('warp')).toBe(true);
+    expect(isTerminalName('gnome-terminal-')).toBe(true);
+    expect(isTerminalName('zsh')).toBe(false);
+    expect(isIdeName('code')).toBe(true);
+    expect(isIdeName('cursor')).toBe(true);
+    expect(isIdeName('node')).toBe(false);
+    expect(isClaudeProc({ name: 'claude', cmdline: 'claude' })).toBe(true);
+    expect(isClaudeProc({ name: 'node', cmdline: '/home/u/.local/bin/claude --resume' })).toBe(true);
+    expect(isClaudeProc({ name: 'node', cmdline: 'node server.js claude' })).toBe(false);
+  });
+  test('shells : une seule liste, toujours dans NEVER_KILL', () => {
+    for (const sh of SHELL_COMMS) expect(isNeverKillName(sh), sh).toBe(true);
+    expect(SHELL_COMMS).toEqual(expect.arrayContaining(['bash', 'zsh', 'sh', 'tcsh', 'csh', 'nu']));
+  });
+  test('IDE : VS Code, IntelliJ lancé par java ; le tsserver lancé par code (ELECTRON_RUN_AS_NODE) n’est pas l’éditeur', () => {
+    expect(isIdeProc({ name: 'code', cmdline: '/usr/share/code/code --type=renderer' })).toBe(true);
+    const tsserver = { name: 'code', cmdline: '/usr/share/code/code /usr/share/code/resources/app/extensions/node_modules/typescript/lib/tsserver.js --serverMode partialSemantic' };
+    expect(isIdeNodeScript(tsserver)).toBe(true);
+    expect(isIdeProc(tsserver)).toBe(false);
+    expect(isIdeProc({ name: 'java', cmdline: '/usr/lib/jvm/java-17/bin/java -Xmx2g -cp /opt/idea/lib/app.jar com.intellij.idea.Main' })).toBe(true);
+    expect(isIdeProc({ name: 'java', cmdline: '/usr/bin/java -Didea.home.path=/home/u/.local/share/JetBrains/Toolbox/apps/idea -jar x.jar' })).toBe(true);
+    expect(isIdeProc({ name: 'java', cmdline: '/home/u/.local/share/JetBrains/Toolbox/apps/idea/jbr/bin/java -cp g.jar org.gradle.launcher.daemon.bootstrap.GradleDaemon' })).toBe(false);
+    expect(isIdeProc({ name: 'java', cmdline: 'java -jar demo.jar' })).toBe(false);
+  });
+  test('script Node d’un éditeur : seulement sous le dossier de l’éditeur ou enfant d’un éditeur ; jamais kate, zed, ni un script relatif', () => {
+    for (const cmdline of ['kate x.js', 'kate /home/u/demo/dist/main.js', 'zed x.js', 'zed /home/u/demo/dist/main.js', 'sublime_text x.js']) {
+      const p = { name: cmdline.split(' ')[0]!, cmdline };
+      expect(isIdeNodeScript(p), cmdline).toBe(false);
+      expect(isIdeProc(p), cmdline).toBe(true);
+    }
+    // processus principal de VS Code ouvert sur un fichier du projet : l'éditeur, pas un script
+    for (const cmdline of ['code dist/server.js', '/usr/share/code/code dist/server.js', '/usr/share/code/code server.js', '/usr/share/code/code /home/u/demo/server.js']) {
+      expect(isIdeNodeScript({ name: 'code', cmdline }), cmdline).toBe(false);
+      expect(isIdeProc({ name: 'code', cmdline }), cmdline).toBe(true);
+    }
+    // scripts sous le dossier de l'éditeur (tsserver, serveurs de langage intégrés)
+    for (const cmdline of [
+      '/usr/share/code/code /usr/share/code/resources/app/extensions/node_modules/typescript/lib/tsserver.js --serverMode partialSemantic',
+      '/usr/lib/code/code /usr/lib/code/extensions/json-language-features/server/dist/node/jsonServerMain.js --node-ipc',
+      '/opt/cursor/cursor /opt/cursor/resources/app/extensions/node_modules/typescript/lib/tsserver.js',
+    ]) {
+      const p = { name: cmdline.split(' ')[0]!.split('/').pop()!, cmdline };
+      expect(isIdeNodeScript(p), cmdline).toBe(true);
+      expect(isIdeProc(p), cmdline).toBe(false);
+    }
+    // enfant d'une ancre éditeur (hôte d'extensions) : script absolu d'une extension installée
+    const host = { name: 'code', cmdline: '/usr/share/code/code --type=utility --utility-sub-type=node.mojom.NodeService' };
+    const ext = { name: 'code', cmdline: '/usr/share/code/code /home/u/.local/share/demo-ext/server/out/server.js --node-ipc' };
+    expect(isIdeNodeScript(ext)).toBe(false);
+    expect(isIdeNodeScript(ext, host)).toBe(true);
+    expect(isIdeProc(ext, host)).toBe(false);
+    // enfant d'un shell : jamais
+    expect(isIdeNodeScript(ext, { name: 'zsh', cmdline: 'zsh' })).toBe(false);
+    // script relatif même sous un éditeur : jamais
+    expect(isIdeNodeScript({ name: 'code', cmdline: '/usr/share/code/code dist/server.js' }, host)).toBe(false);
   });
 });

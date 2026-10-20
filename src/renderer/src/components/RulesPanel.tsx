@@ -194,7 +194,7 @@ export function RulesPanel({ config, issues, onSaved, onFormState }: Props) {
             shells, le bureau, systemd et {APP_DISPLAY_NAME}. 10 actions par heure au plus.
           </span>
         </p>
-        <Row label="Règles automatiques" help="Éteint : rien ne tourne, pas même les simulations. Chaque nouvelle règle démarre en Simulation (journal « aurait arrêté… », aucun signal), sauf la règle anti-gel recommandée, Active telle quelle.">
+        <Row label="Règles automatiques" help="Éteint : rien ne tourne, pas même les simulations. Chaque nouvelle règle démarre en Simulation (journal « aurait arrêté… », aucun signal), sauf les règles recommandées, Actives telles quelles.">
           {(id) => (
             <span data-testid="rules-master">
               <Switch id={id} checked={rules.enabled} label="Règles automatiques" disabled={busy} onToggle={() => void save(withRulesEnabled(config, !rules.enabled))} />
@@ -263,7 +263,7 @@ export function RulesPanel({ config, issues, onSaved, onFormState }: Props) {
           <div className="rules-recommended" data-testid="rules-recommended-box">
             <p className="hint">
               Règles recommandées absentes : {missing.map((r) => `« ${r.name} »`).join(', ')}.
-              {missing.some((r) => r.mode === 'active') && ' L’anti-gel arrive Active (il ne vise que les tests, tsc et eslint, une à la fois) ; les autres en Simulation.'}
+              {' Elles arrivent Actives (l’anti-gel ne vise que les tests, tsc et eslint, un à la fois).'}
               {!rules.enabled && ' L’interrupteur « Règles automatiques » reste à allumer.'}
             </p>
             <button type="button" data-testid="rules-recommended" disabled={busy || full} onClick={() => void addRecommended()}>

@@ -12,6 +12,7 @@ import {
   Info,
   Layers,
   ShieldCheck,
+  Snowflake,
   Sparkles,
   Tags,
   TrendingUp,
@@ -30,6 +31,7 @@ import { pollWhileLive } from '../history';
 import { DiskSettingsCard } from './DiskSettings';
 import { EarlyoomPanel, type EarlyoomAttention } from './EarlyoomPanel';
 import { RulesPanel } from './RulesPanel';
+import { AntigelSettingsCard } from './AntigelSettings';
 import { SettingsConfirm } from './SettingsConfirm';
 import { AboutSetup, AutostartRow } from './AppSetup';
 import { AboutPanel } from './UpdatePopup';
@@ -71,6 +73,7 @@ const ICONS: Record<SettingsSection, LucideIcon> = {
   classify: Tags,
   alerts: BellRing,
   rules: Bot,
+  antigel: Snowflake,
   recorder: HardDrive,
   disk: FolderSearch,
   earlyoom: Wrench,
@@ -542,6 +545,8 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
           {panel('alerts', undefined, <AlertsSettings config={config} onSave={onSave} onFormState={setAlertsForm} recorder={rec} />)}
 
           {panel('rules', 'rules-panel', <RulesPanel config={config} issues={ruleIssues} onSaved={onConfigChanged} onFormState={setRulesForm} />)}
+
+          {panel('antigel', 'antigel-panel', <AntigelSettingsCard config={config} onSave={onSave} />)}
 
           {panel(
             'recorder',

@@ -46,7 +46,7 @@ const shotOf = async (locator, name) => shots && locator.screenshot({ path: join
 // earlyoom simulé (dossier vide : vu installé et actif, rien à proposer) : aucun pop-up earlyoom selon l'état réel de la machine
 const eoFake = join(base, 'earlyoom');
 mkdirSync(eoFake);
-const env = { ...process.env, XDG_CONFIG_HOME: cfg, XDG_DATA_HOME: data, PROC_WATCH_NO_RECORDER_SYNC: '1', PROC_WATCH_TMP_ROOT: root, PROC_WATCH_EARLYOOM_FAKE: eoFake };
+const env = { ...process.env, XDG_CONFIG_HOME: cfg, XDG_DATA_HOME: data, PROC_WATCH_NO_RECORDER_SYNC: '1', PROC_WATCH_NO_ANTIGEL: '1', PROC_WATCH_TMP_ROOT: root, PROC_WATCH_EARLYOOM_FAKE: eoFake };
 const app = await electron.launch({ args: ['.'], env });
 try {
   const win = await app.firstWindow();

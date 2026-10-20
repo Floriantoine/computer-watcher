@@ -34,7 +34,7 @@ function setup(o: { availPercent?: number; rules?: unknown } = {}) {
   }
   // tsc --noEmit (comm MainThread)
   addProc(procRoot, { pid: 710, comm: 'MainThread', ppid: 601, starttime: 7100, rssKB: 4 * GB, cwd: '/home/u/demo', cmdline: ['node', `${NM}/typescript/bin/tsc`, '--noEmit'] });
-  // tsc lancé par Claude : jamais visé, même s'il est le plus gros
+  // tsc lancé par Claude : visé comme les autres vérifications (accord de l'utilisateur du 2026-10-19) ; Claude et son shell jamais
   addProc(procRoot, { pid: 800, comm: 'claude', ppid: 601, rssKB: 400_000, cmdline: ['claude'] });
   addProc(procRoot, { pid: 801, comm: 'zsh', ppid: 800, rssKB: 5_000, cmdline: ['/bin/zsh', '-c', 'tsc'] });
   addProc(procRoot, { pid: 810, comm: 'MainThread', ppid: 801, starttime: 8100, rssKB: 9 * GB, cwd: '/home/u/demo', cmdline: ['node', `${NM}/typescript/bin/tsc`, '--noEmit'] });
@@ -74,16 +74,26 @@ function setup(o: { availPercent?: number; rules?: unknown } = {}) {
 
 const signalled = (k: ReturnType<typeof vi.fn<KillFn>>) => k.mock.calls.map(([pid, sig]) => `${pid}:${sig}`).sort();
 
-test('nouvel utilisateur, RAM à 98 % : jest et ses workers, puis tsc ; jamais le tsc de Claude, ni zsh, warp, claude', () => {
+test('nouvel utilisateur, RAM à 98 % : le tsc de Claude (9 Go), puis jest et ses workers, puis tsc ; jamais zsh, warp, claude', () => {
   const s = setup();
   s.rec.start();
   s.rec.tick();
   s.run(10_000);
   expect(s.kill).not.toHaveBeenCalled();
   s.run(5_000);
+  // revérifié par le service sur /proc relu : vérification lancée par Claude, visable ; SIGKILL s'il survit
+  expect(signalled(s.kill)).toEqual(['810:SIGTERM']);
+  s.timers.splice(0).forEach((f) => f());
+  expect(signalled(s.kill)).toEqual(['810:SIGKILL', '810:SIGTERM']);
+  s.killProc(810);
+  s.kill.mockClear();
+  s.run(15_000);
   expect(signalled(s.kill)).toEqual(['700:SIGTERM', '701:SIGTERM', '702:SIGTERM']);
-  const ev = s.events();
-  expect(ev).toEqual([expect.objectContaining({ type: 'rule_action', ruleId: 'rec-antigel', result: 'sigterm', killed: 3, trigger: expect.stringMatching(/^mémoire 98 % depuis 1[05] s$/) })]);
+  const ev = s.events().filter((e) => e.result === 'sigterm');
+  expect(ev).toEqual([
+    expect.objectContaining({ type: 'rule_action', ruleId: 'rec-antigel', killed: 1, pids: [810], trigger: expect.stringMatching(/^mémoire 98 % depuis 1[05] s$/) }),
+    expect.objectContaining({ type: 'rule_action', ruleId: 'rec-antigel', killed: 3 }),
+  ]);
   // escalade : les processus sont morts entre-temps, rien à forcer
   s.killProc(700, 701, 702);
   s.timers.splice(0).forEach((f) => f());
@@ -99,12 +109,26 @@ test('nouvel utilisateur, RAM à 98 % : jest et ses workers, puis tsc ; jamais l
   s.rec.stop();
 });
 
+test('le tsc de Claude devenu « claude » avant le SIGKILL (exec, même pid et starttime) : aucun signal', () => {
+  const s = setup();
+  s.rec.start();
+  s.rec.tick();
+  s.run(15_000);
+  expect(signalled(s.kill)).toEqual(['810:SIGTERM']);
+  s.killProc(810);
+  addProc(s.procRoot, { pid: 810, comm: 'claude', ppid: 801, starttime: 8100, rssKB: 9 * GB, cmdline: ['claude'] });
+  s.kill.mockClear();
+  s.timers.splice(0).forEach((f) => f());
+  expect(s.kill).not.toHaveBeenCalled();
+  s.rec.stop();
+});
+
 test('victime vivante : la suivante n’est pas visée avant 60 s', () => {
   const s = setup();
   s.rec.start();
   s.rec.tick();
   s.run(15_000);
-  expect(signalled(s.kill)).toEqual(['700:SIGTERM', '701:SIGTERM', '702:SIGTERM']);
+  expect(signalled(s.kill)).toEqual(['810:SIGTERM']);
   s.kill.mockClear();
   s.run(55_000);
   expect(s.kill).not.toHaveBeenCalled();
@@ -115,8 +139,10 @@ test('RAM à 70 % : rien, jamais', () => {
   const s = setup({ availPercent: 30 });
   s.rec.start();
   s.run(10 * 60_000);
-  expect(s.kill).not.toHaveBeenCalled();
-  expect(s.events()).toEqual([]);
+  // jest (5,4 Go, reconnu à sa ligne de commande malgré le comm MainThread) déclenche légitimement la règle « Test > 4 Go »,
+  // Active : seul jest est arrêté, jamais le tsc lancé par Claude ; l'anti-gel reste muet
+  expect(s.kill.mock.calls.map(([pid]) => pid).every((pid) => [700, 701, 702].includes(pid))).toBe(true);
+  expect(s.events().filter((e) => e.ruleId !== 'rec-test-memory')).toEqual([]);
   s.rec.stop();
 });
 
@@ -140,12 +166,12 @@ test('utilisateur existant (section rules présente, vide) : rien n’est ajout�
 
 test('anti-gel passé en Simulation : un rule_dry_run, aucun signal', () => {
   const rule = { ...DEFAULT_CONFIG.rules.list.find((r) => r.id === 'rec-antigel')!, mode: 'simulate' };
-  const s = setup({ rules: { enabled: true, list: [rule] } });
+  const s = setup({ rules: { enabled: true, list: [rule], recommendedActive: true } });
   s.rec.start();
   s.rec.tick();
   s.run(4 * 60_000);
   expect(s.kill).not.toHaveBeenCalled();
   expect(s.timers).toEqual([]);
-  expect(s.events()).toEqual([expect.objectContaining({ type: 'rule_dry_run', ruleId: 'rec-antigel', result: 'dry_run', pids: [700, 701, 702] })]);
+  expect(s.events()).toEqual([expect.objectContaining({ type: 'rule_dry_run', ruleId: 'rec-antigel', result: 'dry_run', pids: [810] })]);
   s.rec.stop();
 });

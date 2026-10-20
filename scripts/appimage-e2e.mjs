@@ -70,7 +70,7 @@ writeFileSync(unit, '[Unit]\nDescription=unité factice du test (jamais chargée
 
 // dossier d'exécution temporaire aussi (la migration du renommage le déplacerait) ; socket Wayland de la session par chemin absolu
 mkdirSync(join(base, 'run'), { mode: 0o700 });
-const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: cfg, XDG_DATA_HOME: data, XDG_CACHE_HOME: join(base, 'cache'), XDG_RUNTIME_DIR: join(base, 'run'), PROC_WATCH_NO_RECORDER_SYNC: '1' };
+const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: cfg, XDG_DATA_HOME: data, XDG_CACHE_HOME: join(base, 'cache'), XDG_RUNTIME_DIR: join(base, 'run'), PROC_WATCH_NO_RECORDER_SYNC: '1', PROC_WATCH_NO_ANTIGEL: '1' };
 if (process.env.XDG_RUNTIME_DIR && process.env.WAYLAND_DISPLAY && !process.env.WAYLAND_DISPLAY.startsWith('/')) env.WAYLAND_DISPLAY = join(process.env.XDG_RUNTIME_DIR, process.env.WAYLAND_DISPLAY);
 for (const k of ['APPIMAGE', 'APPDIR', 'ARGV0', 'OWD', 'PROC_WATCH_UPDATE_FEED', 'ELECTRON_RUN_AS_NODE']) delete env[k];
 

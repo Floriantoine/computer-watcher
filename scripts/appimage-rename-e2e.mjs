@@ -105,6 +105,7 @@ const env = {
   XDG_CACHE_HOME: cacheHome,
   XDG_RUNTIME_DIR: runtime,
   PROC_WATCH_NO_RECORDER_SYNC: '1',
+  PROC_WATCH_NO_ANTIGEL: '1',
   PROC_WATCH_NO_KILL: '1',
 };
 // affichage : le socket Wayland reste celui de la session (chemin absolu), le reste du dossier d'exécution est temporaire

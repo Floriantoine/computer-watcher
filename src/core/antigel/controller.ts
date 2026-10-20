@@ -1,0 +1,492 @@
+// Anti-gel (lot 1) : orchestration par tick du service. Plafonds de cwatch.slice, une slice par projet (budget), un scope
+// neuf par lot de déplacement (amendement A1), OOM et ralentissements lus sur la slice du projet. Les appels D-Bus partent
+// en arrière-plan, un enchaînement à la fois : le tick n'attend jamais busctl, et en régime établi il ne fait aucun appel.
+//
+// Ordre garanti dans un enchaînement : cwatch.slice assurée (plafonds) avant toute slice de projet ; slice de projet
+// assurée (budget ou infinity) dans ce processus avant tout scope rangé dedans : jamais de scope vers une slice que systemd
+// créerait vide. Un échec de cwatch.slice (ou du gestionnaire : refus, injoignable, délai) arrête l'enchaînement ; un échec
+// propre à un projet (son budget, sa slice, son scope) n'arrête que la suite de ce projet, les autres projets continuent.
+import type { Group, ProcInfo, SystemInfo } from '../types';
+import type { Availability, CgroupStats, MemoryEvents } from './cgroupfs';
+import type { AntigelConfig } from './config';
+import { budgetBytes, sameLimits, sliceLimits, type SliceLimits } from './limits';
+import { planMoves, type PlanMove, type PlanTarget } from './plan';
+import type { AntigelProjectState, AntigelSliceState, AntigelState } from './state';
+import { BusctlError, MAX_PIDS, type SystemdClient } from './systemd';
+import { OTHERS_SLICE, ROOT_SLICE, isProdProjectSliceName, newScopeName, projectSliceFor, shortHash, slicePath, slugOf } from './units';
+
+export const PROBE_EVERY_MS = 300_000;
+export const THROTTLE_HOLD_MS = 15_000;
+/** Recul avant un nouvel essai d'un budget en échec (autre que « no-unit ») : pas un busctl par tick. */
+export const BUDGET_RETRY_MS = 60_000;
+const CGROUP_MAX_AGE_MS = 60_000;
+/** Entrées au plus dans `slices` et `projects` de l'état (borne de parseAntigelState). */
+const MAX_UNITS = 200;
+const RESERVE_TOO_BIG = 'réserve trop grande : moins de 1 Go laissé au travail';
+
+export interface AntigelDeps {
+  client: SystemdClient;
+  /** Disponibilité (cgroups v2, gestionnaire utilisateur, contrôleur memory, busctl) : au démarrage, puis toutes les 5 min tant qu'elle manque. */
+  probe: () => Availability;
+  /** Mémoire d'un cgroup (« /user.slice/… »), null s'il n'existe pas. */
+  stats: (cgroupPath: string) => CgroupStats | null;
+  /** cgroup actuel d'un processus (null : illisible). */
+  cgroupOf: (pid: number) => string | null;
+  /** Revérification juste avant l'appel : uid, starttime et cgroup inchangés. */
+  reverify: (targets: readonly PlanTarget[], cgroup: string) => PlanTarget[];
+  monoNow: () => number;
+  log: (msg: string) => void;
+  /** Horloge du coût mesuré (défaut : performance.now). */
+  perfNow?: () => number;
+  /** Attribution slice de projet → racine relue dans antigel-state.json au démarrage (champ `slices`). */
+  initialSlices?: Record<string, string | null>;
+  /** Cache « pid:startTicks » → travail (défaut : neuf) ; injecté par les tests pour en suivre la taille. */
+  workMemo?: Map<string, boolean>;
+}
+
+export interface AntigelTickInput {
+  ts: number;
+  procs: readonly ProcInfo[];
+  groups: readonly Group[];
+  system: SystemInfo;
+  config: AntigelConfig;
+  currentUid: number;
+  selfPid: number;
+  appRoot: string | null;
+  isProtected: (name: string) => boolean;
+  home: string;
+  /** Dossiers de config de Claude (comme pour buildGroups) : shells de l'outil Bash. */
+  claudeDirs?: readonly string[];
+}
+
+/** `unit` : slice du projet (cwatch-p-<clé>.slice). */
+export interface AntigelOom { unit: string; root: string | null; kills: number }
+
+export interface AntigelController {
+  /** Un tick (synchrone, borné) ; renvoie les OOM observés dans les slices de projet depuis le tick précédent. */
+  tick(i: AntigelTickInput): AntigelOom[];
+  state(): AntigelState;
+  /** Attend la fin de l'enchaînement D-Bus en vol (tests, arrêt). */
+  idle(): Promise<void>;
+}
+
+/** `critical` : son échec arrête tout l'enchaînement (cwatch.slice) ; sinon seule l'étape échoue. */
+type Step = { run: () => Promise<void>; critical?: boolean };
+
+const trim = (p: string) => (p.length > 1 ? p.replace(/\/+$/, '') : p);
+const kb = (b: number) => Math.round(b / 1024);
+const toSlice = (s: CgroupStats): AntigelSliceState => ({
+  currentKB: kb(s.currentBytes),
+  highKB: s.highBytes === null ? null : kb(s.highBytes),
+  maxKB: s.maxBytes === null ? null : kb(s.maxBytes),
+  swapMaxKB: s.swapMaxBytes === null ? null : kb(s.swapMaxBytes),
+  throttles: s.events.high,
+  oomKills: s.events.oomKill,
+});
+const capped = (s: CgroupStats | null) => s !== null && (s.highBytes !== null || s.maxBytes !== null || s.swapMaxBytes !== null);
+
+/** Racine de projet par pid : groupes `project:` (sous-groupes de « Autres » compris), jamais « / » ni le dossier personnel. */
+function projectsByPid(groups: readonly Group[], home: string): Map<number, string> {
+  const out = new Map<number, string>();
+  const h = trim(home);
+  const visit = (g: Group) => {
+    if (g.kind === 'project' && g.id.startsWith('project:')) {
+      const root = g.id.slice('project:'.length);
+      if (trim(root) !== '/' && trim(root) !== h) for (const pid of g.pids) out.set(pid, root);
+    }
+    g.subgroups.forEach(visit);
+  };
+  groups.forEach(visit);
+  return out;
+}
+
+/**
+ * La slice a-t-elle pu être attribuée à cette racine par projectSliceFor ? (slice « autres » ⇔ hors projet ; sinon
+ * cwatch-p-<slug>.slice ou cwatch-p-<slug>_<hash>.slice de cette racine). Écarte une attribution relue ou retrouvée
+ * incohérente : jamais le budget d'un projet sur la slice d'un autre.
+ */
+function plausible(slice: string, root: string | null): boolean {
+  if (!isProdProjectSliceName(slice)) return false;
+  if (root === null) return slice === OTHERS_SLICE;
+  if (typeof root !== 'string' || !root.startsWith('/') || slice === OTHERS_SLICE) return false;
+  const slug = slugOf(root);
+  return slice === `cwatch-p-${slug}.slice` || slice === `cwatch-p-${slug}_${shortHash(root)}.slice`;
+}
+
+export function createAntigel(deps: AntigelDeps): AntigelController {
+  const perfNow = deps.perfNow ?? (() => performance.now());
+  const client = deps.client;
+  let avail: Availability | null = null;
+  let probedAt = 0;
+  /** Plafonds posés sur cwatch.slice par ce processus (null : rien posé depuis le démarrage, ou remis à infinity). */
+  let applied: SliceLimits | null = null;
+  /** cwatch.slice remise à infinity par ce processus (une seule fois, même si sysfs montre encore une valeur). */
+  let rootReset = false;
+  /** Attribution slice de projet → racine (null : hors projet), jamais deux slices pour une racine ni deux racines pour une slice. */
+  const slices = new Map<string, string | null>();
+  /** Slices de projet assurées (StartTransientUnit ou propriété posée) par ce processus. */
+  const ensured = new Set<string>();
+  /** Budget posé par ce processus sur chaque slice de projet (null : infinity). */
+  const posed = new Map<string, number | null>();
+  const lastEvents = new Map<string, MemoryEvents>();
+  const throttledUntil = new Map<string, number>();
+  /** Événements de cwatch.slice au tick précédent : le plafond global qui freine compte son « high » sur elle seule. */
+  let lastRootEvents: MemoryEvents | null = null;
+  let rootThrottledUntil = -Infinity;
+  /** Slices de projet inconnues de systemd (« no-unit ») : leur budget repasse par ensureProjectSlice. */
+  const lost = new Set<string>();
+  /** Budget en échec : pas de nouvel essai avant cette heure (horloge monotone). */
+  const retryAt = new Map<string, number>();
+  const cgCache = new Map<string, { cg: string | null; at: number }>();
+  const workMemo = deps.workMemo ?? new Map<string, boolean>();
+  let inFlight: Promise<void> | null = null;
+  let lastError: string | null = null;
+  let tickMs = 0;
+  let seq = 0;
+  let st: AntigelState = {
+    version: 1, at: 0, enabled: true, status: 'unavailable', reason: 'démarrage', memTotalKB: 0, reserveKB: null, slice: null,
+    projects: [], slices: {}, lastError: null, tickMs: 0, dbusCalls: 0,
+  };
+
+  const attribute = (slice: string, root: string | null): void => {
+    if (!plausible(slice, root) || slices.has(slice)) return;
+    for (const r of slices.values()) if (r === root) return;
+    slices.set(slice, root);
+  };
+  for (const [s, r] of Object.entries(deps.initialSlices ?? {})) attribute(s, r);
+
+  const forget = (slice: string) => {
+    slices.delete(slice);
+    ensured.delete(slice);
+    posed.delete(slice);
+    lastEvents.delete(slice);
+    throttledUntil.delete(slice);
+    lost.delete(slice);
+    retryAt.delete(slice);
+  };
+
+  /** `<n>` d'un scope neuf : base 36 de l'horloge murale (8 chiffres) + compteur (4 chiffres), [a-z0-9]{12}. */
+  const nextN = (ts: number): string => {
+    const t = Math.floor(ts);
+    const clock = Number.isSafeInteger(t) && t > 0 ? t.toString(36).slice(-8).padStart(8, '0') : '00000000';
+    const n = (seq++ % 36 ** 4).toString(36).padStart(4, '0');
+    return clock + n;
+  };
+
+  const report = (msg: string) => {
+    if (msg !== lastError) deps.log(`anti-gel: ${msg}`);
+    lastError = msg;
+  };
+  /** cwatch.slice en échec dans cet enchaînement (aussi quand elle est assurée depuis l'étape d'un projet) : arrêt. */
+  let rootFailed = false;
+  const run = (steps: Step[]) => {
+    if (!steps.length) return;
+    let failed = false;
+    rootFailed = false;
+    inFlight = (async () => {
+      for (const s of steps) {
+        try {
+          await s.run();
+        } catch (e) {
+          failed = true;
+          const code = e instanceof BusctlError ? e.code : 'other';
+          const msg = e instanceof Error ? e.message : String(e);
+          if (code === 'denied' || code === 'unreachable' || code === 'timeout') {
+            avail = { ok: false, reason: `gestionnaire systemd injoignable : ${msg}` };
+            probedAt = deps.monoNow();
+            applied = null;
+            ensured.clear();
+            posed.clear();
+            report(msg);
+            return;
+          }
+          report(msg);
+          if (s.critical || rootFailed) return;
+        }
+      }
+    })()
+      .then(() => {
+        if (failed) return;
+        if (lastError !== null) deps.log('anti-gel: appels systemd rétablis');
+        lastError = null;
+      })
+      .finally(() => {
+        inFlight = null;
+      });
+  };
+
+  /** Budget d'une slice de projet à poser ? Ce que ce processus a posé fait foi ; sinon (redémarrage) ce que montre sysfs. */
+  const needsHigh = (slice: string, want: number | null, s: CgroupStats) => (posed.has(slice) ? posed.get(slice) !== want : s.highBytes !== want);
+  /**
+   * Budget d'une slice de projet. Après un « no-unit » (systemd ne connaît plus la slice), repassage par
+   * ensureProjectSlice ; après un autre échec, recul de BUDGET_RETRY_MS (voir `budgetDue`).
+   */
+  const setHigh = (slice: string, want: number | null): Step => ({
+    run: async () => {
+      try {
+        if (lost.has(slice)) {
+          await client.ensureProjectSlice(slice, want);
+          ensured.add(slice);
+          lost.delete(slice);
+        } else await client.setProjectHigh(slice, want);
+      } catch (e) {
+        if (e instanceof BusctlError && e.code === 'no-unit') {
+          ensured.delete(slice);
+          posed.delete(slice);
+          lost.add(slice);
+        } else retryAt.set(slice, deps.monoNow() + BUDGET_RETRY_MS);
+        throw e;
+      }
+      posed.set(slice, want);
+      retryAt.delete(slice);
+    },
+  });
+  const budgetDue = (slice: string, now: number) => (retryAt.get(slice) ?? -Infinity) <= now;
+
+  const step = (i: AntigelTickInput): AntigelOom[] => {
+    const now = deps.monoNow();
+    const base = { version: 1 as const, at: i.ts, enabled: i.config.enabled, memTotalKB: i.system.memTotalKB };
+    if (avail === null || (!avail.ok && now - probedAt >= PROBE_EVERY_MS)) {
+      avail = deps.probe();
+      probedAt = now;
+    }
+    if (!avail.ok) {
+      st = { ...st, ...base, status: 'unavailable', reason: avail.reason, reserveKB: null, slice: null, projects: [] };
+      return [];
+    }
+    const userBase = avail.userBase;
+    const cgOfSlice = (s: string) => `${userBase}/${slicePath(s)}`;
+    const rootStats = deps.stats(cgOfSlice(ROOT_SLICE));
+    const limits = i.config.enabled ? sliceLimits(i.system.memTotalKB, i.system.swapTotalKB, i.config.reserveMB) : null;
+    const active = limits !== null;
+
+    // Décision (pure) ; cgroups mis en cache par pid:startTicks (60 s). Éteint, elle sert seulement à retrouver les
+    // slices de projet déjà peuplées (budgets à retirer) : aucun déplacement.
+    const byPid = new Map(i.procs.map((p) => [p.pid, p]));
+    // caches élagués chacun sur son propre seuil (workMemo grossit avec chaque commande vue sous une ancre, cgCache non)
+    const cacheMax = 4 * i.procs.length + 100;
+    if (cgCache.size > cacheMax || workMemo.size > cacheMax) {
+      const alive = new Set(i.procs.map((p) => `${p.pid}:${p.startTicks}`));
+      if (cgCache.size > cacheMax) for (const k of cgCache.keys()) if (!alive.has(k)) cgCache.delete(k);
+      if (workMemo.size > cacheMax) for (const k of workMemo.keys()) if (!alive.has(k)) workMemo.delete(k);
+    }
+    const cgroupOf = (pid: number): string | null => {
+      const key = `${pid}:${byPid.get(pid)?.startTicks ?? -1}`;
+      const hit = cgCache.get(key);
+      if (hit && now >= hit.at && now - hit.at < CGROUP_MAX_AGE_MS) return hit.cg;
+      const cg = deps.cgroupOf(pid);
+      cgCache.set(key, { cg, at: now });
+      return cg;
+    };
+    const projectOf = projectsByPid(i.groups, i.home);
+    const plan = planMoves({
+      procs: i.procs, projectOf: (pid) => projectOf.get(pid) ?? null, currentUid: i.currentUid, selfPid: i.selfPid, appRoot: i.appRoot,
+      isProtected: i.isProtected, cgroupOf, userBase, claudeDirs: i.claudeDirs, workMemo,
+    });
+
+    // Attribution reconstruite depuis les processus déjà rangés : segment cwatch-p-<clé>.slice de leur cgroup.
+    const sliceRoot = `${userBase}/${ROOT_SLICE}/cwatch-p.slice/`;
+    const projectSliceOf = (cg: string): string | null => {
+      if (!cg.startsWith(sliceRoot)) return null;
+      const seg = cg.slice(sliceRoot.length).split('/', 1)[0]!;
+      return isProdProjectSliceName(seg) && cg.startsWith(`${cgOfSlice(seg)}/`) ? seg : null;
+    };
+    const insideBySlice = new Map<string, number[]>();
+    for (const x of plan.inside) {
+      const s = projectSliceOf(x.cgroup);
+      if (!s) continue;
+      attribute(s, x.root);
+      insideBySlice.set(s, [...(insideBySlice.get(s) ?? []), x.pid]);
+    }
+    // Slices de projet connues : statistiques ; une slice disparue que ce processus n'a pas assurée est oubliée.
+    const sliceStats = new Map<string, CgroupStats>();
+    for (const s of [...slices.keys()]) {
+      const v = deps.stats(cgOfSlice(s));
+      if (v) sliceStats.set(s, v);
+      else if (!ensured.has(s)) forget(s);
+    }
+
+    if (!active) {
+      // Éteint, ou réserve trop grande (aucun plafond global : ne rien déplacer est le choix sûr). Plafonds de cwatch.slice
+      // et budgets remis à infinity une seule fois (aussi après un redémarrage du service) ; aucun StopUnit, aucun
+      // processus ressorti.
+      lastEvents.clear();
+      throttledUntil.clear();
+      lastRootEvents = null;
+      rootThrottledUntil = -Infinity;
+      if (!inFlight) {
+        const steps: Step[] = [];
+        if (applied !== null || (!rootReset && capped(rootStats))) {
+          steps.push({
+            critical: true,
+            run: async () => {
+              await client.setSlice(ROOT_SLICE, null);
+              applied = null;
+              rootReset = true;
+            },
+          });
+        }
+        for (const [s, v] of sliceStats) if (needsHigh(s, null, v) && budgetDue(s, now)) steps.push(setHigh(s, null));
+        run(steps);
+      }
+      const reason = i.config.enabled ? RESERVE_TOO_BIG : null;
+      st = {
+        ...st, ...base, status: i.config.enabled ? 'unavailable' : 'off', reason, reserveKB: null,
+        slice: rootStats && toSlice(rootStats), projects: [],
+      };
+      return [];
+    }
+
+    // Processus déjà rangés, par slice : les racines retrouvées et leurs descendants encore dans cette slice.
+    const children = new Map<number, number[]>();
+    for (const p of i.procs) {
+      if (p.ppid === p.pid) continue;
+      const l = children.get(p.ppid);
+      if (l) l.push(p.pid);
+      else children.set(p.ppid, [p.pid]);
+    }
+    const procsIn = (s: string): number => {
+      const prefix = `${cgOfSlice(s)}/`;
+      const seen = new Set<number>();
+      const stack = [...(insideBySlice.get(s) ?? [])];
+      let n = 0;
+      while (stack.length) {
+        const pid = stack.pop()!;
+        if (seen.has(pid)) continue;
+        seen.add(pid);
+        if (cgroupOf(pid)?.startsWith(prefix)) n++;
+        stack.push(...(children.get(pid) ?? []));
+      }
+      return n;
+    };
+
+    // Ralentissement par le plafond global : le noyau compte « high » sur cwatch.slice elle-même (le cgroup dont la limite
+    // est dépassée), jamais sur ses enfants. Tous les projets peuplés sont alors ralentis.
+    if (rootStats) {
+      if (lastRootEvents && rootStats.events.high > lastRootEvents.high) rootThrottledUntil = now + THROTTLE_HOLD_MS;
+      lastRootEvents = rootStats.events;
+    } else lastRootEvents = null;
+    const rootThrottled = rootThrottledUntil > now;
+
+    // OOM et ralentissements par le budget, lus sur la slice du projet (memory.events, hiérarchique : ses scopes compris).
+    // Une slice vide (plus aucun processus) reste suivie (budget, OOM, extinction) mais n'est pas publiée : ni badge ni compte.
+    const budgetOf = (root: string | null): number | null => (root !== null ? (i.config.budgets[root] ?? null) : null);
+    const ooms: AntigelOom[] = [];
+    const projects: AntigelProjectState[] = [];
+    for (const [unit, root] of slices) {
+      const s = sliceStats.get(unit);
+      if (!s) continue;
+      const prev = lastEvents.get(unit);
+      if (prev && s.events.high > prev.high) throttledUntil.set(unit, now + THROTTLE_HOLD_MS);
+      if (prev && s.events.oomKill > prev.oomKill) ooms.push({ unit, root, kills: s.events.oomKill - prev.oomKill });
+      lastEvents.set(unit, s.events);
+      if (s.populated && projects.length < MAX_UNITS) {
+        projects.push({
+          unit, root, procs: procsIn(unit), currentKB: kb(s.currentBytes), budgetMB: budgetOf(root),
+          throttled: rootThrottled || (throttledUntil.get(unit) ?? -Infinity) > now,
+        });
+      }
+    }
+
+    st = {
+      ...st, ...base, status: 'active', reason: null, reserveKB: kb(limits.reserveBytes), slice: rootStats && toSlice(rootStats), projects,
+    };
+    if (inFlight) return ooms;
+
+    const want = (root: string | null): number | null => {
+      const mb = budgetOf(root);
+      return mb === null ? null : budgetBytes(mb);
+    };
+    const steps: Step[] = [];
+    // cwatch.slice en place avec nos plafonds : sinon (premier tick, plafonds changés, slice disparue) assurée d'abord.
+    let rootReady = sameLimits(applied, limits) && rootStats !== null;
+    const ensureRoot = async () => {
+      try {
+        if (applied === null || rootStats === null) await client.ensureSlice(ROOT_SLICE, limits);
+        else await client.setSlice(ROOT_SLICE, limits);
+      } catch (e) {
+        rootFailed = true;
+        throw e;
+      }
+      applied = limits;
+      rootReset = false;
+      rootReady = true;
+    };
+    if (!sameLimits(applied, limits)) steps.push({ critical: true, run: ensureRoot });
+    // Budgets des slices existantes : un appel par changement (recul après un échec).
+    for (const [s, v] of sliceStats) {
+      const w = want(slices.get(s) ?? null);
+      if (needsHigh(s, w, v) && budgetDue(s, now)) steps.push(setHigh(s, w));
+    }
+
+    // Déplacements regroupés par slice de projet : un seul scope neuf par projet et par tick.
+    const bySlice = new Map<string, PlanMove[]>();
+    /** Le cgroup de cette slice existe-t-il déjà (sysfs) ? */
+    const present = (s: string) => sliceStats.has(s) || deps.stats(cgOfSlice(s)) !== null;
+    for (const m of plan.moves) {
+      let s = projectSliceFor(m.root, slices);
+      if (m.root !== null && !slices.has(s) && present(s)) {
+        // slice déjà là sans attribution dans ce processus (état perdu, processus d'une autre racine hors de toute ancre) :
+        // considérée comme prise, jamais réattribuée ; nom haché, et s'il existe aussi, pas de déplacement
+        s = projectSliceFor(m.root, new Map([...slices, [s, null]]));
+        if (!slices.has(s) && present(s)) continue;
+      }
+      if (slices.has(s) && slices.get(s) !== m.root) continue; // collision de hachage : jamais la slice d'une autre racine
+      slices.set(s, m.root);
+      bySlice.set(s, [...(bySlice.get(s) ?? []), m]);
+    }
+    for (const [s, moves] of bySlice) {
+      const w = want(slices.get(s) ?? null);
+      const exists = sliceStats.has(s);
+      steps.push({ run: async () => {
+        // rien de vivant : aucun appel (ni slice de projet, ni scope)
+        if (moves.every((m) => deps.reverify(m.targets, m.anchorCgroup).length === 0)) return;
+        if (!rootReady) await ensureRoot();
+        if (!ensured.has(s) || !exists || lost.has(s)) {
+          await client.ensureProjectSlice(s, w);
+          ensured.add(s);
+          lost.delete(s);
+          posed.set(s, w);
+          retryAt.delete(s);
+        }
+        // Revérification juste avant l'appel. Au-delà de MAX_PIDS, la racine d'un sous-arbre coupé reste dehors : elle
+        // reste racine au tick suivant, et le reste de son sous-arbre (encore dans l'unité de l'ancre) suit avec elle.
+        const batch = new Map<number, PlanTarget>();
+        for (const m of moves) {
+          const live = deps.reverify(m.targets, m.anchorCgroup).filter((t) => !batch.has(t.pid));
+          if (!live.length) continue;
+          const room = MAX_PIDS - batch.size;
+          if (live.length <= room) for (const t of live) batch.set(t.pid, t);
+          else {
+            for (const t of live.filter((x) => x.pid !== m.rootPid).slice(0, room)) batch.set(t.pid, t);
+            break;
+          }
+        }
+        if (!batch.size) return;
+        await client.startScope(newScopeName(s, nextN(i.ts)), s, [...batch.keys()]);
+        for (const t of batch.values()) cgCache.delete(`${t.pid}:${t.startTicks}`);
+      } });
+    }
+    run(steps);
+    return ooms;
+  };
+
+  const slicesOut = () => Object.fromEntries([...slices].slice(0, MAX_UNITS));
+  return {
+    tick(i) {
+      const t0 = perfNow();
+      try {
+        return step(i);
+      } finally {
+        const ms = Math.max(0, perfNow() - t0);
+        tickMs = tickMs === 0 ? ms : tickMs * 0.9 + ms * 0.1;
+        st = { ...st, slices: slicesOut(), lastError, tickMs: Math.round(tickMs * 100) / 100, dbusCalls: client.calls() };
+      }
+    },
+    // Champs vivants (fin de l'enchaînement en vol comprise) : erreur, attribution, nombre d'appels.
+    state: () => ({ ...st, slices: slicesOut(), lastError, dbusCalls: client.calls() }),
+    async idle() {
+      while (inFlight) await inFlight;
+    },
+  };
+}

@@ -39,7 +39,8 @@ const NM = '/home/u/demo/node_modules';
 
 /**
  * Projet « demo » : jest (3 Go + worker MainThread 0,5 Go) et eslint (2 Go) lancés depuis zsh dans warp ; `npm run
- * typecheck` → `sh -c tsc --noEmit` → tsc (comm MainThread, 4,5 Go) ; un jest de 6 Go lancé par Claude ; vite (8 Go, Front).
+ * typecheck` → `sh -c tsc --noEmit` → tsc (comm MainThread, 4,5 Go) ; un jest de 1,5 Go lancé par Claude (visable : accord
+ * de l'utilisateur du 2026-10-19) ; vite (8 Go, Front).
  * `alive` : pids présents (les autres sont morts).
  */
 function world(alive: (pid: number) => boolean = () => true, over: { eslintName?: string } = {}) {
@@ -57,7 +58,7 @@ function world(alive: (pid: number) => boolean = () => true, over: { eslintName?
   const eslint = proc(over.eslintName ?? 'MainThread', `node ${NM}/eslint/bin/eslint.js src`, { pid: 620, startTicks: 6200, rssKB: 2 * GB });
   const claude = proc('claude', 'claude', { pid: 800, ppid: 603 });
   const czsh = proc('zsh', '/bin/zsh -c jest', { pid: 801 });
-  const cjest = proc('node', `node ${NM}/jest/bin/jest.js`, { pid: 810, startTicks: 8100, rssKB: 6 * GB });
+  const cjest = proc('node', `node ${NM}/jest/bin/jest.js`, { pid: 810, startTicks: 8100, rssKB: 1.5 * GB });
   const vite = proc('node', `node ${NM}/vite/bin/vite.js`, { pid: 830, ppid: 601, rssKB: 8 * GB });
 
   const jestN = node(jest, node(worker));
@@ -198,7 +199,7 @@ describe('condition système : tenue', () => {
 });
 
 describe('condition système : victimes', () => {
-  test('ordre : tsc (4,5 Go) → jest (3,5 Go, instance entière) → eslint (2 Go) ; jamais vite, jamais le jest de Claude, jamais zsh/npm/sh', () => {
+  test('ordre : tsc (4,5 Go) → jest (3,5 Go, instance entière) → eslint (2 Go) → jest de Claude (1,5 Go) ; jamais vite, jamais Claude ni son shell, jamais zsh/npm/sh', () => {
     const st = emptyRuleState();
     const dead = new Set<number>();
     const alive = (pid: number) => !dead.has(pid);
@@ -213,14 +214,14 @@ describe('condition système : victimes', () => {
         v.forEach((p) => dead.add(p));
       }
     }
-    expect(got).toEqual([[612], [700, 701], [620]]);
+    expect(got).toEqual([[612], [700, 701], [620], [810]]);
     const all = got.flat();
-    for (const pid of [600, 601, 602, 603, 610, 611, 800, 801, 810, 830, 900, 500]) expect(all).not.toContain(pid);
+    for (const pid of [600, 601, 602, 603, 610, 611, 800, 801, 830, 900, 500]) expect(all).not.toContain(pid);
   });
 
-  test('plus rien à arrêter (seulement le jest de Claude et vite) : un « rien à arrêter » au plus par cooldown, aucun déclenchement', () => {
+  test('plus rien à arrêter (seulement vite, un Front) : un « rien à arrêter » au plus par cooldown, aucun déclenchement', () => {
     const st = emptyRuleState();
-    const alive = (pid: number) => ![612, 610, 611, 700, 701, 620].includes(pid);
+    const alive = (pid: number) => ![612, 610, 611, 700, 701, 620, 810].includes(pid);
     const out: RuleDecision[] = [];
     for (let t = 0; t <= 10 * 60 * SEC; t += 5 * SEC) out.push(...step(st, t, 99, 99, alive));
     expect(fires(out)).toEqual([]);
@@ -235,7 +236,7 @@ describe('condition système : victimes', () => {
       const x = world(alive, { eslintName: 'eslint' });
       return evaluateRules(input({ now, groups: x.groups, classification: x.classification, system: { memUsedPercent: 99, cpuPercent: 10 }, isProtected: (n) => n === 'eslint' }), st);
     };
-    const dead = new Set([612, 610, 611, 700, 701]);
+    const dead = new Set([612, 610, 611, 700, 701, 810]);
     run(0, (p) => !dead.has(p));
     const d = run(15 * SEC, (p) => !dead.has(p));
     expect(victim(d)).toEqual([]);
@@ -273,8 +274,8 @@ describe('condition système : victimes', () => {
     expect(victim(step(st, t1, 99, 99))).toEqual([[700, 701]]);
     const gone = (p: number) => p !== 700 && p !== 701;
     expect(victim(step(st, t1 + SYSTEM_SETTLE_MS, 99, 99, gone))).toEqual([[620]]);
-    // tsc encore vivant, eslint mort : tsc n'est plus visé ; il ne reste rien
-    const gone2 = (p: number) => ![700, 701, 620].includes(p);
+    // tsc encore vivant, eslint et le jest de Claude morts : tsc n'est plus visé ; il ne reste rien
+    const gone2 = (p: number) => ![700, 701, 620, 810].includes(p);
     const d = step(st, t1 + 2 * SYSTEM_SETTLE_MS, 99, 99, gone2);
     expect(victim(d)).toEqual([]);
   });
@@ -356,7 +357,7 @@ describe('condition système : workers « MainThread » rangés à part', () => 
     return { groups: [project, mt, term, claudeG, svc], classification };
   }
 
-  test('jest emmène ses workers (5,3 Go) avant tsc (4 Go) ; le tsc lancé par Claude (9 Go) jamais ; ni le groupe MainThread entier', () => {
+  test('le tsc lancé par Claude (9 Go) d’abord, puis jest et ses workers (5,3 Go), puis tsc (4 Go) ; jamais Claude, son shell, ni le groupe MainThread entier', () => {
     const st = emptyRuleState();
     const w = mainThreadWorld();
     const run = (now: number, dead: number[] = []) => {
@@ -364,16 +365,20 @@ describe('condition système : workers « MainThread » rangés à part', () => 
       return evaluateRules(input({ now, groups, classification: w.classification, system: { memUsedPercent: 99, cpuPercent: 99 } }), st);
     };
     run(0);
-    const d1 = run(15 * SEC);
+    const d0 = run(15 * SEC);
+    expect(victim(d0)).toEqual([[810]]);
+    expect(fires(d0)[0]!.target.verification).toBe(true);
+    const d1 = run(30 * SEC, [810]);
     expect(victim(d1)).toEqual([[700, 701, 702]]);
     expect(fires(d1)[0]!.target.memKB).toBe(5.3 * GB);
     expect(fires(d1)[0]!.target.label).toBe('jest (demo)');
-    const d2 = run(30 * SEC, [700, 701, 702]);
+    const d2 = run(45 * SEC, [810, 700, 701, 702]);
     expect(victim(d2)).toEqual([[710]]);
     expect(fires(d2)[0]!.target.label).toBe('tsc');
-    const d3 = run(45 * SEC, [700, 701, 702, 710]);
+    const d3 = run(60 * SEC, [810, 700, 701, 702, 710]);
     expect(victim(d3)).toEqual([]);
     expect(d3[0]).toMatchObject({ outcome: 'skip', reason: 'guard' });
+    for (const d of [d0, d1, d2]) for (const pid of [800, 801, 601, 600]) expect(victim(d).flat()).not.toContain(pid);
   });
 });
 

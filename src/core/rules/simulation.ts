@@ -1,7 +1,7 @@
 // src/core/rules/simulation.ts — crédit de Simulation d'une règle (pur). Seul le service l'accumule : temps passé en
 // Simulation avec la règle activée, l'interrupteur général allumé, et au moins une évaluation. Le passage en Active (main)
 // et l'action réelle (service) exigent ≥ 10 min ET ≥ 1 évaluation, avec la même condition. Rien d'écrit à la main dans
-// config.json ne donne de crédit. Seule exception : la règle anti-gel recommandée intacte (isPreapproved).
+// config.json ne donne de crédit. Seule exception : les règles recommandées intactes (isPreapproved).
 import { isPreapproved } from './recommended';
 import type { Rule, RuleCondition } from './types';
 

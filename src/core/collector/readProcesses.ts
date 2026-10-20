@@ -31,8 +31,11 @@ export interface StatusEntry {
 }
 
 export interface ReadOptions {
-  /** Si fourni : le lien cwd n'est lu que pour les noms acceptés (coûteux sur ~750 processus). */
-  wantCwd?: (name: string) => boolean;
+  /**
+   * Si fourni : le lien cwd n'est lu que pour les processus acceptés (coûteux sur ~750 processus).
+   * Reçoit le nom (comm) et la ligne de commande : les outils de dev se reconnaissent aussi à leur programme.
+   */
+  wantCwd?: (name: string, cmdline: string) => boolean;
   /**
    * Cache cmdline `${pid}:${starttime}:${comm}` → ligne de commande : lue une seule fois par processus, purgée des absents à chaque passe.
    * Le nom fait partie de la clé : un exec (même PID, même starttime) change le nom et force une relecture.
@@ -103,7 +106,7 @@ export function readProcesses(procRoot = '/proc', opts: ReadOptions = {}): ProcS
       cpuTicks: stat.utime + stat.stime,
       rssKB: status.rssKB,
       swapKB: status.swapKB,
-      ...(opts.wantCwd && !opts.wantCwd(status.name) ? { cwd: null, cwdDeleted: false } : cwdOf(dir, key)),
+      ...(opts.wantCwd && !opts.wantCwd(status.name, cmdline || `[${status.name}]`) ? { cwd: null, cwdDeleted: false } : cwdOf(dir, key)),
     });
   }
   if (cache && seen) for (const k of cache.keys()) if (!seen.has(k)) cache.delete(k);

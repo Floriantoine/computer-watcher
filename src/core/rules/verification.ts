@@ -3,15 +3,13 @@
 // Autorisé par l'utilisateur (2026-10-19) : pour cette seule règle, une vérification lancée par Claude peut être arrêtée ;
 // Claude lui-même, ses serveurs MCP et tout ce qui n'est pas une vérification restent intouchables.
 import { checkCommand, matchCommand } from '../classify/rules';
-import { CLAUDE_NAMES } from './neverKill';
-
-const CLAUDE_CMD = /(^|[\s/])(claude|claude-desktop)(\s|$)/;
+import { isClaudeProc } from './neverKill';
 
 interface VerifProc { pid: number; ppid: number; name: string; cmdline: string }
 
 /** Nom de la vérification (« vitest », « tsc »…) ou null ; jamais Claude lui-même. */
 export function verificationKind(p: { name: string; cmdline: string }): string | null {
-  if (CLAUDE_NAMES.has(p.name) || CLAUDE_CMD.test(p.cmdline.split(/\s+/, 1)[0] ?? '')) return null;
+  if (isClaudeProc(p)) return null;
   const m = matchCommand([p]);
   if (m?.category === 'test') return m.label;
   return checkCommand(p.name, p.cmdline);
@@ -31,7 +29,7 @@ export function verificationPids(byPid: ReadonlyMap<number, VerifProc>): Set<num
     const pid = stack.pop()!;
     if (out.has(pid)) continue;
     const p = byPid.get(pid);
-    if (!p || CLAUDE_NAMES.has(p.name) || CLAUDE_CMD.test(p.cmdline.split(/\s+/, 1)[0] ?? '')) continue;
+    if (!p || isClaudeProc(p)) continue;
     out.add(pid);
     stack.push(...(children.get(pid) ?? []));
   }

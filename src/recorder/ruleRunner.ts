@@ -8,6 +8,7 @@ import { insertEvent } from '../core/history/events';
 import { planKill, sendSignals, type KillFn } from '../core/kill';
 import type { RuleDecision, RuleTarget } from '../core/rules/engine';
 import { filterTargets } from '../core/rules/neverKill';
+import { verificationPids } from '../core/rules/verification';
 import type { KillResult, KillSignal, KillTarget, ProcSample } from '../core/types';
 
 export const ESCALATE_MS = 5000;
@@ -58,6 +59,13 @@ export function serviceKill(
   };
 }
 
+/**
+ * Cible « vérification » de la règle anti-gel (saturation) : tests, tsc, eslint, visables même lancés par Claude (accord
+ * de l'utilisateur du 2026-10-19). Revérifiée avant chaque signal sur le /proc relu (verificationPids) ; Claude lui-même
+ * et toutes les autres raisons restent des refus.
+ */
+const isVerification = (d: Extract<RuleDecision, { outcome: 'fire' }>) => d.condition.kind === 'system' && d.target.verification === true;
+
 /** (d) mesure qui a déclenché la règle anti-gel, si présente. */
 const triggerDetail = (d: Extract<RuleDecision, { outcome: 'fire' }>) => (d.trigger ? { trigger: d.trigger } : {});
 const targetsDetail = (t: RuleTarget) => t.targets.map((x, i) => ({ name: t.names[i] ?? '?', pid: x.pid, memKB: t.memKBs[i] ?? 0 }));
@@ -87,9 +95,9 @@ export function createRuleRunner(deps: RuleRunnerDeps): { run(decisions: readonl
 
   /**
    * Revérifie la liste « jamais tuer » (processus relus maintenant) puis planKill, et envoie `signal`.
-   * Les cibles refusées par la liste portent l'erreur `GUARD:<raison>`.
+   * Les cibles refusées par la liste portent l'erreur `GUARD:<raison>`. `verification` : voir isVerification.
    */
-  const signal = (targets: readonly KillTarget[], sig: KillSignal): { results: KillResult[]; sent: KillTarget[] } => {
+  const signal = (targets: readonly KillTarget[], sig: KillSignal, verification = false): { results: KillResult[]; sent: KillTarget[] } => {
     const procs = deps.readProcs();
     const byPid = new Map(procs.map((p) => [p.pid, p]));
     // identité d'abord (pid réutilisé → ESRCH par planKill), puis la liste « jamais tuer » sur le processus tel qu'il est maintenant
@@ -97,6 +105,7 @@ export function createRuleRunner(deps: RuleRunnerDeps): { run(decisions: readonl
     const { kept, refused } = filterTargets(same.map((t) => t.pid), {
       byPid, currentUid: deps.currentUid, selfPid: deps.selfPid, appRoot: deps.appRoot, isProtected: deps.isProtected,
       claudeDirs: deps.claudeDirs, claudePids: deps.claudePids?.(),
+      ...(verification ? { verification: verificationPids(byPid) } : {}),
     });
     const keptSet = new Set(kept);
     const guardRefused: KillResult[] = [...refused].map(([pid, why]) => ({ pid, ok: false, error: `GUARD:${why}` }));
@@ -112,7 +121,7 @@ export function createRuleRunner(deps: RuleRunnerDeps): { run(decisions: readonl
   const escalate = (d: Extract<RuleDecision, { outcome: 'fire' }>, sent: KillTarget[]) => {
     try {
       if (!stillValid(d, 'SIGKILL')) return;
-      const { results } = signal(sent, 'SIGKILL');
+      const { results } = signal(sent, 'SIGKILL', isVerification(d));
       const killed = results.filter((r) => r.ok).length;
       if (killed > 0) {
         record('rule_action', d.target.groupKey, {
@@ -130,7 +139,7 @@ export function createRuleRunner(deps: RuleRunnerDeps): { run(decisions: readonl
   const act = (d: Extract<RuleDecision, { outcome: 'fire' }>) => {
     if (!stillValid(d, 'SIGTERM')) return;
     const t = d.target;
-    const { results, sent } = signal(t.targets, 'SIGTERM');
+    const { results, sent } = signal(t.targets, 'SIGTERM', isVerification(d));
     const killed = sent.length;
     record('rule_action', t.groupKey, {
       ruleId: d.ruleId, rule: d.ruleName, target: t.label, memKB: t.memKB, pids: t.targets.map((x) => x.pid), targets: targetsDetail(t),
