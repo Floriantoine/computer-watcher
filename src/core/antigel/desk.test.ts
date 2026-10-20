@@ -56,7 +56,7 @@ function world(o: { protectedChain?: boolean; io?: boolean; fail?: (unit: string
     createDeskPriority({
       client,
       readCg: (path, file) => sys.get(path)?.[file] ?? null,
-      originals,
+      loadOriginals: originals ? () => originals : undefined,
       saveOriginals: (x) => {
         saved.push(structuredClone(x));
         order.push('save');

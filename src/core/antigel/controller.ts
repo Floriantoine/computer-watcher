@@ -9,6 +9,7 @@
 import type { Group, ProcInfo, SystemInfo } from '../types';
 import type { Availability, CgroupStats, MemoryEvents } from './cgroupfs';
 import type { AntigelConfig } from './config';
+import { createDeskPriority, type DeskDeps } from './desk';
 import { budgetBytes, sameLimits, sliceLimits, type SliceLimits } from './limits';
 import { planMoves, type PlanMove, type PlanTarget } from './plan';
 import type { AntigelProjectState, AntigelSliceState, AntigelState } from './state';
@@ -42,6 +43,8 @@ export interface AntigelDeps {
   initialSlices?: Record<string, string | null>;
   /** Cache « pid:startTicks » → travail (défaut : neuf) ; injecté par les tests pour en suivre la taille. */
   workMemo?: Map<string, boolean>;
+  /** Bureau prioritaire (lot 2) : poids et protection des unités du bureau ; absent : rien. */
+  desk?: Omit<DeskDeps, 'monoNow' | 'log'>;
 }
 
 export interface AntigelTickInput {
@@ -116,6 +119,8 @@ function plausible(slice: string, root: string | null): boolean {
 export function createAntigel(deps: AntigelDeps): AntigelController {
   const perfNow = deps.perfNow ?? (() => performance.now());
   const client = deps.client;
+  const desk = deps.desk ? createDeskPriority({ ...deps.desk, monoNow: deps.monoNow, log: deps.log }) : null;
+  const dbusCalls = () => client.calls() + (desk?.calls() ?? 0);
   let avail: Availability | null = null;
   let probedAt = 0;
   /** Plafonds posés sur cwatch.slice par ce processus (null : rien posé depuis le démarrage, ou remis à infinity). */
@@ -282,6 +287,11 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
     const plan = planMoves({
       procs: i.procs, projectOf: (pid) => projectOf.get(pid) ?? null, currentUid: i.currentUid, selfPid: i.selfPid, appRoot: i.appRoot,
       isProtected: i.isProtected, cgroupOf, userBase, claudeDirs: i.claudeDirs, workMemo,
+    });
+    // Bureau prioritaire (lot 2) : seulement sous un plafond actif ; éteint, valeurs d'origine restaurées.
+    desk?.tick({
+      on: active && i.config.desk !== false, userBase, procs: i.procs, uid: i.currentUid, cgroupOf,
+      reserveBytes: limits?.reserveBytes ?? null, rootExists: rootStats !== null,
     });
 
     // Attribution reconstruite depuis les processus déjà rangés : segment cwatch-p-<clé>.slice de leur cgroup.
@@ -480,13 +490,14 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
       } finally {
         const ms = Math.max(0, perfNow() - t0);
         tickMs = tickMs === 0 ? ms : tickMs * 0.9 + ms * 0.1;
-        st = { ...st, slices: slicesOut(), lastError, tickMs: Math.round(tickMs * 100) / 100, dbusCalls: client.calls() };
+        st = { ...st, slices: slicesOut(), lastError, tickMs: Math.round(tickMs * 100) / 100, dbusCalls: dbusCalls(), ...(desk ? { desk: desk.state() } : {}) };
       }
     },
     // Champs vivants (fin de l'enchaînement en vol comprise) : erreur, attribution, nombre d'appels.
-    state: () => ({ ...st, slices: slicesOut(), lastError, dbusCalls: client.calls() }),
+    state: () => ({ ...st, slices: slicesOut(), lastError, dbusCalls: dbusCalls(), ...(desk ? { desk: desk.state() } : {}) }),
     async idle() {
       while (inFlight) await inFlight;
+      await desk?.idle();
     },
   };
 }

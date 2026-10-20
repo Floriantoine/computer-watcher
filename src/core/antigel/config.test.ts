@@ -21,6 +21,12 @@ describe('validateAntigel', () => {
       { enabled: true, budgets: Object.fromEntries(Array.from({ length: MAX_BUDGETS + 1 }, (_, i) => [`/p${i}`, 4096])) },
     ]) expect(validateAntigel(bad), JSON.stringify(bad)).toBeNull();
   });
+  test('bureau prioritaire : absent = allumé (champ omis), booléen gardé, autre type refusé', () => {
+    expect(validateAntigel({ enabled: true })).not.toHaveProperty('desk');
+    expect(validateAntigel({ enabled: true, desk: false })).toEqual({ enabled: true, reserveMB: null, budgets: {}, desk: false });
+    expect(validateAntigel({ enabled: true, desk: true })?.desk).toBe(true);
+    expect(validateAntigel({ enabled: true, desk: 'non' })).toBeNull();
+  });
   test('budgetKey', () => {
     expect(budgetKey('/home/u/alpha/')).toBe('/home/u/alpha');
     expect(budgetKey('/')).toBeNull();

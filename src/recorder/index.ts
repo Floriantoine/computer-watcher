@@ -35,7 +35,7 @@ const rec = createRecorder({
   // out/main/recorder.js → dossier de l'app (jamais visé par une règle)
   appRoot: process.argv[1] ? resolve(dirname(process.argv[1]), '..', '..') : null,
   // Anti-gel : vrais appels systemd (gestionnaire utilisateur) ; PROC_WATCH_NO_ANTIGEL=1 : aucun.
-  antigel: antigelDepsFor({ env: process.env, uid: process.getuid?.() ?? -1, selfPid: process.pid }),
+  antigel: antigelDepsFor({ env: process.env, uid: process.getuid?.() ?? -1, selfPid: process.pid, dataDir: dataDir() }),
 });
 rec.start();
 

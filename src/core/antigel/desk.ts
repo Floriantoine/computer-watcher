@@ -7,6 +7,9 @@ import type { ProcInfo } from '../types';
 import { BusctlError } from './systemd';
 import { DEFAULT_WEIGHT, deskTargets, isDeskSliceName, isDeskUnitName, type DeskCaps, type DeskWant } from './deskUnits';
 import type { DeskClient, DeskProps } from './deskSystemd';
+import type { AntigelDeskState } from './deskState';
+
+export type { AntigelDeskState } from './deskState';
 import { ROOT_SLICE } from './units';
 
 export const DESK_PROBE_MS = 300_000;
@@ -26,8 +29,8 @@ export interface DeskDeps {
   client: DeskClient;
   /** Fichier de contrôle d'un cgroup (« /user.slice/… ») ; null : absent ou illisible. */
   readCg: (cgroup: string, file: DeskFile) => string | null;
-  /** Origines relues au démarrage du service (antigel-desk.json). */
-  originals?: DeskOriginals;
+  /** Origines relues au démarrage du service (antigel-desk.json) ; appelée une fois, à la création. */
+  loadOriginals?: () => DeskOriginals;
   /** Sauvegarde des origines, à chaque changement, AVANT tout appel qui modifie une unité. */
   saveOriginals?: (o: DeskOriginals) => void;
   monoNow: () => number;
@@ -43,23 +46,6 @@ export interface DeskTickInput {
   cgroupOf: (pid: number) => string | null;
   reserveBytes: number | null;
   rootExists: boolean;
-}
-
-export interface AntigelDeskState {
-  status: 'active' | 'off' | 'unavailable';
-  reason: string | null;
-  /** Poids CPU posés (contrôleur cpu délégué). */
-  cpu: boolean;
-  /** Poids E/S posés (contrôleur io délégué). */
-  io: boolean;
-  /** Protection mémoire : posée, sans effet ici (niveaux système sans protection), ou non posée. */
-  memory: 'on' | 'ineffective' | 'off';
-  /** Unités réglées (bureau, terminaux, cwatch.slice). */
-  units: string[];
-  /** Plusieurs terminaux au-delà de la limite. */
-  truncated: boolean;
-  /** Unités qui attendent le retour à leurs valeurs d'origine. */
-  restoring: number;
 }
 
 export interface DeskController {
@@ -120,7 +106,7 @@ export function sanitizeOriginals(raw: unknown): DeskOriginals {
 }
 
 export function createDeskPriority(deps: DeskDeps): DeskController {
-  const originals = new Map<string, DeskOriginal>(Object.entries(sanitizeOriginals(deps.originals ?? {})));
+  const originals = new Map<string, DeskOriginal>(Object.entries(sanitizeOriginals(deps.loadOriginals?.() ?? {})));
   let caps: (DeskCaps & { reason: string | null }) | null = null;
   let capsAt = 0;
   let downUntil = -Infinity;
@@ -311,7 +297,8 @@ export function createDeskPriority(deps: DeskDeps): DeskController {
 
   return {
     tick,
-    state: () => ({ ...st, units: [...st.units] }),
+    // restoring relu en direct : la fin d'un enchaînement en vol compte
+    state: () => ({ ...st, units: [...st.units], restoring: [...originals.keys()].filter((u) => !st.units.includes(u)).length }),
     async idle() {
       while (inFlight) await inFlight;
     },
