@@ -90,7 +90,7 @@ setInterval(() => { if (!alive() || !fs.existsSync('package.json') || fs.existsS
     version: 1, at: Date.now(), enabled: true, status: 'active', reason: null, memTotalKB: 32 * G, reserveKB: 5 * G,
     slice: { currentKB: 9 * G, highKB: 27 * G, maxKB: 29 * G, swapMaxKB: 10 * G, throttles: 3, oomKills: 1 },
     projects: [{ unit, root: proj, procs: 1, currentKB: 2 * G, budgetMB: null, throttled: true }],
-    scopes: { [unit]: proj }, lastError: null, tickMs: 0.4, dbusCalls: 2, ...over,
+    slices: { [unit]: proj }, lastError: null, tickMs: 0.4, dbusCalls: 2, ...over,
   });
   const writeState = () => {
     const p = join(dataApp, 'antigel-state.json');
@@ -189,7 +189,7 @@ setInterval(() => { if (!alive() || !fs.existsSync('package.json') || fs.existsS
   await waitFor(async () => /Plafond de travail actif/.test(await agCard.innerText()), 'carte « Plafond de travail actif »');
 
   // 6) Indisponible : la carte donne la raison, plus aucun badge
-  over = { status: 'unavailable', reason: 'contrôleur mémoire non délégué à la session (memory absent de cgroup.subtree_control)', slice: null, projects: [], scopes: {}, reserveKB: null };
+  over = { status: 'unavailable', reason: 'contrôleur mémoire non délégué à la session (memory absent de cgroup.subtree_control)', slice: null, projects: [], slices: {}, reserveKB: null };
   writeState();
   await waitFor(async () => /Plafond de travail indisponible : contrôleur mémoire non délégué/.test(await agCard.innerText()), 'carte « indisponible »');
   assert.equal(await win.locator('[data-testid="antigel-mem"]').count(), 0);

@@ -95,7 +95,7 @@ test('service : cwatch.slice plafonnée, slice du projet, jest et son worker dan
   await s.tick();
   expect(s.calls).toHaveLength(3); // régime établi : aucun appel
   expect(JSON.parse(readFileSync(s.statePath, 'utf8'))).toMatchObject({
-    version: 1, status: 'active', enabled: true, projects: [{ unit: PS, root: s.A, procs: 2 }], scopes: { [PS]: s.A }, dbusCalls: 3, lastError: null,
+    version: 1, status: 'active', enabled: true, projects: [{ unit: PS, root: s.A, procs: 2 }], slices: { [PS]: s.A }, dbusCalls: 3, lastError: null,
   });
   expect(statSync(s.statePath).mode & 0o777).toBe(0o600);
   s.rec.stop();
@@ -116,7 +116,7 @@ test('redémarrage du service : attribution relue dans antigel-state.json, plafo
   rec2.tick();
   await rec2.antigelIdle();
   expect(fake2.calls).toEqual([ROOT_CALL]);
-  expect(JSON.parse(readFileSync(s.statePath, 'utf8'))).toMatchObject({ scopes: { [PS]: s.A }, projects: [{ unit: PS, root: s.A }] });
+  expect(JSON.parse(readFileSync(s.statePath, 'utf8'))).toMatchObject({ slices: { [PS]: s.A }, projects: [{ unit: PS, root: s.A }] });
   rec2.stop();
 });
 

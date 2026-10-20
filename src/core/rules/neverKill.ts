@@ -73,20 +73,35 @@ const terminalName = matcher(TERMINAL_NAMES);
 const ideName = matcher(IDE_NAMES);
 export const isTerminalName = (name: string): boolean => terminalName(name);
 export const isIdeName = (name: string): boolean => ideName(name);
+/** Éditeurs basés sur Electron, seuls à exécuter des scripts Node sous leur propre nom (ELECTRON_RUN_AS_NODE). */
+const ELECTRON_IDE = /^(code|code-oss|codium|vscodium|cursor|windsurf)$/;
+/** Script installé avec l'éditeur : `…/resources/app/…`, ou sous /usr/lib, /usr/share ou /opt dans un dossier de l'éditeur. */
+const IDE_SCRIPT_DIR = /(\/resources\/app\/|^\/(usr\/lib|usr\/share|opt)\/(code|code-oss|codium|vscodium|cursor|windsurf|visual-studio-code)[^/]*\/)/;
 /**
  * Éditeur basé sur Electron qui exécute un script Node (ELECTRON_RUN_AS_NODE : tsserver, serveurs de langage de VS Code,
- * comm « code ») : premier argument en .js, .mjs ou .cjs. Ce n'est pas l'éditeur, c'est du travail.
+ * comm « code ») : premier argument = chemin absolu en .js, .mjs ou .cjs, situé dans le dossier de l'éditeur, ou lancé
+ * directement par l'éditeur (`parent` : hôte d'extensions). Ce n'est pas l'éditeur, c'est du travail. Jamais kate, zed…,
+ * ni un éditeur ouvert sur un fichier (`code dist/server.js`, chemin relatif ou hors de l'éditeur, depuis un shell).
  */
-export const isIdeNodeScript = (p: { name: string; cmdline: string }): boolean =>
-  ideName(p.name) && /\.[cm]?js$/.test(p.cmdline.split(/\s+/)[1] ?? '');
+export const isIdeNodeScript = (p: { name: string; cmdline: string }, parent?: { name: string; cmdline: string }): boolean => {
+  if (!ELECTRON_IDE.test(p.name)) return false;
+  const script = p.cmdline.split(/\s+/)[1] ?? '';
+  if (!script.startsWith('/') || script.split('/').includes('..') || !/\.[cm]?js$/.test(script)) return false;
+  return IDE_SCRIPT_DIR.test(script) || (parent !== undefined && isIdeProc(parent));
+};
 /** IntelliJ (ancien lancement) : java dont la commande contient `com.intellij.` ou, hors de l'exécutable, un chemin JetBrains. */
 const isJetBrainsJava = (p: { name: string; cmdline: string }): boolean => {
   const [exe = '', ...args] = p.cmdline.split(/\s+/);
   if (p.name !== 'java' && exe.slice(exe.lastIndexOf('/') + 1) !== 'java') return false;
   return args.some((a) => /(^|[=:])com\.intellij\./.test(a) || /\/jetbrains\//i.test(a));
 };
-/** Éditeur ou IDE (anti-gel : ancre, jamais déplacé), d'après son nom, ou IntelliJ lancé par java ; jamais un script Node qu'il exécute. */
-export const isIdeProc = (p: { name: string; cmdline: string }): boolean => (ideName(p.name) && !isIdeNodeScript(p)) || isJetBrainsJava(p);
+/**
+ * Éditeur ou IDE (anti-gel : ancre, jamais déplacé), d'après son nom, ou IntelliJ lancé par java ; jamais un script Node
+ * qu'il exécute (`parent` : processus parent, s'il est connu).
+ */
+export function isIdeProc(p: { name: string; cmdline: string }, parent?: { name: string; cmdline: string }): boolean {
+  return (ideName(p.name) && !isIdeNodeScript(p, parent)) || isJetBrainsJava(p);
+}
 /** Claude, d'après son nom ou le programme lancé (premier mot de la ligne de commande). */
 export const isClaudeProc = (p: { name: string; cmdline: string }): boolean =>
   CLAUDE_NAMES.has(p.name) || CLAUDE_CMD.test(p.cmdline.split(/\s+/, 1)[0] ?? '');

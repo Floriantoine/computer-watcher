@@ -20,7 +20,7 @@ export interface AntigelState {
   slice: AntigelSliceState | null;
   projects: AntigelProjectState[];
   /** Attribution slice de projet → racine de projet (relue au redémarrage du service). */
-  scopes: Record<string, string | null>;
+  slices: Record<string, string | null>;
   lastError: string | null;
   /** Coût moyen de l'étape anti-gel d'un tick (ms, moyenne glissante). */
   tickMs: number;
@@ -70,12 +70,12 @@ export function parseAntigelState(t: string): AntigelState | null {
   if (!text(s.reason) || !text(s.lastError) || !num(s.memTotalKB) || !numOrNull(s.reserveKB) || !num(s.tickMs) || !num(s.dbusCalls)) return null;
   if (!slice(s.slice)) return null;
   if (!Array.isArray(s.projects) || s.projects.length > MAX_ITEMS || !s.projects.every(project)) return null;
-  if (typeof s.scopes !== 'object' || s.scopes === null || Array.isArray(s.scopes)) return null;
-  const scopes = Object.entries(s.scopes as Record<string, unknown>);
-  if (scopes.length > MAX_ITEMS || !scopes.every(([u, r]) => isProdProjectSliceName(u) && root(r))) return null;
+  if (typeof s.slices !== 'object' || s.slices === null || Array.isArray(s.slices)) return null;
+  const slices = Object.entries(s.slices as Record<string, unknown>);
+  if (slices.length > MAX_ITEMS || !slices.every(([u, r]) => isProdProjectSliceName(u) && root(r))) return null;
   return {
     version: 1, at: s.at, enabled: s.enabled, status: s.status, reason: s.reason, memTotalKB: s.memTotalKB, reserveKB: s.reserveKB,
-    slice: s.slice === null ? null : copySlice(s.slice), projects: s.projects.map(copyProject), scopes: Object.fromEntries(scopes) as Record<string, string | null>,
+    slice: s.slice === null ? null : copySlice(s.slice), projects: s.projects.map(copyProject), slices: Object.fromEntries(slices) as Record<string, string | null>,
     lastError: s.lastError, tickMs: s.tickMs, dbusCalls: s.dbusCalls,
   };
 }

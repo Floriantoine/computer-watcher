@@ -39,7 +39,7 @@ const vitest = (pid: number) => p(pid, 601, 'MainThread', `node ${NM}/vitest/vit
 
 function harness(o: {
   avail?: Availability; reverify?: AntigelDeps['reverify']; fail?: (method: string, args: readonly unknown[]) => BusctlError | null;
-  hang?: boolean; initialScopes?: Record<string, string | null>; roots?: Record<string, string>;
+  hang?: boolean; initialSlices?: Record<string, string | null>; roots?: Record<string, string>;
 } = {}) {
   const fake = fakeSystemd({ userBase: BASE, fail: o.fail, hang: () => !!o.hang });
   const logs: string[] = [];
@@ -47,7 +47,7 @@ function harness(o: {
   const probe = vi.fn(() => o.avail ?? ({ ok: true, userBase: BASE, busctl: '/usr/bin/busctl' } as Availability));
   const reverify = vi.fn(o.reverify ?? ((t) => [...t]));
   const ag = createAntigel({
-    client: fake.client, probe, reverify, log: (m) => logs.push(m), monoNow: () => mono, perfNow: () => 0, initialScopes: o.initialScopes,
+    client: fake.client, probe, reverify, log: (m) => logs.push(m), monoNow: () => mono, perfNow: () => 0, initialSlices: o.initialSlices,
     stats: (path) => fake.sys.get(path) ?? null, cgroupOf: (pid) => fake.cg.get(pid) ?? WARP,
   });
   const rootOf = (c: string) => Object.entries({ [A]: A, ...o.roots }).find(([k]) => c === k || c.startsWith(`${k}/`))?.[1] ?? null;
@@ -88,7 +88,7 @@ describe('orchestrateur anti-gel', () => {
     expect(h.calls).toEqual([]);
     expect(h.ag.state()).toMatchObject({
       status: 'active', enabled: true, reserveKB: 4 * 1024 * 1024, dbusCalls: 3, lastError: null,
-      projects: [{ unit: PS, root: A, procs: 5, budgetMB: null, throttled: false }], scopes: { [PS]: A },
+      projects: [{ unit: PS, root: A, procs: 5, budgetMB: null, throttled: false }], slices: { [PS]: A },
     });
   });
 
@@ -226,7 +226,7 @@ describe('orchestrateur anti-gel', () => {
     h.setProcs([...world().slice(0, 2), vitest(720)]);
     for (let k = 0; k < 3; k++) await h.step(OFF);
     expect(h.calls).toEqual([]);
-    expect(h.ag.state()).toMatchObject({ status: 'off', enabled: false, projects: [], scopes: { [PS]: A } });
+    expect(h.ag.state()).toMatchObject({ status: 'off', enabled: false, projects: [], slices: { [PS]: A } });
     expect(h.cg.has(720)).toBe(false);
   });
 
@@ -240,7 +240,7 @@ describe('orchestrateur anti-gel', () => {
   });
 
   test('éteint au démarrage (service redémarré) : plafonds et budgets encore posés remis à infinity, une seule fois', async () => {
-    const h = harness({ initialScopes: { [PS]: A } });
+    const h = harness({ initialSlices: { [PS]: A } });
     h.sys.set(ROOT, stats({ highBytes: 12 * GiB, maxBytes: 14 * GiB, swapMaxBytes: 4 * GiB }));
     h.sys.set(PSCG, stats({ highBytes: 4 * GiB }));
     for (const pid of [700, 701, 702, 703, 704]) h.cg.set(pid, `${PSCG}/cwatch-p-alpha-old.scope`);
@@ -326,7 +326,7 @@ describe('orchestrateur anti-gel', () => {
     await h.step();
     await h.step();
     expect(names(h.calls)).toEqual(['ensureSlice']);
-    expect(h.ag.state().scopes).toEqual({ [PS]: A });
+    expect(h.ag.state().slices).toEqual({ [PS]: A });
     expect(h.ag.state().projects).toMatchObject([{ unit: PS, root: A, procs: 5 }]);
   });
 
@@ -335,14 +335,14 @@ describe('orchestrateur anti-gel', () => {
     const hashed = `cwatch-p-alpha_${shortHash(A)}.slice`;
     const h = harness({
       roots: { [other]: other },
-      initialScopes: { [PS]: other, 'cwatch-p-beta.slice': A, 'cwatch-e2eabc-x.slice': A, 'cwatch-p-autres.slice': A, 'cwatch-p-gamma.slice': null },
+      initialSlices: { [PS]: other, 'cwatch-p-beta.slice': A, 'cwatch-e2eabc-x.slice': A, 'cwatch-p-autres.slice': A, 'cwatch-p-gamma.slice': null },
     });
     const HCG = `${ROOT}/cwatch-p.slice/${hashed}`;
     h.sys.set(PSCG, stats());
     h.sys.set(HCG, stats());
     for (const pid of [700, 701, 702, 703, 704]) h.cg.set(pid, `${HCG}/cwatch-p-alpha_${shortHash(A)}-old.scope`);
     await h.step();
-    expect(h.ag.state().scopes).toEqual({ [PS]: other, [hashed]: A });
+    expect(h.ag.state().slices).toEqual({ [PS]: other, [hashed]: A });
     expect(names(h.calls)).toEqual(['ensureSlice']);
     // un nouveau lot du projet va dans sa slice (hachée), jamais dans celle de l'autre racine
     h.calls.length = 0;
@@ -353,11 +353,11 @@ describe('orchestrateur anti-gel', () => {
 
   test('redémarrage : deux slices relues pour la même racine → une seule gardée', async () => {
     const hashed = `cwatch-p-alpha_${shortHash(A)}.slice`;
-    const h = harness({ initialScopes: { [PS]: A, [hashed]: A } });
+    const h = harness({ initialSlices: { [PS]: A, [hashed]: A } });
     h.sys.set(PSCG, stats());
     h.sys.set(`${ROOT}/cwatch-p.slice/${hashed}`, stats());
     await h.step();
-    expect(h.ag.state().scopes).toEqual({ [PS]: A });
+    expect(h.ag.state().slices).toEqual({ [PS]: A });
   });
 
   test('processus comptés dans la slice : seulement ceux qui y sont vraiment', async () => {
@@ -370,17 +370,17 @@ describe('orchestrateur anti-gel', () => {
 
   test('redémarrage : processus rangés dans la slice d’une autre racine → aucune attribution, aucun doublon', async () => {
     const other = '/srv/alpha';
-    const h = harness({ roots: { [other]: other }, initialScopes: { [PS]: other } });
+    const h = harness({ roots: { [other]: other }, initialSlices: { [PS]: other } });
     h.sys.set(PSCG, stats());
     for (const pid of [700, 701, 702, 703, 704]) h.cg.set(pid, `${PSCG}/cwatch-p-alpha-old.scope`);
     await h.step();
-    expect(h.ag.state().scopes).toEqual({ [PS]: other });
+    expect(h.ag.state().slices).toEqual({ [PS]: other });
   });
 
   test('slice de projet relue mais disparue (session redémarrée) : attribution oubliée', async () => {
-    const h = harness({ initialScopes: { 'cwatch-p-beta.slice': '/home/u/beta' } });
+    const h = harness({ initialSlices: { 'cwatch-p-beta.slice': '/home/u/beta' } });
     await h.step();
-    expect(h.ag.state().scopes).toEqual({ [PS]: A });
+    expect(h.ag.state().slices).toEqual({ [PS]: A });
   });
 
   test('réserve trop grande : aucun plafond, aucune slice de projet, aucun déplacement ; raison dans l’état', async () => {
@@ -412,7 +412,7 @@ describe('orchestrateur anti-gel', () => {
       ['ensureProjectSlice', 'cwatch-p-autres.slice', null],
       ['startScope', expect.stringMatching(/^cwatch-p-autres-[a-z0-9]+\.scope$/), 'cwatch-p-autres.slice', [810]],
     ]);
-    expect(h.ag.state().scopes).toEqual({ 'cwatch-p-autres.slice': null });
+    expect(h.ag.state().slices).toEqual({ 'cwatch-p-autres.slice': null });
   });
 
   test('dossiers de config de Claude transmis au plan : le shell de l’outil Bash d’un dossier personnalisé n’est pas à Claude', async () => {

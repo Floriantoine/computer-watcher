@@ -9,12 +9,20 @@ describe('antigel-state.json', () => {
     expect(parseAntigelState(JSON.stringify(sampleState()))).toEqual(sampleState());
     expect(parseAntigelState(JSON.stringify(sampleState({ status: 'unavailable', reason: 'busctl introuvable (/usr/bin/busctl)', slice: null, projects: [], reserveKB: null })))?.reason).toMatch(/busctl/);
   });
+  test('attribution slice de projet → racine : champ « slices » (l’ancien nom « scopes » est refusé)', () => {
+    const t = JSON.parse(JSON.stringify(sampleState()));
+    expect(t.slices).toEqual({ 'cwatch-p-alpha.slice': '/home/u/alpha', 'cwatch-p-autres.slice': null });
+    expect(t).not.toHaveProperty('scopes');
+    expect(parseAntigelState(JSON.stringify(t))?.slices).toEqual(t.slices);
+    const { slices, ...rest } = t;
+    expect(parseAntigelState(JSON.stringify({ ...rest, scopes: slices }))).toBeNull();
+  });
   test('refus : version, statut, unité, racine relative, nombres, taille, JSON cassé', () => {
     const bad = [
       { ...sampleState(), version: 2 }, { ...sampleState(), status: 'gelé' },
       sampleState({ projects: [proj('../x.slice')] }),
       sampleState({ projects: [proj('cwatch-p-a.slice', 'relatif')] }),
-      sampleState({ scopes: { 'app.slice': null } }), { ...sampleState(), at: Number.NaN }, { ...sampleState(), tickMs: -1 },
+      sampleState({ slices: { 'app.slice': null } }), { ...sampleState(), at: Number.NaN }, { ...sampleState(), tickMs: -1 },
       sampleState({ reason: 'x'.repeat(400) }),
     ];
     for (const b of bad) expect(parseAntigelState(JSON.stringify(b)), JSON.stringify(b).slice(0, 80)).toBeNull();
@@ -29,14 +37,14 @@ describe('antigel-state.json', () => {
     const ok = sampleState({ projects: [proj('cwatch-p-alpha.slice'), proj('cwatch-p-beta_0a1b2c.slice')] });
     expect(parseAntigelState(JSON.stringify(ok))?.projects).toHaveLength(2);
   });
-  test('l\'attribution scopes : clés = slices de projet seulement', () => {
-    expect(parseAntigelState(JSON.stringify(sampleState({ scopes: { 'cwatch-p-alpha-1.scope': null } })))).toBeNull();
-    expect(parseAntigelState(JSON.stringify(sampleState({ scopes: { 'cwatch-p-alpha.slice': 'relatif' } })))).toBeNull();
+  test('l\'attribution slices : clés = slices de projet seulement', () => {
+    expect(parseAntigelState(JSON.stringify(sampleState({ slices: { 'cwatch-p-alpha-1.scope': null } })))).toBeNull();
+    expect(parseAntigelState(JSON.stringify(sampleState({ slices: { 'cwatch-p-alpha.slice': 'relatif' } })))).toBeNull();
   });
   test('noms de test cwatch-e2e jamais acceptés dans l\'état de production', () => {
     for (const unit of ['cwatch-e2eabc.slice', 'cwatch-e2eabc-x.slice', 'cwatch-e2eabc-x.scope']) {
       expect(parseAntigelState(JSON.stringify(sampleState({ projects: [proj(unit)] }))), unit).toBeNull();
-      expect(parseAntigelState(JSON.stringify(sampleState({ scopes: { [unit]: null } }))), unit).toBeNull();
+      expect(parseAntigelState(JSON.stringify(sampleState({ slices: { [unit]: null } }))), unit).toBeNull();
     }
   });
   test('racines : forme normalisée, sans caractère de contrôle', () => {
@@ -56,7 +64,7 @@ describe('antigel-state.json', () => {
   });
   test('__proto__, propriétés en plus, bornes de tailles', () => {
     const base = JSON.parse(JSON.stringify(sampleState()));
-    expect(parseAntigelState(JSON.stringify(base).replace('"scopes":{', '"scopes":{"__proto__":null,'))).toBeNull();
+    expect(parseAntigelState(JSON.stringify(base).replace('"slices":{', '"slices":{"__proto__":null,'))).toBeNull();
     const withExtra = JSON.parse(JSON.stringify(base));
     withExtra.projects[0].extra = 'x';
     withExtra.slice.extra = 'y';

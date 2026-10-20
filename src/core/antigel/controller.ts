@@ -17,7 +17,7 @@ import { OTHERS_SLICE, ROOT_SLICE, isProdProjectSliceName, newScopeName, project
 export const PROBE_EVERY_MS = 300_000;
 export const THROTTLE_HOLD_MS = 15_000;
 const CGROUP_MAX_AGE_MS = 60_000;
-/** Entrées au plus dans `scopes` et `projects` de l'état (borne de parseAntigelState). */
+/** Entrées au plus dans `slices` et `projects` de l'état (borne de parseAntigelState). */
 const MAX_UNITS = 200;
 const RESERVE_TOO_BIG = 'réserve trop grande : moins de 1 Go laissé au travail';
 
@@ -35,8 +35,8 @@ export interface AntigelDeps {
   log: (msg: string) => void;
   /** Horloge du coût mesuré (défaut : performance.now). */
   perfNow?: () => number;
-  /** Attribution slice de projet → racine relue dans antigel-state.json au démarrage (champ `scopes`). */
-  initialScopes?: Record<string, string | null>;
+  /** Attribution slice de projet → racine relue dans antigel-state.json au démarrage (champ `slices`). */
+  initialSlices?: Record<string, string | null>;
 }
 
 export interface AntigelTickInput {
@@ -132,7 +132,7 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
   let seq = 0;
   let st: AntigelState = {
     version: 1, at: 0, enabled: true, status: 'unavailable', reason: 'démarrage', memTotalKB: 0, reserveKB: null, slice: null,
-    projects: [], scopes: {}, lastError: null, tickMs: 0, dbusCalls: 0,
+    projects: [], slices: {}, lastError: null, tickMs: 0, dbusCalls: 0,
   };
 
   const attribute = (slice: string, root: string | null): void => {
@@ -140,7 +140,7 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
     for (const r of slices.values()) if (r === root) return;
     slices.set(slice, root);
   };
-  for (const [s, r] of Object.entries(deps.initialScopes ?? {})) attribute(s, r);
+  for (const [s, r] of Object.entries(deps.initialSlices ?? {})) attribute(s, r);
 
   const forget = (slice: string) => {
     slices.delete(slice);
@@ -399,7 +399,7 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
     return ooms;
   };
 
-  const scopesOut = () => Object.fromEntries([...slices].slice(0, MAX_UNITS));
+  const slicesOut = () => Object.fromEntries([...slices].slice(0, MAX_UNITS));
   return {
     tick(i) {
       const t0 = perfNow();
@@ -408,11 +408,11 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
       } finally {
         const ms = Math.max(0, perfNow() - t0);
         tickMs = tickMs === 0 ? ms : tickMs * 0.9 + ms * 0.1;
-        st = { ...st, scopes: scopesOut(), lastError, tickMs: Math.round(tickMs * 100) / 100, dbusCalls: client.calls() };
+        st = { ...st, slices: slicesOut(), lastError, tickMs: Math.round(tickMs * 100) / 100, dbusCalls: client.calls() };
       }
     },
     // Champs vivants (fin de l'enchaînement en vol comprise) : erreur, attribution, nombre d'appels.
-    state: () => ({ ...st, scopes: scopesOut(), lastError, dbusCalls: client.calls() }),
+    state: () => ({ ...st, slices: slicesOut(), lastError, dbusCalls: client.calls() }),
     async idle() {
       while (inFlight) await inFlight;
     },

@@ -282,6 +282,22 @@ describe('course au lancement et intouchables (relecture, correction 1)', () => 
     expect(r.moves.map((m) => [m.rootPid, m.anchorCgroup, pidsOf(m)])).toEqual([[451, IDEA, [451]]]);
   });
 
+  test('éditeurs ouverts sur un fichier .js depuis le terminal (kate, zed, VS Code principal) : jamais déplacés', () => {
+    for (const [name, cmdline] of [['kate', 'kate x.js'], ['zed', 'zed x.js'], ['code', 'code dist/server.js'], ['code', '/usr/share/code/code dist/server.js'], ['code', '/usr/share/code/code server.js']]) {
+      const procs = [...warp(), p(700, 601, name!, cmdline!, { ageSec: 60, cwd: A })];
+      const r = run(procs, { project: { 700: A } });
+      expect(r.moves, cmdline).toEqual([]);
+    }
+  });
+
+  test('VS Code : script d’une extension lancé par l’hôte d’extensions (enfant de l’éditeur) : déplacé, jamais l’éditeur', () => {
+    const procs = [p(400, 1, 'code', '/usr/share/code/code'),
+      p(402, 400, 'code', '/usr/share/code/code --type=utility --utility-sub-type=node.mojom.NodeService'),
+      p(403, 402, 'code', '/usr/share/code/code /home/u/.local/share/demo-ext/node_modules/typescript/lib/tsserver.js --node-ipc')];
+    const r = run(procs, { cg: { 400: CODE, 402: CODE, 403: CODE } });
+    expect(r.moves.map((m) => [m.rootPid, m.anchorCgroup, pidsOf(m)])).toEqual([[403, CODE, [403]]]);
+  });
+
   test('VS Code : tsserver lancé par code (comm « code », ELECTRON_RUN_AS_NODE) : déplacé, jamais code', () => {
     const procs = [p(400, 1, 'code', '/usr/share/code/code'),
       p(401, 400, 'code', '/usr/share/code/code /usr/share/code/resources/app/extensions/node_modules/typescript/lib/tsserver.js --serverMode partialSemantic')];

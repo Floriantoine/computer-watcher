@@ -11,12 +11,14 @@ export const APP_NAMES = new Set([
 export const DEV_TOOL = /^(node|npm|pnpm|yarn|bun|deno|vite|esbuild|uv|java|cargo|go|python[\d.]*)\b/;
 
 /**
- * Outil de dev, reconnu au nom (comm) OU au programme lancé (premier mot de la ligne de commande). Sous Node ≥ 24 le comm
- * d'un processus node (jest et ses workers, tsc, eslint…) est « MainThread » : jamais de décision sur le comm seul.
+ * Outil de dev, reconnu au nom (comm), ou au programme lancé (premier mot de la ligne de commande) quand le comm vaut
+ * « MainThread » : sous Node ≥ 24, c'est le comm d'un processus node (jest et ses workers, tsc, eslint…). Jamais la ligne
+ * de commande pour un autre comm : un programme à shebang (`meld`, lancé comme `/usr/bin/python3 /usr/bin/meld`) garde
+ * son nom de script et n'est pas un outil de dev.
  */
 export function isDevTool(name: string, cmdline: string): boolean {
   if (DEV_TOOL.test(name)) return true;
-  if (cmdline.startsWith('[')) return false; // thread noyau ou ligne de commande vide : « [nom] »
+  if (name !== 'MainThread' || cmdline.startsWith('[')) return false; // « [nom] » : thread noyau ou ligne de commande vide
   const first = cmdline.split(/\s+/, 1)[0] ?? '';
   const base = first.slice(first.lastIndexOf('/') + 1);
   return base !== '' && DEV_TOOL.test(base);

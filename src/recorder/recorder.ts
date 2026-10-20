@@ -91,7 +91,7 @@ export interface RecorderDeps {
    * Anti-gel : client systemd et lectures de cgroups. Absent (tests, PROC_WATCH_NO_ANTIGEL=1) : anti-gel inactif, aucun
    * appel D-Bus, aucun fichier d'état.
    */
-  antigel?: Omit<AntigelDeps, 'log' | 'monoNow' | 'initialScopes'>;
+  antigel?: Omit<AntigelDeps, 'log' | 'monoNow' | 'initialSlices'>;
 }
 
 /** statfs(2) en Ko : taille totale et place disponible pour un utilisateur ordinaire (f_bavail). */
@@ -566,9 +566,9 @@ export function createRecorder(deps: RecorderDeps): Recorder {
 
   // Anti-gel (lot 1) : plafond global du travail, budgets, déplacements ; état écrit pour la fenêtre (0600).
   let antigel: AntigelController | null = null;
-  const readAntigelScopes = (): Record<string, string | null> => {
+  const readAntigelSlices = (): Record<string, string | null> => {
     try {
-      return parseAntigelState(readFileSync(antigelStatePath(deps.dataDir), 'utf8'))?.scopes ?? {};
+      return parseAntigelState(readFileSync(antigelStatePath(deps.dataDir), 'utf8'))?.slices ?? {};
     } catch {
       return {};
     }
@@ -653,7 +653,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       } catch (e) {
         log(`règles: état non restauré : ${(e as Error).message}`);
       }
-      if (deps.antigel) antigel = createAntigel({ ...deps.antigel, log, monoNow: mono, initialScopes: readAntigelScopes() });
+      if (deps.antigel) antigel = createAntigel({ ...deps.antigel, log, monoNow: mono, initialSlices: readAntigelSlices() });
       writeStatus();
     },
 

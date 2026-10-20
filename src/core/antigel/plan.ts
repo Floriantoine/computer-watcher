@@ -51,12 +51,12 @@ const under = (path: string, base: string) => path === base || path.startsWith(`
  * Vraie appli (navigateur ouvert par `vite --open`…) : le regroupement s'y arrête aussi ; un navigateur de test suit son
  * test, un script Node exécuté par l'éditeur (tsserver, comm « code ») n'est pas l'éditeur.
  */
-const isRealApp = (p: ProcInfo) => APP_NAMES.has(p.name) && !isTestBrowser(p.cmdline) && !isIdeNodeScript(p);
+const isRealApp = (p: ProcInfo, parent?: ProcInfo) => APP_NAMES.has(p.name) && !isTestBrowser(p.cmdline) && !isIdeNodeScript(p, parent);
 /** Dossier de travail dans l'app (n'importe quel worktree, sous ses deux noms) : `npm run dev` de l'app avant qu'electron ne naisse. */
 const inAppDir = (p: ProcInfo) => p.cwd !== null && APP_PATH.test(p.cwd);
 /** Ligne de commande vue par le classement : le script d'un éditeur lancé en Node (ELECTRON_RUN_AS_NODE) est lu comme `node <script>`. */
-const asNode = (p: ProcInfo): { name: string; cmdline: string } =>
-  isIdeNodeScript(p) ? { name: 'node', cmdline: `node ${p.cmdline.split(/\s+/).slice(1).join(' ')}` } : p;
+const asNode = (p: ProcInfo, parent?: ProcInfo): { name: string; cmdline: string } =>
+  isIdeNodeScript(p, parent) ? { name: 'node', cmdline: `node ${p.cmdline.split(/\s+/).slice(1).join(' ')}` } : p;
 /** Ligne de commande vide, « [nom] » : processus zombie (ou thread noyau). Ni racine, ni cible (l'attacher échouerait). */
 const isZombieLike = (p: ProcInfo) => p.cmdline.startsWith('[');
 
@@ -78,16 +78,18 @@ export function planMoves(input: PlanInput): PlanResult {
     return cgMemo.get(pid)!;
   };
   const cwatch = `${input.userBase}/${ROOT_SLICE}`;
-  const isAnchor = (p: ProcInfo) => isTerminalName(p.name) || isIdeProc(p) || isClaudeProc(p);
+  // script Node d'un éditeur : reconnu aussi quand son parent est l'éditeur (hôte d'extensions)
+  const parentOf = (p: ProcInfo) => (p.ppid === p.pid ? undefined : byPid.get(p.ppid));
+  const isAnchor = (p: ProcInfo) => isTerminalName(p.name) || isIdeProc(p, parentOf(p)) || isClaudeProc(p);
   const neverMove = (p: ProcInfo) =>
-    p.pid <= 1 || p.pid === input.selfPid || isNeverKill(p, input.appRoot) || isIdeProc(p) || isRealApp(p) || inAppDir(p) ||
+    p.pid <= 1 || p.pid === input.selfPid || isNeverKill(p, input.appRoot) || isIdeProc(p, parentOf(p)) || isRealApp(p, parentOf(p)) || inAppDir(p) ||
     launchesClaude(p.name, p.cmdline) || input.isProtected(p.name);
   const isWork = (p: ProcInfo): boolean => {
     if (input.projectOf(p.pid) !== null) return true;
     const key = `${p.pid}:${p.startTicks}`;
     let v = input.workMemo?.get(key);
     if (v === undefined) {
-      const q = asNode(p);
+      const q = asNode(p, parentOf(p));
       const cat = matchCommand([q])?.category;
       v = (cat !== undefined && WORK_CATEGORIES.has(cat)) || checkCommand(q.name, q.cmdline) !== null;
       input.workMemo?.set(key, v);

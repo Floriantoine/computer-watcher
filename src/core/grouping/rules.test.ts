@@ -11,3 +11,13 @@ test('isDevTool : au comm, ou au programme lancé (jamais au seul comm « MainTh
   expect(isDevTool('MainThread', '[MainThread]')).toBe(false);
   expect(isDevTool('nodemon', 'nodemonx')).toBe(false);
 });
+
+test('isDevTool : la ligne de commande n’est lue que pour le comm « MainThread » (Node ≥ 24), jamais pour un script à shebang', () => {
+  // programme Python lancé par son shebang : comm = nom du script, ligne de commande = interpréteur + script
+  expect(isDevTool('meld', '/usr/bin/python3 /usr/bin/meld')).toBe(false);
+  expect(isDevTool('meld', '/usr/bin/python3 /usr/bin/meld .')).toBe(false);
+  expect(isDevTool('idle3', '/usr/bin/python3 /usr/bin/idle3')).toBe(false);
+  expect(isDevTool('demo', '/usr/bin/node /home/u/bin/demo')).toBe(false);
+  expect(isDevTool('MainThread', 'node /home/u/demo/x.js')).toBe(true);
+  expect(isDevTool('MainThread', '/usr/bin/python3 /home/u/demo/x.py')).toBe(true);
+});
