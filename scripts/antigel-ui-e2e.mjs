@@ -146,6 +146,37 @@ setInterval(() => { if (!alive() || !fs.existsSync('package.json') || fs.existsS
   await waitFor(async () => /Budget : 6 Go/.test(await budgetBtn.innerText()), 'bouton « Budget : 6 Go »');
   await shot('antigel-budget');
 
+  // 2b) Frigo (lot 3) : « Mettre au frigo… » → dialogue → demande déposée par le main (le service est simulé : jamais lancé) ;
+  // puis état « au frigo » simulé : badge, ligne du détail, « Réveiller » → demande de réveil
+  const requests = () => {
+    try {
+      return JSON.parse(readFileSync(join(dataApp, 'antigel-fridge-request.json'), 'utf8')).requests;
+    } catch {
+      return [];
+    }
+  };
+  const fridgeBtn = win.locator('[data-testid="antigel-fridge-button"]');
+  await fridgeBtn.waitFor();
+  await fridgeBtn.click();
+  const fridgeDialog = win.locator('[data-testid="antigel-fridge-dialog"]');
+  await fridgeDialog.waitFor();
+  assert.match(await fridgeDialog.innerText(), /Mettre « projets \/ alpha » au frigo/);
+  await shot('antigel-frigo-dialogue', fridgeDialog);
+  await win.locator('[data-testid="antigel-fridge-confirm"]').click();
+  await waitFor(() => requests().some((r) => r.root === proj && r.action === 'freeze'), 'demande « frigo » déposée');
+  over = {
+    fridge: [{ unit, root: proj, since: Date.now(), phase: 'frozen', reclaimedKB: 1.5 * G }],
+    fridgeNotice: { root: proj, text: '« alpha » au frigo : ≈ 1,5 Go sortis de la RAM', ok: true, at: Date.now() },
+  };
+  writeState();
+  await waitFor(async () => /au frigo/.test(await win.locator('h2 [data-testid="antigel-badge"]').innerText()), 'badge « au frigo » du détail', 10000);
+  assert.match(await win.locator('[data-testid="antigel-fridge-line"]').innerText(), /^Au frigo depuis \d\d:\d\d · ≈ 1,5 Go sortis de la RAM\./);
+  const thawBtn = win.locator('[data-testid="antigel-fridge-thaw"]');
+  await thawBtn.waitFor();
+  await shot('antigel-frigo');
+  await thawBtn.click();
+  await waitFor(() => requests().some((r) => r.root === proj && r.action === 'thaw'), 'demande « réveiller » déposée');
+
   // 3) Métriques : carte Plafond de travail (ralenti, mémoire face au plafond, arrêts par le noyau)
   await win.locator('[data-testid="tab-metrics"]').click();
   const agCard = win.locator('[data-testid="antigel-card"]');
@@ -154,6 +185,7 @@ setInterval(() => { if (!alive() || !fs.existsSync('package.json') || fs.existsS
   assert.match(agText, /Plafond de travail atteint : travail ralenti/);
   assert.match(agText, /1 projet plafonné/);
   assert.match(agText, /3 ralentissements · 1 arrêt par le noyau/);
+  assert.match(agText, /1 projet au frigo · ≈ 1,5 Go sortis de la RAM/);
   assert.match(await win.locator('[data-testid="antigel-mem"]').innerText(), /arrêt au-delà de/);
   await shot('antigel-metriques');
 

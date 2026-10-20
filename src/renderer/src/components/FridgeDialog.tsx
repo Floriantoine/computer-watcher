@@ -29,8 +29,9 @@ export function FridgeDialog({ label, procs, onConfirm, onCancel }: { label: str
           <h3 id="fridge-title">Mettre « {label} » au frigo ?</h3>
         </div>
         <p className="sub">
-          {procs ? `Ses ${procs} processus rangés sous le plafond de travail sont suspendus` : 'Ses processus rangés sous le plafond de travail sont suspendus'}, puis
-          leur mémoire est poussée en swap autant que la swap libre le permet. Rien n’est arrêté : « Réveiller » les relance là où ils en étaient.
+          {procs === 1
+            ? 'Son processus rangé sous le plafond de travail est suspendu, puis sa mémoire est poussée en swap autant que la swap libre le permet. Rien n’est arrêté : « Réveiller » le relance là où il en était.'
+            : `${procs ? `Ses ${procs}` : 'Ses'} processus rangés sous le plafond de travail sont suspendus, puis leur mémoire est poussée en swap autant que la swap libre le permet. Rien n’est arrêté : « Réveiller » les relance là où ils en étaient.`}
         </p>
         <p className="sub">Pendant ce temps, ses serveurs ne répondent plus. Ce que vous relancez dans ce projet tourne normalement, hors plafond, jusqu’au réveil.</p>
         <div className="actions">
