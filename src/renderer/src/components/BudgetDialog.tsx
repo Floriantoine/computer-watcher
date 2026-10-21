@@ -32,7 +32,7 @@ export function BudgetDialog({ label, currentMB, onSave, onCancel }: { label: st
           <span className="ico" aria-hidden><Snowflake size={17} strokeWidth={2} /></span>
           <h3 id="budget-title">Budget mémoire : {label}</h3>
         </div>
-        <p className="sub">Au-delà, la mémoire de ce projet est ralentie (MemoryHigh de sa slice de projet). Le plafond de travail global s’applique toujours.</p>
+        <p className="sub">Au-delà, la mémoire de ce projet est ralentie (MemoryHigh de sa slice de projet). Le plafond de travail global s’applique toujours. Sans budget propre, le projet a le budget par défaut (Réglages → Plafond de travail).</p>
         <label className="budget-field">
           En Go
           <input data-testid="antigel-budget-input" autoFocus aria-describedby={showError ? 'budget-error' : undefined} aria-invalid={showError} inputMode="decimal" value={text} onChange={(e) => setText(e.target.value)}
