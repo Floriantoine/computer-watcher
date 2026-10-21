@@ -244,7 +244,11 @@ setInterval(() => { if (!alive() || !fs.existsSync('package.json') || fs.existsS
   // « active » : le service n'est pas lancé, c'est lui qui suivrait la config)
   await sw.click();
   await waitFor(() => config().antigel?.enabled === true, 'enabled: true dans config.json');
-  over = { projects: [{ unit, root: proj, procs: 1, currentKB: 2 * G, budgetMB: null, throttled: false }] };
+  // plafond global qui ne freine plus non plus (sinon la carte titre « la RAM est presque pleine »)
+  over = {
+    projects: [{ unit, root: proj, procs: 1, currentKB: 2 * G, budgetMB: null, throttled: false }],
+    slice: { currentKB: 2 * G, highKB: 9 * G, maxKB: 29 * G, swapMaxKB: 10 * G, throttles: 3, oomKills: 1, throttled: false },
+  };
   writeState();
   await win.locator('[data-testid="tab-main"]').click();
   await waitFor(async () => (await badge.count()) === 1 && /plafonné/.test(await badge.innerText()), 'badge « plafonné »');
