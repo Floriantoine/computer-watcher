@@ -37,3 +37,4 @@
 .wrap-limits { margin-top: 12px; font-size: 12px; color: var(--text-2); }
 .wrap-limits ul { margin: 4px 0 6px; padding-left: 18px; display: grid; gap: 2px; }
 .wrap-limits strong { font-size: 12px; }
+.wrap-reminder { --alert: var(--accent); }

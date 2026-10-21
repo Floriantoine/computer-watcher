@@ -14,8 +14,8 @@ import {
 import { basename, delimiter, dirname, isAbsolute, join } from 'node:path';
 import {
   addClaudeHook, addZshBlock, backupName, CLAUDE_HOOK_ENTRY, claudeHookState, isOurLauncher, launcherScript, launcherTargetPath, removeClaudeHook,
-  removeZshBlock, WRAP_LABELS, WRAP_PARTS, wrapSelection, zshBlock, zshrcState, type LauncherTarget, type WrapAction, type WrapActionResult,
-  type WrapApplyResponse, type WrapItemStatus, type WrapPart, type WrapSetupStatus, type WrapTarget,
+  removeZshBlock, shouldRemind, WRAP_LABELS, WRAP_PARTS, wrapSelection, zshBlock, zshrcState, type LauncherTarget, type WrapAction, type WrapActionResult,
+  type WrapApplyResponse, type WrapItemStatus, type WrapPart, type WrapReminderAnswer, type WrapSetupStatus, type WrapTarget,
 } from '../core/wrapSetup';
 import { readFileSafe, removeFileSafe, writeFileSafe } from './safeFs';
 
@@ -456,4 +456,20 @@ export async function applyWrap(
     }
   }
   return { cancelled: false, results, errors, status: await wrapStatus(d) };
+}
+
+/**
+ * Rappel au lancement : montré si l'anti-gel est actif, l'installation incomplète et qu'on n'a jamais répondu (ni « Plus
+ * tard » dans ce lancement, ni test, ni accueil ouvert). Installation complète constatée : réponse `done` écrite, le
+ * rappel ne revient plus jamais (même si un élément est retiré ensuite).
+ */
+export async function wrapReminder(o: {
+  deps: WrapSetupDeps; antigelEnabled: boolean; later: boolean; testMode: boolean; onboarding: boolean;
+  read: () => WrapReminderAnswer | null; write: (a: WrapReminderAnswer) => void;
+}): Promise<boolean> {
+  const base = { antigelEnabled: o.antigelEnabled, answer: o.read(), later: o.later, testMode: o.testMode, onboarding: o.onboarding };
+  if (!shouldRemind({ ...base, complete: false })) return false; // rien à demander : aucune sonde lancée
+  const st = await wrapStatus(o.deps);
+  if (st.complete) o.write('done');
+  return shouldRemind({ ...base, complete: st.complete });
 }

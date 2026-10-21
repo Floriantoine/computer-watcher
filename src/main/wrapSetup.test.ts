@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import { CLAUDE_HOOK_ENTRY, isOurLauncher, zshBlock } from '../core/wrapSetup';
-import { applyWrap, findInPath, installWrap, ownedWrapParts, removeWrap, wrapConfirmText, wrapPaths, wrapStatus, type WrapSetupDeps } from './wrapSetup';
+import { applyWrap, findInPath, installWrap, wrapReminder, ownedWrapParts, removeWrap, wrapConfirmText, wrapPaths, wrapStatus, type WrapSetupDeps } from './wrapSetup';
 
 // HOME temporaires sous ~/.cache/pw-wrapsetup-* : jamais le vrai ~/.zshrc, ~/.claude ni ~/.local/bin.
 const cache = join(homedir(), '.cache');
@@ -344,5 +344,34 @@ describe('applyWrap (Réglages)', () => {
     const none = await applyWrap(d, 'remove', 'claude', async () => (asked++, true));
     expect(none).toMatchObject({ cancelled: false, results: [] });
     expect(asked).toBe(2);
+  });
+});
+
+describe('rappel au lancement', () => {
+  const run = (d: WrapSetupDeps, o: Partial<{ antigelEnabled: boolean; later: boolean; testMode: boolean; answer: 'never' | 'done' | null }> = {}) => {
+    const written: string[] = [];
+    let answer = o.answer ?? null;
+    const p = wrapReminder({
+      deps: d, antigelEnabled: o.antigelEnabled ?? true, later: o.later ?? false, testMode: o.testMode ?? false, onboarding: false,
+      read: () => answer, write: (a) => { written.push(a); answer = a; },
+    });
+    return p.then((shown) => ({ shown, written }));
+  };
+
+  test('incomplet : montré ; « Ne plus afficher » ou test : jamais, sans sonde', async () => {
+    expect(await run(deps())).toEqual({ shown: true, written: [] });
+    probed = [];
+    expect(await run(deps(), { answer: 'never' })).toEqual({ shown: false, written: [] });
+    expect(await run(deps(), { testMode: true })).toEqual({ shown: false, written: [] });
+    expect(await run(deps(), { antigelEnabled: false })).toEqual({ shown: false, written: [] });
+    expect(probed).toEqual([]);
+  });
+
+  test('installation complète : pas montré, réponse « done » écrite (plus jamais montré)', async () => {
+    mkdirSync(join(home, '.claude'));
+    writeFileSync(join(home, '.zshrc'), '');
+    const d = deps();
+    for (const p of ['command', 'zshrc', 'claude'] as const) await installWrap(d, p);
+    expect(await run(d)).toEqual({ shown: false, written: ['done'] });
   });
 });

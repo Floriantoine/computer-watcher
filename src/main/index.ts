@@ -84,9 +84,9 @@ import {
   applyOverride, checkConfigSet, classifySetKey, swapSettingsChanged, isGroupKeys, noKill, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState as computeRecorderState,
 } from './historyIpc';
 import { readAntigelView } from './antigelIpc';
-import { applyWrap, ownedWrapParts, realProbe, removeWrap, wrapStatus, type WrapSetupDeps } from './wrapSetup';
+import { applyWrap, ownedWrapParts, realProbe, removeWrap, wrapReminder, wrapStatus, type WrapSetupDeps } from './wrapSetup';
 import {
-  isTestLaunch, isWrapRequest, parseReminderFile, serializeReminderFile, shouldRemind, type LauncherTarget, type WrapAction, type WrapReminderAnswer,
+  isTestLaunch, isWrapRequest, parseReminderFile, serializeReminderFile, type LauncherTarget, type WrapAction, type WrapReminderAnswer,
   type WrapTarget,
 } from '../core/wrapSetup';
 import { requestFridge } from './fridgeIpc';
@@ -1395,13 +1395,10 @@ ipcMain.handle('wrapSetup:apply', async (_e, action: unknown, part: unknown) => 
   return r;
 });
 /** Rappel au lancement : anti-gel actif, installation incomplète, jamais répondu ; rien en test (PROC_WATCH_NO_*, e2e). */
-ipcMain.handle('wrapSetup:reminder', async (): Promise<boolean> => {
-  const base = { antigelEnabled: config.antigel.enabled, answer: readWrapAnswer(), later: wrapLater, testMode: isTestLaunch(process.env), onboarding: onboardingOpen };
-  if (!shouldRemind({ ...base, complete: false })) return false;
-  const st = await wrapStatus(wrapDeps());
-  if (st.complete) writeWrapAnswer('done');
-  return shouldRemind({ ...base, complete: st.complete });
-});
+ipcMain.handle('wrapSetup:reminder', (): Promise<boolean> => wrapReminder({
+  deps: wrapDeps(), antigelEnabled: config.antigel.enabled, later: wrapLater, testMode: isTestLaunch(process.env), onboarding: onboardingOpen,
+  read: readWrapAnswer, write: writeWrapAnswer,
+}));
 ipcMain.handle('wrapSetup:remind', (_e, kind: unknown) => {
   if (kind === 'later') wrapLater = true;
   else if (kind === 'never') {

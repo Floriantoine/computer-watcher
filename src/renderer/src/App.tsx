@@ -7,6 +7,7 @@ import { AlertPopups, useAlertPopups } from './components/AlertPopups';
 import { notificationTarget } from './alertPopups';
 import { EarlyoomSetupPopup, useEarlyoomReminder } from './components/EarlyoomSetupPopup';
 import { UpdatePopup, useUpdateActions, useUpdateView } from './components/UpdatePopup';
+import { useWrapReminder, WrapReminderPopup } from './components/WrapReminderPopup';
 import { BulkKillDialog } from './components/BulkKillDialog';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { DetailView } from './components/DetailView';
@@ -215,12 +216,19 @@ export function App() {
     ),
     [onboardingAtLaunch, eoReminder.mode, eoReminder.upgrade, eoReminder.busy, eoReminder.setup, eoReminder.remindLater],
   );
+  // Lancer les commandes lourdes dans le budget : rappel unique au lancement (anti-gel actif, installation incomplète).
+  const openWrapSetting = useCallback(() => openSettings('antigel'), [openSettings]);
+  const wrapReminder = useWrapReminder(openWrapSetting);
+  const wrapLead = useMemo(
+    () => !onboardingAtLaunch && wrapReminder.shown && <WrapReminderPopup key="wrap-reminder" onAnswer={wrapReminder.answer} />,
+    [onboardingAtLaunch, wrapReminder.shown, wrapReminder.answer],
+  );
   // Mise à jour disponible : pop-up en tête de pile, après celui d'earlyoom.
   const [updateView, setUpdateView] = useUpdateView();
   const onUpdateAction = useUpdateActions(setUpdateView, (m, kind) => pushToast(m, kind));
   const leads = useMemo(
-    () => [eoLead, updateView?.popup && <UpdatePopup key="update" view={updateView} onAction={onUpdateAction} />],
-    [eoLead, updateView, onUpdateAction],
+    () => [eoLead, wrapLead, updateView?.popup && <UpdatePopup key="update" view={updateView} onAction={onUpdateAction} />],
+    [eoLead, wrapLead, updateView, onUpdateAction],
   );
 
   /** Mémorise les SIGTERM envoyés (boutons qui pulsent, puis « Forcer » avec le même startTicks). */
