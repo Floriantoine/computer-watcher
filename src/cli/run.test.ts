@@ -1,10 +1,12 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import type { Availability, CgroupStats } from '../core/antigel/cgroupfs';
 import { GiB } from '../core/antigel/limits';
 import { USAGE, startRunScopeArgv } from '../core/antigel/run';
 import { BusctlError } from '../core/antigel/systemd';
 import { shortHash } from '../core/antigel/units';
-import { CONFIRM_TIMEOUT_MS, resolveCommand, runCli, type CliDeps, type FsLike } from './run';
+import { elfInterpreter } from './elfInterp';
+import { CONFIRM_TIMEOUT_MS, HEAD_BYTES, resolveCommand, runCli, type CliDeps, type FsLike } from './run';
 
 const BASE = '/user.slice/user-1000.slice/user@1000.service';
 const TERM = `${BASE}/app.slice/app-term.service`;
@@ -233,5 +235,30 @@ describe('resolveCommand : en-tête (revue m1, m2)', () => {
     expect(resolveCommand(['/w/a.exe'], {}, '/', fsH({ '/w/a.exe': { head: 'MZ\x90\x00\x03' } }))).toEqual({ file: '/w/a.exe', argv: ['/w/a.exe'] });
     expect(resolveCommand(['/w/mount.x'], {}, '/', fsH({ '/w/mount.x': { head: null } }))).toEqual({ file: '/w/mount.x', argv: ['/w/mount.x'] });
     expect(resolveCommand(['/w/t'], {}, '/', fsH({ '/w/t': { head: 'echo x\n' } }))).toEqual({ file: '/bin/sh', argv: ['/bin/sh', '/w/t'] });
+  });
+});
+
+describe('resolveCommand : chargeur dynamique d’un ELF (execve en ENOENT, code 134 sinon)', () => {
+  // vrai binaire du système, chargeur réécrit ou non : lu par les vraies fonctions de lecture
+  const real = readFileSync('/usr/bin/true');
+  const loader = elfInterpreter(real.subarray(0, HEAD_BYTES), (pos, len) => real.subarray(pos, pos + len));
+  const fsE = (bin: Buffer, present: Record<string, boolean>): FsLike => ({
+    kind: (p) => (p === '/w/app' || p in present ? 'file' : null),
+    executable: (p) => p === '/w/app' || present[p] === true,
+    head: () => bin.subarray(0, HEAD_BYTES),
+    readAt: (_p, pos, len) => bin.subarray(pos, pos + len),
+  });
+  test.skipIf(!loader)('chargeur présent : exec direct ; absent : 127 ; non exécutable : 126', () => {
+    expect(resolveCommand(['/w/app', 'a'], {}, '/', fsE(real, { [loader!]: true }))).toEqual({ file: '/w/app', argv: ['/w/app', 'a'] });
+    const broken = Buffer.from(real);
+    const at = broken.indexOf(Buffer.from(loader!, 'latin1'));
+    broken.write('/nonexistent/ld.so'.padEnd(loader!.length, '\0'), at, 'latin1');
+    expect(resolveCommand(['/w/app'], {}, '/', fsE(broken, {}))).toEqual({ code: 127, message: 'chargeur dynamique introuvable pour /w/app : /nonexistent/ld.so' });
+    expect(resolveCommand(['/w/app'], {}, '/', fsE(real, { [loader!]: false }))).toMatchObject({ code: 126 });
+  });
+  test('sans readAt (ou ELF illisible au-delà de l’en-tête) : exec direct, comme avant', () => {
+    const { readAt: _, ...noRead } = fsE(real, {});
+    expect(resolveCommand(['/w/app'], {}, '/', noRead)).toEqual({ file: '/w/app', argv: ['/w/app'] });
+    expect(resolveCommand(['/w/app'], {}, '/', { ...fsE(real, {}), readAt: () => null })).toEqual({ file: '/w/app', argv: ['/w/app'] });
   });
 });

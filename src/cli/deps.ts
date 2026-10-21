@@ -45,6 +45,19 @@ export const realFs: FsLike = {
       return null;
     }
   },
+  readAt: (p, pos, len) => {
+    try {
+      const fd = openSync(p, constants.O_RDONLY | constants.O_NONBLOCK);
+      try {
+        const b = Buffer.alloc(len);
+        return b.subarray(0, readSync(fd, b, 0, len, pos));
+      } finally {
+        closeSync(fd);
+      }
+    } catch {
+      return null;
+    }
+  },
 };
 
 function attribution(env: NodeJS.ProcessEnv, home: string): Map<string, string | null> {
