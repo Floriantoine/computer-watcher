@@ -11,7 +11,7 @@ import type { Availability, CgroupStats, MemoryEvents } from './cgroupfs';
 import type { AntigelConfig } from './config';
 import { createDeskPriority, type DeskDeps } from './desk';
 import { budgetBytes, sameLimits, sliceLimits, type SliceLimits } from './limits';
-import { planMoves, type PlanMove, type PlanTarget } from './plan';
+import { MIN_ROOT_AGE_SEC, planMoves, type PlanMove, type PlanTarget } from './plan';
 import type { AntigelProjectState, AntigelSliceState, AntigelState } from './state';
 import { BusctlError, MAX_PIDS, type SystemdClient } from './systemd';
 import { hashedProjectSlice } from './run';
@@ -22,10 +22,27 @@ export const PROBE_EVERY_MS = 300_000;
 export const THROTTLE_HOLD_MS = 15_000;
 /** Recul avant un nouvel essai d'un budget en échec (autre que « no-unit ») : pas un busctl par tick. */
 export const BUDGET_RETRY_MS = 60_000;
+/**
+ * Racine de travail refusée « young » (plus jeune que MIN_ROOT_AGE_SEC) : nouvelle passe dans ce délai plutôt qu'au tick
+ * suivant (5 s par défaut), le temps que la mémoire allouée hors budget reste petite. Égal à MIN_ROOT_AGE_SEC : une racine
+ * jeune a toujours l'âge voulu à la passe suivante, une seule passe de plus par racine.
+ */
+export const RECHECK_YOUNG_MS = MIN_ROOT_AGE_SEC * 1000;
 const CGROUP_MAX_AGE_MS = 60_000;
 /** Entrées au plus dans `slices` et `projects` de l'état (borne de parseAntigelState). */
 const MAX_UNITS = 200;
 const RESERVE_TOO_BIG = 'réserve trop grande : moins de 1 Go laissé au travail';
+/**
+ * Mémoire hors budget publiée seulement au-delà de ces seuils (mémoire anonyme des processus de la slice moins
+ * memory.current) : memory.current compte aussi le cache de fichiers, et la mémoire partagée après un fork compte double.
+ */
+export const OUTSIDE_MIN_KB = 512 * 1024;
+export const OUTSIDE_MIN_RATIO = 0.2;
+/** Mémoire comptée ailleurs (Ko) si elle est nette, sinon undefined. */
+export function outsideKB(anonKB: number, currentKB: number): number | undefined {
+  const d = anonKB - currentKB;
+  return d > OUTSIDE_MIN_KB && d > OUTSIDE_MIN_RATIO * currentKB ? d : undefined;
+}
 
 export interface AntigelDeps {
   client: SystemdClient;
@@ -79,6 +96,8 @@ export interface AntigelController {
   state(): AntigelState;
   /** Attend la fin de l'enchaînement D-Bus en vol (tests, arrêt). */
   idle(): Promise<void>;
+  /** Délai avant une passe rapprochée (racine de travail refusée « young » au dernier tick, plafond actif), null sinon. */
+  recheckMs(): number | null;
 }
 
 /** `critical` : son échec arrête tout l'enchaînement (cwatch.slice) ; sinon seule l'étape échoue. */
@@ -158,6 +177,7 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
   let lastError: string | null = null;
   let tickMs = 0;
   let seq = 0;
+  let youngSeen = false;
   let st: AntigelState = {
     version: 1, at: 0, enabled: true, status: 'unavailable', reason: 'démarrage', memTotalKB: 0, reserveKB: null, slice: null,
     projects: [], slices: {}, lastError: null, tickMs: 0, dbusCalls: 0,
@@ -260,6 +280,7 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
 
   const step = (i: AntigelTickInput): AntigelOom[] => {
     const now = deps.monoNow();
+    youngSeen = false;
     const base = { version: 1 as const, at: i.ts, enabled: i.config.enabled, memTotalKB: i.system.memTotalKB };
     if (avail === null || (!avail.ok && now - probedAt >= PROBE_EVERY_MS)) {
       avail = deps.probe();
@@ -384,21 +405,27 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
       if (l) l.push(p.pid);
       else children.set(p.ppid, [p.pid]);
     }
-    const procsIn = (s: string): number => {
+    /** Processus rangés dans la slice et leur mémoire anonyme (RssAnon : ce que le cgroup qui l'a allouée compte). */
+    const procsIn = (s: string): { n: number; anonKB: number } => {
       const prefix = `${cgOfSlice(s)}/`;
       // processus des scopes « run » (lot 4) : comptés par cgroup.procs, une seule fois
       const run = deps.run ? runPidsOf(cgOfSlice(s), deps.run) : new Set<number>();
       const seen = new Set<number>(run);
       const stack = [...(insideBySlice.get(s) ?? [])];
       let n = 0;
+      let anonKB = 0;
+      for (const pid of run) anonKB += byPid.get(pid)?.anonKB ?? 0;
       while (stack.length) {
         const pid = stack.pop()!;
         if (seen.has(pid)) continue;
         seen.add(pid);
-        if (cgroupOf(pid)?.startsWith(prefix)) n++;
+        if (cgroupOf(pid)?.startsWith(prefix)) {
+          n++;
+          anonKB += byPid.get(pid)?.anonKB ?? 0;
+        }
         stack.push(...(children.get(pid) ?? []));
       }
-      return n + run.size;
+      return { n: n + run.size, anonKB };
     };
 
     // Ralentissement par le plafond global : le noyau compte « high » sur cwatch.slice elle-même (le cgroup dont la limite
@@ -422,9 +449,12 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
       if (prev && s.events.oomKill > prev.oomKill) ooms.push({ unit, root, kills: s.events.oomKill - prev.oomKill });
       lastEvents.set(unit, s.events);
       if (s.populated && projects.length < MAX_UNITS) {
+        const inside = procsIn(unit);
+        const outside = outsideKB(inside.anonKB, kb(s.currentBytes));
         projects.push({
-          unit, root, procs: procsIn(unit), currentKB: kb(s.currentBytes), budgetMB: budgetOf(root),
+          unit, root, procs: inside.n, currentKB: kb(s.currentBytes), budgetMB: budgetOf(root),
           throttled: rootThrottled || (throttledUntil.get(unit) ?? -Infinity) > now,
+          ...(outside !== undefined ? { outsideKB: outside } : {}),
         });
       }
     }
@@ -432,6 +462,7 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
     st = {
       ...st, ...base, status: 'active', reason: null, reserveKB: kb(limits.reserveBytes), slice: rootStats && toSlice(rootStats), projects,
     };
+    youngSeen = plan.refused.some((r) => r.reason === 'young');
     if (inFlight) return ooms;
 
     const want = (root: string | null): number | null => {
@@ -531,5 +562,6 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
       while (inFlight) await inFlight;
       await desk?.idle();
     },
+    recheckMs: () => (youngSeen ? RECHECK_YOUNG_MS : null),
   };
 }

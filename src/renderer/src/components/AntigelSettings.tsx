@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Snowflake, Trash2 } from 'lucide-react';
 import type { Config } from '../../../core/types';
 import { deskLine } from '../antigelDesk';
-import { antigelStatusLine, budgetLabel, formatGo, formatGoInput, reserveHint, validateReserve, withBudget } from '../antigel';
+import { antigelStatusLine, budgetLabel, budgetUsage, formatGo, formatGoInput, reserveHint, validateReserve, withBudget } from '../antigel';
 import { useAntigel } from '../useAntigel';
 import { Card, Row, SaveBar, Switch } from './settingsUi';
 
@@ -46,15 +46,19 @@ export function AntigelSettingsCard({ config, onSave }: { config: Config; onSave
         <p className="sub">Aucun budget. Pour en poser un : onglet Processus, ouvrir un projet, puis « Budget mémoire… ».</p>
       ) : (
         <ul className="antigel-budgets">
-          {budgets.map(([root, mb]) => (
-            <li key={root} data-testid="antigel-budget-row" data-root={root}>
-              <span className="mono" title={root}>{budgetLabel(root)}</span>
-              <span className="mono">{formatGo(mb)}</span>
-              <button type="button" onClick={() => onSave({ ...config, antigel: { ...ag, budgets: withBudget(ag.budgets, root, null) } })}>
-                <Trash2 size={13} strokeWidth={2} /> Retirer
-              </button>
-            </li>
-          ))}
+          {budgets.map(([root, mb]) => {
+            const use = budgetUsage(view, root);
+            return (
+              <li key={root} data-testid="antigel-budget-row" data-root={root}>
+                <span className="mono" title={root}>{budgetLabel(root)}</span>
+                <span className="mono">{formatGo(mb)}</span>
+                <button type="button" onClick={() => onSave({ ...config, antigel: { ...ag, budgets: withBudget(ag.budgets, root, null) } })}>
+                  <Trash2 size={13} strokeWidth={2} /> Retirer
+                </button>
+                {use && <small className="sub antigel-budget-use" title={use.hint ?? undefined} data-testid="antigel-budget-use">{use.text}</small>}
+              </li>
+            );
+          })}
         </ul>
       )}
     </Card>

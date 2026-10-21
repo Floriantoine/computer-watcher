@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { sampleState } from '../../core/antigel/testFixtures';
 import {
-  antigelCard, antigelMarks, antigelStatusLine, budgetLabel, formatGo, parseGo, reserveHint, sameMark, validateBudget, validateReserve, withBudget,
+  LATE_HINT, antigelCard, antigelMarks, budgetUsage, antigelStatusLine, budgetLabel, formatGo, parseGo, reserveHint, sameMark, validateBudget, validateReserve, withBudget,
 } from './antigel';
 
 const fresh = (o = {}) => ({ state: sampleState(o), fresh: true });
@@ -67,6 +67,20 @@ describe('fenêtre : plafond de travail', () => {
     expect(antigelStatusLine(null, true)).toMatch(/applique le plafond de travail/);
     expect(antigelStatusLine(fresh({ status: 'unavailable', reason: 'x' }), true)).toBe('Plafond de travail indisponible : x.');
     expect(antigelStatusLine(fresh({ status: 'off' }), false)).toMatch(/^Éteint/);
+  });
+  test('mémoire hors budget (capturé tard) : ligne de la carte et des budgets, avec une infobulle qui conseille run', () => {
+    const late = { unit: 'cwatch-p-projet-a.slice', root: '/home/u/projet-a', procs: 17, currentKB: 5.4 * 1024 * 1024, budgetMB: 5120, throttled: false, outsideKB: 4.5 * 1024 * 1024 };
+    const v = fresh({ projects: [late] });
+    const c = antigelCard(v);
+    expect(c.late).toEqual([{ text: 'u / projet-a : 5,4 Go dans le budget · ~4,5 Go hors budget (capturé tard)', hint: LATE_HINT }]);
+    expect(LATE_HINT).toMatch(/computer-watcher run -- <commande>/);
+    expect(antigelCard(fresh()).late).toEqual([]);
+    expect(antigelCard(fresh({ projects: [{ ...late, root: null, unit: 'cwatch-p-autres.slice' }] })).late[0]!.text).toMatch(/^Vérifications hors projet : /);
+    // Réglages → budgets : mémoire du projet en cours, hors budget seulement s'il y en a
+    expect(budgetUsage(v, '/home/u/projet-a')).toEqual({ text: '5,4 Go dans le budget · ~4,5 Go hors budget (capturé tard)', hint: LATE_HINT });
+    expect(budgetUsage(fresh({ projects: [{ ...late, outsideKB: undefined }] }), '/home/u/projet-a')).toEqual({ text: '5,4 Go dans le budget', hint: null });
+    expect(budgetUsage(v, '/home/u/demo')).toBeNull();
+    expect(budgetUsage({ state: v.state, fresh: false }, '/home/u/projet-a')).toBeNull();
   });
   test('carte : aucun jargon « slice » ; la slice « autres » (vérifications hors projet) ne compte pas comme un projet', () => {
     const alpha = { unit: 'cwatch-p-alpha.slice', root: '/home/u/alpha', procs: 3, currentKB: 1, budgetMB: null, throttled: false };

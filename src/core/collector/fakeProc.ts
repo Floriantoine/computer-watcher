@@ -15,6 +15,8 @@ export interface FakeProc {
   /** undefined → pas de ligne VmRSS (thread noyau) */
   rssKB?: number;
   swapKB?: number;
+  /** Ligne RssAnon (absente si undefined) */
+  anonKB?: number;
   /** undefined → [comm] ; [] → cmdline vide */
   cmdline?: string[];
   /** undefined → '/' ; null → pas de lien (cwd illisible) */
@@ -44,6 +46,7 @@ export function addProc(root: string, p: FakeProc): void {
   const uid = p.uid ?? 1000;
   let status = `Name:\t${p.comm}\nUid:\t${uid}\t${uid}\t${uid}\t${uid}\n`;
   if (p.rssKB !== undefined) status += `VmRSS:\t${p.rssKB} kB\nVmSwap:\t${p.swapKB ?? 0} kB\n`;
+  if (p.anonKB !== undefined) status += `RssAnon:\t${p.anonKB} kB\n`;
   writeFileSync(join(dir, 'status'), status);
   const argv = p.cmdline ?? [p.comm];
   writeFileSync(join(dir, 'cmdline'), argv.length ? argv.join('\0') + '\0' : '');

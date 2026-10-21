@@ -42,12 +42,28 @@ const rec = createRecorder({
 });
 rec.start();
 
+// Anti-gel : racine de travail encore trop jeune pour être rangée → passe anti-gel seule une seconde plus tard, sans
+// attendre le tick suivant (la mémoire allouée avant le déplacement reste comptée hors budget). Rien en régime normal.
+let recheck: NodeJS.Timeout | undefined;
+const scheduleRecheck = () => {
+  clearTimeout(recheck);
+  const ms = rec.antigelRecheckMs();
+  if (ms === null || ms >= rec.config().intervalSec * 1000) return;
+  recheck = setTimeout(() => {
+    rec.antigelPass();
+    scheduleRecheck();
+  }, ms);
+};
+const tick = () => {
+  rec.tick();
+  scheduleRecheck();
+};
 let timer: NodeJS.Timeout;
 const schedule = () => {
   clearInterval(timer);
-  timer = setInterval(() => rec.tick(), rec.config().intervalSec * 1000);
+  timer = setInterval(tick, rec.config().intervalSec * 1000);
 };
-rec.tick();
+tick();
 schedule();
 const minute = setInterval(() => rec.minuteJob(), 60_000);
 
@@ -75,6 +91,7 @@ try {
 
 const shutdown = () => {
   clearInterval(timer);
+  clearTimeout(recheck);
   clearInterval(minute);
   stopJournal();
   rec.stop();

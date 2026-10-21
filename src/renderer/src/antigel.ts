@@ -96,10 +96,30 @@ export function antigelStatusLine(v: AntigelView | null, enabled: boolean): stri
   return `Actif : ${cappedLine(s.projects)}${high !== null ? `, travail ralenti au-delà de ${formatKB(high)}` : ''}.`;
 }
 
-export interface AntigelCardModel { tone: 'ok' | 'warn' | 'off' | 'na'; title: string; usedKB: number | null; highKB: number | null; maxKB: number | null; fillPercent: number | null; lines: string[] }
+/** Infobulle de la mémoire hors budget : la limite des cgroups en une phrase, et le moyen de l'éviter. */
+export const LATE_HINT =
+  'Un processus capturé après son lancement laisse la mémoire déjà allouée comptée là où il a démarré (limite des cgroups) : lancez la commande avec « computer-watcher run -- <commande> » pour qu’elle soit dans le budget dès le départ.';
+
+export interface LateLine { text: string; hint: string }
+
+/** « 5,4 Go dans le budget · ~4,5 Go hors budget (capturé tard) » */
+const usageText = (p: { currentKB: number; outsideKB?: number }) =>
+  `${formatKB(p.currentKB)} dans le budget${p.outsideKB ? ` · ~${formatKB(p.outsideKB)} hors budget (capturé tard)` : ''}`;
+
+/** Réglages → budgets : mémoire du projet en cours (service actif et état frais), hors budget seulement s'il y en a. */
+export function budgetUsage(v: AntigelView | null, root: string): { text: string; hint: string | null } | null {
+  const p = active(v)?.projects.find((x) => x.root === root);
+  return p ? { text: usageText(p), hint: p.outsideKB ? LATE_HINT : null } : null;
+}
+
+export interface AntigelCardModel {
+  tone: 'ok' | 'warn' | 'off' | 'na'; title: string; usedKB: number | null; highKB: number | null; maxKB: number | null; fillPercent: number | null; lines: string[];
+  /** Projets dont une part de la mémoire est comptée hors budget (capturés tard), avec l'infobulle. */
+  late: LateLine[];
+}
 
 export function antigelCard(v: AntigelView | null): AntigelCardModel {
-  const none = { usedKB: null, highKB: null, maxKB: null, fillPercent: null };
+  const none = { usedKB: null, highKB: null, maxKB: null, fillPercent: null, late: [] };
   if (!v || !v.state) return { tone: 'na', title: 'Plafond de travail : en attente du service d’enregistrement', ...none, lines: ['Le service d’enregistrement applique le plafond de travail ; il ne tourne pas ou n’a pas encore écrit son état.'] };
   if (!v.fresh) return { tone: 'na', title: 'Plafond de travail : service d’enregistrement arrêté', ...none, lines: ['Les plafonds déjà posés restent en place ; aucun nouveau processus n’est déplacé.'] };
   const s = v.state;
@@ -120,5 +140,8 @@ export function antigelCard(v: AntigelView | null): AntigelCardModel {
       ...(deskLine(s.desk) ? [deskLine(s.desk)!] : []),
       ...[fridgeCardLine(v)].filter((l): l is string => l !== null),
     ],
+    late: s.projects
+      .filter((p) => p.outsideKB)
+      .map((p) => ({ text: `${p.root === null ? 'Vérifications hors projet' : budgetLabel(p.root)} : ${usageText(p)}`, hint: LATE_HINT })),
   };
 }

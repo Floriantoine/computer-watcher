@@ -132,6 +132,13 @@ export interface Recorder {
   stats(): { classifyRuns: number; ruleEvaluations: number };
   /** Attend la fin des appels systemd de l'anti-gel en vol (tests). */
   antigelIdle(): Promise<void>;
+  /** Délai avant une passe anti-gel rapprochée (racine de travail encore trop jeune au dernier passage), null sinon. */
+  antigelRecheckMs(): number | null;
+  /**
+   * Passe anti-gel seule, entre deux ticks : lecture de /proc et regroupement, puis déplacements ; ni échantillon, ni
+   * règles, ni prévision, ni CPU (la mesure de CPU du tick suivant n'est pas raccourcie).
+   */
+  antigelPass(): void;
 }
 
 const M = 60_000;
@@ -641,6 +648,23 @@ export function createRecorder(deps: RecorderDeps): Recorder {
     antigelIdle: async () => {
       await antigel?.idle();
       await fridge?.idle();
+    },
+    antigelRecheckMs: () => (db ? (antigel?.recheckMs() ?? null) : null),
+    antigelPass() {
+      const d = db;
+      if (!d || !antigel) return;
+      try {
+        const ts = now();
+        // cpuPercent à 0 : l'anti-gel ne s'en sert pas, et le CpuTracker garde l'intervalle du tick
+        const procs = readProcesses(procRoot, { wantCwd, cmdlineCache }).map((p) => ({ ...p, cpuPercent: 0 }));
+        const groups = buildGroups(procs, {
+          home: homedir(), currentUid, isProtected: protection.isProtected, othersThreshold: { memMB: 0, cpuPercent: 0 }, projectRootOf, claudeDirs: claudeConfigDirs,
+        });
+        runAntigel(d, ts, procs, groups, readSystem(procRoot));
+        if (fridge) writeAntigelState({ ...antigel.state(), ...fridge.publish() });
+      } catch (e) {
+        fail('antigel', 'Plafond de travail', e);
+      }
     },
 
     start() {

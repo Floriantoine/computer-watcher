@@ -20,6 +20,8 @@ export interface ProcSample {
   cpuTicks: number;
   rssKB: number;
   swapKB: number;
+  /** Mémoire anonyme résidente (RssAnon), absente si illisible : celle qu'un cgroup compte au processus qui l'a allouée. */
+  anonKB?: number;
   /** Dossier de travail, null si illisible */
   cwd: string | null;
   cwdDeleted: boolean;

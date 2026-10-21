@@ -13,6 +13,15 @@ test('lit un processus complet', () => {
   ]);
 });
 
+test('mémoire anonyme (RssAnon) transmise si présente, absente sinon', () => {
+  const root = makeProcRoot();
+  addProc(root, { pid: 5, comm: 'node', rssKB: 3000, anonKB: 2500 });
+  addProc(root, { pid: 6, comm: 'node', rssKB: 3000 });
+  const [a, b] = readProcesses(root).sort((x, y) => x.pid - y.pid);
+  expect(a!.anonKB).toBe(2500);
+  expect(b).not.toHaveProperty('anonKB');
+});
+
 test('détecte un dossier de travail supprimé', () => {
   const root = makeProcRoot();
   addProc(root, { pid: 5, comm: 'node', rssKB: 1, cwd: '/home/u/old-worktree (deleted)' });

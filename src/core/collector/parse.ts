@@ -30,6 +30,8 @@ export interface StatusFields {
   uid: number;
   rssKB: number;
   swapKB: number;
+  /** RssAnon : mémoire anonyme résidente (tas, piles) ; absente pour un thread noyau. */
+  anonKB?: number;
 }
 
 /** Valeur de la ligne `key:` (sans les blancs de tête). Recherche par indexOf : appelée ~3 000 fois par passe. */
@@ -48,12 +50,15 @@ function field(content: string, key: string): string | undefined {
 }
 
 export function parseStatus(content: string): StatusFields {
-  return {
+  const out: StatusFields = {
     name: field(content, 'Name') ?? '',
     uid: Number((field(content, 'Uid') ?? '-1').split(/\s+/)[0]),
     rssKB: parseInt(field(content, 'VmRSS') ?? '0', 10),
     swapKB: parseInt(field(content, 'VmSwap') ?? '0', 10),
   };
+  const anon = field(content, 'RssAnon');
+  if (anon !== undefined) out.anonKB = parseInt(anon, 10);
+  return out;
 }
 
 export function parseCmdline(raw: string): string {

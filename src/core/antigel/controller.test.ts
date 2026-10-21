@@ -4,7 +4,7 @@ import { buildGroups } from '../grouping/buildGroups';
 import type { ProcInfo, SystemInfo } from '../types';
 import type { Availability, CgroupStats } from './cgroupfs';
 import type { AntigelConfig } from './config';
-import { BUDGET_RETRY_MS, PROBE_EVERY_MS, THROTTLE_HOLD_MS, createAntigel, type AntigelDeps } from './controller';
+import { BUDGET_RETRY_MS, PROBE_EVERY_MS, RECHECK_YOUNG_MS, THROTTLE_HOLD_MS, createAntigel, type AntigelDeps } from './controller';
 import { GiB } from './limits';
 import { BusctlError, MAX_PIDS } from './systemd';
 import { fakeSystemd, sampleStats as stats } from './testFixtures';
@@ -368,6 +368,24 @@ describe('orchestrateur anti-gel', () => {
     expect(h.ag.state().projects).toMatchObject([{ unit: PS, procs: 4 }]);
   });
 
+  test('mémoire hors budget : processus de la slice (mémoire anonyme) nettement au-delà de memory.current → outsideKB', async () => {
+    const h = harness();
+    h.sys.set(PSCG, stats()); // 1 Gio comptés par la slice
+    h.setProcs(world().map((x) => ({ ...x, anonKB: 1_000_000 })));
+    for (const pid of [700, 701, 702, 703, 704]) h.cg.set(pid, `${PSCG}/cwatch-p-alpha-old.scope`);
+    await h.step();
+    expect(h.ag.state().projects).toEqual([expect.objectContaining({ unit: PS, procs: 5, currentKB: 1024 * 1024, outsideKB: 5_000_000 - 1024 * 1024 })]);
+    // écart faible (cache de fichiers, arrondis) : rien
+    h.setProcs(world().map((x) => ({ ...x, anonKB: 250_000 })));
+    await h.step();
+    expect(h.ag.state().projects[0]).not.toHaveProperty('outsideKB');
+    // processus encore hors de la slice : jamais comptés (les cinq dedans dépasseraient)
+    h.setProcs(world().map((x) => ({ ...x, anonKB: 600_000 })));
+    for (const pid of [702, 703, 704]) h.cg.set(pid, WARP);
+    await h.step();
+    expect(h.ag.state().projects[0]).not.toHaveProperty('outsideKB');
+  });
+
   test('redémarrage : processus rangés dans la slice d’une autre racine → aucune attribution, aucun doublon', async () => {
     const other = '/srv/alpha';
     const h = harness({ roots: { [other]: other }, initialSlices: { [PS]: other } });
@@ -608,5 +626,35 @@ describe('bureau prioritaire branché sur l’orchestrateur', () => {
     const h = harness();
     await h.step();
     expect(h.ag.state()).not.toHaveProperty('desk');
+  });
+});
+
+describe('racine trop jeune : revue une seconde plus tard', () => {
+  const young = (age: number) => world().map((x) => (x.pid === 700 ? { ...x, ageSec: age } : x));
+
+  test('refus « young » : aucun scope, nouvelle passe demandée dans 1 s ; une fois déplacée : plus rien', async () => {
+    const h = harness();
+    h.setProcs(young(0.3));
+    await h.step();
+    expect(names(h.calls)).toEqual(['ensureSlice']);
+    expect(h.ag.recheckMs()).toBe(RECHECK_YOUNG_MS);
+    expect(RECHECK_YOUNG_MS).toBe(1000);
+    h.setProcs(young(1.3));
+    await h.step(ON, RECHECK_YOUNG_MS);
+    expect(names(h.calls)).toEqual(['ensureSlice', 'ensureProjectSlice', 'startScope']);
+    expect(h.ag.recheckMs()).toBeNull();
+  });
+
+  test('régime normal (aucune racine jeune), éteint ou indisponible : aucune passe de plus', async () => {
+    const h = harness();
+    await h.step();
+    expect(h.ag.recheckMs()).toBeNull();
+    h.setProcs(young(0.3));
+    await h.step(OFF);
+    expect(h.ag.recheckMs()).toBeNull();
+    const u = harness({ avail: { ok: false, reason: 'pas de cgroups v2' } });
+    u.setProcs(young(0.3));
+    await u.step();
+    expect(u.ag.recheckMs()).toBeNull();
   });
 });
