@@ -368,6 +368,24 @@ describe('orchestrateur anti-gel', () => {
     expect(h.ag.state().projects).toMatchObject([{ unit: PS, procs: 4 }]);
   });
 
+  test('mémoire hors budget : processus de la slice (mémoire anonyme) nettement au-delà de memory.current → outsideKB', async () => {
+    const h = harness();
+    h.sys.set(PSCG, stats()); // 1 Gio comptés par la slice
+    h.setProcs(world().map((x) => ({ ...x, anonKB: 1_000_000 })));
+    for (const pid of [700, 701, 702, 703, 704]) h.cg.set(pid, `${PSCG}/cwatch-p-alpha-old.scope`);
+    await h.step();
+    expect(h.ag.state().projects).toEqual([expect.objectContaining({ unit: PS, procs: 5, currentKB: 1024 * 1024, outsideKB: 5_000_000 - 1024 * 1024 })]);
+    // écart faible (cache de fichiers, arrondis) : rien
+    h.setProcs(world().map((x) => ({ ...x, anonKB: 250_000 })));
+    await h.step();
+    expect(h.ag.state().projects[0]).not.toHaveProperty('outsideKB');
+    // processus encore hors de la slice : jamais comptés (les cinq dedans dépasseraient)
+    h.setProcs(world().map((x) => ({ ...x, anonKB: 600_000 })));
+    for (const pid of [702, 703, 704]) h.cg.set(pid, WARP);
+    await h.step();
+    expect(h.ag.state().projects[0]).not.toHaveProperty('outsideKB');
+  });
+
   test('redémarrage : processus rangés dans la slice d’une autre racine → aucune attribution, aucun doublon', async () => {
     const other = '/srv/alpha';
     const h = harness({ roots: { [other]: other }, initialSlices: { [PS]: other } });

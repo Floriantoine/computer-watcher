@@ -24,6 +24,12 @@ describe('parseStatus', () => {
     expect(parseStatus(s)).toEqual({ name: 'tmux: server', uid: 1000, rssKB: 45120, swapKB: 2048 });
   });
 
+  test('mémoire anonyme (RssAnon) : lue si présente', () => {
+    const s = 'Name:\tnode\nUid:\t1000\t1000\t1000\t1000\nVmRSS:\t  45120 kB\nRssAnon:\t  40000 kB\nRssFile:\t   5120 kB\nVmSwap:\t      0 kB\n';
+    expect(parseStatus(s)).toEqual({ name: 'node', uid: 1000, rssKB: 45120, swapKB: 0, anonKB: 40000 });
+    expect(parseStatus('Name:\tkworker/0:1\nUid:\t0\t0\t0\t0\n')).not.toHaveProperty('anonKB');
+  });
+
   test('thread noyau sans VmRSS ni VmSwap → 0', () => {
     expect(parseStatus('Name:\tkworker/0:1\nUid:\t0\t0\t0\t0\n')).toEqual({ name: 'kworker/0:1', uid: 0, rssKB: 0, swapKB: 0 });
   });

@@ -25,6 +25,7 @@ export function AntigelCard({ view, onSettings }: { view: AntigelView | null; on
         </>
       )}
       {m.lines.map((l) => <p key={l} className="sub">{l}</p>)}
+      {m.late.map((l) => <p key={l.text} className="sub antigel-late" title={l.hint} data-testid="antigel-late">{l.text}</p>)}
     </section>
   );
 }

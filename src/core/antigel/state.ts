@@ -7,7 +7,14 @@ import { isProdProjectSliceName } from './units';
 export type AntigelStatus = 'active' | 'off' | 'unavailable';
 export interface AntigelSliceState { currentKB: number; highKB: number | null; maxKB: number | null; swapMaxKB: number | null; throttles: number; oomKills: number }
 /** `unit` : nom de la slice de projet (cwatch-p-<clé>.slice), qui porte le budget optionnel du projet. */
-export interface AntigelProjectState { unit: string; root: string | null; procs: number; currentKB: number; budgetMB: number | null; throttled: boolean }
+export interface AntigelProjectState {
+  unit: string; root: string | null; procs: number; currentKB: number; budgetMB: number | null; throttled: boolean;
+  /**
+   * Mémoire de ses processus comptée ailleurs (Ko) : allouée avant leur capture, elle reste dans l'unité d'origine (un
+   * cgroup v2 ne déplace pas la mémoire déjà comptée). Absent : écart négligeable.
+   */
+  outsideKB?: number;
+}
 export interface AntigelState {
   version: 1;
   /** Horloge murale du tick qui a écrit l'état. */
@@ -55,12 +62,16 @@ function slice(v: unknown): v is AntigelSliceState | null {
 function project(v: unknown): v is AntigelProjectState {
   if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
   const p = v as Record<string, unknown>;
-  return isProdProjectSliceName(p.unit) && root(p.root) && int(p.procs) && num(p.currentKB) && numOrNull(p.budgetMB) && typeof p.throttled === 'boolean';
+  return isProdProjectSliceName(p.unit) && root(p.root) && int(p.procs) && num(p.currentKB) && numOrNull(p.budgetMB) && typeof p.throttled === 'boolean' &&
+    (p.outsideKB === undefined || num(p.outsideKB));
 }
 
 // Reconstruction champ par champ : aucune propriété en plus (ni __proto__) ne traverse.
 const copySlice = (v: AntigelSliceState): AntigelSliceState => ({ currentKB: v.currentKB, highKB: v.highKB, maxKB: v.maxKB, swapMaxKB: v.swapMaxKB, throttles: v.throttles, oomKills: v.oomKills });
-const copyProject = (v: AntigelProjectState): AntigelProjectState => ({ unit: v.unit, root: v.root, procs: v.procs, currentKB: v.currentKB, budgetMB: v.budgetMB, throttled: v.throttled });
+const copyProject = (v: AntigelProjectState): AntigelProjectState => ({
+  unit: v.unit, root: v.root, procs: v.procs, currentKB: v.currentKB, budgetMB: v.budgetMB, throttled: v.throttled,
+  ...(v.outsideKB !== undefined ? { outsideKB: v.outsideKB } : {}),
+});
 
 export function parseAntigelState(t: string): AntigelState | null {
   if (t.length > MAX_STATE_BYTES || new TextEncoder().encode(t).length > MAX_STATE_BYTES) return null;

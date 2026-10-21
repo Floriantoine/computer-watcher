@@ -106,6 +106,7 @@ export function readProcesses(procRoot = '/proc', opts: ReadOptions = {}): ProcS
       cpuTicks: stat.utime + stat.stime,
       rssKB: status.rssKB,
       swapKB: status.swapKB,
+      ...(status.anonKB !== undefined ? { anonKB: status.anonKB } : {}),
       ...(opts.wantCwd && !opts.wantCwd(status.name, cmdline || `[${status.name}]`) ? { cwd: null, cwdDeleted: false } : cwdOf(dir, key)),
     });
   }

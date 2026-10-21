@@ -32,6 +32,17 @@ const CGROUP_MAX_AGE_MS = 60_000;
 /** Entrées au plus dans `slices` et `projects` de l'état (borne de parseAntigelState). */
 const MAX_UNITS = 200;
 const RESERVE_TOO_BIG = 'réserve trop grande : moins de 1 Go laissé au travail';
+/**
+ * Mémoire hors budget publiée seulement au-delà de ces seuils (mémoire anonyme des processus de la slice moins
+ * memory.current) : memory.current compte aussi le cache de fichiers, et la mémoire partagée après un fork compte double.
+ */
+export const OUTSIDE_MIN_KB = 512 * 1024;
+export const OUTSIDE_MIN_RATIO = 0.2;
+/** Mémoire comptée ailleurs (Ko) si elle est nette, sinon undefined. */
+export function outsideKB(anonKB: number, currentKB: number): number | undefined {
+  const d = anonKB - currentKB;
+  return d > OUTSIDE_MIN_KB && d > OUTSIDE_MIN_RATIO * currentKB ? d : undefined;
+}
 
 export interface AntigelDeps {
   client: SystemdClient;
@@ -394,21 +405,27 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
       if (l) l.push(p.pid);
       else children.set(p.ppid, [p.pid]);
     }
-    const procsIn = (s: string): number => {
+    /** Processus rangés dans la slice et leur mémoire anonyme (RssAnon : ce que le cgroup qui l'a allouée compte). */
+    const procsIn = (s: string): { n: number; anonKB: number } => {
       const prefix = `${cgOfSlice(s)}/`;
       // processus des scopes « run » (lot 4) : comptés par cgroup.procs, une seule fois
       const run = deps.run ? runPidsOf(cgOfSlice(s), deps.run) : new Set<number>();
       const seen = new Set<number>(run);
       const stack = [...(insideBySlice.get(s) ?? [])];
       let n = 0;
+      let anonKB = 0;
+      for (const pid of run) anonKB += byPid.get(pid)?.anonKB ?? 0;
       while (stack.length) {
         const pid = stack.pop()!;
         if (seen.has(pid)) continue;
         seen.add(pid);
-        if (cgroupOf(pid)?.startsWith(prefix)) n++;
+        if (cgroupOf(pid)?.startsWith(prefix)) {
+          n++;
+          anonKB += byPid.get(pid)?.anonKB ?? 0;
+        }
         stack.push(...(children.get(pid) ?? []));
       }
-      return n + run.size;
+      return { n: n + run.size, anonKB };
     };
 
     // Ralentissement par le plafond global : le noyau compte « high » sur cwatch.slice elle-même (le cgroup dont la limite
@@ -432,9 +449,12 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
       if (prev && s.events.oomKill > prev.oomKill) ooms.push({ unit, root, kills: s.events.oomKill - prev.oomKill });
       lastEvents.set(unit, s.events);
       if (s.populated && projects.length < MAX_UNITS) {
+        const inside = procsIn(unit);
+        const outside = outsideKB(inside.anonKB, kb(s.currentBytes));
         projects.push({
-          unit, root, procs: procsIn(unit), currentKB: kb(s.currentBytes), budgetMB: budgetOf(root),
+          unit, root, procs: inside.n, currentKB: kb(s.currentBytes), budgetMB: budgetOf(root),
           throttled: rootThrottled || (throttledUntil.get(unit) ?? -Infinity) > now,
+          ...(outside !== undefined ? { outsideKB: outside } : {}),
         });
       }
     }

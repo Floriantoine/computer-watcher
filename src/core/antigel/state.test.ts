@@ -9,6 +9,12 @@ describe('antigel-state.json', () => {
     expect(parseAntigelState(JSON.stringify(sampleState()))).toEqual(sampleState());
     expect(parseAntigelState(JSON.stringify(sampleState({ status: 'unavailable', reason: 'busctl introuvable (/usr/bin/busctl)', slice: null, projects: [], reserveKB: null })))?.reason).toMatch(/busctl/);
   });
+  test('mémoire hors budget (capturée tard) : aller-retour, absente tolérée, refusée si invalide', () => {
+    const late = { ...proj('cwatch-p-alpha.slice', '/home/u/alpha'), outsideKB: 4_500_000 };
+    expect(parseAntigelState(JSON.stringify(sampleState({ projects: [late] })))?.projects).toEqual([late]);
+    expect(parseAntigelState(JSON.stringify(sampleState()))?.projects[0]).not.toHaveProperty('outsideKB');
+    for (const bad of [-1, '4 Go', null]) expect(parseAntigelState(JSON.stringify(sampleState({ projects: [{ ...late, outsideKB: bad as never }] })))).toBeNull();
+  });
   test('bureau prioritaire : aller-retour, absent toléré, refusé si invalide (unité, statut, champ manquant)', () => {
     const desk = { status: 'active', reason: null, cpu: true, io: false, memory: 'ineffective', units: ['session.slice', 'app.slice', 'cwatch.slice'], truncated: false, restoring: 0 } as const;
     expect(parseAntigelState(JSON.stringify(sampleState({ desk: { ...desk, units: [...desk.units] } })))?.desk).toEqual(desk);

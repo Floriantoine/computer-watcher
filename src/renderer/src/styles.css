@@ -1236,3 +1236,6 @@ button.primary:hover:not(:disabled) { background: rgba(124, 92, 255, 0.32); bord
 .antigel-budgets { list-style: none; padding: 0; margin: 6px 0 0; display: grid; gap: 6px; }
 .antigel-budgets li { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 10px; }
 .antigel-budgets-title { margin: 16px 0 4px; font-size: 12.5px; }
+/* mémoire du projet en cours sous sa ligne de budget ; infobulle quand une part est hors budget (capturé tard) */
+.antigel-budgets .antigel-budget-use { grid-column: 1 / -1; margin-top: -4px; }
+.antigel-budget-use[title], .antigel-late { cursor: help; }
