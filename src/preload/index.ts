@@ -12,6 +12,7 @@ import type { RuleStats } from '../core/rules/types';
 import type { SwapView } from '../core/swap';
 import type { TmpDeleteItem, TmpDeleteOutcome, TmpListing } from '../core/tmpClean';
 import type { UpdateView } from '../core/update';
+import type { WrapAction, WrapApplyResponse, WrapSetupStatus, WrapTarget } from '../core/wrapSetup';
 import type {
   ApplyResult, Category, DiskHistory, EarlyoomStatus, Config, ConfigState, Culprit, InstanceTargets, ProcInfo, Watch, GroupHistory, GroupsHistory, HistoryEvent, KillResult, KillTarget, KillSignal, ProcsHistory, ProcTreeAt, RangePreset,
   RecorderState, Snapshot, SystemSeries, TimeRange, TmpFsStats, TmpUsage, TopOptions, TopResult,
@@ -244,6 +245,16 @@ const api = {
     state: (): Promise<AntigelView> => ipcRenderer.invoke('antigel:state'),
     /** « Mettre au frigo » / « Réveiller » un projet (identifiant de groupe « project:<racine> ») : demande au service. */
     fridge: (groupId: string, action: 'freeze' | 'thaw'): Promise<{ queued: true }> => ipcRenderer.invoke('antigel:fridge', groupId, action),
+  },
+  /** Lancer les commandes lourdes directement dans le budget (Réglages → Plafond de travail). */
+  wrapSetup: {
+    status: (): Promise<WrapSetupStatus> => ipcRenderer.invoke('wrapSetup:status'),
+    /** Le main choisit les éléments, confirme (fichiers modifiés, sauvegardes) puis installe ou retire. */
+    apply: (action: WrapAction, part: WrapTarget): Promise<WrapApplyResponse> => ipcRenderer.invoke('wrapSetup:apply', action, part),
+    /** Rappel à montrer dans ce lancement ? */
+    reminder: (): Promise<boolean> => ipcRenderer.invoke('wrapSetup:reminder'),
+    /** « Plus tard » (revient au prochain lancement) ou « Ne plus afficher ». */
+    remind: (kind: 'later' | 'never'): Promise<void> => ipcRenderer.invoke('wrapSetup:remind', kind),
   },
   recorder: {
     status: (): Promise<RecorderState> => ipcRenderer.invoke('recorder:status'),

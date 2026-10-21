@@ -1,0 +1,40 @@
+/* Réglages → Plafond de travail : « Lancer les commandes lourdes directement dans le budget » ; rappel du lancement. */
+.wrap-setup { margin-top: 14px; }
+.wrap-why { line-height: 1.5; margin: 0 0 10px; }
+.wrap-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.wrap-summary { margin: 0; font-size: 12.5px; color: var(--text-2); }
+.wrap-summary.is-ok { color: var(--success); }
+.wrap-items { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.wrap-item { padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2); display: grid; gap: 4px; }
+.wrap-item p { margin: 0; }
+.wrap-item-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.wrap-item-head strong { font-size: 12.5px; }
+.wrap-actions { margin-left: auto; display: inline-flex; gap: 6px; }
+.wrap-badge { font-size: 11px; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--border-2); color: var(--muted); }
+.wrap-badge.tone-ok { color: var(--success); background: var(--success-bg); border-color: var(--success-border); }
+.wrap-badge.tone-warn { color: var(--amber); background: rgba(255, 181, 71, 0.12); border-color: rgba(255, 181, 71, 0.3); }
+.wrap-badge.tone-bad { color: var(--danger); background: var(--danger-bg); border-color: var(--danger-border); }
+.wrap-detail { font-size: 12px; color: var(--text-2); overflow-wrap: anywhere; }
+.wrap-preview { display: grid; gap: 3px; margin-top: 2px; }
+.wrap-preview pre {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-2);
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 5px 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-variant-ligatures: none;
+  font-feature-settings: 'liga' 0, 'calt' 0;
+}
+.wrap-note { display: flex; gap: 6px; align-items: baseline; font-size: 11.5px; color: var(--amber); }
+.wrap-note svg { flex: none; transform: translateY(1px); }
+.wrap-note.is-blocked { color: var(--danger); }
+.wrap-limits { margin-top: 12px; font-size: 12px; color: var(--text-2); }
+.wrap-limits ul { margin: 4px 0 6px; padding-left: 18px; display: grid; gap: 2px; }
+.wrap-limits strong { font-size: 12px; }
+.wrap-reminder { --alert: var(--accent); }

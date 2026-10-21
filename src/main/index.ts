@@ -3,7 +3,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } f
 import appIcon from '../../resources/icon.png?asset';
 import { appendFileSync, constants as fsConstants, existsSync, lstatSync, realpathSync, mkdirSync, readFileSync, renameSync, statfsSync, writeFileSync } from 'node:fs';
 import { access, realpath, stat } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { homedir, userInfo } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { classifyGroups, type InstanceDecision } from '../core/classify/classify';
 import { readPackageHints } from '../core/classify/packageJson';
@@ -84,6 +84,11 @@ import {
   applyOverride, checkConfigSet, classifySetKey, swapSettingsChanged, isGroupKeys, noKill, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState as computeRecorderState,
 } from './historyIpc';
 import { readAntigelView } from './antigelIpc';
+import { applyWrap, ownedWrapParts, realProbe, removeWrap, wrapReminder, wrapStatus, type WrapSetupDeps } from './wrapSetup';
+import {
+  isTestLaunch, isWrapRequest, parseReminderFile, serializeReminderFile, type LauncherTarget, type WrapAction, type WrapReminderAnswer,
+  type WrapTarget,
+} from '../core/wrapSetup';
 import { requestFridge } from './fridgeIpc';
 import { autoManageService, defaultSystemctl, recorderSyncDisabled, ensureRecorderService, recorderAppImage, recorderExecArgs, systemctlAvailable, unitPath } from './recorderService';
 import { cliArgsFromArgv, reexecAsCli } from './runEntry';
@@ -1339,15 +1344,77 @@ ipcMain.handle('migration:retry', async (): Promise<{ report: MigrationReport; r
 });
 
 const isDeb = () => app.isPackaged && !appImage;
+
+// ---------------------------------------------------------------- lancer directement dans le budget (Réglages → Plafond de travail)
+// Chemins tirés de l'environnement de l'app (HOME, ZDOTDIR, CLAUDE_CONFIG_DIR, PATH) : une app de test aux dossiers
+// temporaires ne touche jamais les vrais ~/.zshrc, ~/.claude ni ~/.local/bin.
+/** Ce que le lanceur ~/.local/bin/computer-watcher appelle : l'AppImage installée (chemin figé), le binaire du .deb, ou Electron en mode Node (développement). */
+function wrapTarget(): LauncherTarget {
+  const t = launchTarget({ roots, appImage: appImage ?? undefined, packaged: app.isPackaged, execPath: process.execPath });
+  if (appImage && t) return { kind: 'appimage', path: t };
+  if (t) return { kind: 'binary', path: t };
+  return { kind: 'node', electron: process.execPath, cli: join(__dirname, 'cli.js') };
+}
+const loginShell = (): string | null => {
+  try {
+    return userInfo().shell || null;
+  } catch {
+    return null;
+  }
+};
+const wrapDeps = (): WrapSetupDeps => ({
+  home: roots.home, env: process.env, loginShell: loginShell(), target: wrapTarget(), probe: (f) => realProbe(f, process.env), now: () => new Date(),
+});
+/** Réponse au rappel (« Ne plus afficher », ou installation complète constatée), gardée dans wrap-setup.json. */
+const wrapReminderFile = join(dir, 'wrap-setup.json');
+const readWrapAnswer = (): WrapReminderAnswer | null => {
+  try {
+    return parseReminderFile(readFileSync(wrapReminderFile, 'utf8'));
+  } catch {
+    return null;
+  }
+};
+const writeWrapAnswer = (a: WrapReminderAnswer) => {
+  try {
+    if (readWrapAnswer() !== a) writeFileSafe([roots.configHome], wrapReminderFile, serializeReminderFile(a), 0o600);
+  } catch (e) {
+    console.error('wrap-setup.json :', e);
+  }
+};
+/** « Plus tard » : plus de rappel dans ce lancement, il revient au suivant. */
+let wrapLater = false;
+ipcMain.handle('wrapSetup:status', async () => {
+  const st = await wrapStatus(wrapDeps());
+  if (st.complete) writeWrapAnswer('done');
+  return st;
+});
+ipcMain.handle('wrapSetup:apply', async (_e, action: unknown, part: unknown) => {
+  if (!isWrapRequest(action, part)) throw new Error('Requête invalide');
+  const r = await applyWrap(wrapDeps(), action as WrapAction, part as WrapTarget, (c) => confirmNative({ title: 'Lancer dans le budget', ...c }));
+  if (!r.cancelled && r.status.complete) writeWrapAnswer('done'); // installation complète : le rappel ne revient plus jamais
+  return r;
+});
+/** Rappel au lancement : anti-gel actif, installation incomplète, jamais répondu ; rien en test (PROC_WATCH_NO_*, e2e). */
+ipcMain.handle('wrapSetup:reminder', (): Promise<boolean> => wrapReminder({
+  deps: wrapDeps(), antigelEnabled: config.antigel.enabled, later: wrapLater, testMode: isTestLaunch(process.env), onboarding: onboardingOpen,
+  read: readWrapAnswer, write: writeWrapAnswer,
+}));
+ipcMain.handle('wrapSetup:remind', (_e, kind: unknown) => {
+  if (kind === 'later') wrapLater = true;
+  else if (kind === 'never') {
+    wrapLater = true;
+    writeWrapAnswer('never');
+  } else throw new Error('Valeur invalide');
+});
 ipcMain.handle('uninstall:plan', (_e, o: unknown) => {
   if (!isUninstallOptions(o)) throw new Error('Requête invalide');
-  const plan = uninstallPlan(roots, o);
+  const plan = uninstallPlan(roots, o, ownedWrapParts(wrapDeps()));
   return { items: plan, ...uninstallSummary(plan, { deb: isDeb() }) };
 });
 /** Le main refait le plan (jamais de chemins venus du renderer), le montre dans une confirmation native, puis l'exécute. */
 ipcMain.handle('uninstall:run', async (_e, o: unknown) => {
   if (!isUninstallOptions(o)) throw new Error('Requête invalide');
-  const plan = uninstallPlan(roots, o);
+  const plan = uninstallPlan(roots, o, ownedWrapParts(wrapDeps()));
   const s = uninstallSummary(plan, { deb: isDeb() });
   if (!(await confirmNative({ title: `Désinstaller ${APP_DISPLAY_NAME}`, message: s.message, detail: s.detail, confirm: 'Désinstaller' }))) return { cancelled: true as const };
   uninstalling = true;
@@ -1366,6 +1433,7 @@ ipcMain.handle('uninstall:run', async (_e, o: unknown) => {
       },
     },
     beforeHistory: () => history.close(),
+    wrap: async (part) => ((await removeWrap(wrapDeps(), part)).changed ? 'removed' : 'absent'),
   });
   if (result.done) {
     quitting = true;

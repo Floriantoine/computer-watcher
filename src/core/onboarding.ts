@@ -155,10 +155,15 @@ export interface AboutInfo {
   migration?: MigrationReport;
 }
 
+import type { WrapPart } from './wrapSetup';
+
 export interface UninstallOptions { history: boolean; config: boolean }
-export type UninstallKind = 'autostart' | 'desktop' | 'icon' | 'service' | 'history' | 'config' | 'cache' | 'appimage';
-/** `tree` : arborescence du profil Chromium de l'app (configuration), retirée sans suivre de lien. */
-export interface UninstallItem { kind: UninstallKind; path: string; label: string; dir?: boolean; tree?: boolean }
+export type UninstallKind = 'autostart' | 'desktop' | 'icon' | 'service' | 'history' | 'config' | 'cache' | 'wrap' | 'appimage';
+/**
+ * `tree` : arborescence du profil Chromium de l'app (configuration), retirée sans suivre de lien.
+ * `part` (kind `wrap`) : élément du lancement dans le budget (lanceur, bloc ~/.zshrc, hook Claude Code), retiré par main/wrapSetup.
+ */
+export interface UninstallItem { kind: UninstallKind; path: string; label: string; dir?: boolean; tree?: boolean; part?: WrapPart }
 
 export interface UninstallResult {
   removed: string[];

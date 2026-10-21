@@ -280,7 +280,17 @@ La commande part **directement** sous `cwatch.slice`, sans attendre que le servi
 
 #### Lancer directement dans le budget
 
-En cgroups v2, la mémoire allouée avant qu'un processus soit déplacé dans un budget reste comptée là où elle l'a été : un jest à 16 workers déplacé par le service au bout de 10 s a déjà dépassé son budget. Pour les **projets qui ont un budget**, propre ou par défaut (anti-gel allumé ; donc tous les projets tant que le budget par défaut est allumé, sauf ceux « Sans budget »), les commandes lourdes peuvent passer d'elles-mêmes par `computer-watcher run -- …` :
+En cgroups v2, la mémoire allouée avant qu'un processus soit déplacé dans un budget reste comptée là où elle l'a été : un jest à 16 workers déplacé par le service au bout de 10 s a déjà dépassé son budget. Pour les **projets qui ont un budget**, propre ou par défaut (anti-gel allumé ; donc tous les projets tant que le budget par défaut est allumé, sauf ceux « Sans budget »), les commandes lourdes peuvent passer d'elles-mêmes par `computer-watcher run -- …`.
+
+**En un clic** : Réglages › Plafond de travail › « Lancer les commandes lourdes directement dans le budget ». Pour chacun des trois éléments, la section montre son état (absent, installé par l'app, présent mais pas de l'app, illisible) et le texte exact ajouté, avec « Installer » / « Retirer » et « Tout installer ». Une confirmation liste les fichiers modifiés et l'emplacement des sauvegardes :
+
+- **commande `computer-watcher`** : si une commande du PATH répond déjà à `computer-watcher should-wrap --help` (paquet .deb : `/usr/bin/computer-watcher`, ou votre propre lanceur), rien n'est fait. Sinon l'app écrit `~/.local/bin/computer-watcher`, un petit script qui appelle l'AppImage installée (chemin figé à l'installation ; « Installer » le met à jour si l'AppImage a bougé). Un fichier existant qui n'est pas de l'app (sans son marqueur) n'est jamais écrasé ni retiré. Si `~/.local/bin` manque au PATH, la section le dit ;
+- **`~/.zshrc`** (`$ZDOTDIR/.zshrc` si ZDOTDIR est défini pour l'app) : bloc délimité par `# >>> computer-watcher … >>>` / `# <<< computer-watcher <<<`, ajouté à la fin, retiré proprement. Le fichier n'est jamais créé si zsh n'est pas votre shell. S'il est un lien (dépôt de dotfiles), c'est le fichier pointé qui est modifié ;
+- **`~/.claude/settings.json`** (`$CLAUDE_CONFIG_DIR/settings.json` si défini) : l'entrée ci-dessous est ajoutée à `hooks.PreToolUse`, le reste du fichier (clés, ordre, indentation) est conservé ; « Retirer » enlève exactement cette entrée. JSON invalide : rien n'est touché, l'erreur est affichée. Claude Code absent (pas de dossier) : rien n'est créé.
+
+Avant chaque écriture, le fichier est sauvegardé à côté de lui (`<fichier>.computer-watcher-AAAAMMJJ-HHMMSS.bak`), puis réécrit de façon atomique. Une ligne ou un hook ajoutés à la main sont reconnus (« présent, pas de l'app ») et laissés tels quels. La désinstallation de l'app (Réglages › À propos) retire aussi ce qu'elle a installé ici. Au lancement, si l'anti-gel est actif et que l'installation est incomplète, un pop-up le propose une fois (« Voir le réglage », « Plus tard » : il revient au lancement suivant ; « Ne plus afficher » ou une installation complète : plus jamais).
+
+**À la main**, les mêmes lignes :
 
 - **zsh** : à la fin de `~/.zshrc`
 
@@ -302,6 +312,8 @@ En cgroups v2, la mémoire allouée avant qu'un processus soit déplacé dans un
   ```
 
   Le hook remplace la commande (`updatedInput`) **sans donner d'autorisation** : elle repasse par les permissions habituelles, évaluées sur la commande réécrite (une règle `Bash(npm test:*)` ne la couvre donc plus). `computer-watcher claude-hook --ask` demande en plus confirmation à chaque réécriture. En cas de doute ou d'erreur : aucune sortie, la commande part telle quelle.
+
+Limites : Warp a son propre éditeur de ligne, le bloc zsh peut ne pas y agir (le hook Claude Code, lui, ne dépend pas du terminal) ; le hook ne vaut que pour les nouvelles sessions de Claude Code, le bloc zsh pour les nouveaux terminaux ; les règles d'autorisation `Bash(...)` de Claude Code ne reconnaissent plus la commande réécrite. Avec l'AppImage, le lanceur monte l'AppImage à chaque appel de `should-wrap` (coût non mesuré ; seulement pour les lignes qui contiennent un nom lourd).
 
 Jamais réécrites : les lignes déjà enveloppées (`computer-watcher`, `systemd-run`), `sudo`, celles qui changent l'état du shell (`cd`, `export`, `source`, affectations seules…), les commandes interactives (éditeurs, `less`, `ssh`, `tmux`…), heredocs, lignes incomplètes, arrière-plan au milieu d'une ligne. `computer-watcher should-wrap -- '<ligne>'` montre la décision (code 0 et la ligne réécrite, sinon code 1).
 

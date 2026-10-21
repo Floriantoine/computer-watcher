@@ -32,6 +32,7 @@ import { DiskSettingsCard } from './DiskSettings';
 import { EarlyoomPanel, type EarlyoomAttention } from './EarlyoomPanel';
 import { RulesPanel } from './RulesPanel';
 import { AntigelSettingsCard } from './AntigelSettings';
+import { WrapSetupCard } from './WrapSetupCard';
 import { SettingsConfirm } from './SettingsConfirm';
 import { AboutSetup, AutostartRow } from './AppSetup';
 import { AboutPanel } from './UpdatePopup';
@@ -546,7 +547,14 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
 
           {panel('rules', 'rules-panel', <RulesPanel config={config} issues={ruleIssues} onSaved={onConfigChanged} onFormState={setRulesForm} />)}
 
-          {panel('antigel', 'antigel-panel', <AntigelSettingsCard config={config} onSave={onSave} />)}
+          {panel(
+            'antigel',
+            'antigel-panel',
+            <>
+              <AntigelSettingsCard config={config} onSave={onSave} />
+              <WrapSetupCard onToast={onToast} />
+            </>,
+          )}
 
           {panel(
             'recorder',
