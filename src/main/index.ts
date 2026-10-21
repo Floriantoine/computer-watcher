@@ -86,11 +86,12 @@ import {
 import { readAntigelView } from './antigelIpc';
 import { requestFridge } from './fridgeIpc';
 import { autoManageService, defaultSystemctl, recorderSyncDisabled, ensureRecorderService, recorderAppImage, recorderExecArgs, systemctlAvailable, unitPath } from './recorderService';
-import { reexecAsCli, runArgsFromArgv } from './runEntry';
+import { cliArgsFromArgv, reexecAsCli } from './runEntry';
 
-// `computer-watcher run -- <commande>` (anti-gel, lot 4) : avant tout le reste, l'exécutable se remplace par son mode Node.
-const cliRun = runArgsFromArgv(process.argv, process.defaultApp === true);
-if (cliRun) reexecAsCli(cliRun, { execPath: process.execPath, dir: __dirname, env: process.env, execve: process.execve });
+// `computer-watcher run -- <commande>` (anti-gel, lot 4), should-wrap, shell-init, claude-hook : avant tout le reste,
+// l'exécutable se remplace par son mode Node.
+const cliArgs = cliArgsFromArgv(process.argv, process.defaultApp === true);
+if (cliArgs) reexecAsCli(cliArgs.slice(1), { execPath: process.execPath, dir: __dirname, env: process.env, execve: process.execve, sub: cliArgs[0] });
 
 // Service réseau dans le processus main : l'app ne charge que des fichiers locaux, un processus de moins (~20 Mo).
 app.commandLine.appendSwitch('enable-features', 'NetworkServiceInProcess2');
