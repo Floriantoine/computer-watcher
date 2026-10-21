@@ -145,4 +145,9 @@ describe('environnement de la commande', () => {
     expect(commandEnv({ CHROME_DESKTOP: 'firefox.desktop' })).toEqual({ CHROME_DESKTOP: 'firefox.desktop' });
     expect(commandEnv({ CHROME_DESKTOP: 'electron.desktop' })).toEqual({});
   });
+  test('NODE_OPTIONS mis de côté par le lanceur : rendu tel quel à la commande (même vide), à la place de celui laissé par Electron', () => {
+    expect(commandEnv({ CWATCH_NODE_OPTIONS: '--max-old-space-size=4096 --require ./a.js', NODE_OPTIONS: '' })).toEqual({ NODE_OPTIONS: '--max-old-space-size=4096 --require ./a.js' });
+    expect(commandEnv({ CWATCH_NODE_OPTIONS: '' })).toEqual({ NODE_OPTIONS: '' });
+    expect(commandEnv({ NODE_OPTIONS: '--no-warnings' })).toEqual({ NODE_OPTIONS: '--no-warnings' });
+  });
 });

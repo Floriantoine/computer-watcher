@@ -7,12 +7,19 @@ describe('runArgsFromArgv', () => {
     expect(runArgsFromArgv(['/x/computer-watcher', '--no-sandbox', 'run', '--mem', '6G', 'make'], false)).toEqual(['--mem', '6G', 'make']);
     expect(runArgsFromArgv(['/x/computer-watcher', 'run'], false)).toEqual([]);
   });
+  test('« -- » devant la sous-commande (lanceurs) : Chromium n’analyse plus la suite, la sous-commande est reconnue', () => {
+    expect(runArgsFromArgv(['/x/cw', '--', 'run', '--type=x', '--', 'rg', '--type=rust'], false)).toEqual(['--type=x', '--', 'rg', '--type=rust']);
+    // AppRun ajoute --no-sandbox devant les arguments du lanceur
+    expect(runArgsFromArgv(['/tmp/.mount_x/computer-watcher', '--no-sandbox', '--', 'run', '--', 'tail'], false)).toEqual(['--', 'tail']);
+    expect(cliArgsFromArgv(['/x/cw', '--', 'should-wrap', '--help'], false)).toEqual(['should-wrap', '--help']);
+    expect(runArgsFromArgv(['/x/electron', '.', '--', 'run', 'x'], true)).toEqual(['x']);
+  });
   test('electron <dossier> (développement) : le chemin de l’app est sauté', () => {
     expect(runArgsFromArgv(['/x/electron', '.', 'run', '--', 'tail'], true)).toEqual(['--', 'tail']);
     expect(runArgsFromArgv(['/x/electron', '--inspect=0', '/w/app', 'run', 'x'], true)).toEqual(['x']);
   });
   test('lancement normal de l’app : null', () => {
-    for (const a of [['/x/cw'], ['/x/cw', '--hidden'], ['/x/cw', '--', 'run'], ['/x/cw', 'runx'], ['/x/cw', 'other', 'run'], ['/x/cw', '-run']]) {
+    for (const a of [['/x/cw'], ['/x/cw', '--hidden'], ['/x/cw', '--', '--', 'run'], ['/x/cw', '--', 'other'], ['/x/cw', 'runx'], ['/x/cw', 'other', 'run'], ['/x/cw', '-run']]) {
       expect(runArgsFromArgv(a, false), a.join(' ')).toBeNull();
     }
     expect(runArgsFromArgv(['/x/electron', 'run'], true)).toBeNull(); // « run » est alors le chemin de l'app

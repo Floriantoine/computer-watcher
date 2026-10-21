@@ -200,13 +200,31 @@ export type LauncherTarget = { kind: 'appimage' | 'binary'; path: string } | { k
 
 const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
+/** Sous-commandes du CLI (même liste que CLI_SUBCOMMANDS de main/runEntry.ts, vérifié par test). */
+export const LAUNCHER_CLI_SUBCOMMANDS = ['run', 'should-wrap', 'shell-init', 'claude-hook'] as const;
+
+/** NODE_OPTIONS de l'appelant mis de côté (voir SAVED_NODE_OPTIONS, core/antigel/run.ts), même ligne que l'enveloppe du .deb. */
+export const LAUNCHER_SAVE_NODE_OPTIONS = 'if [ "${NODE_OPTIONS+x}" ]; then CWATCH_NODE_OPTIONS=$NODE_OPTIONS; export CWATCH_NODE_OPTIONS; unset NODE_OPTIONS; fi';
+
 export function launcherScript(t: LauncherTarget): string {
-  const run = t.kind === 'node' ? `ELECTRON_RUN_AS_NODE=1 exec ${shq(t.electron)} ${shq(t.cli)} "$@"` : `exec ${shq(t.path)} "$@"`;
+  // AppImage ou binaire : Chromium lit les options placées avant le premier « -- » (`run rg --type=rust` le ferait
+  // planter avant notre code) ; un « -- » inséré devant la sous-commande l'en empêche (reconnu par main/runEntry.ts).
+  // NODE_OPTIONS : Electron l'efface en mode complet, et le CLI ne l'exécute jamais ; run le rend à la commande.
+  const run = t.kind === 'node'
+    ? [LAUNCHER_SAVE_NODE_OPTIONS, `ELECTRON_RUN_AS_NODE=1 exec ${shq(t.electron)} ${shq(t.cli)} "$@"`]
+    : [
+      `case "\${1-}" in`,
+      `  ${LAUNCHER_CLI_SUBCOMMANDS.join('|')})`,
+      `    ${LAUNCHER_SAVE_NODE_OPTIONS}`,
+      `    exec ${shq(t.path)} -- "$@" ;;`,
+      'esac',
+      `exec ${shq(t.path)} "$@"`,
+    ];
   return [
     '#!/bin/sh',
     LAUNCHER_MARKER,
     '# (Réglages → Plafond de travail ; « Retirer » le supprime). Sert run, should-wrap, shell-init et claude-hook.',
-    run,
+    ...run,
     '',
   ].join('\n');
 }
