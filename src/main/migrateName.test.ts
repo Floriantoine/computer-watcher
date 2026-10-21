@@ -612,9 +612,11 @@ describe('revue de sécurité (C1, I1, M1)', () => {
   test('[lock] SingletonLock de l’ancien dossier tenu par un Computer Watcher vivant (comm computer-watche) : différé, pid et nom dans le message', async () => {
     const L = legacyInstall();
     const bin = join(roots.home, 'computer-watcher');
-    copyFileSync('/usr/bin/sleep', bin);
+    // script shell (le comm vient du nom du script) : pas une copie de sleep, binaire multi-appel sous Ubuntu 26.04
+    // (uutils) qui refuse de tourner sous un autre nom, ni node, qui renomme son fil principal « MainThread »
+    writeFileSync(bin, "#!/bin/sh\ntrap 'kill $c; exit 0' TERM\nsleep 30 & c=$!\nwait\n");
     chmodSync(bin, 0o755);
-    const p = spawn(bin, ['30'], { stdio: 'ignore' });
+    const p = spawn(bin, [], { stdio: 'ignore' });
     await started(p);
     symlinkSync(`${hostname()}-${p.pid}`, join(L.configDir, 'SingletonLock'));
     expect(realLegacyInstance(roots.configHome)).toEqual({ pid: p.pid, name: 'computer-watche' });
