@@ -5,7 +5,14 @@ import { parseFridgeFields, type FridgeEntryState, type FridgeNotice } from './f
 import { isProdProjectSliceName } from './units';
 
 export type AntigelStatus = 'active' | 'off' | 'unavailable';
-export interface AntigelSliceState { currentKB: number; highKB: number | null; maxKB: number | null; swapMaxKB: number | null; throttles: number; oomKills: number }
+/**
+ * `throttled` : le plafond global lui-même freine (dépassement de memory.high de cwatch.slice, maintenu 15 s) ;
+ * `stallPct` : part de la dernière minute passée freinée (voir recent.ts), absente sans dépassement dans la minute.
+ */
+export interface AntigelSliceState {
+  currentKB: number; highKB: number | null; maxKB: number | null; swapMaxKB: number | null; throttles: number; oomKills: number;
+  throttled?: boolean; stallPct?: number;
+}
 /** `unit` : nom de la slice de projet (cwatch-p-<clé>.slice), qui porte le budget optionnel du projet. */
 export interface AntigelProjectState {
   unit: string; root: string | null; procs: number; currentKB: number; budgetMB: number | null; throttled: boolean;
@@ -14,6 +21,10 @@ export interface AntigelProjectState {
    * cgroup v2 ne déplace pas la mémoire déjà comptée). Absent : écart négligeable.
    */
   outsideKB?: number;
+  /** Freiné par son propre budget (dépassement de memory.high de sa slice, maintenu 15 s) ; `throttled` compte aussi le plafond global. */
+  budgetThrottled?: boolean;
+  /** Part de la dernière minute passée freinée par son budget (voir recent.ts). */
+  stallPct?: number;
 }
 export interface AntigelState {
   version: 1;
@@ -51,26 +62,32 @@ const num = (v: unknown): v is number => typeof v === 'number' && Number.isFinit
 const int = (v: unknown): v is number => num(v) && Number.isInteger(v);
 const numOrNull = (v: unknown): v is number | null => v === null || num(v);
 const text = (v: unknown): v is string | null => v === null || (typeof v === 'string' && v.length <= MAX_TEXT);
+const pct = (v: unknown) => v === undefined || (num(v) && v <= 100);
+const optBool = (v: unknown) => v === undefined || typeof v === 'boolean';
 const root = (v: unknown): v is string | null => v === null || (typeof v === 'string' && v.length <= 1024 && !/[\x00-\x1f]/.test(v) && v.startsWith('/') && normalizePath(v) === v);
 
 function slice(v: unknown): v is AntigelSliceState | null {
   if (v === null) return true;
   if (typeof v !== 'object' || Array.isArray(v)) return false;
   const s = v as Record<string, unknown>;
-  return num(s.currentKB) && numOrNull(s.highKB) && numOrNull(s.maxKB) && numOrNull(s.swapMaxKB) && int(s.throttles) && int(s.oomKills);
+  return num(s.currentKB) && numOrNull(s.highKB) && numOrNull(s.maxKB) && numOrNull(s.swapMaxKB) && int(s.throttles) && int(s.oomKills) && optBool(s.throttled) && pct(s.stallPct);
 }
 function project(v: unknown): v is AntigelProjectState {
   if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
   const p = v as Record<string, unknown>;
   return isProdProjectSliceName(p.unit) && root(p.root) && int(p.procs) && num(p.currentKB) && numOrNull(p.budgetMB) && typeof p.throttled === 'boolean' &&
-    (p.outsideKB === undefined || num(p.outsideKB));
+    (p.outsideKB === undefined || num(p.outsideKB)) && optBool(p.budgetThrottled) && pct(p.stallPct);
 }
 
 // Reconstruction champ par champ : aucune propriété en plus (ni __proto__) ne traverse.
-const copySlice = (v: AntigelSliceState): AntigelSliceState => ({ currentKB: v.currentKB, highKB: v.highKB, maxKB: v.maxKB, swapMaxKB: v.swapMaxKB, throttles: v.throttles, oomKills: v.oomKills });
+const copySlice = (v: AntigelSliceState): AntigelSliceState => ({
+  currentKB: v.currentKB, highKB: v.highKB, maxKB: v.maxKB, swapMaxKB: v.swapMaxKB, throttles: v.throttles, oomKills: v.oomKills,
+  ...(v.throttled !== undefined ? { throttled: v.throttled } : {}), ...(v.stallPct !== undefined ? { stallPct: v.stallPct } : {}),
+});
 const copyProject = (v: AntigelProjectState): AntigelProjectState => ({
   unit: v.unit, root: v.root, procs: v.procs, currentKB: v.currentKB, budgetMB: v.budgetMB, throttled: v.throttled,
   ...(v.outsideKB !== undefined ? { outsideKB: v.outsideKB } : {}),
+  ...(v.budgetThrottled !== undefined ? { budgetThrottled: v.budgetThrottled } : {}), ...(v.stallPct !== undefined ? { stallPct: v.stallPct } : {}),
 });
 
 export function parseAntigelState(t: string): AntigelState | null {

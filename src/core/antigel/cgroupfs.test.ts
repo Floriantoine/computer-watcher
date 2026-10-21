@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { addProc, makeProcRoot } from '../collector/fakeProc';
-import { availability, parseCgroupFile, parseLimit, parseMemoryEvents, probeAvailability, readCgroup, readCgroupStats, reverify, stillSame, userBaseOf } from './cgroupfs';
+import { availability, parseCgroupFile, parseLimit, parseMemoryEvents, parseMemoryPressure, probeAvailability, readCgroup, readCgroupStats, reverify, stillSame, userBaseOf } from './cgroupfs';
 
 const BASE = '/user.slice/user-1000.slice/user@1000.service';
 const WARP = `${BASE}/app.slice/app-dev.warp.Warp@1.service`;
@@ -49,6 +49,12 @@ describe('cgroups', () => {
     expect(parseLimit('4294967296\n')).toBe(4294967296);
     expect(parseLimit('abc')).toBeNull();
   });
+  test('memory.pressure : total « some » en µs (attente mémoire cumulée) ; illisible → null', () => {
+    expect(parseMemoryPressure('some avg10=37.71 avg60=51.20 avg300=50.99 total=833190832\nfull avg10=36.43 avg60=50.50 avg300=50.25 total=818188049\n')).toBe(833190832);
+    expect(parseMemoryPressure('full avg10=0.00 avg60=0.00 avg300=0.00 total=5\n')).toBeNull();
+    expect(parseMemoryPressure('some total=abc')).toBeNull();
+    expect(parseMemoryPressure('')).toBeNull();
+  });
   test('readCgroupStats : faux sysfs ; chemin avec « .. » refusé ; absent → null', () => {
     const sys = mkdtempSync(join(tmpdir(), 'pw-sysfs-'));
     const dir = join(sys, BASE, 'cwatch.slice');
@@ -65,6 +71,9 @@ describe('cgroups', () => {
     // slice vide (processus tous partis) : cgroup.events « populated 0 »
     writeFileSync(join(dir, 'cgroup.events'), 'populated 0\nfrozen 0\n');
     expect(readCgroupStats(sys, `${BASE}/cwatch.slice`)?.populated).toBe(false);
+    // PSI du cgroup : attente mémoire cumulée
+    writeFileSync(join(dir, 'memory.pressure'), 'some avg10=1.00 avg60=0.50 avg300=0.10 total=2500000\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n');
+    expect(readCgroupStats(sys, `${BASE}/cwatch.slice`)?.stallUs).toBe(2_500_000);
     expect(readCgroupStats(sys, `${BASE}/cwatch.slice/../cwatch.slice`)).toBeNull();
     expect(readCgroupStats(sys, `${BASE}/absent.slice`)).toBeNull();
   });

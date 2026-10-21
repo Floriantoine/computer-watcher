@@ -15,6 +15,18 @@ describe('antigel-state.json', () => {
     expect(parseAntigelState(JSON.stringify(sampleState()))?.projects[0]).not.toHaveProperty('outsideKB');
     for (const bad of [-1, '4 Go', null]) expect(parseAntigelState(JSON.stringify(sampleState({ projects: [{ ...late, outsideKB: bad as never }] })))).toBeNull();
   });
+  test('freinage récent (plafond global, budget, part de la dernière minute) : aller-retour, absent toléré, refusé si invalide', () => {
+    const slice = { ...sampleState().slice!, throttled: true, stallPct: 35 };
+    const p = { ...proj('cwatch-p-alpha.slice', '/home/u/alpha'), budgetThrottled: true, stallPct: 80 };
+    const ok = parseAntigelState(JSON.stringify(sampleState({ slice, projects: [p] })));
+    expect(ok?.slice).toEqual(slice);
+    expect(ok?.projects).toEqual([p]);
+    expect(parseAntigelState(JSON.stringify(sampleState()))?.slice).not.toHaveProperty('stallPct');
+    for (const bad of [{ slice: { ...slice, stallPct: 101 } }, { slice: { ...slice, stallPct: -1 } }, { slice: { ...slice, throttled: 'oui' } },
+      { projects: [{ ...p, stallPct: '3' }] }, { projects: [{ ...p, budgetThrottled: 1 }] }]) {
+      expect(parseAntigelState(JSON.stringify(sampleState(bad as never))), JSON.stringify(bad)).toBeNull();
+    }
+  });
   test('bureau prioritaire : aller-retour, absent toléré, refusé si invalide (unité, statut, champ manquant)', () => {
     const desk = { status: 'active', reason: null, cpu: true, io: false, memory: 'ineffective', units: ['session.slice', 'app.slice', 'cwatch.slice'], truncated: false, restoring: 0 } as const;
     expect(parseAntigelState(JSON.stringify(sampleState({ desk: { ...desk, units: [...desk.units] } })))?.desk).toEqual(desk);

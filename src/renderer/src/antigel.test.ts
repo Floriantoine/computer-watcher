@@ -44,6 +44,7 @@ describe('fenêtre : plafond de travail', () => {
     expect(validateReserve('15,5', 16 * 1024 * 1024)).toMatchObject({ ok: false, error: 'Laisse au moins 1 Go au travail (RAM : 16 Go).' });
     expect(validateReserve('0,5', null)).toMatchObject({ ok: false, error: 'Entre 1 Go et 1024 Go.' });
     expect(reserveHint(32 * 1024 * 1024)).toMatch(/^Vide : automatique, 4,8 Go/);
+    expect(reserveHint(32 * 1024 * 1024)).toMatch(/RAM disponible/);
   });
   test('budgets : ajout, remplacement, retrait, racine normalisée, libellé', () => {
     expect(withBudget({}, '/home/u/alpha/', 4096)).toEqual({ '/home/u/alpha': 4096 });
@@ -59,9 +60,12 @@ describe('fenêtre : plafond de travail', () => {
     expect(antigelCard(fresh({ status: 'off', enabled: false }))).toMatchObject({ tone: 'off', title: 'Plafond de travail éteint' });
     const c = antigelCard(fresh());
     expect(c).toMatchObject({ tone: 'ok', title: 'Plafond de travail actif', usedKB: 2 * 1024 * 1024, highKB: 12 * 1024 * 1024, fillPercent: 17 });
-    expect(c.lines).toEqual(['1 projet plafonné', '3 ralentissements · 0 arrêt par le noyau sous le plafond']);
-    expect(antigelCard(fresh({ projects: [{ unit: 'cwatch-p-alpha.slice', root: '/a', procs: 1, currentKB: 1, budgetMB: null, throttled: true }] })))
-      .toMatchObject({ tone: 'warn', title: 'Plafond de travail atteint : travail ralenti' });
+    expect(c.memLine).toBe('Travail : 2,0 Go · marge avant ralentissement : 10,0 Go');
+    expect(c.memHint).toMatch(/suit la RAM .* arrêt par le noyau seulement au-delà de 14,0 Go/i);
+    // plus de compteur brut d'événements du noyau
+    expect(c.lines).toEqual(['1 projet plafonné']);
+    expect(c.budgets).toEqual([]);
+    expect(antigelStatusLine(fresh(), true)).toBe('Actif : 1 projet plafonné · travail : 2,0 Go, marge avant ralentissement : 10,0 Go.');
     expect(antigelCard(fresh({ status: 'off' })).lines).toEqual(['Réglages → Plafond de travail pour le rallumer.']);
     expect(antigelStatusLine(fresh(), true)).toMatch(/^Actif : 1 projet plafonné/);
     expect(antigelStatusLine(null, true)).toMatch(/applique le plafond de travail/);
@@ -72,13 +76,18 @@ describe('fenêtre : plafond de travail', () => {
     const late = { unit: 'cwatch-p-projet-a.slice', root: '/home/u/projet-a', procs: 17, currentKB: 5.4 * 1024 * 1024, budgetMB: 5120, throttled: false, outsideKB: 4.5 * 1024 * 1024 };
     const v = fresh({ projects: [late] });
     const c = antigelCard(v);
-    expect(c.late).toEqual([{ text: 'u / projet-a : 5,4 Go dans le budget · ~4,5 Go hors budget (capturé tard)', hint: LATE_HINT }]);
+    // projet avec budget : la mention hors budget est sur sa ligne de budget
+    expect(c.late).toEqual([]);
+    expect(c.budgets).toEqual([{ text: 'u / projet-a : 5,4 / 5 Go — ok · ~4,5 Go hors budget (capturé tard)', hint: LATE_HINT, throttled: false }]);
     expect(LATE_HINT).toMatch(/computer-watcher run -- <commande>/);
     expect(antigelCard(fresh()).late).toEqual([]);
-    expect(antigelCard(fresh({ projects: [{ ...late, root: null, unit: 'cwatch-p-autres.slice' }] })).late[0]!.text).toMatch(/^Vérifications hors projet : /);
+    // sans budget : ligne à part, comme avant
+    const free = antigelCard(fresh({ projects: [{ ...late, budgetMB: null }] }));
+    expect(free.late).toEqual([{ text: 'u / projet-a : 5,4 Go dans le budget · ~4,5 Go hors budget (capturé tard)', hint: LATE_HINT }]);
+    expect(antigelCard(fresh({ projects: [{ ...late, budgetMB: null, root: null, unit: 'cwatch-p-autres.slice' }] })).late[0]!.text).toMatch(/^Vérifications hors projet : /);
     // Réglages → budgets : mémoire du projet en cours, hors budget seulement s'il y en a
-    expect(budgetUsage(v, '/home/u/projet-a')).toEqual({ text: '5,4 Go dans le budget · ~4,5 Go hors budget (capturé tard)', hint: LATE_HINT });
-    expect(budgetUsage(fresh({ projects: [{ ...late, outsideKB: undefined }] }), '/home/u/projet-a')).toEqual({ text: '5,4 Go dans le budget', hint: null });
+    expect(budgetUsage(v, '/home/u/projet-a')).toEqual({ text: '5,4 Go dans le budget — ok · ~4,5 Go hors budget (capturé tard)', hint: LATE_HINT });
+    expect(budgetUsage(fresh({ projects: [{ ...late, outsideKB: undefined }] }), '/home/u/projet-a')).toEqual({ text: '5,4 Go dans le budget — ok', hint: null });
     expect(budgetUsage(v, '/home/u/demo')).toBeNull();
     expect(budgetUsage({ state: v.state, fresh: false }, '/home/u/projet-a')).toBeNull();
   });
@@ -86,11 +95,62 @@ describe('fenêtre : plafond de travail', () => {
     const alpha = { unit: 'cwatch-p-alpha.slice', root: '/home/u/alpha', procs: 3, currentKB: 1, budgetMB: null, throttled: false };
     const autres = { unit: 'cwatch-p-autres.slice', root: null, procs: 1, currentKB: 1, budgetMB: null, throttled: false };
     const both = fresh({ projects: [alpha, autres] });
-    expect(antigelCard(both).lines).toEqual(['1 projet plafonné, plus des vérifications hors projet', '3 ralentissements · 0 arrêt par le noyau sous le plafond']);
+    expect(antigelCard(both).lines).toEqual(['1 projet plafonné, plus des vérifications hors projet']);
     expect(antigelStatusLine(both, true)).toMatch(/^Actif : 1 projet plafonné,/);
     const only = fresh({ projects: [autres] });
     expect(antigelCard(only).lines[0]).toBe('0 projet plafonné, plus des vérifications hors projet');
     expect(antigelStatusLine(only, true)).toMatch(/^Actif : 0 projet plafonné,/);
     for (const v of [both, only, fresh()]) expect(antigelCard(v).lines.join(' ')).not.toMatch(/slice/);
+  });
+
+  describe('ce qui freine vraiment', () => {
+    const G = 1024 * 1024;
+    const proj = { unit: 'cwatch-p-projet-a.slice', root: '/home/u/projet-a', procs: 4, currentKB: 5 * G, budgetMB: 5120, throttled: false, budgetThrottled: false };
+    const slice = { currentKB: 4.8 * G, highKB: 6 * G, maxKB: 28.7 * G, swapMaxKB: 4 * G, throttles: 2_825_279, oomKills: 0, throttled: false };
+
+    test('budget d’un projet : titre qui le nomme, ligne « freiné » ; le plafond global n’est pas en cause', () => {
+      const c = antigelCard(fresh({ slice, projects: [{ ...proj, throttled: true, budgetThrottled: true, stallPct: 64 }] }));
+      expect(c).toMatchObject({ tone: 'warn', title: 'Le projet u / projet-a est freiné par son budget' });
+      expect(c.memLine).toBe('Travail : 4,8 Go · marge avant ralentissement : 1,2 Go');
+      expect(c.budgets).toEqual([{ text: 'u / projet-a : 5,0 / 5 Go — freiné en ce moment', hint: null, throttled: true }]);
+      expect(c.lines.join(' ')).not.toMatch(/2825279|2 825 279|ralentissements/);
+      const two = antigelCard(fresh({ slice, projects: [
+        { ...proj, throttled: true, budgetThrottled: true },
+        { ...proj, unit: 'cwatch-p-demo.slice', root: '/home/u/demo', throttled: true, budgetThrottled: true },
+      ] }));
+      expect(two.title).toBe('2 projets sont freinés par leur budget');
+    });
+    test('budget qui a freiné dans la dernière minute : part du temps ; sinon « ok »', () => {
+      const c = antigelCard(fresh({ slice, projects: [{ ...proj, stallPct: 30 }] }));
+      expect(c).toMatchObject({ tone: 'ok', title: 'Plafond de travail actif' });
+      expect(c.budgets[0]!.text).toBe('u / projet-a : 5,0 / 5 Go — freiné 30 % de la dernière minute');
+      expect(antigelCard(fresh({ slice, projects: [{ ...proj, stallPct: 0 }] })).budgets[0]!.text).toBe('u / projet-a : 5,0 / 5 Go — ok');
+      expect(antigelCard(fresh({ slice, projects: [{ ...proj, currentKB: 800 * 1024 }] })).budgets[0]!.text).toBe('u / projet-a : 800 Mo / 5 Go — ok');
+    });
+    test('plafond global : « la RAM est presque pleine », état récent du travail, marge nulle', () => {
+      const full = { ...slice, highKB: 4.8 * G, throttled: true, stallPct: 42 };
+      const c = antigelCard(fresh({ slice: full, projects: [{ ...proj, budgetMB: null, throttled: true }] }));
+      expect(c).toMatchObject({ tone: 'warn', title: 'Le travail est freiné : la RAM est presque pleine' });
+      expect(c.memLine).toBe('Travail : 4,8 Go · marge avant ralentissement : aucune');
+      expect(c.lines).toContain('Travail freiné en ce moment (42 % de la dernière minute)');
+      const past = antigelCard(fresh({ slice: { ...full, throttled: false, stallPct: 7 }, projects: [] }));
+      expect(past).toMatchObject({ tone: 'ok', title: 'Plafond de travail actif' });
+      expect(past.lines).toContain('Travail freiné 7 % de la dernière minute');
+    });
+    test('arrêts par le noyau : seulement s’il y en a', () => {
+      expect(antigelCard(fresh({ slice: { ...slice, oomKills: 2 }, projects: [] })).lines).toContain('2 arrêts par le noyau sous le plafond');
+      expect(antigelCard(fresh({ slice, projects: [] })).lines.join(' ')).not.toMatch(/arrêt/);
+    });
+    test('service d’avant ce lot (sans budgetThrottled ni slice.throttled) : déduit du budget', () => {
+      const old = { currentKB: 4.8 * G, highKB: 26.4 * G, maxKB: 28.7 * G, swapMaxKB: 4 * G, throttles: 2_825_279, oomKills: 0 };
+      const { budgetThrottled: _, ...p } = proj;
+      expect(antigelCard(fresh({ slice: old, projects: [{ ...p, throttled: true }] })).title).toBe('Le projet u / projet-a est freiné par son budget');
+      expect(antigelCard(fresh({ slice: old, projects: [{ ...p, budgetMB: null, throttled: true }] })).title).toBe('Le travail est freiné : la RAM est presque pleine');
+    });
+    test('Réglages → budgets : état du budget à côté de la mémoire', () => {
+      expect(budgetUsage(fresh({ slice, projects: [{ ...proj, throttled: true, budgetThrottled: true }] }), '/home/u/projet-a'))
+        .toEqual({ text: '5,0 Go dans le budget — freiné en ce moment', hint: null });
+      expect(budgetUsage(fresh({ slice, projects: [proj] }), '/home/u/projet-a')).toEqual({ text: '5,0 Go dans le budget — ok', hint: null });
+    });
   });
 });

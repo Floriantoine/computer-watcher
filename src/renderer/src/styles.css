@@ -1239,3 +1239,4 @@ button.primary:hover:not(:disabled) { background: rgba(124, 92, 255, 0.32); bord
 /* mémoire du projet en cours sous sa ligne de budget ; infobulle quand une part est hors budget (capturé tard) */
 .antigel-budgets .antigel-budget-use { grid-column: 1 / -1; margin-top: -4px; }
 .antigel-budget-use[title], .antigel-late { cursor: help; }
+.antigel-budget-line.throttled { color: #ffb547; }

@@ -32,8 +32,8 @@ describe('fenêtre : bureau prioritaire', () => {
 
   test('carte Métriques : une ligne de plus quand le service publie le bureau prioritaire', () => {
     const lines = antigelCard({ state: sampleState({ desk: desk() }), fresh: true }).lines;
-    expect(lines).toHaveLength(3);
-    expect(lines[2]).toMatch(/^Bureau prioritaire : processeur/);
-    expect(antigelCard({ state: sampleState(), fresh: true }).lines).toHaveLength(2);
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toMatch(/^Bureau prioritaire : processeur/);
+    expect(antigelCard({ state: sampleState(), fresh: true }).lines).toHaveLength(1);
   });
 });
