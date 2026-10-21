@@ -37,7 +37,7 @@ function setup(rules: RulesConfig, credit = true) {
   mkdirSync(cfgDir, { recursive: true });
   const writeCfg = (r: RulesConfig) =>
     writeFileSync(join(cfgDir, 'config.json'), JSON.stringify({
-      ...DEFAULT_CONFIG, recorder: { ...DEFAULT_CONFIG.recorder, intervalSec: 30 }, classify: { detectPorts: false, overrides: {} }, rules: r,
+      ...DEFAULT_CONFIG, recorder: { ...DEFAULT_CONFIG.recorder, intervalSec: 30 }, classify: { detectPorts: false, overrides: {} }, rules: { recommendedSeeded: true, ...r },
     }));
   writeCfg(rules);
   mkdirSync(join(base, 'data'), { recursive: true });

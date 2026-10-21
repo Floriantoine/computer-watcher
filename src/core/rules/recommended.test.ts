@@ -120,3 +120,32 @@ describe('règles recommandées', () => {
     expect(withRecommendedRules(r.rules, 2).added).toEqual([]);
   });
 });
+
+describe('migration « recommandées ajoutées » (mise à jour depuis la v0.3.0 ou avant)', () => {
+  const seeded = { recommendedActive: true, recommendedInactive4h: true, recommendedSeeded: true };
+
+  test('config v0.2.0 (interrupteur éteint, liste vide) → les 3 recommandées, interrupteur allumé', () => {
+    const out = validateRulesDetailed({ enabled: false, list: [] });
+    expect(out.issues).toEqual([]);
+    expect(out.rules).toEqual({ ...DEFAULT_RULES, ...seeded });
+  });
+
+  test('section « rules » absente (config d\'avant les règles) → mêmes défauts que la première installation', () => {
+    expect(validateRulesDetailed(undefined).rules).toEqual({ ...DEFAULT_RULES, ...seeded });
+  });
+
+  test('règles à soi : recommandées manquantes ajoutées à la fin, interrupteur jamais touché', () => {
+    const out = validateRulesDetailed({ enabled: false, list: [mine, byId(REC_TEST_MEMORY_ID)], recommendedActive: true, recommendedInactive4h: true });
+    expect(out.rules.enabled).toBe(false);
+    expect(out.rules.list.map((r) => r.id)).toEqual([mine.id, REC_TEST_MEMORY_ID, REC_INACTIVE_ID, REC_ANTIGEL_ID]);
+  });
+
+  test('une seule fois : une recommandée supprimée ensuite reste supprimée', () => {
+    const out = validateRulesDetailed({ enabled: true, list: [mine], ...seeded });
+    expect(out.rules.list).toEqual([mine]);
+  });
+
+  test('section mal formée → toujours éteinte, rien d\'ajouté', () => {
+    expect(validateRulesDetailed('oui').rules).toEqual({ enabled: false, list: [], ...seeded });
+  });
+});

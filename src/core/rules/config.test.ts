@@ -9,11 +9,12 @@ const vitest: Rule = {
 };
 const withCond = (c: Record<string, unknown>, over: Record<string, unknown> = {}) => ({ ...vitest, ...over, condition: { ...vitest.condition, ...c } });
 const sys = { kind: 'system', memPercent: 95, memForSec: 15, cpuPercent: 95, cpuForSec: 60 };
-const one = (r: unknown) => validateRulesDetailed({ enabled: true, list: [r] });
+const one = (r: unknown) => validateRulesDetailed({ enabled: true, list: [r], recommendedSeeded: true });
 
 describe('validateRules', () => {
-  test('section absente (config d’avant les règles) → éteint, liste vide ; les recommandées ne sont pas ajoutées', () => {
-    expect(validateRules(undefined)).toEqual({ enabled: false, list: [], recommendedActive: true, recommendedInactive4h: true });
+  test('section absente (config d’avant les règles) → recommandées ajoutées, interrupteur allumé', () => {
+    expect(validateRules(undefined).list.map((r) => r.id)).toEqual(RECOMMENDED_RULES.map((r) => r.id));
+    expect(validateRules(undefined).enabled).toBe(true);
     expect(RECOMMENDED_RULES).toHaveLength(3);
     expect(validateRulesDetailed(undefined).issues).toEqual([]);
   });
@@ -21,7 +22,7 @@ describe('validateRules', () => {
   test('les 4 modèles sont valides, désactivés et en Simulation', () => {
     expect(RULE_TEMPLATES).toHaveLength(4);
     const list = RULE_TEMPLATES.map((t, i) => ({ ...t, id: `t-${i}`, createdAt: 0 }));
-    const r = validateRulesDetailed({ enabled: false, list });
+    const r = validateRulesDetailed({ enabled: false, list, recommendedSeeded: true });
     expect(r.issues).toEqual([]);
     expect(r.rules.list).toEqual(list);
     for (const t of RULE_TEMPLATES) expect(t).toMatchObject({ enabled: false, mode: 'simulate' });
@@ -65,7 +66,7 @@ describe('validateRules', () => {
     ['système champ absent', { ...vitest, condition: { kind: 'system', memPercent: 95, memForSec: 15, cpuPercent: 95 } }, /durée CPU/],
   ])('refusée : %s (seule cette règle, avec son erreur)', (_label, bad, msg) => {
     const ok = { ...vitest, id: 'r-ok' };
-    const r = validateRulesDetailed({ enabled: true, list: [bad, ok] });
+    const r = validateRulesDetailed({ enabled: true, list: [bad, ok], recommendedSeeded: true });
     expect(r.rules.list).toEqual([ok]);
     expect(r.rules.enabled).toBe(true);
     expect(r.issues).toHaveLength(1);
@@ -82,13 +83,13 @@ describe('validateRules', () => {
 
   test(`${MAX_RULES + 1} règles → les ${MAX_RULES} premières gardées, la suivante refusée`, () => {
     const list = Array.from({ length: MAX_RULES + 1 }, (_, i) => ({ ...vitest, id: `r-${i}` }));
-    const r = validateRulesDetailed({ enabled: true, list });
+    const r = validateRulesDetailed({ enabled: true, list, recommendedSeeded: true });
     expect(r.rules.list).toHaveLength(MAX_RULES);
     expect(r.issues).toEqual([{ index: MAX_RULES, id: `r-${MAX_RULES}`, name: vitest.name, error: `au plus ${MAX_RULES} règles` }]);
   });
 
   test('ids dupliqués → la seconde refusée', () => {
-    const r = validateRulesDetailed({ enabled: true, list: [vitest, { ...vitest, name: 'copie' }] });
+    const r = validateRulesDetailed({ enabled: true, list: [vitest, { ...vitest, name: 'copie' }], recommendedSeeded: true });
     expect(r.rules.list).toEqual([vitest]);
     expect(r.issues[0]).toMatchObject({ index: 1, error: 'identifiant en double' });
   });
@@ -109,7 +110,7 @@ describe('validateRules', () => {
   test('section mal formée → règles éteintes avec une erreur, jamais une exception', () => {
     for (const raw of ['oui', null, [], { enabled: 'yes', list: [] }, { enabled: true, list: {} }]) {
       const r = validateRulesDetailed(raw);
-      expect(r.rules).toEqual({ enabled: false, list: [], recommendedActive: true, recommendedInactive4h: true });
+      expect(r.rules).toEqual({ enabled: false, list: [], recommendedActive: true, recommendedInactive4h: true, recommendedSeeded: true });
       expect(r.issues).toHaveLength(1);
     }
   });
@@ -157,7 +158,7 @@ describe('revue de sécurité', () => {
   });
   test('M-4 : 100 000 règles invalides → au plus 20 erreurs + une ligne « … et n autres »', () => {
     const list = Array.from({ length: 100_000 }, (_, i) => ({ ...vitest, id: `r-${i}`, mode: 'kill' }));
-    const r = validateRulesDetailed({ enabled: true, list });
+    const r = validateRulesDetailed({ enabled: true, list, recommendedSeeded: true });
     expect(r.issues).toHaveLength(21);
     expect(r.issues[20]).toEqual({ index: -1, id: null, name: null, error: '… et 99980 autres règles refusées' });
   });

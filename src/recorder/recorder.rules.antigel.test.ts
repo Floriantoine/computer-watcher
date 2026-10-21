@@ -155,8 +155,8 @@ test('/proc/meminfo illisible : aucune évaluation, aucun signal', () => {
   s.rec.stop();
 });
 
-test('utilisateur existant (section rules présente, vide) : rien n’est ajouté, rien n’agit', () => {
-  const s = setup({ rules: { enabled: false, list: [] } });
+test('utilisateur qui a tout retiré (section rules vide, migration déjà faite) : rien n’est ajouté, rien n’agit', () => {
+  const s = setup({ rules: { enabled: false, list: [], recommendedSeeded: true } });
   s.rec.start();
   s.run(5 * 60_000);
   expect(s.kill).not.toHaveBeenCalled();

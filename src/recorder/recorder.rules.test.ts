@@ -35,7 +35,7 @@ function setup(o: { rules?: RulesConfig; protectedNames?: string[] } = {}) {
   const writeCfg = (rules: RulesConfig) =>
     writeFileSync(join(cfgDir, 'config.json'), JSON.stringify({
       ...DEFAULT_CONFIG, recorder: { ...DEFAULT_CONFIG.recorder, intervalSec: 30 }, protected: o.protectedNames ?? DEFAULT_CONFIG.protected,
-      classify: { detectPorts: false, overrides: {} }, rules,
+      classify: { detectPorts: false, overrides: {} }, rules: { recommendedSeeded: true, ...rules },
     }));
   writeCfg(o.rules ?? { enabled: true, list: [vitestRule()] });
   // crédit de Simulation déjà enregistré (sinon une règle Active est traitée en Simulation, voir recorder.rules.safety)

@@ -31,8 +31,8 @@ test('JSON corrompu → .bak, défauts, avertissement', () => {
   writeFileSync(join(dir, 'config.json'), '{ pas du json');
   const r = loadConfig(dir);
   // jamais l'anti-gel Actif sur un fichier que l'utilisateur avait réglé : règles éteintes, aussi dans le fichier réécrit
-  expect(r.config).toEqual({ ...DEFAULT_CONFIG, rules: { enabled: false, list: [], recommendedActive: true, recommendedInactive4h: true }, antigel: { enabled: false, reserveMB: null, budgets: {} } });
-  expect(JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')).rules).toEqual({ enabled: false, list: [], recommendedActive: true, recommendedInactive4h: true });
+  expect(r.config).toEqual({ ...DEFAULT_CONFIG, rules: { enabled: false, list: [], recommendedActive: true, recommendedInactive4h: true, recommendedSeeded: true }, antigel: { enabled: false, reserveMB: null, budgets: {} } });
+  expect(JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')).rules).toEqual({ enabled: false, list: [], recommendedActive: true, recommendedInactive4h: true, recommendedSeeded: true });
   expect(r.warning).toMatch(/config\.json\.bak/);
   expect(readFileSync(join(dir, 'config.json.bak'), 'utf8')).toBe('{ pas du json');
 });
@@ -49,7 +49,7 @@ test('fichier illisible → défauts et avertissement, sans écraser le fichier'
   writeFileSync(join(dir, 'config.json'), JSON.stringify(DEFAULT_CONFIG));
   chmodSync(join(dir, 'config.json'), 0o000);
   const r = loadConfig(dir);
-  expect(r.config).toEqual({ ...DEFAULT_CONFIG, rules: { enabled: false, list: [], recommendedActive: true, recommendedInactive4h: true }, antigel: { enabled: false, reserveMB: null, budgets: {} } });
+  expect(r.config).toEqual({ ...DEFAULT_CONFIG, rules: { enabled: false, list: [], recommendedActive: true, recommendedInactive4h: true, recommendedSeeded: true }, antigel: { enabled: false, reserveMB: null, budgets: {} } });
   expect(r.warning).toMatch(/illisible/);
   expect(existsSync(join(dir, 'config.json.bak'))).toBe(false);
 });
@@ -78,7 +78,7 @@ test('fichier invalide en dossier illisible → défauts et avertissement, sans 
   writeFileSync(join(dir, 'config.json'), '{ pas du json');
   chmodSync(dir, 0o500);
   const r = loadConfig(dir);
-  expect(r.config).toEqual({ ...DEFAULT_CONFIG, rules: { enabled: false, list: [], recommendedActive: true, recommendedInactive4h: true }, antigel: { enabled: false, reserveMB: null, budgets: {} } });
+  expect(r.config).toEqual({ ...DEFAULT_CONFIG, rules: { enabled: false, list: [], recommendedActive: true, recommendedInactive4h: true, recommendedSeeded: true }, antigel: { enabled: false, reserveMB: null, budgets: {} } });
   expect(r.warning).not.toBeNull();
   expect(r.warning).toMatch(/Impossible d'écrire/);
   chmodSync(dir, 0o755); // cleanup pour teardown
@@ -214,11 +214,11 @@ test('recorder.tmpfsAlertMB : 4000 Mo par défaut, ajouté si absent, bornes 100
 });
 
 describe('règles (⑥)', () => {
-  test('config v1 existante sans « rules » → valide, règles éteintes, liste vide (recommandées seulement à la création)', () => {
+  test('config v1 existante sans « rules » → valide, recommandées ajoutées une fois, comme une première installation', () => {
     const { rules: _r, ...old } = { ...DEFAULT_CONFIG, rules: undefined };
     const c = validateConfig(old);
     expect(c).not.toBeNull();
-    expect(c!.rules).toEqual({ enabled: false, list: [], recommendedActive: true, recommendedInactive4h: true });
+    expect(c!.rules).toEqual({ ...DEFAULT_CONFIG.rules, recommendedSeeded: true });
     expect(DEFAULT_CONFIG.rules.enabled).toBe(true);
     expect(DEFAULT_CONFIG.rules.list.map((r) => r.id)).toEqual(['rec-inactive-front-back', 'rec-test-memory', 'rec-antigel']);
   });
@@ -227,11 +227,11 @@ describe('règles (⑥)', () => {
     const dir = tmp();
     const good = { id: 'r-ok', name: 'ok', enabled: true, mode: 'simulate', createdAt: 1, condition: { kind: 'forecast', underMin: 3, includeApps: [] } };
     const bad = { ...good, id: 'r-bad', name: 'cassée', condition: { kind: 'forecast', underMin: 99, includeApps: [] } };
-    writeFileSync(join(dir, 'config.json'), JSON.stringify({ ...DEFAULT_CONFIG, protected: ['x'], rules: { enabled: true, list: [bad, good] } }));
+    writeFileSync(join(dir, 'config.json'), JSON.stringify({ ...DEFAULT_CONFIG, protected: ['x'], rules: { enabled: true, list: [bad, good], recommendedSeeded: true } }));
     const r = loadConfig(dir);
     expect(r.warning).toBeNull();
     expect(r.config.protected).toEqual(['x']);
-    expect(r.config.rules).toEqual({ enabled: true, list: [good], recommendedActive: true, recommendedInactive4h: true });
+    expect(r.config.rules).toEqual({ enabled: true, list: [good], recommendedActive: true, recommendedInactive4h: true, recommendedSeeded: true });
     expect(r.ruleIssues).toEqual([{ index: 0, id: 'r-bad', name: 'cassée', error: expect.stringMatching(/délai/) }]);
     expect(existsSync(join(dir, 'config.json.bak'))).toBe(false);
   });

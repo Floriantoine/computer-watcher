@@ -43,6 +43,11 @@ export interface RulesConfig {
   recommendedActive?: boolean;
   /** Migration « règle inactif recommandée de 1 j à 4 h » (2026-10-21) déjà faite. Même principe que recommendedActive. */
   recommendedInactive4h?: boolean;
+  /**
+   * Migration « recommandées ajoutées » (2026-10-21) déjà faite. Absent d'une config d'avant (v0.3.0 ou plus ancienne) :
+   * la validation ajoute les recommandées manquantes (et allume l'interrupteur s'il n'y avait aucune règle), puis le pose.
+   */
+  recommendedSeeded?: boolean;
 }
 
 /** Règle du fichier refusée par la validation : ignorée (désactivée) seule, avec son erreur affichée. */

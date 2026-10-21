@@ -25,13 +25,14 @@ export const OPT_IN_APPS: readonly string[] = [...APP_NAMES].filter((n) => !isNe
 /** Erreurs de règles gardées (au-delà : une ligne « … et n autres »). */
 export const MAX_RULE_ISSUES = 20;
 
+const MIGRATED = { recommendedActive: true, recommendedInactive4h: true, recommendedSeeded: true } as const;
 /**
- * Première installation seulement (config.json absent) : interrupteur allumé, les 3 règles recommandées. Jamais
- * appliqué à une config existante (section absente, fichier illisible ou invalide : RULES_OFF).
+ * Première installation (config.json absent) : interrupteur allumé, les 3 règles recommandées. Une config existante
+ * d'avant les recommandées y arrive aussi, une fois, par la migration « recommandées ajoutées » (withSeeded).
  */
-export const DEFAULT_RULES: RulesConfig = { enabled: true, list: RECOMMENDED_RULES.map((r) => structuredClone(r)), recommendedActive: true, recommendedInactive4h: true };
-/** Config existante sans section « rules », section mal formée, fichier illisible ou invalide : tout éteint. */
-export const RULES_OFF: RulesConfig = { enabled: false, list: [], recommendedActive: true, recommendedInactive4h: true };
+export const DEFAULT_RULES: RulesConfig = { enabled: true, list: RECOMMENDED_RULES.map((r) => structuredClone(r)), ...MIGRATED };
+/** Section mal formée, fichier illisible ou invalide : tout éteint. */
+export const RULES_OFF: RulesConfig = { enabled: false, list: [], ...MIGRATED };
 
 const CONTROL = /[\u0000-\u001f\u007f-\u009f‎‏‪-‮⁦-⁩]/;
 
@@ -101,14 +102,24 @@ function validateRule(raw: unknown): Rule | string {
 }
 
 /**
+ * Migration unique (2026-10-21) : une config d'avant `recommendedSeeded` (mise à jour depuis la v0.3.0 ou avant, où les
+ * recommandées n'étaient posées qu'à la création de config.json) reçoit les recommandées manquantes, à la fin. Aucune
+ * règle à soi → interrupteur allumé, comme une première installation ; sinon l'interrupteur n'est pas touché.
+ */
+function withSeeded(enabled: boolean, list: Rule[]): { enabled: boolean; list: Rule[] } {
+  const seeded = withRecommendedRules({ enabled, list }, 0).rules;
+  return { enabled: list.length === 0 ? true : enabled, list: seeded.list };
+}
+
+/**
  * Validation stricte, règle par règle : une règle invalide (modifiée à la main) est ignorée seule et décrite dans
- * `issues` ; au-delà de MAX_RULES, les suivantes aussi ; un id déjà vu aussi. Section absente → éteint, liste vide (les
- * règles recommandées ne sont posées qu'à la création de config.json).
+ * `issues` ; au-delà de MAX_RULES, les suivantes aussi ; un id déjà vu aussi. Section absente (config d'avant les
+ * règles) → recommandées ajoutées, interrupteur allumé (withSeeded).
  * Une section mal formée (pas un objet, liste absente) → règles éteintes, une erreur ; jamais de réinitialisation du reste.
  */
 export function validateRulesDetailed(raw: unknown): { rules: RulesConfig; issues: RuleIssue[] } {
-  // config existante d'avant les règles : rien n'est ajouté (bouton « Ajouter les règles recommandées »)
-  if (raw === undefined) return { rules: structuredClone(RULES_OFF), issues: [] };
+  // config existante d'avant les règles : recommandées ajoutées une fois (withSeeded)
+  if (raw === undefined) return { rules: { ...withSeeded(false, []), ...MIGRATED }, issues: [] };
   const broken = (error: string) => ({ rules: structuredClone(RULES_OFF), issues: [{ index: -1, id: null, name: null, error }] });
   if (!isObj(raw)) return broken('section « rules » invalide : règles éteintes');
   const enabled = raw.enabled ?? false;
@@ -137,8 +148,9 @@ export function validateRulesDetailed(raw: unknown): { rules: RulesConfig; issue
   // migration unique : règles recommandées intactes en Active (accord de l'utilisateur du 2026-10-20)
   const at4h = raw.recommendedInactive4h === true ? out : withInactive4h(out);
   const migrated = raw.recommendedActive === true ? at4h : withRecommendedActive(at4h);
+  const final = raw.recommendedSeeded === true ? { enabled, list: migrated } : withSeeded(enabled, migrated);
   if (dropped) issues.push({ index: -1, id: null, name: null, error: `… et ${dropped} autre${dropped > 1 ? 's' : ''} règle${dropped > 1 ? 's' : ''} refusée${dropped > 1 ? 's' : ''}` });
-  return { rules: { enabled, list: migrated, recommendedActive: true, recommendedInactive4h: true }, issues };
+  return { rules: { ...final, ...MIGRATED }, issues };
 }
 
 export function validateRules(raw: unknown): RulesConfig {
