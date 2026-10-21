@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
   addClaudeHook, addZshBlock, CLAUDE_HOOK_ENTRY, claudeHookState, launcherScript, isOurLauncher, removeClaudeHook, removeZshBlock, shouldRemind,
-  ZSH_BEGIN, ZSH_END, ZSHRC_LINE, zshBlock, zshrcState, backupName,
+  ZSH_BEGIN, ZSH_END, ZSHRC_LINE, zshBlock, zshrcState, backupName, type WrapItemStatus,
 } from './wrapSetup';
 
 describe('bloc ~/.zshrc', () => {
@@ -147,4 +147,27 @@ test('lancement de test : PROC_WATCH_NO_* ou e2e, sauf PROC_WATCH_WRAP_REMINDER=
   expect(isTestLaunch({ PROC_WATCH_NO_ANTIGEL: '1' })).toBe(true);
   expect(isTestLaunch({ PROC_WATCH_ANTIGEL_E2E: '1' })).toBe(true);
   expect(isTestLaunch({ PROC_WATCH_NO_ANTIGEL: '1', PROC_WATCH_WRAP_REMINDER: '1' })).toBe(false);
+});
+
+describe('sélection d’une action', () => {
+  const it = (part: 'command' | 'zshrc' | 'claude', canInstall: boolean, canRemove: boolean): WrapItemStatus =>
+    ({ part, state: 'absent', ok: false, path: part, preview: '', detail: '', canInstall, canRemove, blocked: null, warnings: [] });
+  const st = { complete: false, items: [it('command', true, false), it('zshrc', false, true), it('claude', true, true)] };
+  test('installation : éléments installables, ordre lanceur → zsh → Claude', async () => {
+    const { wrapSelection } = await import('./wrapSetup');
+    expect(wrapSelection(st, 'install', 'all').map((i) => i.part)).toEqual(['command', 'claude']);
+    expect(wrapSelection(st, 'install', 'zshrc')).toEqual([]);
+  });
+  test('retrait : éléments de l’app, ordre Claude → zsh → lanceur', async () => {
+    const { wrapSelection } = await import('./wrapSetup');
+    expect(wrapSelection(st, 'remove', 'all').map((i) => i.part)).toEqual(['claude', 'zshrc']);
+    expect(wrapSelection(st, 'remove', 'command')).toEqual([]);
+  });
+  test('requête validée', async () => {
+    const { isWrapRequest } = await import('./wrapSetup');
+    expect(isWrapRequest('install', 'all')).toBe(true);
+    expect(isWrapRequest('remove', 'claude')).toBe(true);
+    expect(isWrapRequest('rm', 'claude')).toBe(false);
+    expect(isWrapRequest('install', '/etc/passwd')).toBe(false);
+  });
 });

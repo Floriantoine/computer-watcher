@@ -14,8 +14,8 @@ import {
 import { basename, delimiter, dirname, isAbsolute, join } from 'node:path';
 import {
   addClaudeHook, addZshBlock, backupName, CLAUDE_HOOK_ENTRY, claudeHookState, isOurLauncher, launcherScript, launcherTargetPath, removeClaudeHook,
-  removeZshBlock, WRAP_LABELS, WRAP_PARTS, zshBlock, zshrcState, type LauncherTarget, type WrapActionResult, type WrapItemStatus, type WrapPart,
-  type WrapSetupStatus,
+  removeZshBlock, WRAP_LABELS, WRAP_PARTS, wrapSelection, zshBlock, zshrcState, type LauncherTarget, type WrapAction, type WrapActionResult,
+  type WrapApplyResponse, type WrapItemStatus, type WrapPart, type WrapSetupStatus, type WrapTarget,
 } from '../core/wrapSetup';
 import { readFileSafe, removeFileSafe, writeFileSafe } from './safeFs';
 
@@ -432,4 +432,28 @@ export function realProbe(file: string, env: NodeJS.ProcessEnv): Promise<boolean
       resolve(!err && /computer-watcher should-wrap/.test(String(stdout)));
     });
   });
+}
+
+/**
+ * « Installer » / « Retirer » depuis Réglages : état relu, éléments choisis ici (jamais de chemin venu du renderer),
+ * confirmation (fichiers modifiés et sauvegardes), puis chaque élément à son tour ; une erreur n'arrête pas les autres.
+ */
+export async function applyWrap(
+  d: WrapSetupDeps, action: WrapAction, part: WrapTarget,
+  confirm: (c: { message: string; detail: string; confirm: string }) => Promise<boolean>,
+): Promise<WrapApplyResponse> {
+  const before = await wrapStatus(d);
+  const items = wrapSelection(before, action, part);
+  if (!items.length) return { cancelled: false, results: [], errors: [], status: before };
+  if (!(await confirm(wrapConfirmText(d.home, action, items)))) return { cancelled: true };
+  const results: WrapActionResult[] = [];
+  const errors: { part: WrapPart; error: string }[] = [];
+  for (const i of items) {
+    try {
+      results.push(action === 'install' ? await installWrap(d, i.part) : await removeWrap(d, i.part));
+    } catch (e) {
+      errors.push({ part: i.part, error: msg(e) });
+    }
+  }
+  return { cancelled: false, results, errors, status: await wrapStatus(d) };
 }

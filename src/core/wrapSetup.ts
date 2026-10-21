@@ -258,3 +258,23 @@ export function isTestLaunch(env: NodeJS.ProcessEnv): boolean {
   if (env.PROC_WATCH_WRAP_REMINDER === '1') return false;
   return Object.keys(env).some((k) => k.startsWith('PROC_WATCH_NO_') || (k.startsWith('PROC_WATCH_') && k.endsWith('_E2E'))) || env.PROC_WATCH_E2E === '1';
 }
+
+// ---------------------------------------------------------------- actions demandées par Réglages
+
+export type WrapAction = 'install' | 'remove';
+export type WrapTarget = WrapPart | 'all';
+
+export const isWrapRequest = (action: unknown, part: unknown): boolean =>
+  (action === 'install' || action === 'remove') && (part === 'all' || isWrapPart(part));
+
+/** Éléments concernés, dans l'ordre d'exécution : lanceur d'abord à l'installation, en dernier au retrait. */
+export function wrapSelection(status: WrapSetupStatus, action: WrapAction, part: WrapTarget): WrapItemStatus[] {
+  const picked = status.items.filter((i) => (part === 'all' || i.part === part) && (action === 'install' ? i.canInstall : i.canRemove));
+  const order = action === 'install' ? WRAP_PARTS : [...WRAP_PARTS].reverse();
+  return order.flatMap((p) => picked.filter((i) => i.part === p));
+}
+
+/** Réponse de « Installer » / « Retirer ». */
+export type WrapApplyResponse =
+  | { cancelled: true }
+  | { cancelled: false; results: WrapActionResult[]; errors: { part: WrapPart; error: string }[]; status: WrapSetupStatus };

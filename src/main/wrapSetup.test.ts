@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import { CLAUDE_HOOK_ENTRY, isOurLauncher, zshBlock } from '../core/wrapSetup';
-import { findInPath, installWrap, ownedWrapParts, removeWrap, wrapConfirmText, wrapPaths, wrapStatus, type WrapSetupDeps } from './wrapSetup';
+import { applyWrap, findInPath, installWrap, ownedWrapParts, removeWrap, wrapConfirmText, wrapPaths, wrapStatus, type WrapSetupDeps } from './wrapSetup';
 
 // HOME temporaires sous ~/.cache/pw-wrapsetup-* : jamais le vrai ~/.zshrc, ~/.claude ni ~/.local/bin.
 const cache = join(homedir(), '.cache');
@@ -306,5 +306,43 @@ describe('ensemble', () => {
     expect(c.detail).toContain('~/.zshrc.computer-watcher-AAAAMMJJ-HHMMSS.bak');
     expect(c.confirm).toBe('Installer');
     expect(wrapConfirmText(home, 'remove', st.items.slice(0, 1)).detail).not.toContain('Sauvegarde');
+  });
+});
+
+describe('applyWrap (Réglages)', () => {
+  test('« Tout installer » : confirmation puis les éléments installables ; refus de confirmer : rien écrit', async () => {
+    mkdirSync(join(home, '.claude'));
+    const d = deps();
+    const seen: string[] = [];
+    const no = await applyWrap(d, 'install', 'all', async (c) => (seen.push(c.detail), false));
+    expect(no).toEqual({ cancelled: true });
+    expect(existsSync(wrapPaths(d).launcher)).toBe(false);
+    expect(existsSync(join(home, '.zshrc'))).toBe(false);
+    expect(seen[0]).toContain('.bak');
+    const yes = await applyWrap(d, 'install', 'all', async () => true);
+    if (yes.cancelled) throw new Error('annulé');
+    expect(yes.results.map((r) => r.part)).toEqual(['command', 'zshrc', 'claude']);
+    expect(yes.errors).toEqual([]);
+    expect(yes.status.complete).toBe(true);
+  });
+
+  test('une erreur n’arrête pas les autres ; rien à faire : pas de confirmation', async () => {
+    mkdirSync(join(home, '.claude'));
+    const d = deps();
+    let asked = 0;
+    await applyWrap(d, 'install', 'zshrc', async () => (asked++, true));
+    // JSON cassé pendant la confirmation (après le calcul de l'état) : le hook échoue, le lanceur passe
+    const r = await applyWrap(d, 'install', 'all', async () => {
+      asked++;
+      writeFileSync(join(home, '.claude/settings.json'), '{');
+      return true;
+    });
+    if (r.cancelled) throw new Error('annulé');
+    expect(r.results.map((x) => x.part)).toEqual(['command']);
+    expect(r.errors).toEqual([{ part: 'claude', error: expect.stringMatching(/JSON invalide/) }]);
+    expect(readFileSync(join(home, '.claude/settings.json'), 'utf8')).toBe('{');
+    const none = await applyWrap(d, 'remove', 'claude', async () => (asked++, true));
+    expect(none).toMatchObject({ cancelled: false, results: [] });
+    expect(asked).toBe(2);
   });
 });
