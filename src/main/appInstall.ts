@@ -13,6 +13,7 @@ import { LEGACY_UNIT_NAME, UNIT_NAME, type Systemctl } from './recorderService';
 import { APP_DISPLAY_NAME, APP_NAME, LEGACY_APP_NAME } from '../core/appName';
 import { xdgFamilies, xdgHome } from '../core/paths';
 import { systemBin } from '../core/childEnv';
+import { isWrapPart, type WrapPart } from '../core/wrapSetup';
 
 export type { InstallOutcome, UninstallItem, UninstallKind, UninstallOptions, UninstallResult };
 
@@ -233,7 +234,7 @@ const DATA_FILES = [
   'forecast-snooze.json', 'rules-simulation.json', 'app-focus.json', 'tmp-set-aside.json',
 ];
 /** `.updaterId` : identifiant écrit par electron-updater dans le dossier de l'app. */
-const CONFIG_FILES = ['config.json', 'config.json.bak', 'onboarding.json', 'updater.json', 'test-app-update.yml', '.updaterId', 'migration.json'];
+const CONFIG_FILES = ['config.json', 'config.json.bak', 'onboarding.json', 'updater.json', 'test-app-update.yml', '.updaterId', 'migration.json', 'wrap-setup.json'];
 /**
  * Profil Chromium de l'app (le dossier de config est aussi son `userData`) : noms connus seulement, retirés en
  * arborescence sans suivre de lien. Tout autre nom reste.
@@ -260,7 +261,14 @@ const LABELS: Record<UninstallKind, string> = {
   history: 'Historique',
   config: 'Configuration',
   cache: 'Cache des mises à jour',
+  wrap: 'Lancement dans le budget',
   appimage: 'Application',
+};
+
+const WRAP_ITEM_LABELS: Record<WrapPart, string> = {
+  claude: 'hook retiré de settings.json, sauvegarde à côté',
+  zshrc: 'bloc retiré de .zshrc, sauvegarde à côté',
+  command: 'lanceur supprimé',
 };
 
 const allowedName = (name: string, files: string[], patterns: RegExp[]) => files.includes(name) || patterns.some((p) => p.test(name));
@@ -281,7 +289,7 @@ function ownFiles(r: Roots, dir: string, files: string[], patterns: RegExp[]): s
  * contrôles, juste après leur équivalent au nouveau nom (l'ancienne copie juste avant la nouvelle).
  * earlyoom n'en fait jamais partie.
  */
-export function uninstallPlan(r: Roots, o: UninstallOptions): UninstallItem[] {
+export function uninstallPlan(r: Roots, o: UninstallOptions, wrap: readonly { part: WrapPart; path: string }[] = []): UninstallItem[] {
   const p = appPaths(r);
   const ok = (path: string) => !foreignPath(r, path);
   const item = (kind: UninstallKind, path: string, dir = false): UninstallItem => ({ kind, path, label: LABELS[kind], ...(dir ? { dir } : {}) });
@@ -311,6 +319,9 @@ export function uninstallPlan(r: Roots, o: UninstallOptions): UninstallItem[] {
     // cache d'electron-updater : arborescence retirée sans suivre de lien ; s'il est un lien, le lien seul
     for (const set of both) if (ok(set.updaterCache) && present(set.updaterCache)) out.push({ ...item('cache', set.updaterCache), tree: true });
   }
+  // lancement dans le budget (installé depuis Réglages → Plafond de travail) : hook, bloc ~/.zshrc, puis lanceur ; sans
+  // eux, Claude Code appellerait une commande disparue à chaque outil Bash
+  for (const w of wrap) out.push({ kind: 'wrap', path: w.path, label: `${LABELS.wrap} (${WRAP_ITEM_LABELS[w.part]})`, part: w.part });
   // la copie en cours d'exécution (nouveau nom) en tout dernier
   for (const set of [p.legacy, p]) if (present(set.appImage)) out.push(item('appimage', set.appImage));
   return out;
@@ -321,6 +332,8 @@ export function uninstallPlan(r: Roots, o: UninstallOptions): UninstallItem[] {
  * nouveau ou à l'ancien nom ?
  */
 function allowed(r: Roots, i: UninstallItem): boolean {
+  // revérifié et retiré par main/wrapSetup (chemins recalculés là-bas, jamais ceux de l'élément)
+  if (i.kind === 'wrap') return isWrapPart(i.part) && !i.dir && !i.tree;
   const p = appPaths(r);
   return !foreignPath(r, i.path) && (allowedIn(p, i) || allowedIn(p.legacy, i));
 }
@@ -358,6 +371,8 @@ export interface UninstallDeps {
   /** Avant le premier fichier d'historique : fermer la base ouverte par l'app. */
   beforeHistory?: () => void;
   onRemoved?: (path: string) => void;
+  /** Retire un élément du lancement dans le budget (main/wrapSetup.removeWrap) ; erreur : signalée, AppImage gardée. */
+  wrap?: (part: WrapPart) => Promise<'removed' | 'absent'>;
 }
 
 /**
@@ -394,6 +409,14 @@ export async function runUninstall(plan: readonly UninstallItem[], r: Roots, dep
         const d = removeDirIfEmptySafe(roots, i.path);
         if (d === 'removed') removed(i.path);
         else if (d === 'not-empty') res.kept.push({ path: i.path, reason: 'dossier non vide : fichiers inconnus laissés' });
+        continue;
+      }
+      if (i.kind === 'wrap') {
+        if (!deps.wrap) {
+          fail(i.path, 'retrait non pris en charge ici : laissé');
+          continue;
+        }
+        if ((await deps.wrap(i.part!)) === 'removed') removed(i.path);
         continue;
       }
       if (i.kind === 'service') {

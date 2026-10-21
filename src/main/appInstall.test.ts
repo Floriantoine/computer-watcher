@@ -751,3 +751,59 @@ describe('revue M4 : XDG partiel, la désinstallation ne liste jamais les dossie
     expect(rootsFrom({ XDG_DATA_HOME: '/d' }, '/home/u').foreign).toEqual(['data']);
   });
 });
+
+describe('lancement dans le budget : retiré avec l’app', () => {
+  const wrap = (p: string) => [
+    { part: 'claude' as const, path: join(roots.home, '.claude/settings.json') },
+    { part: 'zshrc' as const, path: join(roots.home, '.zshrc') },
+    { part: 'command' as const, path: p },
+  ];
+
+  test('plan : hook, bloc puis lanceur, juste avant la copie de l’AppImage', async () => {
+    const p = await fullInstall();
+    const launcher = join(roots.home, '.local/bin/computer-watcher');
+    const plan = uninstallPlan(roots, { history: false, config: false }, wrap(launcher));
+    expect(plan.map((i) => i.kind)).toEqual(['autostart', 'desktop', 'icon', 'service', 'wrap', 'wrap', 'wrap', 'appimage']);
+    expect(plan.filter((i) => i.kind === 'wrap').map((i) => i.part)).toEqual(['claude', 'zshrc', 'command']);
+    expect(plan.at(-1)!.path).toBe(p.appImage);
+    const s = uninstallSummary(plan, { deb: false });
+    expect(s.detail).toContain('Lancement dans le budget');
+    expect(s.detail).toContain(launcher);
+  });
+
+  test('exécution : chaque élément retiré par le module dédié ; sans lui, refusé et AppImage gardée', async () => {
+    const p = await fullInstall();
+    const plan = uninstallPlan(roots, { history: false, config: false }, wrap(join(roots.home, '.local/bin/computer-watcher')));
+    const done: string[] = [];
+    const r = await runUninstall(plan, roots, { service: okService(), wrap: async (part) => (done.push(part), 'removed') });
+    expect(done).toEqual(['claude', 'zshrc', 'command']);
+    expect(r.failed).toEqual([]);
+    expect(r.done).toBe(true);
+    expect(existsSync(p.appImage)).toBe(false);
+
+    await fullInstall();
+    const plan2 = uninstallPlan(roots, { history: false, config: false }, wrap('/x'));
+    const r2 = await runUninstall(plan2, roots, { service: okService() });
+    expect(r2.failed.map((f) => f.error)).toEqual(Array(3).fill(expect.stringMatching(/non pris en charge/)));
+    expect(r2.done).toBe(false);
+  });
+
+  test('échec d’un retrait (JSON devenu invalide…) : signalé, AppImage gardée', async () => {
+    await fullInstall();
+    const plan = uninstallPlan(roots, { history: false, config: false }, wrap('/x').slice(0, 1));
+    const r = await runUninstall(plan, roots, { service: okService(), wrap: async () => { throw new Error('JSON invalide'); } });
+    expect(r.failed).toEqual([{ path: join(roots.home, '.claude/settings.json'), error: 'JSON invalide' }]);
+    expect(r.done).toBe(false);
+  });
+
+  test('élément « wrap » sans partie connue : refusé', async () => {
+    const r = await runUninstall([{ kind: 'wrap', path: '/etc/passwd', label: 'x' }], roots, { service: okService(), wrap: async () => 'removed' });
+    expect(r.failed[0]!.error).toMatch(/hors de la liste/);
+  });
+
+  test('wrap-setup.json fait partie de la configuration', async () => {
+    const p = await fullInstall();
+    writeFileSync(join(p.configDir, 'wrap-setup.json'), '{}');
+    expect(uninstallPlan(roots, { history: false, config: true }).map((i) => i.path)).toContain(join(p.configDir, 'wrap-setup.json'));
+  });
+});

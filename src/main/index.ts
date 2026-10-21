@@ -3,7 +3,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } f
 import appIcon from '../../resources/icon.png?asset';
 import { appendFileSync, constants as fsConstants, existsSync, lstatSync, realpathSync, mkdirSync, readFileSync, renameSync, statfsSync, writeFileSync } from 'node:fs';
 import { access, realpath, stat } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { homedir, userInfo } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { classifyGroups, type InstanceDecision } from '../core/classify/classify';
 import { readPackageHints } from '../core/classify/packageJson';
@@ -84,6 +84,8 @@ import {
   applyOverride, checkConfigSet, classifySetKey, swapSettingsChanged, isGroupKeys, noKill, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState as computeRecorderState,
 } from './historyIpc';
 import { readAntigelView } from './antigelIpc';
+import { installWrap, ownedWrapParts, realProbe, removeWrap, wrapConfirmText, wrapStatus, type WrapSetupDeps } from './wrapSetup';
+import type { LauncherTarget } from '../core/wrapSetup';
 import { requestFridge } from './fridgeIpc';
 import { autoManageService, defaultSystemctl, recorderSyncDisabled, ensureRecorderService, recorderAppImage, recorderExecArgs, systemctlAvailable, unitPath } from './recorderService';
 import { cliArgsFromArgv, reexecAsCli } from './runEntry';
@@ -1339,15 +1341,36 @@ ipcMain.handle('migration:retry', async (): Promise<{ report: MigrationReport; r
 });
 
 const isDeb = () => app.isPackaged && !appImage;
+
+// ---------------------------------------------------------------- lancer directement dans le budget (Réglages → Plafond de travail)
+// Chemins tirés de l'environnement de l'app (HOME, ZDOTDIR, CLAUDE_CONFIG_DIR, PATH) : une app de test aux dossiers
+// temporaires ne touche jamais les vrais ~/.zshrc, ~/.claude ni ~/.local/bin.
+/** Ce que le lanceur ~/.local/bin/computer-watcher appelle : l'AppImage installée (chemin figé), le binaire du .deb, ou Electron en mode Node (développement). */
+function wrapTarget(): LauncherTarget {
+  const t = launchTarget({ roots, appImage: appImage ?? undefined, packaged: app.isPackaged, execPath: process.execPath });
+  if (appImage && t) return { kind: 'appimage', path: t };
+  if (t) return { kind: 'binary', path: t };
+  return { kind: 'node', electron: process.execPath, cli: join(__dirname, 'cli.js') };
+}
+const loginShell = (): string | null => {
+  try {
+    return userInfo().shell || null;
+  } catch {
+    return null;
+  }
+};
+const wrapDeps = (): WrapSetupDeps => ({
+  home: roots.home, env: process.env, loginShell: loginShell(), target: wrapTarget(), probe: (f) => realProbe(f, process.env), now: () => new Date(),
+});
 ipcMain.handle('uninstall:plan', (_e, o: unknown) => {
   if (!isUninstallOptions(o)) throw new Error('Requête invalide');
-  const plan = uninstallPlan(roots, o);
+  const plan = uninstallPlan(roots, o, ownedWrapParts(wrapDeps()));
   return { items: plan, ...uninstallSummary(plan, { deb: isDeb() }) };
 });
 /** Le main refait le plan (jamais de chemins venus du renderer), le montre dans une confirmation native, puis l'exécute. */
 ipcMain.handle('uninstall:run', async (_e, o: unknown) => {
   if (!isUninstallOptions(o)) throw new Error('Requête invalide');
-  const plan = uninstallPlan(roots, o);
+  const plan = uninstallPlan(roots, o, ownedWrapParts(wrapDeps()));
   const s = uninstallSummary(plan, { deb: isDeb() });
   if (!(await confirmNative({ title: `Désinstaller ${APP_DISPLAY_NAME}`, message: s.message, detail: s.detail, confirm: 'Désinstaller' }))) return { cancelled: true as const };
   uninstalling = true;
@@ -1366,6 +1389,7 @@ ipcMain.handle('uninstall:run', async (_e, o: unknown) => {
       },
     },
     beforeHistory: () => history.close(),
+    wrap: async (part) => ((await removeWrap(wrapDeps(), part)).changed ? 'removed' : 'absent'),
   });
   if (result.done) {
     quitting = true;
