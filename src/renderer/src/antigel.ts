@@ -1,5 +1,5 @@
 // Plafond de travail (anti-gel), fenêtre (logique pure) : marques des projets, carte Métriques, formulaires (Go).
-import { BUDGET_MAX_MB, BUDGET_MIN_MB, RESERVE_MAX_MB, RESERVE_MIN_MB, budgetKey } from '../../core/antigel/config';
+import { BUDGET_MAX_MB, BUDGET_MIN_MB, RESERVE_MAX_MB, RESERVE_MIN_MB, budgetKey, effectiveBudget, type AntigelConfig } from '../../core/antigel/config';
 import { MiB, autoReserveBytes } from '../../core/antigel/limits';
 import type { FridgePhase } from '../../core/antigel/fridgeState';
 import type { AntigelSliceState, AntigelState, AntigelView } from '../../core/antigel/state';
@@ -69,6 +69,32 @@ export function withBudget(budgets: Record<string, number>, root: string, mb: nu
   if (mb === null) delete out[k];
   else out[k] = mb;
   return out;
+}
+
+/** Projet explicitement sans budget (le budget par défaut ne s'y applique pas) ou rendu au budget par défaut. */
+export function withNoBudget(ag: AntigelConfig, root: string, on: boolean): AntigelConfig {
+  const k = budgetKey(root);
+  if (k === null) return ag;
+  const list = (ag.noBudget ?? []).filter((r) => r !== k);
+  if (on) list.push(k);
+  const { noBudget: _, ...rest } = ag;
+  return list.length ? { ...rest, noBudget: list } : rest;
+}
+
+/** Ligne de Réglages → budgets : budget explicite, budget par défaut, ou « sans budget » (mb null). */
+export interface BudgetRow { root: string; mb: number | null; source: 'explicit' | 'default' | 'none' }
+
+/**
+ * Lignes de Réglages → budgets, triées : chaque budget explicite, chaque projet explicitement sans budget, et chaque
+ * projet en cours sous le plafond (service actif, état frais) avec son budget effectif d'après la config.
+ */
+export function budgetRows(ag: AntigelConfig, v: AntigelView | null): BudgetRow[] {
+  const roots = new Set<string>([...Object.keys(ag.budgets), ...(ag.noBudget ?? [])]);
+  for (const p of active(v)?.projects ?? []) if (p.root !== null) roots.add(p.root);
+  return [...roots].sort((a, b) => a.localeCompare(b)).map((root) => {
+    const e = effectiveBudget(ag, root);
+    return e === null ? { root, mb: null, source: 'none' } : { root, mb: e.mb, source: e.source };
+  });
 }
 
 export const budgetLabel = (root: string): string => root.split('/').filter(Boolean).slice(-2).join(' / ');
@@ -151,7 +177,7 @@ export interface AntigelCardModel {
   /** « Travail : 4,8 Go · marge avant ralentissement : 1,2 Go », et son infobulle (plafond dynamique, arrêt). */
   memLine: string | null;
   memHint: string | null;
-  /** Une ligne par projet en cours qui a un budget : « projet : 5,0 / 5 Go — freiné en ce moment ». */
+  /** Une ligne par projet en cours qui a un budget (explicite, ou par défaut avec la mention) : « projet : 5,0 / 5 Go — freiné en ce moment ». */
   budgets: BudgetLine[];
   /** Projets sans budget dont une part de la mémoire est comptée ailleurs (capturés tard), avec l'infobulle. */
   late: LateLine[];
@@ -203,7 +229,8 @@ export function antigelCard(v: AntigelView | null): AntigelCardModel {
       .map((p) => {
         const now = ownBrake(p, rootBrake);
         const late = p.outsideKB ? ` · ~${formatKB(p.outsideKB)} hors budget (capturé tard)` : '';
-        return { text: `${label(p.root)} : ${usedOfBudget(p.currentKB, p.budgetMB!)} — ${brakeText(now, p.stallPct)}${late}`, hint: p.outsideKB ? LATE_HINT : null, throttled: now };
+        const def = p.budgetDefault ? ' (par défaut)' : '';
+        return { text: `${label(p.root)} : ${usedOfBudget(p.currentKB, p.budgetMB!)}${def} — ${brakeText(now, p.stallPct)}${late}`, hint: p.outsideKB ? LATE_HINT : null, throttled: now };
       }),
     late: s.projects
       .filter((p) => p.outsideKB && p.budgetMB === null)

@@ -206,7 +206,21 @@ setInterval(() => { if (!alive() || !fs.existsSync('package.json') || fs.existsS
   assert.match(await row.innerText(), /6 Go/);
   await row.locator('button', { hasText: 'Retirer' }).click();
   await waitFor(() => Object.keys(config().antigel?.budgets ?? { x: 1 }).length === 0, 'budget retiré de config.json');
-  await row.waitFor({ state: 'detached' });
+  // budget par défaut (5 Go) : le projet en cours reste listé, « par défaut » ; « Sans budget » puis retour au défaut
+  await waitFor(async () => (await row.getAttribute('data-source')) === 'default', 'ligne « par défaut » après le retrait');
+  assert.match(await row.innerText(), /5 Go \(par défaut\)/);
+  await row.locator('button', { hasText: 'Sans budget' }).click();
+  await waitFor(() => config().antigel?.noBudget?.includes(proj) === true, 'projet sans budget dans config.json');
+  await waitFor(async () => (await row.getAttribute('data-source')) === 'none', 'ligne « sans budget »');
+  await row.locator('button', { hasText: 'Budget par défaut' }).click();
+  await waitFor(() => config().antigel?.noBudget === undefined, 'projet rendu au budget par défaut');
+  // interrupteur du budget par défaut : éteint (null) puis rallumé (5 Go)
+  const defSw = win.locator('#settings-panel-antigel button[role="switch"][aria-label="Budget par défaut de chaque projet"]');
+  assert.equal(await defSw.getAttribute('aria-checked'), 'true', 'budget par défaut allumé par défaut');
+  await defSw.click();
+  await waitFor(() => config().antigel?.defaultBudgetMB === null, 'defaultBudgetMB: null dans config.json');
+  await defSw.click();
+  await waitFor(() => config().antigel?.defaultBudgetMB === 5120, 'defaultBudgetMB: 5120 dans config.json');
   // bureau prioritaire : ligne d'état, interrupteur allumé par défaut, éteint puis rallumé (config.antigel.desk)
   assert.match(await win.locator('[data-testid="antigel-desk-status"]').innerText(), /^Bureau prioritaire : processeur/);
   const deskSw = win.locator('#settings-panel-antigel button[role="switch"][aria-label="Bureau prioritaire"]');

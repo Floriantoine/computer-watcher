@@ -2,11 +2,12 @@ import { useEffect, useState } from 'react';
 import { Snowflake, Trash2 } from 'lucide-react';
 import type { Config } from '../../../core/types';
 import { deskLine } from '../antigelDesk';
-import { antigelStatusLine, budgetLabel, budgetUsage, formatGo, formatGoInput, reserveHint, validateReserve, withBudget } from '../antigel';
+import { DEFAULT_BUDGET_MB } from '../../../core/antigel/config';
+import { antigelStatusLine, budgetLabel, budgetRows, budgetUsage, formatGo, formatGoInput, reserveHint, validateBudget, validateReserve, withBudget, withNoBudget } from '../antigel';
 import { useAntigel } from '../useAntigel';
 import { Card, Row, SaveBar, Switch } from './settingsUi';
 
-/** Réglages → Plafond de travail : interrupteur (allumé par défaut), réserve pour le bureau, budgets par projet. */
+/** Réglages → Plafond de travail : interrupteur (allumé par défaut), réserve pour le bureau, budget par défaut, budgets par projet. */
 export function AntigelSettingsCard({ config, onSave }: { config: Config; onSave: (c: Config) => void }) {
   const view = useAntigel();
   const ag = config.antigel;
@@ -20,7 +21,18 @@ export function AntigelSettingsCard({ config, onSave }: { config: Config; onSave
     if (v.ok) onSave({ ...config, antigel: { ...ag, reserveMB: v.mb } });
   };
   const deskText = ag.enabled && view?.fresh && view.state?.status === 'active' ? deskLine(view.state.desk) : null;
-  const budgets = Object.entries(ag.budgets).sort(([a], [b]) => a.localeCompare(b));
+  // budget par défaut de chaque projet : null = aucun ; le champ garde la dernière valeur (ou 5 Go) quand il est éteint
+  const def = ag.defaultBudgetMB ?? null;
+  const defSaved = formatGoInput(def ?? DEFAULT_BUDGET_MB);
+  const [defText, setDefText] = useState(defSaved);
+  useEffect(() => setDefText(defSaved), [defSaved]);
+  const dv = validateBudget(defText);
+  const defDirty = def !== null && defText.trim() !== defSaved;
+  const saveDef = () => {
+    if (def !== null && dv.ok) onSave({ ...config, antigel: { ...ag, defaultBudgetMB: dv.mb } });
+  };
+  const toggleDef = () => onSave({ ...config, antigel: { ...ag, defaultBudgetMB: def === null ? (dv.ok ? dv.mb : DEFAULT_BUDGET_MB) : null } });
+  const budgets = budgetRows(ag, view);
   return (
     <Card title="Plafond de travail" icon={<Snowflake size={14} strokeWidth={2} />} testid="antigel-settings">
       <p className="sub" data-testid="antigel-settings-status">{antigelStatusLine(view, ag.enabled)}</p>
@@ -41,20 +53,47 @@ export function AntigelSettingsCard({ config, onSave }: { config: Config; onSave
         )}
       </Row>
       <SaveBar dirty={dirty} disabled={!v.ok || !dirty} onSave={save} testid="antigel-save" />
+      <Row label="Budget par défaut de chaque projet" error={def !== null && !dv.ok ? dv.error : null}
+        help="Budget mémoire de chaque projet capturé qui n’a pas le sien (MemoryHigh de sa slice de projet, comme un budget posé à la main) ; jamais pour les vérifications hors projet. Un budget posé sur un projet l’emporte ; « Sans budget » en exclut un projet. Éteint : aucun budget par défaut.">
+        {(id) => (
+          <span className="antigel-default-budget">
+            <Switch checked={def !== null} label="Budget par défaut de chaque projet" disabled={!ag.enabled} onToggle={toggleDef} />
+            <input id={id} data-testid="antigel-default-budget" inputMode="decimal" value={defText} disabled={def === null} aria-label="Budget par défaut, en Go"
+              onChange={(e) => setDefText(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') saveDef(); }} />
+            <span className="sub">Go</span>
+          </span>
+        )}
+      </Row>
+      <SaveBar dirty={defDirty} disabled={!dv.ok || !defDirty} onSave={saveDef} testid="antigel-default-save" />
       <h4 className="antigel-budgets-title">Budgets par projet</h4>
       {budgets.length === 0 ? (
-        <p className="sub">Aucun budget. Pour en poser un : onglet Processus, ouvrir un projet, puis « Budget mémoire… ».</p>
+        <p className="sub">Aucun budget propre à un projet. Pour en poser un : onglet Processus, ouvrir un projet, puis « Budget mémoire… ».</p>
       ) : (
         <ul className="antigel-budgets">
-          {budgets.map(([root, mb]) => {
+          {budgets.map(({ root, mb, source }) => {
             const use = budgetUsage(view, root);
+            const excluded = ag.noBudget?.includes(root) ?? false;
             return (
-              <li key={root} data-testid="antigel-budget-row" data-root={root}>
+              <li key={root} data-testid="antigel-budget-row" data-root={root} data-source={source}>
                 <span className="mono" title={root}>{budgetLabel(root)}</span>
-                <span className="mono">{formatGo(mb)}</span>
-                <button type="button" onClick={() => onSave({ ...config, antigel: { ...ag, budgets: withBudget(ag.budgets, root, null) } })}>
-                  <Trash2 size={13} strokeWidth={2} /> Retirer
-                </button>
+                <span className="mono">
+                  {mb === null ? 'sans budget' : formatGo(mb)}
+                  {source === 'default' && <small className="sub"> (par défaut)</small>}
+                </span>
+                {source === 'explicit' ? (
+                  <button type="button" title={def === null || excluded ? 'Le projet n’aura plus de budget' : `Le projet reprendra le budget par défaut (${formatGo(def)})`}
+                    onClick={() => onSave({ ...config, antigel: { ...ag, budgets: withBudget(ag.budgets, root, null) } })}>
+                    <Trash2 size={13} strokeWidth={2} /> Retirer
+                  </button>
+                ) : source === 'default' ? (
+                  <button type="button" title="Ce projet n’aura aucun budget, même avec le budget par défaut" onClick={() => onSave({ ...config, antigel: withNoBudget(ag, root, true) })}>
+                    Sans budget
+                  </button>
+                ) : excluded ? (
+                  <button type="button" title="Ce projet reprend le budget par défaut" onClick={() => onSave({ ...config, antigel: withNoBudget(ag, root, false) })}>
+                    Budget par défaut
+                  </button>
+                ) : <span />}
                 {use && <small className="sub antigel-budget-use" title={use.hint ?? undefined} data-testid="antigel-budget-use">{use.text}</small>}
               </li>
             );

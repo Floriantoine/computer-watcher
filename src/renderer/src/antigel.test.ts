@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { sampleState } from '../../core/antigel/testFixtures';
 import {
   LATE_HINT, antigelCard, antigelMarks, budgetUsage, antigelStatusLine, budgetLabel, formatGo, parseGo, reserveHint, sameMark, validateBudget, validateReserve, withBudget,
+  budgetRows, withNoBudget,
 } from './antigel';
 
 const fresh = (o = {}) => ({ state: sampleState(o), fresh: true });
@@ -101,6 +102,40 @@ describe('fenêtre : plafond de travail', () => {
     expect(antigelCard(only).lines[0]).toBe('0 projet plafonné, plus des vérifications hors projet');
     expect(antigelStatusLine(only, true)).toMatch(/^Actif : 0 projet plafonné,/);
     for (const v of [both, only, fresh()]) expect(antigelCard(v).lines.join(' ')).not.toMatch(/slice/);
+  });
+
+  describe('budget par défaut', () => {
+    const G = 1024 * 1024;
+    const ag = { enabled: true, reserveMB: null, budgets: { '/home/u/demo': 2048 }, defaultBudgetMB: 5120 };
+    const proj = (root: string, o = {}) => ({ unit: `cwatch-p-${root.split('/').pop()}.slice`, root, procs: 2, currentKB: G, budgetMB: 5120, throttled: false, ...o });
+
+    test('lignes de Réglages : budgets explicites, projets actifs au budget par défaut ou sans budget, triés', () => {
+      const v = fresh({ projects: [
+        proj('/home/u/projet-a', { budgetDefault: true }), proj('/home/u/demo', { budgetMB: 2048 }), proj('/home/u/libre', { budgetMB: null }),
+        { unit: 'cwatch-p-autres.slice', root: null, procs: 1, currentKB: 1, budgetMB: null, throttled: false },
+      ] });
+      expect(budgetRows({ ...ag, noBudget: ['/home/u/libre', '/home/u/vieux'] }, v)).toEqual([
+        { root: '/home/u/demo', mb: 2048, source: 'explicit' },
+        { root: '/home/u/libre', mb: null, source: 'none' },
+        { root: '/home/u/projet-a', mb: 5120, source: 'default' },
+        { root: '/home/u/vieux', mb: null, source: 'none' },
+      ]);
+      // défaut retiré : les projets actifs sans budget explicite apparaissent « sans budget »
+      expect(budgetRows({ ...ag, defaultBudgetMB: null }, v).find((r) => r.root === '/home/u/projet-a')).toEqual({ root: '/home/u/projet-a', mb: null, source: 'none' });
+      // état vieux : seulement la config
+      expect(budgetRows(ag, { ...v, fresh: false })).toEqual([{ root: '/home/u/demo', mb: 2048, source: 'explicit' }]);
+    });
+    test('projet sans budget : ajout normalisé sans doublon, retrait, champ omis quand la liste est vide', () => {
+      const a = withNoBudget(ag, '/home/u/projet-a/', true);
+      expect(a.noBudget).toEqual(['/home/u/projet-a']);
+      expect(withNoBudget(a, '/home/u/projet-a', true).noBudget).toEqual(['/home/u/projet-a']);
+      expect(withNoBudget(a, '/home/u/projet-a', false)).not.toHaveProperty('noBudget');
+      expect(withNoBudget(ag, 'relatif', true)).toEqual(ag);
+    });
+    test('carte Métriques : les projets au budget par défaut ont leur ligne, avec la mention « par défaut »', () => {
+      const c = antigelCard(fresh({ projects: [proj('/home/u/projet-a', { budgetDefault: true, currentKB: 800 * 1024 }), proj('/home/u/demo', { budgetMB: 2048 })] }));
+      expect(c.budgets.map((b) => b.text)).toEqual(['u / projet-a : 800 Mo / 5 Go (par défaut) — ok', 'u / demo : 1,0 / 2 Go — ok']);
+    });
   });
 
   describe('ce qui freine vraiment', () => {
