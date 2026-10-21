@@ -4,6 +4,7 @@
 import { USAGE } from '../core/antigel/run';
 import { realCliDeps, writeOut } from './deps';
 import { runCli } from './run';
+import { claudeHookCli } from './claudeHook';
 import { realWrapDeps, shellInitCli, shouldWrapCli } from './wrap';
 
 const [sub, ...rest] = process.argv.slice(2);
@@ -11,8 +12,18 @@ if (sub === 'should-wrap') {
   process.exitCode = shouldWrapCli(rest, realWrapDeps());
 } else if (sub === 'shell-init') {
   process.exitCode = shellInitCli(rest, realWrapDeps());
+} else if (sub === 'claude-hook') {
+  // jamais bloquant : code 0 quoi qu'il arrive
+  claudeHookCli(rest, realWrapDeps()).then(
+    (code) => {
+      process.exitCode = code;
+    },
+    () => {
+      process.exitCode = 0;
+    },
+  );
 } else if (sub !== 'run') {
-  writeOut(2, `${USAGE}\nAutres commandes : computer-watcher should-wrap --help, computer-watcher shell-init zsh\n`);
+  writeOut(2, `${USAGE}\nAutres commandes : computer-watcher should-wrap --help, computer-watcher shell-init zsh, computer-watcher claude-hook --help\n`);
   process.exitCode = 2;
 } else {
   runCli(rest, realCliDeps()).then(
