@@ -238,3 +238,40 @@ test('le service arrêté puis relancé ne garde pas l’orchestrateur : antigel
   s.rec.stop();
   await expect(s.rec.antigelIdle()).resolves.toBeUndefined();
 });
+
+test('racine de travail toute jeune : passe anti-gel rapprochée 1 s plus tard (sans échantillon), puis plus rien', async () => {
+  // jest lancé 0,4 s avant le tick (horloge de démarrage du faux /proc : 100 000 s)
+  const s = setup({
+    extra: (procRoot, A) => {
+      addProc(procRoot, { pid: 720, comm: 'MainThread', ppid: 601, starttime: 9_999_960, rssKB: 200_000, cwd: A, cmdline: ['node', `${A}/node_modules/vitest/vitest.mjs`, 'run'], cgroup: WARP });
+    },
+  });
+  s.rec.start();
+  await s.tick();
+  expect(s.calls.filter((c) => c[0] === 'startScope').map((c) => c[3])).toEqual([[700, 701]]);
+  expect(s.rec.antigelRecheckMs()).toBe(1000);
+  const samples = () => {
+    const db = new DatabaseSync(join(s.dataDir, 'metrics.db'), { readOnly: true });
+    const n = (db.prepare('SELECT COUNT(*) AS n FROM system_samples').get() as { n: number }).n;
+    db.close();
+    return n;
+  };
+  const before = samples();
+  writeFileSync(join(s.procRoot, 'uptime'), '100001.00 0.00\n');
+  s.rec.antigelPass();
+  await s.rec.antigelIdle();
+  expect(s.calls.filter((c) => c[0] === 'startScope').map((c) => c[3])).toEqual([[700, 701], [720]]);
+  expect(s.rec.antigelRecheckMs()).toBeNull();
+  expect(samples()).toBe(before); // aucune écriture d'historique, aucune règle : seulement l'anti-gel
+  s.rec.stop();
+});
+
+test('passe rapprochée sans anti-gel ou service arrêté : aucun effet', async () => {
+  const s = setup({ withDeps: false });
+  s.rec.start();
+  await s.tick();
+  expect(s.rec.antigelRecheckMs()).toBeNull();
+  expect(() => s.rec.antigelPass()).not.toThrow();
+  s.rec.stop();
+  expect(() => s.rec.antigelPass()).not.toThrow();
+});

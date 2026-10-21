@@ -11,10 +11,15 @@ export const WORK_CATEGORIES: ReadonlySet<Category> = new Set<Category>(['test',
 /** Shells (liste « jamais tuer ») : jamais racine déplacée, mais ils suivent leur parent dans un sous-arbre de travail. */
 const SHELLS: ReadonlySet<string> = new Set(SHELL_COMMS);
 /**
- * Âge minimal (s) d'une racine déplacée : un lanceur tout juste né n'a peut-être pas encore lancé l'intouchable qui le
- * bloquerait (claude, l'app, un navigateur) ; or un processus déplacé n'est jamais ressorti, ni ses futurs enfants.
+ * Âge minimal (s) d'une racine déplacée. Capturer tôt compte : en cgroups v2, la mémoire déjà allouée reste comptée dans
+ * l'unité d'origine (le terminal…) quand un processus change de cgroup ; seules les allocations suivantes vont au budget.
+ * Avec 10 s, jest et ses workers avaient déjà pris plusieurs Go hors budget. Plancher d'une seconde, et pas zéro :
+ * - une commande éclair (git, ls, tsc --version…) se termine avant : ni scope ni appel D-Bus pour elle ;
+ * - un lanceur tout juste né a eu le temps d'exécuter son premier enfant (npm → sh → node), que `blocked` voit alors
+ *   s'il s'agit d'un intouchable (claude, l'app) ; or un processus déplacé n'est jamais ressorti, ni ses futurs enfants.
+ * Une racine refusée « young » est revue une seconde plus tard (`recheckMs` du contrôleur), pas au tick suivant.
  */
-export const MIN_ROOT_AGE_SEC = 10;
+export const MIN_ROOT_AGE_SEC = 1;
 
 export interface PlanTarget { pid: number; startTicks: number }
 
@@ -203,7 +208,7 @@ export function planMoves(input: PlanInput): PlanResult {
         continue;
       }
       if (p.ageSec < MIN_ROOT_AGE_SEC) {
-        refused.push({ pid: p.pid, reason: 'young' }); // revu au prochain tick, avec ses enfants
+        refused.push({ pid: p.pid, reason: 'young' }); // revu une seconde plus tard, avec ses enfants
         continue;
       }
       move(p, a);

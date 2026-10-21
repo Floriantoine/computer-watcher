@@ -235,8 +235,8 @@ describe('décisions du contrôleur (A à D)', () => {
 
 describe('course au lancement et intouchables (relecture, correction 1)', () => {
   test('a : racine trop jeune (lanceur seul, sans enfant encore visible) : pas déplacée à ce tick, refus « young »', () => {
-    const procs = [...warp(), p(700, 601, 'npm run test', 'npm run test', { ageSec: 3 }),
-      p(710, 601, 'MainThread', `node ${NM}/vite/bin/vite.js --open`, { ageSec: MIN_ROOT_AGE_SEC - 1 })];
+    const procs = [...warp(), p(700, 601, 'npm run test', 'npm run test', { ageSec: 0.4 }),
+      p(710, 601, 'MainThread', `node ${NM}/vite/bin/vite.js --open`, { ageSec: MIN_ROOT_AGE_SEC - 0.01 })];
     const r = run(procs, { project: { 700: A, 710: A } });
     expect(r.moves).toEqual([]);
     expect(r.refused).toContainEqual({ pid: 700, reason: 'young' });
@@ -246,6 +246,15 @@ describe('course au lancement et intouchables (relecture, correction 1)', () => 
   test('a : à partir de MIN_ROOT_AGE_SEC, la racine est déplacée', () => {
     const r = run([...warp(), p(700, 601, 'npm run test', 'npm run test', { ageSec: MIN_ROOT_AGE_SEC })], { project: { 700: A } });
     expect(r.moves.map(pidsOf)).toEqual([[700]]);
+  });
+
+  test('capturé tôt : âge minimal d’une seconde (la mémoire allouée avant le déplacement reste comptée ailleurs)', () => {
+    expect(MIN_ROOT_AGE_SEC).toBe(1);
+    // jest et ses workers vus 1,2 s après le lancement : déplacés dès ce tick
+    const procs = [...warp(), p(700, 601, 'MainThread', `node ${NM}/jest/bin/jest.js`, { ageSec: 1.2 }),
+      p(701, 700, 'MainThread', `node ${NM}/jest-worker/build/workers/processChild.js`, { ageSec: 0.3 })];
+    const r = run(procs, { project: { 700: A, 701: A } });
+    expect(r.moves.map((m) => [m.rootPid, pidsOf(m)])).toEqual([[700, [700, 701]]]);
   });
 
   test('b : lanceur d’une session Claude seul (npm exec, npx, pnpm dlx, bunx), même ancien : jamais déplacé', () => {

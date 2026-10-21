@@ -4,7 +4,7 @@ import { buildGroups } from '../grouping/buildGroups';
 import type { ProcInfo, SystemInfo } from '../types';
 import type { Availability, CgroupStats } from './cgroupfs';
 import type { AntigelConfig } from './config';
-import { BUDGET_RETRY_MS, PROBE_EVERY_MS, THROTTLE_HOLD_MS, createAntigel, type AntigelDeps } from './controller';
+import { BUDGET_RETRY_MS, PROBE_EVERY_MS, RECHECK_YOUNG_MS, THROTTLE_HOLD_MS, createAntigel, type AntigelDeps } from './controller';
 import { GiB } from './limits';
 import { BusctlError, MAX_PIDS } from './systemd';
 import { fakeSystemd, sampleStats as stats } from './testFixtures';
@@ -608,5 +608,35 @@ describe('bureau prioritaire branché sur l’orchestrateur', () => {
     const h = harness();
     await h.step();
     expect(h.ag.state()).not.toHaveProperty('desk');
+  });
+});
+
+describe('racine trop jeune : revue une seconde plus tard', () => {
+  const young = (age: number) => world().map((x) => (x.pid === 700 ? { ...x, ageSec: age } : x));
+
+  test('refus « young » : aucun scope, nouvelle passe demandée dans 1 s ; une fois déplacée : plus rien', async () => {
+    const h = harness();
+    h.setProcs(young(0.3));
+    await h.step();
+    expect(names(h.calls)).toEqual(['ensureSlice']);
+    expect(h.ag.recheckMs()).toBe(RECHECK_YOUNG_MS);
+    expect(RECHECK_YOUNG_MS).toBe(1000);
+    h.setProcs(young(1.3));
+    await h.step(ON, RECHECK_YOUNG_MS);
+    expect(names(h.calls)).toEqual(['ensureSlice', 'ensureProjectSlice', 'startScope']);
+    expect(h.ag.recheckMs()).toBeNull();
+  });
+
+  test('régime normal (aucune racine jeune), éteint ou indisponible : aucune passe de plus', async () => {
+    const h = harness();
+    await h.step();
+    expect(h.ag.recheckMs()).toBeNull();
+    h.setProcs(young(0.3));
+    await h.step(OFF);
+    expect(h.ag.recheckMs()).toBeNull();
+    const u = harness({ avail: { ok: false, reason: 'pas de cgroups v2' } });
+    u.setProcs(young(0.3));
+    await u.step();
+    expect(u.ag.recheckMs()).toBeNull();
   });
 });
