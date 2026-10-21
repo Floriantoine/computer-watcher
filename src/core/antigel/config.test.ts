@@ -53,8 +53,8 @@ describe('validateAntigel', () => {
     expect(effectiveBudget(c, '/home/u/projet-a')).toEqual({ mb: 5120, source: 'default' });
     expect(effectiveBudget(c, null)).toBeNull();
     expect(effectiveBudget({ ...c, defaultBudgetMB: null }, '/home/u/projet-a')).toBeNull();
-    // champ absent (config en mémoire d'avant ce lot) : 5 Go
-    expect(effectiveBudget({ enabled: true, reserveMB: null, budgets: {} }, '/home/u/projet-a')).toEqual({ mb: 5120, source: 'default' });
+    // champ absent d'un objet en mémoire (la migration à 5 Go se fait dans validateAntigel) : aucun
+    expect(effectiveBudget({ enabled: true, reserveMB: null, budgets: {} }, '/home/u/projet-a')).toBeNull();
     expect(effectiveBudget(c, '__proto__')).toBeNull();
   });
   test('budgetKey', () => {

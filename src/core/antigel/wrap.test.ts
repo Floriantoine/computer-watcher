@@ -57,6 +57,14 @@ describe('shouldWrap : commande lourde dans un projet qui a un budget', () => {
     expect(shouldWrap('jest', IN, ctx({ findRoot: () => `${DEMO}/` }))).toBe(true);
   });
 
+  test('budget par défaut : un projet sans budget explicite est enveloppé ; « sans budget » ou défaut retiré : non', () => {
+    expect(shouldWrap('jest', IN, ctx({ config: cfg({ budgets: {}, defaultBudgetMB: 5120 }) }))).toBe(true);
+    expect(shouldWrap('jest', IN, ctx({ config: cfg({ budgets: {}, defaultBudgetMB: null }) }))).toBe(false);
+    expect(shouldWrap('jest', IN, ctx({ config: cfg({ budgets: {}, defaultBudgetMB: 5120, noBudget: [DEMO] }) }))).toBe(false);
+    // hors projet : jamais, même avec un défaut
+    expect(shouldWrap('jest', IN, ctx({ config: cfg({ budgets: {}, defaultBudgetMB: 5120 }), findRoot: () => null }))).toBe(false);
+  });
+
   test('cwd vide ou relatif : faux', () => {
     expect(shouldWrap('jest', '', ctx())).toBe(false);
     expect(shouldWrap('jest', 'demo', ctx())).toBe(false);

@@ -8,7 +8,7 @@
 // propre à un projet (son budget, sa slice, son scope) n'arrête que la suite de ce projet, les autres projets continuent.
 import type { Group, ProcInfo, SystemInfo } from '../types';
 import type { Availability, CgroupStats, MemoryEvents } from './cgroupfs';
-import type { AntigelConfig } from './config';
+import { effectiveBudget, type AntigelConfig } from './config';
 import { createDeskPriority, type DeskDeps } from './desk';
 import { budgetBytes, dynamicLimits, sameLimits, sliceLimits, type SliceLimits } from './limits';
 import { createRecent, type Recent } from './recent';
@@ -455,7 +455,8 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
 
     // OOM et ralentissements par le budget, lus sur la slice du projet (memory.events, hiérarchique : ses scopes compris).
     // Une slice vide (plus aucun processus) reste suivie (budget, OOM, extinction) mais n'est pas publiée : ni badge ni compte.
-    const budgetOf = (root: string | null): number | null => (root !== null ? (i.config.budgets[root] ?? null) : null);
+    // Budget effectif : explicite, sinon budget par défaut (sauf projet « sans budget ») ; hors projet : aucun.
+    const budgetOf = (root: string | null): number | null => effectiveBudget(i.config, root)?.mb ?? null;
     const ooms: AntigelOom[] = [];
     const projects: AntigelProjectState[] = [];
     for (const [unit, root] of slices) {
@@ -472,6 +473,7 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
         const own = (throttledUntil.get(unit) ?? -Infinity) > now;
         projects.push({
           unit, root, procs: inside.n, currentKB: kb(s.currentBytes), budgetMB: budgetOf(root),
+          ...(effectiveBudget(i.config, root)?.source === 'default' ? { budgetDefault: true } : {}),
           throttled: rootThrottled || own, budgetThrottled: own,
           ...(outside !== undefined ? { outsideKB: outside } : {}),
           ...(pct !== undefined ? { stallPct: pct } : {}),

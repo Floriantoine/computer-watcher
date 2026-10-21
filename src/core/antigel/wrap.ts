@@ -6,7 +6,7 @@
 //
 // Prudence avant tout : au moindre doute (ligne incomplète, heredoc, changement d'état du shell, commande interactive,
 // déjà enveloppée), aucune réécriture. Pur : le dossier courant, la config et la racine du projet sont fournis.
-import { budgetKey, type AntigelConfig } from './config';
+import { budgetKey, effectiveBudget, type AntigelConfig } from './config';
 import { workRoot } from './run';
 
 export interface WrapCtx {
@@ -344,13 +344,13 @@ export function planLine(line: string): WrapPlan | null {
   return { kind: 'shell' };
 }
 
-/** Le projet du dossier courant a-t-il un budget anti-gel (anti-gel allumé, config lisible) ? */
+/** Le projet du dossier courant a-t-il un budget anti-gel, explicite ou par défaut (anti-gel allumé, config lisible) ? */
 export function hasBudget(cwd: string, ctx: WrapCtx): boolean {
   if (ctx.env.CWATCH_NO_WRAP === '1' || ctx.env.PROC_WATCH_NO_ANTIGEL === '1') return false;
   if (!ctx.config || !ctx.config.enabled || !cwd.startsWith('/')) return false;
   const root = workRoot(cwd, ctx.findRoot, ctx.home);
   const key = root === null ? null : budgetKey(root);
-  return key !== null && Object.hasOwn(ctx.config.budgets, key);
+  return key !== null && effectiveBudget(ctx.config, key) !== null;
 }
 
 export function planWrap(command: string, cwd: string, ctx: WrapCtx): WrapPlan | null {

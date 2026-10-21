@@ -27,6 +27,12 @@ describe('antigel-state.json', () => {
       expect(parseAntigelState(JSON.stringify(sampleState(bad as never))), JSON.stringify(bad)).toBeNull();
     }
   });
+  test('budget par défaut (budgetDefault) : aller-retour, absent toléré, refusé si invalide', () => {
+    const p = { ...proj('cwatch-p-alpha.slice', '/home/u/alpha'), budgetMB: 5120, budgetDefault: true };
+    expect(parseAntigelState(JSON.stringify(sampleState({ projects: [p] })))?.projects).toEqual([p]);
+    expect(parseAntigelState(JSON.stringify(sampleState()))?.projects[0]).not.toHaveProperty('budgetDefault');
+    expect(parseAntigelState(JSON.stringify(sampleState({ projects: [{ ...p, budgetDefault: 'oui' as never }] })))).toBeNull();
+  });
   test('bureau prioritaire : aller-retour, absent toléré, refusé si invalide (unité, statut, champ manquant)', () => {
     const desk = { status: 'active', reason: null, cpu: true, io: false, memory: 'ineffective', units: ['session.slice', 'app.slice', 'cwatch.slice'], truncated: false, restoring: 0 } as const;
     expect(parseAntigelState(JSON.stringify(sampleState({ desk: { ...desk, units: [...desk.units] } })))?.desk).toEqual(desk);

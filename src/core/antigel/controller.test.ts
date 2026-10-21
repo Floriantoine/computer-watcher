@@ -219,6 +219,66 @@ describe('orchestrateur anti-gel', () => {
     expect(h.calls).toEqual([]);
   });
 
+  test('budget par défaut : posé sur un projet sans budget explicite, changé, retiré (null) ; un seul appel par changement', async () => {
+    const h = harness();
+    const def = (mb: number | null) => ({ ...ON, defaultBudgetMB: mb });
+    await h.step(def(5120));
+    expect(h.calls[1]).toEqual(['ensureProjectSlice', PS, 5 * GiB]);
+    h.calls.length = 0;
+    await h.step(def(5120));
+    expect(h.calls).toEqual([]);
+    expect(h.ag.state().projects).toMatchObject([{ unit: PS, budgetMB: 5120, budgetDefault: true }]);
+    // défaut changé : appliqué au tick suivant
+    await h.step(def(8192));
+    expect(h.calls).toEqual([['setProjectHigh', PS, 8 * GiB]]);
+    h.calls.length = 0;
+    // défaut retiré : memory.high remis à infinity
+    await h.step(def(null));
+    expect(h.calls).toEqual([['setProjectHigh', PS, null]]);
+    expect(h.ag.state().projects[0]).toMatchObject({ budgetMB: null });
+    expect(h.ag.state().projects[0]).not.toHaveProperty('budgetDefault');
+    h.calls.length = 0;
+    await h.step(def(null));
+    expect(h.calls).toEqual([]);
+  });
+
+  test('budget par défaut : le budget explicite l’emporte, « sans budget » l’écarte, hors projet jamais', async () => {
+    const h = harness();
+    await h.step({ ...ON, defaultBudgetMB: 5120, budgets: { [A]: 2048 } });
+    expect(h.calls[1]).toEqual(['ensureProjectSlice', PS, 2 * GiB]);
+    await h.step({ ...ON, defaultBudgetMB: 5120, budgets: { [A]: 2048 } });
+    expect(h.ag.state().projects[0]).toMatchObject({ budgetMB: 2048 });
+    expect(h.ag.state().projects[0]).not.toHaveProperty('budgetDefault');
+    h.calls.length = 0;
+    // budget explicite retiré : le défaut prend le relais
+    await h.step({ ...ON, defaultBudgetMB: 5120 });
+    expect(h.calls).toEqual([['setProjectHigh', PS, 5 * GiB]]);
+    h.calls.length = 0;
+    // projet explicitement sans budget : infinity malgré le défaut
+    await h.step({ ...ON, defaultBudgetMB: 5120, noBudget: [A] });
+    expect(h.calls).toEqual([['setProjectHigh', PS, null]]);
+    h.calls.length = 0;
+    // vérification hors projet : jamais le défaut
+    const o = harness();
+    o.setProcs([...world().slice(0, 2), p(810, 601, 'MainThread', 'node /usr/lib/node_modules/typescript/bin/tsc --noEmit', '/')]);
+    await o.step({ ...ON, defaultBudgetMB: 5120 });
+    expect(o.calls[1]).toEqual(['ensureProjectSlice', 'cwatch-p-autres.slice', null]);
+  });
+
+  test('budget par défaut : éteint → retiré comme un budget explicite ; redémarrage avec le défaut déjà posé (sysfs) → aucun appel', async () => {
+    const h = harness();
+    await h.step({ ...ON, defaultBudgetMB: 5120 });
+    h.calls.length = 0;
+    await h.step({ ...OFF, defaultBudgetMB: 5120 });
+    expect(h.calls).toEqual([['setSlice', 'cwatch.slice', null], ['setProjectHigh', PS, null]]);
+    // service redémarré : slice du projet déjà au budget par défaut dans sysfs
+    const r = harness({ initialSlices: { [PS]: A } });
+    r.cg.set(700, `${PSCG}/cwatch-p-alpha-x.scope`);
+    r.sys.set(PSCG, stats({ highBytes: 5 * GiB, populated: true }));
+    await r.step({ ...ON, defaultBudgetMB: 5120 });
+    expect(r.calls.filter((c) => c[0] === 'setProjectHigh' || (c[0] === 'ensureProjectSlice' && c[2] !== 5 * GiB))).toEqual([]);
+  });
+
   test('interrupteur éteint : cwatch.slice et slices de projet remises à infinity une seule fois, aucun déplacement', async () => {
     const h = harness();
     await h.step({ ...ON, budgets: { [A]: 4096 } });

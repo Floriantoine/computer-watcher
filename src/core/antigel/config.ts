@@ -11,8 +11,9 @@ export interface AntigelConfig {
   /** Bureau prioritaire (lot 2) : poids CPU du bureau, protection mémoire si elle peut agir ; absent : allumé. */
   desk?: boolean;
   /**
-   * Budget par défaut (Mo) de chaque projet capturé sans budget explicite ; null : aucun. Absent (config d'avant ce
-   * réglage) : DEFAULT_BUDGET_MB ; validateAntigel le renseigne toujours, il est donc écrit au prochain enregistrement.
+   * Budget par défaut (Mo) de chaque projet capturé sans budget explicite ; null : aucun. Migration dans validateAntigel :
+   * absent du fichier (config d'avant ce réglage) → DEFAULT_BUDGET_MB, toujours renseigné en sortie, donc écrit au prochain
+   * enregistrement. Absent d'un objet construit en mémoire sans passer par la validation : aucun (effectiveBudget).
    */
   defaultBudgetMB?: number | null;
   /** Racines de projet explicitement sans budget (le budget par défaut ne s'y applique pas) ; un budget explicite l'emporte. */
@@ -77,12 +78,12 @@ export function validateAntigel(raw: unknown): AntigelConfig | null {
 
 /**
  * Budget effectif d'un projet : le budget explicite l'emporte, puis « sans budget » (noBudget), puis le budget par
- * défaut (DEFAULT_BUDGET_MB si le champ est absent). Hors projet (null) : aucun.
+ * défaut. Hors projet (null, slice « autres ») : aucun.
  */
 export function effectiveBudget(c: AntigelConfig, root: string | null): { mb: number; source: 'explicit' | 'default' } | null {
   if (root === null || !root.startsWith('/')) return null;
   if (Object.hasOwn(c.budgets, root)) return { mb: c.budgets[root]!, source: 'explicit' };
   if (c.noBudget?.includes(root)) return null;
-  const def = c.defaultBudgetMB === undefined ? DEFAULT_BUDGET_MB : c.defaultBudgetMB;
+  const def = c.defaultBudgetMB ?? null;
   return def === null ? null : { mb: def, source: 'default' };
 }
