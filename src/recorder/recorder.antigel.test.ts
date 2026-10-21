@@ -47,7 +47,8 @@ function setup(o: { withDeps?: boolean; antigel?: object; throwStats?: { on: boo
   mkdirSync(cfgDir, { recursive: true });
   const writeCfg = (antigel: object) =>
     writeFileSync(join(cfgDir, 'config.json'), JSON.stringify({ ...DEFAULT_CONFIG, recorder: { ...DEFAULT_CONFIG.recorder, intervalSec: 5 }, classify: { detectPorts: false, overrides: {} }, rules: { enabled: false, list: [] }, antigel }));
-  writeCfg(o.antigel ?? { enabled: true, reserveMB: null, budgets: {} });
+  // budget par défaut éteint sauf mention : ces tests suivent les budgets explicites
+  writeCfg(o.antigel ?? { enabled: true, reserveMB: null, budgets: {}, defaultBudgetMB: null });
   const fake = fakeSystemd({ userBase: BASE });
   const antigelFor = (f: FakeSystemd): RecorderDeps['antigel'] => ({
     client: f.client,
@@ -100,6 +101,22 @@ test('service : cwatch.slice plafonnée, slice du projet, jest et son worker dan
     version: 1, status: 'active', enabled: true, projects: [{ unit: PS, root: s.A, procs: 2 }], slices: { [PS]: s.A }, dbusCalls: 3, lastError: null,
   });
   expect(statSync(s.statePath).mode & 0o777).toBe(0o600);
+  s.rec.stop();
+});
+
+test('config sans budget par défaut (écrite avant ce réglage) : 5 Go posés sur la slice du projet ; null écrit : aucun', async () => {
+  const s = setup({ antigel: { enabled: true, reserveMB: null, budgets: {} } });
+  s.rec.start();
+  await s.tick();
+  expect(s.calls.slice(0, 2)).toEqual([ROOT_CALL, ['ensureProjectSlice', PS, 5 * GiB]]);
+  await s.tick();
+  expect(JSON.parse(readFileSync(s.statePath, 'utf8')).projects).toMatchObject([{ unit: PS, budgetMB: 5120, budgetDefault: true }]);
+  s.calls.length = 0;
+  s.writeCfg({ enabled: true, reserveMB: null, budgets: {}, defaultBudgetMB: null });
+  s.rec.reloadConfig();
+  await s.tick();
+  await s.tick();
+  expect(s.calls).toEqual([['setProjectHigh', PS, null]]);
   s.rec.stop();
 });
 
