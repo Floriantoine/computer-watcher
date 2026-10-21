@@ -277,6 +277,33 @@ La commande part **directement** sous `cwatch.slice`, sans attendre que le servi
 - **Avec le service** : il ne redéplace jamais ces processus (ils sont déjà sous `cwatch.slice`) ; il les compte dans le projet (badge, carte), lui pose son budget et reconnaît sa slice même s'il ne l'a pas créée (d'après le dossier courant de ses processus, seulement si le nom de la slice correspond à ce projet). La slice d'un projet est celle que le service lui a déjà attribuée (relue dans `antigel-state.json`), sinon son nom haché `cwatch-p-<projet>_<empreinte>.slice`, propre à la racine : jamais le nom simple, qu'un autre projet du même nom pourrait prendre, et le service n'attribue une slice ouverte par `run` qu'à la racine dont elle porte l'empreinte.
 - **Depuis les sources** : `npm run build`, puis `ELECTRON_RUN_AS_NODE=1 node_modules/electron/dist/electron out/main/cli.js run -- <commande>`.
 
+#### Lancer directement dans le budget
+
+En cgroups v2, la mémoire allouée avant qu'un processus soit déplacé dans un budget reste comptée là où elle l'a été : un jest à 16 workers déplacé par le service au bout de 10 s a déjà dépassé son budget. Pour les **projets qui ont un budget** (anti-gel allumé), les commandes lourdes peuvent passer d'elles-mêmes par `computer-watcher run -- …` :
+
+- **zsh** : à la fin de `~/.zshrc`
+
+  ```zsh
+  (( ${+commands[computer-watcher]} )) && eval "$(computer-watcher shell-init zsh)"
+  ```
+
+  À Entrée, une ligne qui contient une commande lourde (jest, vitest, tsc, eslint, `npm`/`pnpm`/`yarn`/`bun` `test|run|exec`, `npx`, make, `cargo build|test`, gradle, mvn, pytest, playwright…) est réécrite en `computer-watcher run -- …` (ligne composée : `computer-watcher run -- zsh -c '…'`). L'historique garde la ligne tapée. `export CWATCH_NO_WRAP=1` désactive ; outil absent, en erreur ou plus lent que 2 s : la ligne part telle quelle.
+- **Claude Code** : dans `~/.claude/settings.json`
+
+  ```json
+  {
+    "hooks": {
+      "PreToolUse": [
+        { "matcher": "Bash", "hooks": [{ "type": "command", "command": "computer-watcher claude-hook", "timeout": 5 }] }
+      ]
+    }
+  }
+  ```
+
+  Le hook remplace la commande (`updatedInput`) **sans donner d'autorisation** : elle repasse par les permissions habituelles, évaluées sur la commande réécrite (une règle `Bash(npm test:*)` ne la couvre donc plus). `computer-watcher claude-hook --ask` demande en plus confirmation à chaque réécriture. En cas de doute ou d'erreur : aucune sortie, la commande part telle quelle.
+
+Jamais réécrites : les lignes déjà enveloppées (`computer-watcher`, `systemd-run`), `sudo`, celles qui changent l'état du shell (`cd`, `export`, `source`, affectations seules…), les commandes interactives (éditeurs, `less`, `ssh`, `tmux`…), heredocs, lignes incomplètes, arrière-plan au milieu d'une ligne. `computer-watcher should-wrap -- '<ligne>'` montre la décision (code 0 et la ligne réécrite, sinon code 1).
+
 Les noms internes restent ceux d'origine (`cwatch.slice`, fichiers `antigel`, variable `PROC_WATCH_NO_ANTIGEL`) : « Plafond de travail » n'est que le libellé de l'interface, pour ne pas le confondre avec la « Protection anti-gel » d'earlyoom ni la règle anti-gel recommandée. `npm run test:antigel` vérifie le plafond sur le vrai systemd avec **ses propres processus seulement** (un `tail`, un petit allocateur) sous des unités de test (`cwatch-e2e<id>.slice` plafonnée → slice de projet de test → deux scopes neufs), toutes arrêtées à la fin, puis le bureau prioritaire sur d'autres unités de test (vraies valeurs dans `/sys`, régime établi sans appel, retour aux origines) ; une `cwatch.slice` vide peut rester chargée jusqu'à la fin de la session. `PROC_WATCH_NO_ANTIGEL=1` coupe le plafond de travail du service (scripts de mesure et de bout en bout du service).
 
 ## Va bien avec earlyoom
