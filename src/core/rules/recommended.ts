@@ -17,8 +17,8 @@ const ANTIGEL_CONDITION: RuleCondition = { kind: 'system', ...SYSTEM_DEFAULTS };
  */
 export const RECOMMENDED_RULES: readonly Rule[] = [
   {
-    id: REC_INACTIVE_ID, name: 'Front/Back de projet inactif depuis 1 j', enabled: true, mode: 'active', createdAt: 0,
-    condition: { kind: 'inactive', categories: ['front', 'back'], forHours: 24 },
+    id: REC_INACTIVE_ID, name: 'Front/Back de projet inactif depuis 4 h', enabled: true, mode: 'active', createdAt: 0,
+    condition: { kind: 'inactive', categories: ['front', 'back'], forHours: 4 },
   },
   {
     id: REC_TEST_MEMORY_ID, name: 'Test > 4 Go pendant 5 min', enabled: true, mode: 'active', createdAt: 0,
@@ -45,4 +45,20 @@ export function isPreapproved(rule: Pick<Rule, 'id' | 'condition'>): boolean {
  */
 export function withRecommendedActive(list: readonly Rule[]): Rule[] {
   return list.map((r) => (r.mode === 'simulate' && isPreapproved(r) ? { ...r, mode: 'active' } : r));
+}
+
+/** Ancienne version (jusqu'au 2026-10-21) de la règle « inactif » recommandée : 1 j au lieu de 4 h. */
+const OLD_INACTIVE_CONDITION: RuleCondition = { kind: 'inactive', categories: ['front', 'back'], forHours: 24 };
+
+/**
+ * Migration unique (2026-10-21, demandée par l'utilisateur) : la règle « inactif depuis 1 j » recommandée intacte passe
+ * à 4 h, activée et en Active. Une fois faite (marqueur posé par la validation), un retour à 1 j est respecté.
+ */
+export function withInactive4h(list: readonly Rule[]): Rule[] {
+  const rec = RECOMMENDED_RULES.find((r) => r.id === REC_INACTIVE_ID)!;
+  return list.map((r) =>
+    r.id === REC_INACTIVE_ID && JSON.stringify(r.condition) === JSON.stringify(OLD_INACTIVE_CONDITION)
+      ? { ...r, name: rec.name, enabled: true, mode: 'active', condition: structuredClone(rec.condition) }
+      : r,
+  );
 }

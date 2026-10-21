@@ -2,7 +2,7 @@
 import { CATEGORIES, isCategory } from '../classify/categories';
 import { APP_NAMES } from '../grouping/rules';
 import { isNeverKillName } from './neverKill';
-import { isPreapproved, RECOMMENDED_RULES, SYSTEM_DEFAULTS, withRecommendedActive } from './recommended';
+import { isPreapproved, RECOMMENDED_RULES, SYSTEM_DEFAULTS, withInactive4h, withRecommendedActive } from './recommended';
 import { simulationCredit, type SimStats } from './simulation';
 import type { Rule, RuleCondition, RuleIssue, RuleMatch, RuleMode, RulesConfig } from './types';
 
@@ -29,9 +29,9 @@ export const MAX_RULE_ISSUES = 20;
  * Première installation seulement (config.json absent) : interrupteur allumé, les 3 règles recommandées. Jamais
  * appliqué à une config existante (section absente, fichier illisible ou invalide : RULES_OFF).
  */
-export const DEFAULT_RULES: RulesConfig = { enabled: true, list: RECOMMENDED_RULES.map((r) => structuredClone(r)), recommendedActive: true };
+export const DEFAULT_RULES: RulesConfig = { enabled: true, list: RECOMMENDED_RULES.map((r) => structuredClone(r)), recommendedActive: true, recommendedInactive4h: true };
 /** Config existante sans section « rules », section mal formée, fichier illisible ou invalide : tout éteint. */
-export const RULES_OFF: RulesConfig = { enabled: false, list: [], recommendedActive: true };
+export const RULES_OFF: RulesConfig = { enabled: false, list: [], recommendedActive: true, recommendedInactive4h: true };
 
 const CONTROL = /[\u0000-\u001f\u007f-\u009f‎‏‪-‮⁦-⁩]/;
 
@@ -135,9 +135,10 @@ export function validateRulesDetailed(raw: unknown): { rules: RulesConfig; issue
     out.push(r as Rule);
   });
   // migration unique : règles recommandées intactes en Active (accord de l'utilisateur du 2026-10-20)
-  const migrated = raw.recommendedActive === true ? out : withRecommendedActive(out);
+  const at4h = raw.recommendedInactive4h === true ? out : withInactive4h(out);
+  const migrated = raw.recommendedActive === true ? at4h : withRecommendedActive(at4h);
   if (dropped) issues.push({ index: -1, id: null, name: null, error: `… et ${dropped} autre${dropped > 1 ? 's' : ''} règle${dropped > 1 ? 's' : ''} refusée${dropped > 1 ? 's' : ''}` });
-  return { rules: { enabled, list: migrated, recommendedActive: true }, issues };
+  return { rules: { enabled, list: migrated, recommendedActive: true, recommendedInactive4h: true }, issues };
 }
 
 export function validateRules(raw: unknown): RulesConfig {
@@ -183,7 +184,7 @@ export const RULE_TEMPLATES: readonly Omit<Rule, 'id' | 'createdAt'>[] = [
     name: 'Test > 4 Go pendant 5 min', enabled: false, mode: 'simulate',
     condition: { kind: 'memory', target: 'instance', match: { by: 'category', value: 'test' }, overMB: 4096, forMin: 5 },
   },
-  { name: 'Front/Back de projet inactif depuis 1 j', enabled: false, mode: 'simulate', condition: { kind: 'inactive', categories: ['front', 'back'], forHours: 24 } },
+  { name: 'Front/Back de projet inactif depuis 4 h', enabled: false, mode: 'simulate', condition: { kind: 'inactive', categories: ['front', 'back'], forHours: 4 } },
   { name: 'Épuisement prévu dans < 3 min', enabled: false, mode: 'simulate', condition: { kind: 'forecast', underMin: 3, includeApps: [] } },
   { name: 'Mémoire ou CPU > 95 % : tuer les tests', enabled: false, mode: 'simulate', condition: { kind: 'system', ...SYSTEM_DEFAULTS } },
 ];

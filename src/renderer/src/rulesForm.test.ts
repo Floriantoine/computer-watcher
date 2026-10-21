@@ -84,7 +84,7 @@ describe('ruleSummary', () => {
   test('les 4 modèles (texte exact)', () => {
     expect(templates.map(ruleSummary)).toEqual([
       'Si une instance Tests dépasse 4 Go pendant 5 min → arrêter',
-      'Si une instance Front ou Back de projet est inactive depuis 1 j → arrêter',
+      'Si une instance Front ou Back de projet est inactive depuis 4 h → arrêter',
       "Si la mémoire doit s'épuiser dans moins de 3 min → arrêter le plus gros groupe qui grossit",
       'Si la mémoire dépasse 95 % pendant 15 s ou le CPU 95 % pendant 1 min → arrêter la plus grosse vérification (tests, tsc, eslint), une à la fois',
     ]);

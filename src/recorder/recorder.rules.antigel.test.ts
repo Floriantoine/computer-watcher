@@ -166,7 +166,7 @@ test('utilisateur existant (section rules présente, vide) : rien n’est ajout�
 
 test('anti-gel passé en Simulation : un rule_dry_run, aucun signal', () => {
   const rule = { ...DEFAULT_CONFIG.rules.list.find((r) => r.id === 'rec-antigel')!, mode: 'simulate' };
-  const s = setup({ rules: { enabled: true, list: [rule], recommendedActive: true } });
+  const s = setup({ rules: { enabled: true, list: [rule], recommendedActive: true, recommendedInactive4h: true } });
   s.rec.start();
   s.rec.tick();
   s.run(4 * 60_000);

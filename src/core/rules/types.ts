@@ -41,6 +41,8 @@ export interface RulesConfig {
    * passe les règles recommandées intactes en Active, puis le pose (toujours vrai en sortie de validation).
    */
   recommendedActive?: boolean;
+  /** Migration « règle inactif recommandée de 1 j à 4 h » (2026-10-21) déjà faite. Même principe que recommendedActive. */
+  recommendedInactive4h?: boolean;
 }
 
 /** Règle du fichier refusée par la validation : ignorée (désactivée) seule, avec son erreur affichée. */

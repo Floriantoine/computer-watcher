@@ -17,7 +17,7 @@ describe('règles recommandées', () => {
     const r = validateRulesDetailed(DEFAULT_RULES);
     expect(r.issues).toEqual([]);
     expect(r.rules).toEqual(DEFAULT_RULES);
-    expect(byId(REC_INACTIVE_ID)).toMatchObject({ enabled: true, mode: 'active', condition: { kind: 'inactive', categories: ['front', 'back'], forHours: 24 } });
+    expect(byId(REC_INACTIVE_ID)).toMatchObject({ enabled: true, mode: 'active', condition: { kind: 'inactive', categories: ['front', 'back'], forHours: 4 } });
     expect(byId(REC_TEST_MEMORY_ID)).toMatchObject({
       enabled: true, mode: 'active',
       condition: { kind: 'memory', target: 'instance', match: { by: 'category', value: 'test' }, overMB: 4096, forMin: 5 },
@@ -39,7 +39,7 @@ describe('règles recommandées', () => {
     expect(isPreapproved({ ...antigel, condition: { ...antigel.condition, memPercent: 90 } as RuleCondition })).toBe(false);
     expect(isPreapproved({ ...byId(REC_TEST_MEMORY_ID), id: REC_ANTIGEL_ID })).toBe(false);
     expect(isPreapproved({ ...byId(REC_TEST_MEMORY_ID), condition: { ...byId(REC_TEST_MEMORY_ID).condition, overMB: 2048 } as RuleCondition })).toBe(false);
-    expect(isPreapproved({ ...byId(REC_INACTIVE_ID), condition: { kind: 'inactive', categories: ['front'], forHours: 24 } })).toBe(false);
+    expect(isPreapproved({ ...byId(REC_INACTIVE_ID), condition: { kind: 'inactive', categories: ['front'], forHours: 4 } })).toBe(false);
   });
 
   test('crédit de Simulation : une recommandée intacte est acceptée sans crédit, modifiée elle en redemande', () => {
@@ -74,6 +74,24 @@ describe('règles recommandées', () => {
     const after = validateRulesDetailed({ ...old, recommendedActive: true });
     expect(after.rules.list.map((r) => r.mode)).toEqual(['simulate', 'simulate', 'simulate', 'simulate']);
     expect(validateRulesDetailed(out.rules).rules).toEqual(out.rules);
+  });
+
+  test('migration 4 h : l\'ancienne « inactif depuis 1 j » intacte passe à 4 h, activée et en Active ; une fois seulement', () => {
+    const old1j: Rule = { ...byId(REC_INACTIVE_ID), name: 'Front/Back de projet inactif depuis 1 j', enabled: false, mode: 'simulate',
+      condition: { kind: 'inactive', categories: ['front', 'back'], forHours: 24 } };
+    const out = validateRulesDetailed({ enabled: true, list: [old1j, mine], recommendedActive: true });
+    expect(out.issues).toEqual([]);
+    expect(out.rules.recommendedInactive4h).toBe(true);
+    expect(out.rules.list[0]).toEqual({ ...byId(REC_INACTIVE_ID), createdAt: old1j.createdAt });
+    expect(out.rules.list[1]).toEqual(mine);
+    // modifiée par l'utilisateur (12 h) : jamais touchée
+    const custom = { ...old1j, condition: { kind: 'inactive', categories: ['front'], forHours: 12 } as RuleCondition };
+    expect(validateRulesDetailed({ enabled: true, list: [custom], recommendedActive: true }).rules.list[0]).toEqual(custom);
+    // migration déjà faite : un retour à 24 h choisi par l'utilisateur est gardé
+    const kept = validateRulesDetailed({ enabled: true, list: [old1j], recommendedActive: true, recommendedInactive4h: true });
+    expect(kept.rules.list[0]).toEqual(old1j);
+    expect(byId(REC_INACTIVE_ID).condition).toEqual({ kind: 'inactive', categories: ['front', 'back'], forHours: 4 });
+    expect(byId(REC_INACTIVE_ID).name).toBe('Front/Back de projet inactif depuis 4 h');
   });
 
   test('bouton « Ajouter les règles recommandées » : ajoute les manquantes, sans écraser ni dupliquer, idempotent', () => {
