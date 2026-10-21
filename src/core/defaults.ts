@@ -1,4 +1,5 @@
 import { DEFAULT_ALERTS } from './alerts';
+import { DEFAULT_BUDGET_MB } from './antigel/config';
 import { DEFAULT_RULES } from './rules/config';
 import type { ClassifyConfig, Config, RecorderConfig, UiConfig } from './types';
 
@@ -36,5 +37,5 @@ export const DEFAULT_CONFIG: Config = {
   classify: { ...DEFAULT_CLASSIFY, overrides: {} },
   alerts: DEFAULT_ALERTS,
   rules: DEFAULT_RULES,
-  antigel: { enabled: true, reserveMB: null, budgets: {} },
+  antigel: { enabled: true, reserveMB: null, budgets: {}, defaultBudgetMB: DEFAULT_BUDGET_MB },
 };

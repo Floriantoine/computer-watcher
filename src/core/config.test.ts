@@ -274,10 +274,24 @@ test('recorder.diskAlertPercent et diskAlertGB : 10 % et 20 Go par défaut, ajou
 test('antigel : absent d’une config existante → allumé ; section invalide → config refusée ; repli d’une config invalide → éteint', () => {
   const base = structuredClone(DEFAULT_CONFIG) as unknown as Record<string, unknown>;
   delete base.antigel;
-  expect(validateConfig(base)?.antigel).toEqual({ enabled: true, reserveMB: null, budgets: {} });
+  expect(validateConfig(base)?.antigel).toEqual({ enabled: true, reserveMB: null, budgets: {}, defaultBudgetMB: 5120 });
   expect(validateConfig({ ...base, antigel: { enabled: 'oui' } })).toBeNull();
-  expect(DEFAULT_CONFIG.antigel).toEqual({ enabled: true, reserveMB: null, budgets: {} });
+  expect(DEFAULT_CONFIG.antigel).toEqual({ enabled: true, reserveMB: null, budgets: {}, defaultBudgetMB: 5120 });
   const dir = mkdtempSync(join(tmpdir(), 'pw-cfg-antigel-'));
   writeFileSync(join(dir, 'config.json'), '{ illisible');
   expect(loadConfig(dir).config.antigel.enabled).toBe(false);
+});
+
+test('antigel : budget par défaut absent d’une config existante → 5 Go ; choix écrit (null compris) relu tel quel', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pw-cfg-defbudget-'));
+  const old = structuredClone(DEFAULT_CONFIG) as unknown as { antigel: Record<string, unknown> };
+  old.antigel = { enabled: true, reserveMB: null, budgets: { '/home/u/demo': 2048 } };
+  writeFileSync(join(dir, 'config.json'), JSON.stringify(old));
+  const r = loadConfig(dir);
+  expect(r.config.antigel.defaultBudgetMB).toBe(5120);
+  expect(r.config.antigel.budgets).toEqual({ '/home/u/demo': 2048 });
+  saveConfig(dir, { ...r.config, antigel: { ...r.config.antigel, defaultBudgetMB: null } });
+  expect(loadConfig(dir).config.antigel.defaultBudgetMB).toBeNull();
+  saveConfig(dir, { ...r.config, antigel: { ...r.config.antigel, defaultBudgetMB: 8192 } });
+  expect(loadConfig(dir).config.antigel.defaultBudgetMB).toBe(8192);
 });
