@@ -17,7 +17,8 @@ const PS = 'cwatch-p-alpha.slice';
 const PSCG = `${PARENT}/${PS}`;
 const RUN = 'cwatch-p-alpha-r0000000001.scope';
 const ON: AntigelConfig = { enabled: true, reserveMB: null, budgets: {} };
-const SYS: SystemInfo = { memTotalKB: 16 * 1024 * 1024, memAvailableKB: 8 * 1024 * 1024, swapTotalKB: 8 * 1024 * 1024, swapFreeKB: 8 * 1024 * 1024, load1: 1, psiSome10: null, shmemKB: null };
+// RAM entièrement disponible : le plafond dynamique vaut le plafond statique (12 Go), sauf dans les tests qui le font varier.
+const SYS: SystemInfo = { memTotalKB: 16 * 1024 * 1024, memAvailableKB: 16 * 1024 * 1024, swapTotalKB: 8 * 1024 * 1024, swapFreeKB: 8 * 1024 * 1024, load1: 1, psiSome10: null, shmemKB: null };
 
 let stc = 1;
 const p = (pid: number, ppid: number, name: string, cmdline: string, cwd: string | null = null, ageSec = 60): ProcInfo => ({

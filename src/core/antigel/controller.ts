@@ -10,7 +10,7 @@ import type { Group, ProcInfo, SystemInfo } from '../types';
 import type { Availability, CgroupStats, MemoryEvents } from './cgroupfs';
 import type { AntigelConfig } from './config';
 import { createDeskPriority, type DeskDeps } from './desk';
-import { budgetBytes, sameLimits, sliceLimits, type SliceLimits } from './limits';
+import { budgetBytes, dynamicLimits, sameLimits, sliceLimits, type SliceLimits } from './limits';
 import { MIN_ROOT_AGE_SEC, planMoves, type PlanMove, type PlanTarget } from './plan';
 import type { AntigelProjectState, AntigelSliceState, AntigelState } from './state';
 import { BusctlError, MAX_PIDS, type SystemdClient } from './systemd';
@@ -293,7 +293,11 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
     const userBase = avail.userBase;
     const cgOfSlice = (s: string) => `${userBase}/${slicePath(s)}`;
     const rootStats = deps.stats(cgOfSlice(ROOT_SLICE));
-    const limits = i.config.enabled ? sliceLimits(i.system.memTotalKB, i.system.swapTotalKB, i.config.reserveMB) : null;
+    const fixed = i.config.enabled ? sliceLimits(i.system.memTotalKB, i.system.swapTotalKB, i.config.reserveMB) : null;
+    // MemoryHigh dynamique (travail + ce que le reste laisse au-dessus de la réserve), avec hystérésis contre `applied` ;
+    // MemoryMax et MemorySwapMax restent statiques (voir dynamicLimits).
+    const availKB = i.system.memAvailableKnown === false ? null : i.system.memAvailableKB;
+    const limits = fixed && dynamicLimits(fixed, { workBytes: rootStats?.currentBytes ?? 0, availKB }, applied);
     const active = limits !== null;
 
     // Décision (pure) ; cgroups mis en cache par pid:startTicks (60 s). Éteint, elle sert seulement à retrouver les

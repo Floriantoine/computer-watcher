@@ -20,7 +20,8 @@ const A = '/home/u/alpha';
 const NM = `${A}/node_modules`;
 const ON: AntigelConfig = { enabled: true, reserveMB: null, budgets: {} };
 const OFF: AntigelConfig = { ...ON, enabled: false };
-const SYS: SystemInfo = { memTotalKB: 16 * 1024 * 1024, memAvailableKB: 8 * 1024 * 1024, swapTotalKB: 8 * 1024 * 1024, swapFreeKB: 8 * 1024 * 1024, load1: 1, psiSome10: null, shmemKB: null };
+// RAM entièrement disponible : le plafond dynamique vaut le plafond statique (12 Go), sauf dans les tests qui le font varier.
+const SYS: SystemInfo = { memTotalKB: 16 * 1024 * 1024, memAvailableKB: 16 * 1024 * 1024, swapTotalKB: 8 * 1024 * 1024, swapFreeKB: 8 * 1024 * 1024, load1: 1, psiSome10: null, shmemKB: null };
 const ROOT_CALL = ['ensureSlice', 'cwatch.slice', 12 * GiB, 14 * GiB, 4 * GiB];
 const ev = (o: Partial<CgroupStats['events']> = {}) => ({ high: 0, max: 0, oom: 0, oomKill: 0, ...o });
 
@@ -52,9 +53,10 @@ function harness(o: {
   });
   const rootOf = (c: string) => Object.entries({ [A]: A, ...o.roots }).find(([k]) => c === k || c.startsWith(`${k}/`))?.[1] ?? null;
   let procs = world();
+  let system = SYS;
   let claudeDirs: string[] | undefined;
   const input = (config: AntigelConfig) => ({
-    ts: 1_000_000 + mono, procs, system: SYS, config, currentUid: 1000, selfPid: 900, appRoot: null, home: '/home/u', claudeDirs,
+    ts: 1_000_000 + mono, procs, system, config, currentUid: 1000, selfPid: 900, appRoot: null, home: '/home/u', claudeDirs,
     isProtected: (n: string) => ['zsh', 'warp'].includes(n),
     groups: buildGroups(procs, { home: '/home/u', currentUid: 1000, isProtected: () => false, othersThreshold: { memMB: 0, cpuPercent: 0 }, projectRootOf: rootOf }),
   });
@@ -67,6 +69,7 @@ function harness(o: {
   return {
     ag, calls: fake.calls, cg: fake.cg, sys: fake.sys, logs, probe, reverify, step, input,
     setProcs: (x: ProcInfo[]) => { procs = x; },
+    setSystem: (o: Partial<SystemInfo>) => { system = { ...SYS, ...o }; },
     setClaudeDirs: (d: string[]) => { claudeDirs = d; },
   };
 }
@@ -549,6 +552,91 @@ describe('orchestrateur anti-gel', () => {
     }
     expect(memo.size).toBeGreaterThan(0);
     expect(memo.size).toBeLessThanOrEqual(4 * 22 + 100 + 20);
+  });
+});
+
+describe('plafond dynamique de cwatch.slice', () => {
+  const GKB = 1024 * 1024;
+  const setWork = (h: ReturnType<typeof harness>, bytes: number) => h.sys.set(ROOT, { ...(h.sys.get(ROOT) ?? stats({ currentBytes: 0 })), currentBytes: bytes });
+  const rootCalls = (calls: unknown[][]) => calls.filter((c) => c[0] === 'setSlice' || c[0] === 'ensureSlice');
+
+  test('RAM qui se remplit hors travail : le plafond descend à travail + (MemAvailable − réserve) ; MemoryMax inchangé', async () => {
+    const h = harness();
+    await h.step();
+    expect(h.calls[0]).toEqual(ROOT_CALL);
+    setWork(h, 3 * GiB);
+    h.setSystem({ memAvailableKB: 6 * GKB }); // navigateurs : 7 Go pris hors travail
+    h.calls.length = 0;
+    await h.step();
+    expect(h.calls).toEqual([['setSlice', 'cwatch.slice', 5 * GiB]]);
+    expect(h.sys.get(ROOT)).toMatchObject({ highBytes: 5 * GiB, maxBytes: 14 * GiB, swapMaxBytes: 4 * GiB });
+    // RAM pleine : plus aucune marge, le plafond colle au travail
+    h.setSystem({ memAvailableKB: 3 * GKB });
+    h.calls.length = 0;
+    await h.step();
+    expect(h.calls).toEqual([['setSlice', 'cwatch.slice', 3 * GiB]]);
+    await h.step(); // l'état publie ce que montre sysfs au tick suivant
+    expect(h.ag.state().slice).toMatchObject({ currentKB: 3 * GKB, highKB: 3 * GKB, maxKB: 14 * GKB });
+  });
+
+  test('mémoire libérée hors travail : le plafond remonte, jamais au-delà de RAM − réserve', async () => {
+    const h = harness();
+    setWork(h, 0);
+    h.setSystem({ memAvailableKB: 6 * GKB });
+    await h.step();
+    expect(h.calls[0]).toEqual(['ensureSlice', 'cwatch.slice', 2 * GiB, 14 * GiB, 4 * GiB]);
+    setWork(h, 3 * GiB);
+    h.setSystem({ memAvailableKB: 7 * GKB });
+    h.calls.length = 0;
+    await h.step();
+    expect(rootCalls(h.calls)).toEqual([['setSlice', 'cwatch.slice', 6 * GiB]]);
+    h.setSystem({ memAvailableKB: 15 * GKB });
+    h.calls.length = 0;
+    await h.step();
+    expect(rootCalls(h.calls)).toEqual([['setSlice', 'cwatch.slice', 12 * GiB]]);
+  });
+
+  test('quelques Mo d’écart (moins de 256 Mo) : aucun SetUnitProperties', async () => {
+    const h = harness();
+    await h.step();
+    setWork(h, 3 * GiB);
+    h.setSystem({ memAvailableKB: 6 * GKB });
+    await h.step();
+    h.calls.length = 0;
+    for (const mb of [100, -150, 200, 50]) {
+      h.setSystem({ memAvailableKB: 6 * GKB + mb * 1024 });
+      await h.step();
+    }
+    expect(h.calls).toEqual([]);
+  });
+
+  test('MemAvailable illisible : plafond statique (RAM − réserve)', async () => {
+    const h = harness();
+    setWork(h, 3 * GiB);
+    h.setSystem({ memAvailableKB: 0, memAvailableKnown: false });
+    await h.step();
+    expect(h.calls[0]).toEqual(ROOT_CALL);
+    h.setSystem({ memAvailableKB: 6 * GKB });
+    h.calls.length = 0;
+    await h.step();
+    expect(rootCalls(h.calls)).toEqual([['setSlice', 'cwatch.slice', 5 * GiB]]);
+    h.setSystem({ memAvailableKB: 0, memAvailableKnown: false });
+    h.calls.length = 0;
+    await h.step();
+    expect(rootCalls(h.calls)).toEqual([['setSlice', 'cwatch.slice', 12 * GiB]]);
+  });
+
+  test('seule cwatch.slice est replafonnée : jamais une autre unité', async () => {
+    const h = harness();
+    await h.step();
+    for (const [w, a] of [[3, 6], [3, 3], [1, 15], [8, 9]] as const) {
+      setWork(h, w * GiB);
+      h.setSystem({ memAvailableKB: a * GKB });
+      await h.step();
+    }
+    const units = new Set(h.calls.filter((c) => c[0] === 'setSlice' || c[0] === 'ensureSlice').map((c) => c[1]));
+    expect([...units]).toEqual(['cwatch.slice']);
+    expect(h.calls.every((c) => ['ensureSlice', 'setSlice', 'ensureProjectSlice', 'startScope'].includes(c[0] as string))).toBe(true);
   });
 });
 

@@ -10,7 +10,8 @@ const BASE = '/user.slice/user-1000.slice/user@1000.service';
 const WARP = `${BASE}/app.slice/app-dev.warp.Warp@1.service`;
 const A = '/home/u/alpha';
 const ON: AntigelConfig = { enabled: true, reserveMB: null, budgets: {} };
-const SYS: SystemInfo = { memTotalKB: 16 * 1024 * 1024, memAvailableKB: 8 * 1024 * 1024, swapTotalKB: 8 * 1024 * 1024, swapFreeKB: 8 * 1024 * 1024, load1: 1, psiSome10: null, shmemKB: null };
+// RAM entièrement disponible : le plafond dynamique vaut le plafond statique (12 Go), sauf dans les tests qui le font varier.
+const SYS: SystemInfo = { memTotalKB: 16 * 1024 * 1024, memAvailableKB: 16 * 1024 * 1024, swapTotalKB: 8 * 1024 * 1024, swapFreeKB: 8 * 1024 * 1024, load1: 1, psiSome10: null, shmemKB: null };
 let stc = 1;
 const p = (pid: number, ppid: number, name: string, cmdline: string, cwd: string | null = null): ProcInfo => ({
   pid, ppid, name, cmdline, uid: 1000, startTicks: stc++, ageSec: 10, cpuTicks: 0, cpuPercent: 0, rssKB: 100_000, swapKB: 0, cwd, cwdDeleted: false,

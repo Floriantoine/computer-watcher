@@ -18,7 +18,8 @@ const WARP = `${BASE}/app.slice/app-dev.warp.Warp@1.service`;
 const PS = 'cwatch-p-alpha.slice';
 const PSCG = `${BASE}/cwatch.slice/cwatch-p.slice/${PS}`;
 const SCOPE = /^cwatch-p-alpha-[a-z0-9]{1,12}\.scope$/;
-const ROOT_CALL = ['ensureSlice', 'cwatch.slice', 12 * GiB, 14 * GiB, 4 * GiB];
+// plafond dynamique : travail (0 au premier tick) + MemAvailable (8 000 000 Ko) − réserve (4 Go)
+const ROOT_CALL = ['ensureSlice', 'cwatch.slice', 8_000_000 * 1024 - 4 * GiB, 14 * GiB, 4 * GiB];
 const ev = (o: Partial<CgroupStats['events']> = {}) => ({ high: 0, max: 0, oom: 0, oomKill: 0, ...o });
 
 afterEach(() => {
