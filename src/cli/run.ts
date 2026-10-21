@@ -14,6 +14,7 @@ import {
 } from '../core/antigel/run';
 import { BusctlError, type BusctlRun } from '../core/antigel/systemd';
 import { scopePath, slicePath } from '../core/antigel/units';
+import { elfInterpreter } from './elfInterp';
 
 /** Attente maximale du déplacement du lanceur dans son scope (le job systemd part juste après la réponse de busctl). */
 export const CONFIRM_TIMEOUT_MS = 3000;
@@ -120,6 +121,8 @@ export interface FsLike {
   executable: (p: string) => boolean;
   /** Premiers octets (au plus HEAD_BYTES ; null : illisible, comme un exécutable en exécution seule). */
   head: (p: string) => Buffer | null;
+  /** `len` octets à partir de `pos` (moins en fin de fichier ; null : illisible). Absent : chargeur ELF non vérifié. */
+  readAt?: (p: string, pos: number, len: number) => Buffer | null;
 }
 
 const DEFAULT_PATH = '/usr/local/bin:/usr/bin:/bin';
@@ -130,8 +133,10 @@ export const HEAD_BYTES = 256;
  * Comme execvp, mais vérifié AVANT l'exec (un execve raté abat le processus Node) : commande avec « / » relative au
  * dossier courant, sinon recherche dans le PATH de la commande (entrée vide : dossier courant). Introuvable : 127 ;
  * trouvé mais non exécutable : 126. Script « #! » : son interpréteur doit exister et être exécutable (sinon 127 / 126).
- * ELF, binaire (octet nul : binfmt_misc…) ou en-tête illisible (exécution seule) : exec direct. Texte sans « #! » :
- * /bin/sh <fichier>, comme execvp.
+ * ELF natif : son chargeur dynamique (PT_INTERP) aussi (elfInterpreter). ELF étranger, binaire (octet nul :
+ * binfmt_misc…) ou en-tête illisible (exécution seule) : exec direct. Texte sans « #! » : /bin/sh <fichier>, comme execvp.
+ * Restent hors d'atteinte : un fichier ouvert en écriture par un autre processus (ETXTBSY), remplacé entre cette
+ * vérification et l'exec, ou un ELF étranger sans binfmt_misc (ENOEXEC) : execve échoue et Node s'arrête (code 134).
  */
 export function resolveCommand(command: readonly string[], env: NodeJS.ProcessEnv, cwd: string | null, fs: FsLike): ResolvedCommand | ResolveError {
   const [name, ...rest] = command;
@@ -149,6 +154,17 @@ export function resolveCommand(command: readonly string[], env: NodeJS.ProcessEn
     }
     const h = fs.head(p);
     const direct = { file: p, argv: [name, ...rest] };
+    if (h !== null && fs.readAt && h[0] === 0x7f && h.subarray(1, 4).toString('latin1') === 'ELF') {
+      const readAt = fs.readAt;
+      const loader = elfInterpreter(h, (pos, len) => readAt(p, pos, len));
+      if (loader) {
+        const lp = isAbsolute(loader) ? loader : cwd !== null ? resolvePath(cwd, loader) : null;
+        const k2 = lp === null ? null : fs.kind(lp);
+        if (lp === null || k2 === null) return { code: 127, message: `chargeur dynamique introuvable pour ${p} : ${loader}` };
+        if (k2 !== 'file' || !fs.executable(lp)) return { code: 126, message: `chargeur dynamique non exécutable pour ${p} : ${lp}` };
+      }
+      return direct;
+    }
     if (h === null || h.includes(0) || (h[0] === 0x7f && h.subarray(1, 4).toString('latin1') === 'ELF')) return direct;
     if (h[0] === 0x23 && h[1] === 0x21) {
       const line = h.subarray(2).toString('latin1').split('\n', 1)[0]!.trim();

@@ -1,0 +1,20 @@
+#!/bin/sh
+# /usr/bin/computer-watcher du paquet .deb (lien posé par after-install.tpl vers /opt/computer-watcher/resources/bin/).
+# Sous-commandes du CLI (run, should-wrap, shell-init, claude-hook), précédées ou non de « -- » : Electron en mode Node
+# sur out/main/cli.js, sans Chromium. Lancé directement, Chromium lirait les options placées avant le « -- » de `run`
+# (`run rg --type=rust` : plantage, code 133, avant le code de l'app). Tout le reste : l'exécutable de l'app, inchangé.
+self=$(readlink -f -- "$0") || self=$0
+case $self in
+  */resources/bin/*) app=${self%/resources/bin/*} ;;
+  *) app=/opt/computer-watcher ;;
+esac
+bin=$app/computer-watcher
+if [ "${1-}" = -- ]; then sub=${2-}; else sub=${1-}; fi
+case $sub in
+  run|should-wrap|shell-init|claude-hook)
+    [ "$1" = -- ] && shift
+    # NODE_OPTIONS de l'appelant : jamais pour le CLI lui-même, rendu tel quel à la commande (CWATCH_NODE_OPTIONS)
+    if [ "${NODE_OPTIONS+x}" ]; then CWATCH_NODE_OPTIONS=$NODE_OPTIONS; export CWATCH_NODE_OPTIONS; unset NODE_OPTIONS; fi
+    ELECTRON_RUN_AS_NODE=1 exec "$bin" "$app/resources/app.asar/out/main/cli.js" "$@" ;;
+esac
+exec "$bin" "$@"

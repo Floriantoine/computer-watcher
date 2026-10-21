@@ -232,6 +232,8 @@ export function setAutostart(on: boolean, target: string | null, r: Roots): void
 const DATA_FILES = [
   'metrics.db', 'metrics.db-wal', 'metrics.db-shm', 'recorder-status.json', 'app-events.jsonl', 'app-events.jsonl.ingest', 'clear-request',
   'forecast-snooze.json', 'rules-simulation.json', 'app-focus.json', 'tmp-set-aside.json',
+  // anti-gel (état publié par le service, demandes « frigo », bureau prioritaire) et page Disque
+  'antigel-state.json', 'antigel-fridge-request.json', 'antigel-desk.json', 'disk-families.json', 'disk-measure-request',
 ];
 /** `.updaterId` : identifiant écrit par electron-updater dans le dossier de l'app. */
 const CONFIG_FILES = ['config.json', 'config.json.bak', 'onboarding.json', 'updater.json', 'test-app-update.yml', '.updaterId', 'migration.json', 'wrap-setup.json'];
@@ -250,8 +252,14 @@ const CHROMIUM_TREES = [
 const CHROMIUM_LINKS = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const tmpOf = (names: string[]) => new RegExp(`^(?:${names.map(esc).join('|')})\\.\\d+\\.tmp$`);
-const DATA_PATTERNS = [/^metrics\.db\.(?:pre-v\d+|bak)-\d{8}T\d{6}(?:-wal|-shm)?$/, tmpOf(DATA_FILES)];
-const CONFIG_PATTERNS = [tmpOf(CONFIG_FILES)];
+/** Temporaire de writeFileSafe (safeFs.ts) : `.<nom>.<pid>.<12 hexa>.tmp`, laissé par un arrêt brutal. */
+const safeTmpOf = (names: string[]) => new RegExp(`^\\.(?:${names.map(esc).join('|')})\\.\\d+\\.[0-9a-f]{12}\\.tmp$`);
+const DATA_PATTERNS = [
+  /^metrics\.db\.(?:pre-v\d+|bak)-\d{8}T\d{6}(?:-wal|-shm)?$/, tmpOf(DATA_FILES),
+  // fridgeRequest.ts : `<nom>.<pid>.<horloge en base 36>.tmp`
+  /^antigel-fridge-request\.json\.\d+\.[0-9a-z]+\.tmp$/,
+];
+const CONFIG_PATTERNS = [tmpOf(CONFIG_FILES), safeTmpOf(CONFIG_FILES)];
 
 const LABELS: Record<UninstallKind, string> = {
   autostart: 'Démarrage automatique',

@@ -346,6 +346,24 @@ describe('désinstaller', () => {
     expect(existsSync(p.configDir)).toBe(false);
   });
 
+  test('anti-gel, page Disque, rappel du lancement dans le budget : fichiers et temporaires retirés, dossiers retirés', async () => {
+    const p = await fullInstall();
+    const data = ['antigel-state.json', 'antigel-state.json.4242.tmp', 'antigel-fridge-request.json', 'antigel-fridge-request.json.4242.lx3k9a.tmp',
+      'antigel-desk.json', 'disk-families.json', 'disk-measure-request'];
+    const config = ['wrap-setup.json', '.wrap-setup.json.4242.0a1b2c3d4e5f.tmp', '.onboarding.json.17.ffffffffffff.tmp'];
+    for (const n of data) writeFileSync(join(p.dataDir, n), '{}');
+    for (const n of config) writeFileSync(join(p.configDir, n), '{}');
+    const plan = uninstallPlan(roots, { history: true, config: true });
+    for (const n of data) expect(plan.filter((i) => i.kind === 'history').map((i) => i.path)).toContain(join(p.dataDir, n));
+    for (const n of config) expect(plan.filter((i) => i.kind === 'config').map((i) => i.path)).toContain(join(p.configDir, n));
+    // historique seul : la configuration (wrap-setup.json) reste
+    expect(uninstallPlan(roots, { history: true, config: false }).map((i) => i.path)).not.toContain(join(p.configDir, 'wrap-setup.json'));
+    const r = await runUninstall(plan, roots, { service: okService() });
+    expect(r.failed).toEqual([]);
+    expect(existsSync(p.dataDir)).toBe(false);
+    expect(existsSync(p.configDir)).toBe(false);
+  });
+
   test('fichiers inconnus des dossiers de données et de config : jamais listés, dossier laissé', async () => {
     const p = await fullInstall();
     writeFileSync(join(p.dataDir, 'notes-perso.txt'), 'à moi');

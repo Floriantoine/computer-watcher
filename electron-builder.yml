@@ -14,6 +14,10 @@ linux:
     - deb
   category: System
   executableName: computer-watcher
+  # Enveloppe de /usr/bin/computer-watcher (.deb, voir deb.afterInstall) : sous-commandes du CLI sans Chromium.
+  extraResources:
+    - from: build/linux/computer-watcher
+      to: bin/computer-watcher
   synopsis: Voir et tuer les processus gourmands
   desktop:
     entry:
@@ -25,6 +29,10 @@ deb:
     - --replaces=proc-watch
     - --conflicts=proc-watch
     - --provides=proc-watch
+  # Copies des scripts d'electron-builder 26.15.3 : /usr/bin/computer-watcher vise resources/bin/computer-watcher (le
+  # lanceur du menu garde l'exécutable). À recomparer aux modèles d'electron-builder à chaque mise à jour de celui-ci.
+  afterInstall: build/linux/after-install.tpl
+  afterRemove: build/linux/after-remove.tpl
 artifactName: ${productName}-${version}-${arch}.${ext}
 publish:
   provider: github
@@ -33,3 +41,8 @@ publish:
 # `run node --inspect-brk …` oublié ouvrirait l'inspecteur du processus principal. Jamais utilisé en production.
 electronFuses:
   enableNodeCliInspectArguments: false
+  # NODE_OPTIONS (enableNodeOptionsEnvironmentVariable) reste accepté, volontairement (2026-10-21) : RunAsNode doit rester
+  # actif (service, run, analyse du disque), et `ELECTRON_RUN_AS_NODE=1 computer-watcher -e …` exécute déjà n'importe quel
+  # code ; couper NODE_OPTIONS n'enlèverait donc rien à un attaquant capable de poser l'environnement (LD_PRELOAD aussi).
+  # Le coût, lui, a été mesuré sur une build : la fuse coupée efface NODE_OPTIONS et NODE_EXTRA_CA_CERTS de
+  # l'environnement, donc de celui des commandes lancées par `computer-watcher run`.

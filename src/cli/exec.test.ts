@@ -1,7 +1,11 @@
 import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
 import { describe, expect, test, vi } from 'vitest';
-import { closeInheritedFds, execCommand, isNonBlocking, restoreBlocking, type ProcLike } from './exec';
+import { execFileSync } from 'node:child_process';
+import { closeSync, constants as fsConstants, mkdtempSync, openSync, readFileSync, readSync, readdirSync, readlinkSync, rmSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { closeInheritedFds, execCommand, isNonBlocking, reopenPipeCloexec, restoreBlocking, type ProcLike } from './exec';
 
 function fakeProc(withExecve: boolean) {
   const ev = new EventEmitter();
@@ -26,11 +30,55 @@ function fakeChild() {
 describe('closeInheritedFds', () => {
   test('ferme tout descripteur > 2, ignore les erreurs', () => {
     const closed: number[] = [];
+    const kept: number[] = [];
     closeInheritedFds(() => ['0', '1', '2', '3', '17', 'x', '255'], (fd) => {
       if (fd === 17) throw new Error('EBADF');
       closed.push(fd);
+    }, (fd) => {
+      kept.push(fd);
+      return fd === 3;
     });
     expect(closed).toEqual([3, 255]);
+    expect(kept).toEqual([3, 17, 255]);
+  });
+
+  test('tube réel : rouvert avec O_CLOEXEC, l’original fermé, le tube reste ouvert (le lecteur ne voit pas EOF)', () => {
+    // FIFO nommé sous ~/.cache/pw-* (même traitement qu'un tube anonyme : fstat isFIFO), ouvert des deux côtés
+    const dir = mkdtempSync(join(homedir(), '.cache', 'pw-exec-fifo-'));
+    try {
+      const fifo = join(dir, 'f');
+      execFileSync('mkfifo', [fifo]);
+      const r = openSync(fifo, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+      const w = openSync(fifo, fsConstants.O_WRONLY | fsConstants.O_NONBLOCK);
+      const onFifo = () => readdirSync('/proc/self/fd').map(Number).filter((n) => {
+        try {
+          return n !== r && n !== w && readlinkSync(`/proc/self/fd/${n}`) === fifo;
+        } catch {
+          return false;
+        }
+      });
+      expect(onFifo()).toEqual([]);
+      expect(reopenPipeCloexec(w)).toBe(true);
+      const added = onFifo();
+      expect(added).toHaveLength(1);
+      const fd = added[0]!;
+      // O_CLOEXEC (02000000) posé, même sens (écriture)
+      const flags = parseInt(/^flags:\s+([0-7]+)/m.exec(readFileSync(`/proc/self/fdinfo/${fd}`, 'utf8'))![1]!, 8);
+      expect(flags & 0o2000000).not.toBe(0);
+      expect(flags & 3).toBe(fsConstants.O_WRONLY);
+      closeSync(w);
+      // un écrivain reste : la lecture rend EAGAIN, pas EOF (0 octet)
+      expect(() => readSync(r, Buffer.alloc(1))).toThrow(/EAGAIN/);
+      closeSync(fd);
+      expect(readSync(r, Buffer.alloc(1))).toBe(0);
+      closeSync(r);
+      // fichier ordinaire : jamais rouvert
+      const f = openSync(fifo.replace(/f$/, 'g'), 'w');
+      expect(reopenPipeCloexec(f)).toBe(false);
+      closeSync(f);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

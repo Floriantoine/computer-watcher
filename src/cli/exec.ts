@@ -4,14 +4,44 @@
 // hérités (Electron, libuv) sont fermés juste avant : la commande ne reçoit que 0, 1 et 2.
 // Repli (process.execve absent) : enfant avec les mêmes entrées/sorties, signaux transmis, code de sortie renvoyé.
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
-import { closeSync, readFileSync, readdirSync } from 'node:fs';
+import { closeSync, constants as fsConstants, fstatSync, openSync, readFileSync, readdirSync } from 'node:fs';
 import { constants } from 'node:os';
 
-export function closeInheritedFds(list: () => string[] = () => readdirSync('/proc/self/fd'), close: (fd: number) => void = closeSync): void {
+/** Masque du sens d'ouverture (O_RDONLY, O_WRONLY, O_RDWR) : absent de fs.constants. */
+const O_ACCMODE = 3;
+
+/**
+ * Tube hérité rouvert par /proc/self/fd/<fd> (même tube, même sens) : Node ouvre toujours avec O_CLOEXEC, le noyau le
+ * fermera donc à l'execve même. true si c'est fait (l'original peut être fermé sans fermer le tube avant l'exec).
+ */
+export function reopenPipeCloexec(fd: number): boolean {
+  try {
+    if (!fstatSync(fd).isFIFO()) return false;
+    const m = /^flags:\s+([0-7]+)\s*$/m.exec(readFdinfo(fd) ?? '');
+    if (!m) return false;
+    // O_NONBLOCK : jamais d'attente (écriture sans lecteur : ENXIO, le tube est alors simplement fermé)
+    openSync(`/proc/self/fd/${fd}`, (parseInt(m[1]!, 8) & O_ACCMODE) | fsConstants.O_NONBLOCK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Descripteurs ≥ 3 hérités fermés avant l'execve ; un tube est d'abord rouvert avec O_CLOEXEC (reopenPipeCloexec) et ne
+ * se ferme donc qu'à l'execve même. Raison : le runtime AppImage garde son montage tant qu'un descripteur de son tube
+ * « keepalive » reste ouvert ; fermé avant l'execve, le montage disparaît pendant que Node tourne encore depuis lui
+ * (SIGBUS, code 135, constaté avec une vraie AppImage).
+ */
+export function closeInheritedFds(
+  list: () => string[] = () => readdirSync('/proc/self/fd'), close: (fd: number) => void = closeSync,
+  keepUntilExec: (fd: number) => boolean = reopenPipeCloexec,
+): void {
   for (const s of list()) {
     const fd = Number(s);
     if (!Number.isInteger(fd) || fd <= 2) continue;
     try {
+      keepUntilExec(fd);
       close(fd);
     } catch {
       // déjà fermé (descripteur du readdir lui-même)

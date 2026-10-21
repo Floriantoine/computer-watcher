@@ -179,6 +179,18 @@ test.skipIf(!RUN)(
       expect(cg5.startsWith(`0::${avail.userBase}/cwatch.slice/${slice}/${othersSlice}/cwatch-e2e${id}-r`)).toBe(true);
       note(cg5);
       expect(nonBlocking(r5.out)).toEqual([]);
+      // 5 bis) « -- » devant la sous-commande (inséré par les lanceurs) : une option de run placée avant son « -- » est lue
+      // par run (code 2), jamais par Chromium (plantage 133 sinon) ; NODE_OPTIONS mis de côté par le lanceur rendu à la commande
+      const r5b = await launch([electron, APP, '--', 'run', '--type=x', '--', '/bin/true'], { env, cwd: '/' }).done;
+      seen.push(`5 bis) app -- run --type=x : code=${r5b.code} stderr=${JSON.stringify(r5b.err.trim())}`);
+      expect(r5b.code).toBe(2);
+      expect(r5b.err).toMatch(/option inconnue : --type=x/);
+      const r5c = await launch([electron, APP, '--', 'run', '--', '/bin/sh', '-c', 'printf "%s|%s\\n" "$NODE_OPTIONS" "${CWATCH_NODE_OPTIONS-absent}"; exit 8'], {
+        env: { ...env, CWATCH_NODE_OPTIONS: '--max-old-space-size=4096 --require ./a.js' }, cwd: '/',
+      }).done;
+      seen.push(`5 ter) app -- run, NODE_OPTIONS mis de côté : code=${r5c.code} stdout=${JSON.stringify(r5c.out.trim())}`);
+      expect(r5c.code).toBe(8);
+      expect(r5c.out).toBe('--max-old-space-size=4096 --require ./a.js|absent\n');
 
       // 6) plafond éteint (slice de test remise à infinity) : avertissement, commande lancée quand même, hors cwatch
       await client.setSlice(slice, null);

@@ -158,11 +158,22 @@ export function runProjectSlice(i: { root: string | null; taken: ReadonlyMap<str
   return i.taken.has(h) ? OTHERS_SLICE : h;
 }
 
+/**
+ * NODE_OPTIONS de l'appelant, mis de côté par les lanceurs (enveloppe du .deb, ~/.local/bin/computer-watcher) : Electron
+ * en mode complet efface la plupart des options avant notre code (app empaquetée), et le CLI ne doit pas les exécuter
+ * lui-même (`--require`, `--import` du projet). Rendu tel quel à la commande par commandEnv.
+ */
+export const SAVED_NODE_OPTIONS = 'CWATCH_NODE_OPTIONS';
+
 /** Environnement de la commande : sans le runtime AppImage (cleanEnv), sans le mode Node d'Electron ni la variable de test. */
 export function commandEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const out = cleanEnv(env);
   delete out.ELECTRON_RUN_AS_NODE;
   delete out.PROC_WATCH_RUN_ROOT_SLICE;
+  if (out[SAVED_NODE_OPTIONS] !== undefined) {
+    out.NODE_OPTIONS = out[SAVED_NODE_OPTIONS];
+    delete out[SAVED_NODE_OPTIONS];
+  }
   // posée par Electron au démarrage de l'app (absente de l'environnement d'origine)
   if (out.CHROME_DESKTOP !== undefined && /^(electron|computer-watcher)\.desktop$/.test(out.CHROME_DESKTOP)) delete out.CHROME_DESKTOP;
   return out;

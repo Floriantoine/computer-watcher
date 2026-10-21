@@ -12,7 +12,12 @@ export function runArgsFromArgv(argv: readonly string[], defaultApp: boolean): s
   return c !== null && c[0] === 'run' ? c.slice(1) : null;
 }
 
-/** [sous-commande, arguments…] si l'app est lancée comme `computer-watcher [options Chromium] <sous-commande du CLI> …`. */
+/**
+ * [sous-commande, arguments…] si l'app est lancée comme `computer-watcher [options Chromium] [--] <sous-commande du CLI> …`.
+ * Le « -- » facultatif devant la sous-commande arrête l'analyse des options par Chromium : sans lui, une option de la
+ * commande placée avant le « -- » de `run` (`run --type=x -- …`) serait lue par Chromium avant notre code (plantage,
+ * code 133). Les lanceurs de l'app (paquet .deb, ~/.local/bin/computer-watcher) l'insèrent eux-mêmes.
+ */
 export function cliArgsFromArgv(argv: readonly string[], defaultApp: boolean): string[] | null {
   let i = 1;
   const skipSwitches = () => {
@@ -25,6 +30,7 @@ export function cliArgsFromArgv(argv: readonly string[], defaultApp: boolean): s
     i++;
     skipSwitches();
   }
+  if (argv[i] === '--') i++;
   return argv[i] !== undefined && CLI_SUBCOMMANDS.includes(argv[i]!) ? argv.slice(i) : null;
 }
 
