@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import type { AlertEvent } from '../core/alerts';
 import type { AntigelView } from '../core/antigel/state';
 import type { EarlyoomSettings } from '../core/earlyoom';
+import type { DeskRootResult, DeskRootStatus } from '../core/antigel/deskRoot';
 import type { SunNode } from '../core/disk/sunTree';
 import type { FamiliesFile, FamilyId } from '../core/disk/families';
 import type { DiskCleanAllResult, DiskCleanRequest, ExtrasView } from '../core/disk/extras';
@@ -245,6 +246,13 @@ const api = {
     state: (): Promise<AntigelView> => ipcRenderer.invoke('antigel:state'),
     /** « Mettre au frigo » / « Réveiller » un projet (identifiant de groupe « project:<racine> ») : demande au service. */
     fridge: (groupId: string, action: 'freeze' | 'thaw'): Promise<{ queued: true }> => ipcRenderer.invoke('antigel:fridge', groupId, action),
+  },
+  /** Bureau prioritaire : protection mémoire des niveaux système (drop-ins root, Réglages → Plafond de travail). */
+  deskRoot: {
+    /** Lecture seule : nos trois fichiers, valeur voulue, memory.low effectif de user.slice, user-<uid>.slice, user@<uid>.service. */
+    status: (): Promise<DeskRootStatus> => ipcRenderer.invoke('deskRoot:status'),
+    /** Le main relit l'état, confirme (fichiers et commande exacts), puis un seul pkexec d'un script figé. */
+    apply: (mode: 'install' | 'remove'): Promise<DeskRootResult> => ipcRenderer.invoke('deskRoot:apply', mode),
   },
   /** Lancer les commandes lourdes directement dans le budget (Réglages → Plafond de travail). */
   wrapSetup: {

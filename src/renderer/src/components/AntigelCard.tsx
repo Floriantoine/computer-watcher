@@ -2,10 +2,14 @@ import { Snowflake } from 'lucide-react';
 import type { AntigelView } from '../../../core/antigel/state';
 import { antigelCard } from '../antigel';
 import { cardTone } from '../theme';
+import { DeskRootCardAction, useDeskRoot } from './DeskRoot';
 
 /** Métriques : travail et marge avant ralentissement (plafond dynamique), ce qui freine, budgets des projets en cours. */
 export function AntigelCard({ view, onSettings }: { view: AntigelView | null; onSettings?: () => void }) {
-  const m = antigelCard(view);
+  const root = useDeskRoot();
+  const m = antigelCard(view, root);
+  // bouton de la protection mémoire système : seulement quand le bureau prioritaire tourne (sa ligne est affichée)
+  const deskOn = !!view?.fresh && view.state?.status === 'active' && view.state.desk?.status === 'active';
   return (
     <section className={`antigel-card tone-${m.tone}`} data-testid="antigel-card" aria-label="Plafond de travail">
       <div className="antigel-head">
@@ -21,6 +25,7 @@ export function AntigelCard({ view, onSettings }: { view: AntigelView | null; on
         </>
       )}
       {m.lines.map((l) => <p key={l} className="sub">{l}</p>)}
+      {deskOn && <DeskRootCardAction st={root} />}
       {/* une ligne de budget qui porte la mention hors budget garde le data-testid « antigel-late » du lot précédent */}
       {m.budgets.map((b) => (
         <p key={b.text} className={`sub antigel-budget-line${b.throttled ? ' throttled' : ''}${b.hint ? ' antigel-late' : ''}`} title={b.hint ?? undefined}

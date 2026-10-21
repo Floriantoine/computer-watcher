@@ -5,11 +5,13 @@ import { deskLine } from '../antigelDesk';
 import { DEFAULT_BUDGET_MB } from '../../../core/antigel/config';
 import { antigelStatusLine, budgetLabel, budgetRows, budgetUsage, formatGo, formatGoInput, reserveHint, validateBudget, validateReserve, withBudget, withNoBudget } from '../antigel';
 import { useAntigel } from '../useAntigel';
+import { DeskRootRow, useDeskRoot } from './DeskRoot';
 import { Card, Row, SaveBar, Switch } from './settingsUi';
 
 /** Réglages → Plafond de travail : interrupteur (allumé par défaut), réserve pour le bureau, budget par défaut, budgets par projet. */
 export function AntigelSettingsCard({ config, onSave }: { config: Config; onSave: (c: Config) => void }) {
   const view = useAntigel();
+  const root = useDeskRoot();
   const ag = config.antigel;
   const saved = ag.reserveMB === null ? '' : formatGoInput(ag.reserveMB);
   const [text, setText] = useState(saved);
@@ -20,7 +22,7 @@ export function AntigelSettingsCard({ config, onSave }: { config: Config; onSave
   const save = () => {
     if (v.ok) onSave({ ...config, antigel: { ...ag, reserveMB: v.mb } });
   };
-  const deskText = ag.enabled && view?.fresh && view.state?.status === 'active' ? deskLine(view.state.desk) : null;
+  const deskText = ag.enabled && view?.fresh && view.state?.status === 'active' ? deskLine(view.state.desk, root) : null;
   // budget par défaut de chaque projet : null = aucun ; le champ garde la dernière valeur (ou 5 Go) quand il est éteint
   const def = ag.defaultBudgetMB ?? null;
   const defSaved = formatGoInput(def ?? DEFAULT_BUDGET_MB);
@@ -46,6 +48,7 @@ export function AntigelSettingsCard({ config, onSave }: { config: Config; onSave
         )}
       </Row>
       {deskText && <p className="sub" data-testid="antigel-desk-status">{deskText}</p>}
+      <DeskRootRow disabled={!ag.enabled || ag.desk === false} />
       <Row label="Réserve pour le bureau" error={v.ok ? null : v.error} help={reserveHint(memTotalKB)}>
         {(id) => (
           <input id={id} data-testid="antigel-reserve" inputMode="decimal" placeholder="automatique" value={text}

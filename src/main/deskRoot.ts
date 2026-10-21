@@ -8,7 +8,7 @@ import { isAbsolute, join } from 'node:path';
 import { cleanEnv } from '../core/childEnv';
 import {
   DESK_ROOT_DROPINS, DESK_ROOT_ETC, DESK_ROOT_HEADER, DESK_ROOT_MAX_MB, DESK_ROOT_MIN_MB, DESK_ROOT_NAME, deskRootContent, deskRootLevels, deskRootStatus,
-  deskRootTargetMB, isDeskRootMB, type DeskRootStatus,
+  deskRootTargetMB, isDeskRootMB, type DeskRootResult, type DeskRootStatus,
 } from '../core/antigel/deskRoot';
 import { sliceLimits } from '../core/antigel/limits';
 import { PKEXEC, defaultRun } from './earlyoom';
@@ -93,12 +93,7 @@ export function deskRootArgv(mode: DeskRootMode, mb: number | null, script = DES
   return ['/usr/bin/bash', '-c', script, DESK_ROOT_ARGV0, mode, mode === 'install' ? String(mb) : '0'];
 }
 
-export interface DeskRootResult {
-  ok: boolean;
-  reason?: 'cancelled' | 'invalid' | 'stale' | 'failed' | 'unavailable';
-  message: string;
-  status?: DeskRootStatus;
-}
+export type { DeskRootResult };
 
 const lastLine = (s: string) => {
   const l = s.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').split('\n').map((x) => x.trim()).filter(Boolean).at(-1) ?? '';
@@ -294,3 +289,28 @@ export function deskRootFake(env: NodeJS.ProcessEnv, isPackaged: boolean): { dir
 
 /** Lanceur réel (pkexec). */
 export const realDeskRootRun: DeskRootRun = (cmd, args, o) => defaultRun(cmd, args, o);
+
+/**
+ * Branchement dans le main : état (lecture seule) et action, simulés si PROC_WATCH_DESK_ROOT_FAKE (hors paquet). La valeur
+ * voulue suit la réserve réglée (config) et la RAM ; l'uid est celui de l'app.
+ */
+export function createDeskRootService(deps: {
+  env: NodeJS.ProcessEnv;
+  isPackaged: boolean;
+  reserveMB: () => number | null;
+  memTotalKB: () => number;
+  uid: number;
+  confirm: (c: { message: string; detail: string; confirm: string }) => Promise<boolean>;
+  log?: (msg: string) => void;
+}): { fake: boolean; status: () => Promise<DeskRootStatus>; read: () => DeskRootStatus; apply: (raw: unknown) => Promise<DeskRootResult> } {
+  const fake = deskRootFake(deps.env, deps.isPackaged);
+  const read = (): DeskRootStatus => {
+    const st = readDeskRootStatus({
+      etc: fake?.etc, cgroupRoot: fake?.cgroupRoot, uid: deps.uid, targetMB: deskRootTargetFrom(deps.reserveMB(), deps.memTotalKB()),
+      mounts: fake ? readText(join(fake.dir, 'mounts')) : readText('/proc/mounts'),
+    });
+    return fake ? { ...st, fake: true } : st;
+  };
+  const status = async () => read();
+  return { fake: fake !== null, status, read, apply: createDeskRootAction({ status, confirm: deps.confirm, run: fake?.run ?? realDeskRootRun, log: deps.log }) };
+}

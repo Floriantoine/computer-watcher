@@ -3,6 +3,7 @@ import { BUDGET_MAX_MB, BUDGET_MIN_MB, RESERVE_MAX_MB, RESERVE_MIN_MB, budgetKey
 import { MiB, autoReserveBytes } from '../../core/antigel/limits';
 import type { FridgePhase } from '../../core/antigel/fridgeState';
 import type { AntigelSliceState, AntigelState, AntigelView } from '../../core/antigel/state';
+import type { DeskRootStatus } from '../../core/antigel/deskRoot';
 import { deskLine } from './antigelDesk';
 import { fridgeCardLine } from './fridge';
 import { formatKB } from './format';
@@ -183,7 +184,8 @@ export interface AntigelCardModel {
   late: LateLine[];
 }
 
-export function antigelCard(v: AntigelView | null): AntigelCardModel {
+/** `root` : protection mémoire système du bureau (ligne du bureau prioritaire), facultative. */
+export function antigelCard(v: AntigelView | null, root?: DeskRootStatus | null): AntigelCardModel {
   const none = { usedKB: null, highKB: null, maxKB: null, fillPercent: null, memLine: null, memHint: null, budgets: [], late: [] };
   if (!v || !v.state) return { tone: 'na', title: 'Plafond de travail : en attente du service d’enregistrement', ...none, lines: ['Le service d’enregistrement applique le plafond de travail ; il ne tourne pas ou n’a pas encore écrit son état.'] };
   if (!v.fresh) return { tone: 'na', title: 'Plafond de travail : service d’enregistrement arrêté', ...none, lines: ['Les plafonds déjà posés restent en place ; aucun nouveau processus n’est déplacé.'] };
@@ -221,7 +223,7 @@ export function antigelCard(v: AntigelView | null): AntigelCardModel {
     lines: [
       cappedLine(s.projects),
       ...[rootLine, oom].filter((l): l is string => l !== null),
-      ...(deskLine(s.desk) ? [deskLine(s.desk)!] : []),
+      ...(deskLine(s.desk, root) ? [deskLine(s.desk, root)!] : []),
       ...[fridgeCardLine(v)].filter((l): l is string => l !== null),
     ],
     budgets: s.projects

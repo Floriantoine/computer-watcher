@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DESK_ROOT_DROPINS, deskRootContent, deskRootStatus, type DeskRootStatus } from '../core/antigel/deskRoot';
 import {
   DESK_ROOT_ARGV0, DESK_ROOT_SCRIPT, createDeskRootAction, deskRootArgv, deskRootConfirmation, deskRootExitMessage, deskRootFake, deskRootScript,
-  deskRootTargetFrom, hasRecursiveProt, readDeskRootStatus, runDeskRoot,
+  createDeskRootService, deskRootTargetFrom, hasRecursiveProt, readDeskRootStatus, runDeskRoot,
 } from './deskRoot';
 import { PKEXEC } from './earlyoom';
 
@@ -284,5 +284,29 @@ describe('deskRootFake', () => {
     expect(r.ok).toBe(true);
     expect(files()).toEqual(DESK_ROOT_DROPINS.map((d) => deskRootContent(d.section, 4771)));
     expect(reloads()).toBe('daemon-reload\n');
+  });
+});
+
+describe('createDeskRootService (simulé)', () => {
+  it('état lu sous le dossier simulé, activation puis retrait par le vrai script', async () => {
+    writeFileSync(join(base, 'mounts'), 'cgroup2 /sys/fs/cgroup cgroup2 rw,memory_recursiveprot 0 0\n');
+    const confirms: string[] = [];
+    const svc = createDeskRootService({
+      env: { PROC_WATCH_DESK_ROOT_FAKE: base }, isPackaged: false, uid: 1000, reserveMB: () => null, memTotalKB: () => 32564348,
+      confirm: async (c) => {
+        confirms.push(c.detail);
+        return true;
+      },
+    });
+    expect(svc.fake).toBe(true);
+    const before = await svc.status();
+    expect(before).toMatchObject({ files: 'absent', targetMB: 4771, recursiveprot: true, fake: true, effective: false });
+    const r = await svc.apply('install');
+    expect(r.ok).toBe(true);
+    expect(r.message).toMatch(/reste à 0/); // le faux systemctl ne touche pas au faux sysfs
+    expect(svc.read()).toMatchObject({ files: 'installed', installedMB: 4771 });
+    expect(confirms[0]).toContain(join(etc, 'user@.service.d', 'computer-watcher-desk.conf'));
+    expect((await svc.apply('remove')).ok).toBe(true);
+    expect(svc.read().files).toBe('absent');
   });
 });

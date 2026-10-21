@@ -1,0 +1,8 @@
+/* Bureau prioritaire : protection mémoire système (Réglages → Plafond de travail, carte Métriques). */
+.desk-root { display: grid; gap: 6px; }
+.desk-root-summary { margin: 0; line-height: 1.5; overflow-wrap: anywhere; }
+.desk-root-summary.tone-ok { color: var(--success); }
+.desk-root-summary.tone-warn { color: var(--amber); }
+.desk-root-actions { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.desk-root-actions:empty { display: none; }
+.desk-root-card { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

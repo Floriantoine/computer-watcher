@@ -3,7 +3,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray } f
 import appIcon from '../../resources/icon.png?asset';
 import { appendFileSync, constants as fsConstants, existsSync, lstatSync, realpathSync, mkdirSync, readFileSync, renameSync, statfsSync, writeFileSync } from 'node:fs';
 import { access, realpath, stat } from 'node:fs/promises';
-import { homedir, userInfo } from 'node:os';
+import { homedir, totalmem, userInfo } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { classifyGroups, type InstanceDecision } from '../core/classify/classify';
 import { readPackageHints } from '../core/classify/packageJson';
@@ -90,6 +90,7 @@ import {
   type WrapTarget,
 } from '../core/wrapSetup';
 import { requestFridge } from './fridgeIpc';
+import { createDeskRootService } from './deskRoot';
 import { autoManageService, defaultSystemctl, recorderSyncDisabled, ensureRecorderService, recorderAppImage, recorderExecArgs, systemctlAvailable, unitPath } from './recorderService';
 import { cliArgsFromArgv, reexecAsCli } from './runEntry';
 
@@ -1028,6 +1029,24 @@ ipcMain.handle('recorder:status', () => recorderState());
 ipcMain.handle('antigel:state', () => readAntigelView(data, Date.now(), config.recorder.intervalSec));
 // Frigo (anti-gel lot 3) : identifiant du groupe de projet et action seulement ; demande déposée pour le service
 ipcMain.handle('antigel:fridge', (_e, groupId: unknown, action: unknown) => requestFridge(data, Date.now(), config.recorder.intervalSec, groupId, action));
+// Bureau prioritaire : protection mémoire des niveaux système (drop-ins root) ; seul un mot-clé vient du renderer.
+// PROC_WATCH_DESK_ROOT_FAKE=<dossier> (hors paquet) : /etc, systemctl et /sys/fs/cgroup simulés, aucun pkexec.
+const deskRoot = createDeskRootService({
+  env: process.env, isPackaged: app.isPackaged, uid: process.getuid?.() ?? 0,
+  reserveMB: () => config.antigel.reserveMB, memTotalKB: () => Math.round(totalmem() / 1024),
+  confirm: async (c) => {
+    const opts: Electron.MessageBoxOptions = {
+      type: 'warning', title: 'Bureau prioritaire', message: c.message, detail: c.detail, buttons: ['Annuler', c.confirm], defaultId: 0, cancelId: 0, noLink: true,
+    };
+    const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    const r = parent ? await dialog.showMessageBox(parent, opts) : await dialog.showMessageBox(opts);
+    return r.response === 1;
+  },
+  log: (m) => console.error(`${APP_DISPLAY_NAME} : ${m}`),
+});
+if (deskRoot.fake) console.error(`${APP_DISPLAY_NAME} : protection mémoire système simulée (PROC_WATCH_DESK_ROOT_FAKE)`);
+ipcMain.handle('deskRoot:status', () => deskRoot.status());
+ipcMain.handle('deskRoot:apply', (_e, mode: unknown) => deskRoot.apply(mode));
 ipcMain.handle('recorder:setEnabled', async (_e, enabled: unknown) => {
   if (typeof enabled !== 'boolean') throw new Error('Valeur invalide');
   const next = { ...config, recorder: { ...config.recorder, enabled } };
@@ -1409,13 +1428,13 @@ ipcMain.handle('wrapSetup:remind', (_e, kind: unknown) => {
 ipcMain.handle('uninstall:plan', (_e, o: unknown) => {
   if (!isUninstallOptions(o)) throw new Error('Requête invalide');
   const plan = uninstallPlan(roots, o, ownedWrapParts(wrapDeps()));
-  return { items: plan, ...uninstallSummary(plan, { deb: isDeb() }) };
+  return { items: plan, ...uninstallSummary(plan, { deb: isDeb(), deskRoot: deskRoot.read().files !== 'absent' }) };
 });
 /** Le main refait le plan (jamais de chemins venus du renderer), le montre dans une confirmation native, puis l'exécute. */
 ipcMain.handle('uninstall:run', async (_e, o: unknown) => {
   if (!isUninstallOptions(o)) throw new Error('Requête invalide');
   const plan = uninstallPlan(roots, o, ownedWrapParts(wrapDeps()));
-  const s = uninstallSummary(plan, { deb: isDeb() });
+  const s = uninstallSummary(plan, { deb: isDeb(), deskRoot: deskRoot.read().files !== 'absent' });
   if (!(await confirmNative({ title: `Désinstaller ${APP_DISPLAY_NAME}`, message: s.message, detail: s.detail, confirm: 'Désinstaller' }))) return { cancelled: true as const };
   uninstalling = true;
   await syncing.catch(() => {}); // pas de synchronisation du service en cours

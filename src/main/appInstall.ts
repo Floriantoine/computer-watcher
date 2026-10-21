@@ -465,7 +465,8 @@ export async function runUninstall(plan: readonly UninstallItem[], r: Roots, dep
 }
 
 /** Texte de la confirmation native : exactement ce qui sera retiré. */
-export function uninstallSummary(plan: readonly UninstallItem[], o: { deb: boolean }): { message: string; detail: string } {
+/** `deskRoot` : protection mémoire système du bureau en place (drop-ins root, jamais retirés ici, comme earlyoom). */
+export function uninstallSummary(plan: readonly UninstallItem[], o: { deb: boolean; deskRoot?: boolean }): { message: string; detail: string } {
   const lines = plan.length ? plan.map((i) => `• ${i.label}${i.dir ? ' (dossier, s’il est vide)' : i.tree ? ' (profil de l’app, avec son contenu)' : ''} : ${i.path}`) : [`• (aucun fichier de ${APP_DISPLAY_NAME} trouvé)`];
   const kept: string[] = [];
   const hasHistory = plan.some((i) => i.kind === 'history');
@@ -481,6 +482,7 @@ export function uninstallSummary(plan: readonly UninstallItem[], o: { deb: boole
       '',
       ...kept,
       'earlyoom n’est pas modifié.',
+      ...(o.deskRoot ? ['La protection mémoire système du bureau (/etc/systemd/system/user*.d/computer-watcher-desk.conf) n’est pas retirée : la retirer d’abord dans Réglages › Plafond de travail (« Retirer »), sinon elle reste en place, sans autre effet.'] : []),
       ...(o.deb ? [`Le paquet .deb reste installé : le retirer avec « sudo apt remove ${APP_NAME} ».`] : []),
       `${APP_DISPLAY_NAME} se fermera ensuite.`,
     ].join('\n'),

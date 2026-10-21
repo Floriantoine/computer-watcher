@@ -103,3 +103,11 @@ export function deskRootStatus(i: {
     recursiveprot: i.recursiveprot, paths: deskRootPaths(i.etc ?? DESK_ROOT_ETC),
   };
 }
+
+/** Résultat de l'action (installation, mise à jour, retrait), avec l'état relu après. */
+export interface DeskRootResult {
+  ok: boolean;
+  reason?: 'cancelled' | 'invalid' | 'stale' | 'failed' | 'unavailable';
+  message: string;
+  status?: DeskRootStatus;
+}

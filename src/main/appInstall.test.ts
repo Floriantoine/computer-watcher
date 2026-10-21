@@ -469,6 +469,8 @@ describe('désinstaller', () => {
     const s = uninstallSummary(uninstallPlan(roots, { history: false, config: false }), { deb: false });
     for (const x of [p.autostart, p.desktop, p.icon, p.unit, p.appImage]) expect(s.detail).toContain(x);
     expect(s.detail).toMatch(/earlyoom n’est pas modifié/);
+    expect(s.detail).not.toMatch(/computer-watcher-desk/);
+    expect(uninstallSummary([], { deb: false, deskRoot: true }).detail).toMatch(/computer-watcher-desk\.conf\) n’est pas retirée : la retirer d’abord dans Réglages › Plafond de travail/);
     expect(s.detail).toMatch(/Historique et configuration : gardés/);
     expect(uninstallSummary([], { deb: true }).detail).toMatch(/apt remove computer-watcher/);
     expect(s.message).toBe('Désinstaller Computer Watcher ?');

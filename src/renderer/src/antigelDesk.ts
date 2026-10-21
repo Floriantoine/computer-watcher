@@ -1,5 +1,6 @@
 // Bureau prioritaire (anti-gel, lot 2), fenêtre (logique pure) : libellés des unités et ligne d'état, sans jargon systemd.
 import type { AntigelDeskState } from '../../core/antigel/deskState';
+import type { DeskRootStatus } from '../../core/antigel/deskRoot';
 import { DESK_CPU_WEIGHT, TERMINAL_CPU_WEIGHT, WORK_CPU_WEIGHT } from '../../core/antigel/deskUnits';
 
 /** Nom lisible d'une unité de terminal ou de Claude : « app-dev.warp.Warp@….service » → « Warp ». */
@@ -19,8 +20,11 @@ const DESK_SLICES = new Set(['session.slice', 'app.slice', 'cwatch.slice', 'back
 export const deskTerminals = (d: AntigelDeskState): string[] =>
   [...new Set(d.units.filter((u) => !u.endsWith('.slice') && !DESK_SLICES.has(u)).map(deskUnitLabel))];
 
-/** Ligne de la carte Métriques et de Réglages ; null : service sans ce lot. */
-export function deskLine(d: AntigelDeskState | null | undefined): string | null {
+/**
+ * Ligne de la carte Métriques et de Réglages ; null : service sans ce lot. `root` : état de la protection mémoire système
+ * (mise à niveau root), lu par le main ; absent : ligne d'avant.
+ */
+export function deskLine(d: AntigelDeskState | null | undefined, root?: DeskRootStatus | null): string | null {
   if (!d) return null;
   if (d.status === 'off') return 'Bureau prioritaire éteint.';
   if (d.status === 'unavailable') return `Bureau prioritaire indisponible : ${d.reason ?? 'raison inconnue'}.`;
@@ -32,8 +36,12 @@ export function deskLine(d: AntigelDeskState | null | undefined): string | null 
   if (d.memory === 'on') {
     const t = deskTerminals(d);
     parts.push(`mémoire du bureau protégée${t.length ? ` (${t.join(', ')})` : ''}`);
+    if (root?.files === 'obsolete') parts.push('protection système à mettre à jour (réserve changée)');
   } else if (d.memory === 'ineffective') {
-    parts.push('protection mémoire sans effet ici (les niveaux système au-dessus de la session n’en ont pas)');
+    // le service relit les niveaux système toutes les 5 min : juste après « Activer », il ne le sait pas encore
+    if (root?.effective) parts.push('protection mémoire système active, prise en compte par le service sous 5 min');
+    else if (root?.files === 'installed') parts.push('protection mémoire système posée mais pas encore effective (se reconnecter)');
+    else parts.push(`protection mémoire sans effet ici (les niveaux système au-dessus de la session n’en ont pas)${root && root.targetMB !== null ? ' : « Activer » la pose au niveau système' : ''}`);
   }
   if (d.io) parts.push('disque : bureau prioritaire');
   if (d.truncated) parts.push('trop de terminaux : les premiers seulement');
