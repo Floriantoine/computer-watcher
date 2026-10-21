@@ -11,6 +11,7 @@ import type { Availability, CgroupStats, MemoryEvents } from './cgroupfs';
 import type { AntigelConfig } from './config';
 import { createDeskPriority, type DeskDeps } from './desk';
 import { budgetBytes, dynamicLimits, sameLimits, sliceLimits, type SliceLimits } from './limits';
+import { createRecent, type Recent } from './recent';
 import { MIN_ROOT_AGE_SEC, planMoves, type PlanMove, type PlanTarget } from './plan';
 import type { AntigelProjectState, AntigelSliceState, AntigelState } from './state';
 import { BusctlError, MAX_PIDS, type SystemdClient } from './systemd';
@@ -165,6 +166,14 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
   /** Événements de cwatch.slice au tick précédent : le plafond global qui freine compte son « high » sur elle seule. */
   let lastRootEvents: MemoryEvents | null = null;
   let rootThrottledUntil = -Infinity;
+  /** Freinage de la dernière minute, par slice (cwatch.slice comprise) : voir recent.ts. */
+  const recent = new Map<string, Recent>();
+  const recentPct = (unit: string, s: CgroupStats, now: number): number | undefined => {
+    let r = recent.get(unit);
+    if (!r) recent.set(unit, (r = createRecent()));
+    r.push({ at: now, high: s.events.high, stallUs: s.stallUs ?? null });
+    return r.pct();
+  };
   /** Slices de projet inconnues de systemd (« no-unit ») : leur budget repasse par ensureProjectSlice. */
   const lost = new Set<string>();
   /** Budget en échec : pas de nouvel essai avant cette heure (horloge monotone). */
@@ -198,6 +207,7 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
     throttledUntil.delete(slice);
     lost.delete(slice);
     retryAt.delete(slice);
+    recent.delete(slice);
   };
 
   /** `<n>` d'un scope neuf : base 36 de l'horloge murale (8 chiffres) + compteur (4 chiffres), [a-z0-9]{12}. */
@@ -378,6 +388,7 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
       throttledUntil.clear();
       lastRootEvents = null;
       rootThrottledUntil = -Infinity;
+      recent.clear();
       if (!inFlight) {
         const steps: Step[] = [];
         if (applied !== null || (!rootReset && capped(rootStats))) {
@@ -439,6 +450,8 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
       lastRootEvents = rootStats.events;
     } else lastRootEvents = null;
     const rootThrottled = rootThrottledUntil > now;
+    const rootPct = rootStats ? recentPct(ROOT_SLICE, rootStats, now) : undefined;
+    if (!rootStats) recent.delete(ROOT_SLICE);
 
     // OOM et ralentissements par le budget, lus sur la slice du projet (memory.events, hiérarchique : ses scopes compris).
     // Une slice vide (plus aucun processus) reste suivie (budget, OOM, extinction) mais n'est pas publiée : ni badge ni compte.
@@ -452,19 +465,23 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
       if (prev && s.events.high > prev.high) throttledUntil.set(unit, now + THROTTLE_HOLD_MS);
       if (prev && s.events.oomKill > prev.oomKill) ooms.push({ unit, root, kills: s.events.oomKill - prev.oomKill });
       lastEvents.set(unit, s.events);
+      const pct = recentPct(unit, s, now);
       if (s.populated && projects.length < MAX_UNITS) {
         const inside = procsIn(unit);
         const outside = outsideKB(inside.anonKB, kb(s.currentBytes));
+        const own = (throttledUntil.get(unit) ?? -Infinity) > now;
         projects.push({
           unit, root, procs: inside.n, currentKB: kb(s.currentBytes), budgetMB: budgetOf(root),
-          throttled: rootThrottled || (throttledUntil.get(unit) ?? -Infinity) > now,
+          throttled: rootThrottled || own, budgetThrottled: own,
           ...(outside !== undefined ? { outsideKB: outside } : {}),
+          ...(pct !== undefined ? { stallPct: pct } : {}),
         });
       }
     }
 
     st = {
-      ...st, ...base, status: 'active', reason: null, reserveKB: kb(limits.reserveBytes), slice: rootStats && toSlice(rootStats), projects,
+      ...st, ...base, status: 'active', reason: null, reserveKB: kb(limits.reserveBytes), projects,
+      slice: rootStats && { ...toSlice(rootStats), throttled: rootThrottled, ...(rootPct !== undefined ? { stallPct: rootPct } : {}) },
     };
     youngSeen = plan.refused.some((r) => r.reason === 'young');
     if (inFlight) return ooms;

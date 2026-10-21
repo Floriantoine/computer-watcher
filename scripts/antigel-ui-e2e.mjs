@@ -88,7 +88,7 @@ setInterval(() => { if (!alive() || !fs.existsSync('package.json') || fs.existsS
   let over = {};
   const state = () => ({
     version: 1, at: Date.now(), enabled: true, status: 'active', reason: null, memTotalKB: 32 * G, reserveKB: 5 * G,
-    slice: { currentKB: 9 * G, highKB: 27 * G, maxKB: 29 * G, swapMaxKB: 10 * G, throttles: 3, oomKills: 1 },
+    slice: { currentKB: 9 * G, highKB: 9 * G, maxKB: 29 * G, swapMaxKB: 10 * G, throttles: 3, oomKills: 1, throttled: true, stallPct: 42 },
     projects: [{ unit, root: proj, procs: 1, currentKB: 2 * G, budgetMB: null, throttled: true }],
     slices: { [unit]: proj }, lastError: null, tickMs: 0.4, dbusCalls: 2,
     // bureau prioritaire (lot 2) : poids posés, protection mémoire sans effet ici
@@ -180,16 +180,18 @@ setInterval(() => { if (!alive() || !fs.existsSync('package.json') || fs.existsS
   await thawBtn.click();
   await waitFor(() => requests().some((r) => r.root === proj && r.action === 'thaw'), 'demande « réveiller » déposée');
 
-  // 3) Métriques : carte Plafond de travail (ralenti, mémoire face au plafond, arrêts par le noyau)
+  // 3) Métriques : carte Plafond de travail (ce qui freine, travail et marge, état récent, arrêts par le noyau)
   await win.locator('[data-testid="tab-metrics"]').click();
   const agCard = win.locator('[data-testid="antigel-card"]');
   await agCard.waitFor();
   const agText = await agCard.innerText();
-  assert.match(agText, /Plafond de travail atteint : travail ralenti/);
+  assert.match(agText, /Le travail est freiné : la RAM est presque pleine/);
   assert.match(agText, /1 projet plafonné/);
-  assert.match(agText, /3 ralentissements · 1 arrêt par le noyau/);
+  assert.match(agText, /Travail freiné en ce moment \(42 % de la dernière minute\)/);
+  assert.match(agText, /1 arrêt par le noyau sous le plafond/);
+  assert.doesNotMatch(agText, /ralentissements/);
   assert.match(agText, /1 projet au frigo · ≈ 1,5 Go sortis de la RAM/);
-  assert.match(await win.locator('[data-testid="antigel-mem"]').innerText(), /arrêt au-delà de/);
+  assert.match(await win.locator('[data-testid="antigel-mem"]').innerText(), /^Travail : 9,0 Go · marge avant ralentissement : aucune$/);
   assert.match(agText, /Bureau prioritaire : processeur : bureau 4× et applications 3× prioritaires sur le travail · protection mémoire sans effet ici/);
   await shot('antigel-metriques');
 

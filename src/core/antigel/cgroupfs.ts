@@ -84,8 +84,22 @@ export function parseLimit(text: string): number | null {
   return Number.isSafeInteger(n) ? n : null;
 }
 
-/** `populated` : au moins un processus dans le cgroup ou ses descendants (cgroup.events « populated 1 »). */
-export interface CgroupStats { currentBytes: number; highBytes: number | null; maxBytes: number | null; swapMaxBytes: number | null; events: MemoryEvents; populated: boolean }
+/** memory.pressure (PSI du cgroup) : total « some » en µs (temps où au moins une tâche attend la mémoire) ; null sinon. */
+export function parseMemoryPressure(text: string): number | null {
+  const m = /^some\s.*\btotal=(\d+)\s*$/m.exec(text);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isSafeInteger(n) ? n : null;
+}
+
+/**
+ * `populated` : au moins un processus dans le cgroup ou ses descendants (cgroup.events « populated 1 »).
+ * `stallUs` : attente mémoire cumulée (memory.pressure, µs) ; absent si PSI est indisponible.
+ */
+export interface CgroupStats {
+  currentBytes: number; highBytes: number | null; maxBytes: number | null; swapMaxBytes: number | null; events: MemoryEvents; populated: boolean;
+  stallUs?: number;
+}
 
 /** cgroup.events : ligne « populated 0|1 » ; illisible ou absente → true (dans le doute, la slice reste affichée). */
 export function parsePopulated(text: string): boolean {
@@ -116,6 +130,12 @@ export function readCgroupStats(sysfsRoot: string, cgroupPath: string): CgroupSt
     } catch {
       swapMax = null; // pas de swap compté (swapaccount=0)
     }
+    let stall: number | null = null;
+    try {
+      stall = parseMemoryPressure(read('memory.pressure'));
+    } catch {
+      stall = null; // PSI désactivé (psi=0)
+    }
     return {
       currentBytes: current,
       highBytes: parseLimit(read('memory.high')),
@@ -123,6 +143,7 @@ export function readCgroupStats(sysfsRoot: string, cgroupPath: string): CgroupSt
       swapMaxBytes: swapMax,
       events: parseMemoryEvents(read('memory.events')),
       populated: populated(),
+      ...(stall !== null ? { stallUs: stall } : {}),
     };
   } catch {
     return null;

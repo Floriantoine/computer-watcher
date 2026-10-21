@@ -480,6 +480,30 @@ describe('orchestrateur anti-gel', () => {
     expect(h.ag.state().projects).toMatchObject([{ unit: PS, throttled: false }]);
   });
 
+  test('freinage récent : plafond global (cwatch.slice) ou budget du projet, et part de la dernière minute d’après memory.pressure', async () => {
+    const h = harness();
+    await h.step();
+    h.sys.set(ROOT, { ...h.sys.get(ROOT)!, events: ev({ high: 2 }), stallUs: 0 });
+    await h.step(); // référence
+    expect(h.ag.state().slice).not.toHaveProperty('stallPct');
+    expect(h.ag.state().slice).toMatchObject({ throttled: false });
+    h.sys.set(ROOT, { ...h.sys.get(ROOT)!, events: ev({ high: 5 }), stallUs: 2_500_000 });
+    await h.step();
+    expect(h.ag.state().slice).toMatchObject({ throttled: true, stallPct: 50 });
+    expect(h.ag.state().projects).toMatchObject([{ unit: PS, throttled: true, budgetThrottled: false }]);
+    await h.step(ON, THROTTLE_HOLD_MS + 1000);
+    expect(h.ag.state().slice).toMatchObject({ throttled: false, stallPct: 12 });
+    await h.step(ON, 60_000);
+    expect(h.ag.state().slice).not.toHaveProperty('stallPct');
+    // budget du projet : freinage propre à sa slice
+    h.sys.set(PSCG, { ...h.sys.get(PSCG)!, events: ev({ high: 1 }), stallUs: 0 });
+    await h.step();
+    h.sys.set(PSCG, { ...h.sys.get(PSCG)!, events: ev({ high: 7 }), stallUs: 4_000_000 });
+    await h.step();
+    expect(h.ag.state().slice).toMatchObject({ throttled: false });
+    expect(h.ag.state().projects).toMatchObject([{ unit: PS, throttled: true, budgetThrottled: true, stallPct: 80 }]);
+  });
+
   test('slice de projet vide (aucun processus) : ni « plafonnée » ni comptée ; gardée pour son budget', async () => {
     const h = harness({ initialSlices: { [PS]: A } });
     h.sys.set(PSCG, stats({ populated: false, highBytes: 4 * GiB }));
