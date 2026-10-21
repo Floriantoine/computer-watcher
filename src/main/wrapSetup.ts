@@ -219,7 +219,9 @@ async function commandStatus(d: WrapSetupDeps): Promise<WrapItemStatus> {
     const selfOk = targetOk && (first === p.launcher ? working : await d.probe(p.launcher).catch(() => false));
     return {
       ...base, state: 'ours', ok: selfOk,
-      detail: targetOk ? `Installée par Computer Watcher : appelle ${target}.` : `Installée par Computer Watcher, mais ${target ?? 'sa cible'} n’existe plus : « Installer » la met à jour.`,
+      detail: targetOk
+        ? `${tilde(home, p.launcher)}, écrit par Computer Watcher, appelle ${target}.`
+        : `${tilde(home, p.launcher)}, écrit par Computer Watcher, appelle ${target ?? 'une cible illisible'}, qui n’existe plus : « Installer » le met à jour.`,
       canInstall: wanted !== null && (outdated || !targetOk), blocked: wanted === null && !targetOk ? noTarget : null, warnings,
     };
   }

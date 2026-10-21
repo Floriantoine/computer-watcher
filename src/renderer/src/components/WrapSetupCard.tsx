@@ -96,9 +96,7 @@ function WrapItem({ item, busy, onAction }: { item: WrapItemStatus; busy: boolea
         </span>
       </div>
       <p className="sub">{WRAP_ROLE[item.part]}</p>
-      <p className="wrap-detail">
-        <span className="mono" title={item.path}>{item.path}</span> — {item.detail}
-      </p>
+      <p className="wrap-detail" title={item.path}>{item.detail}</p>
       {item.preview && (item.canInstall || item.state === 'ours') && (
         <div className="wrap-preview">
           <span className="sub">{previewLabel(item)}</span>
