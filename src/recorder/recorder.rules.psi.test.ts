@@ -183,3 +183,18 @@ test('tick bloqué 15 s pendant l’étouffement : la tenue de la pression conti
   expect(s.events()[0]).toMatchObject({ ruleId: 'rec-antigel', trigger: 'pression mémoire du bureau et des applis 55 % depuis 25 s' });
   s.rec.stop();
 });
+
+test('alerte « Pression mémoire » sur le même signal : projet freiné → aucune ; applis à 30 % → une, avec sa portée', () => {
+  const s = setup();
+  s.machine(70, 55);
+  s.slice('cwatch.slice', 90);
+  s.rec.start();
+  s.run(60_000);
+  expect(s.events('pressure')).toEqual([]);
+  s.slice('app.slice', 30);
+  s.run(5_000);
+  expect(s.events('pressure')).toEqual([{ type: 'pressure', psi: 30, scope: 'interactive' }]);
+  // sous le seuil de la règle (40 %) : alerte seulement
+  expect(s.kill).not.toHaveBeenCalled();
+  s.rec.stop();
+});

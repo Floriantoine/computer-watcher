@@ -84,6 +84,14 @@ test('eventMarkers : couleurs et libellés', () => {
   expect(m.map((x) => x.color)).toEqual(['#ff5c8a', '#ffb547', '#8b91a0', '#ff8a3d']);
 });
 
+test('eventMarkers : pression du bureau et des applis, ou de la machine', () => {
+  const m = eventMarkers([
+    { ts: 1, type: 'pressure', groupKey: null, groupLabel: null, detail: { psi: 31.4, scope: 'interactive' } },
+    { ts: 2, type: 'pressure', groupKey: null, groupLabel: null, detail: { psi: 41, scope: 'system' } },
+  ]);
+  expect(m.map((x) => x.label)).toEqual(['Pression bureau et applis 31 %', 'Pression 41 %']);
+});
+
 test('alertsFrom : récents d\'abord, sans app_kill', () => {
   const ev = (ts: number, type: string) => ({ ts, type, groupKey: null, groupLabel: null, detail: {} });
   expect(alertsFrom([ev(1, 'leak'), ev(2, 'app_kill'), ev(3, 'gap')]).map((e) => e.ts)).toEqual([3, 1]);

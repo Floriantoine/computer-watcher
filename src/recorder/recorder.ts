@@ -765,8 +765,9 @@ export function createRecorder(deps: RecorderDeps): Recorder {
         });
         const cpuPercent = procs.reduce((s, p) => s + p.cpuPercent, 0) / ncpu;
         writer.writeTick({ ts, system, cpuPercent, groups, procs }, cfg);
-        if (shouldRecordPressure(system.psiSome10, lastPressureTs, ts)) {
-          const detail = { psi: system.psiSome10 };
+        // alerte « Pression mémoire » : même signal que la règle (la colonne d'historique reste la PSI some de la machine)
+        if (pressure && shouldRecordPressure(pressure.percent, lastPressureTs, ts)) {
+          const detail = { psi: pressure.percent, scope: pressure.scope };
           alert(insertEvent(db, ts, 'pressure', null, detail), ts, 'pressure', null, null, detail);
           lastPressureTs = ts;
         }

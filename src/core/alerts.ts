@@ -144,8 +144,11 @@ export function alertMessage(e: AlertEvent): { title: string; body: string } {
         title: `Fichiers en mémoire : ${fmtKB(Number(d.shmemKB))}`,
         body: `Au-dessus du seuil de ${fmtKB(Number(d.thresholdKB))} (/tmp, mémoire partagée).`,
       };
-    case 'pressure':
-      return { title: `Pression mémoire ${Math.round(Number(d.psi))} %`, body: 'Le système attend la mémoire (PSI, 10 dernières secondes).' };
+    case 'pressure': {
+      // portée : bureau et applis (cgroups interactifs), toute la machine (repli) ; absente : ancien événement (PSI some)
+      const who = d.scope === 'interactive' ? 'Le bureau et les applis attendent' : d.scope === 'system' ? 'Toute la machine attend' : 'Le système attend';
+      return { title: `Pression mémoire ${Math.round(Number(d.psi))} %`, body: `${who} la mémoire (PSI, 10 dernières secondes).` };
+    }
     case 'forecast': {
       const eta = Number(d.etaMin);
       const title = !Number.isFinite(eta) ? 'Mémoire bientôt épuisée' : eta < 1 ? "Mémoire épuisée dans moins d'une minute" : `Mémoire épuisée dans ~${Math.round(eta)} min`;
