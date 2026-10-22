@@ -324,10 +324,13 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       if (e.type === 'tmpfs' && deps.tmpCaches) {
         let timer: ReturnType<typeof setTimeout> | undefined;
         const timeout = new Promise<null>((resolve) => (timer = setTimeout(() => resolve(null), TMP_CACHES_MEASURE_WAIT_MS)));
-        void Promise.race([deps.tmpCaches.measure().then(cachesOffer, () => null), timeout]).then((offer) => {
-          clearTimeout(timer);
-          return send(offer);
-        });
+        void Promise.race([deps.tmpCaches.measure().then(cachesOffer, () => null), timeout])
+          .then((offer) => {
+            clearTimeout(timer);
+            return send(offer);
+          })
+          // jamais de rejet non géré : il ferait tomber le service
+          .catch((err: unknown) => log(`notification: ${(err as Error)?.message ?? String(err)}`));
       } else void send(null);
     } catch (err) {
       log(`notification: ${(err as Error).message}`);
@@ -338,8 +341,9 @@ export function createRecorder(deps: RecorderDeps): Recorder {
 
   /** « Vider les caches (X) » d'une notification tmpfs : vidage par le service, événement tmp_clean, notification du résultat. */
   const emptyCachesFromNotification = (ids: TmpCacheId[]) => {
-    deps.tmpCaches?.empty(ids).then(
-      (out) => {
+    deps.tmpCaches
+      ?.empty(ids)
+      .then((out) => {
         const ev = tmpCachesEvent(out, now());
         if (ev && db) {
           try {
@@ -350,9 +354,9 @@ export function createRecorder(deps: RecorderDeps): Recorder {
         }
         const m = cachesOutcomeMessage(out);
         void deps.notifier?.notify({ title: `${APP_DISPLAY_NAME} — ${DESKTOP_TITLES.tmpfs}`, body: desktopText(m.message), urgency: 'normal', actions: [] });
-      },
-      (err: unknown) => log(`caches de /tmp : ${(err as Error)?.message ?? String(err)}`),
-    );
+      })
+      // vidage en échec ou résultat inattendu : journalisé, jamais un rejet non géré (il ferait tomber le service)
+      .catch((err: unknown) => log(`caches de /tmp : ${(err as Error)?.message ?? String(err)}`));
   };
 
   /** « Ignorer 30 min » : retenu en mémoire et dans le fichier d'état (survit à un redémarrage du service). */

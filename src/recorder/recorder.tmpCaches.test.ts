@@ -14,7 +14,7 @@ import { createRecorder } from './recorder';
 const GB = 1024 * 1024;
 const JEST: TmpCaches = { root: '/tmp', caches: [{ id: 'jest', name: 'jest_rs', sizeKB: 5 * GB, atLeast: false, refusal: null }] };
 
-function setup(o: { caches?: TmpCaches | 'reject' | 'hang'; shmemKB?: number; channel?: 'pressure'; result?: string | null } = {}) {
+function setup(o: { caches?: TmpCaches | 'reject' | 'hang'; shmemKB?: number; channel?: 'pressure'; result?: string | null; outcome?: unknown } = {}) {
   const base = mkdtempSync(join(tmpdir(), 'pw-rtc-'));
   const procRoot = makeProcRoot(1000);
   writeFileSync(join(procRoot, 'meminfo'), `MemTotal: 32000000 kB\nMemAvailable: 16000000 kB\nSwapTotal: 2000000 kB\nSwapFree: 1000000 kB\nShmem: ${o.shmemKB ?? 5000000} kB\n`);
@@ -34,13 +34,14 @@ function setup(o: { caches?: TmpCaches | 'reject' | 'hang'; shmemKB?: number; ch
     return o.caches ?? JEST;
   });
   const outcome: TmpCachesOutcome = { results: [{ id: 'jest', name: 'jest_rs', ok: true, freedKB: 5 * GB }], freedKB: 5 * GB };
-  const empty = vi.fn(async (_ids: TmpCacheId[]) => outcome);
+  const empty = vi.fn(async (_ids: TmpCacheId[]) => (o.outcome ?? outcome) as TmpCachesOutcome);
+  const logs: string[] = [];
   const rec = createRecorder({
-    dataDir: join(base, 'data'), configDir: cfgDir, procRoot, now: () => 1_000_000, cpuCount: 4, log: () => {},
+    dataDir: join(base, 'data'), configDir: cfgDir, procRoot, now: () => 1_000_000, cpuCount: 4, log: (m) => logs.push(m),
     notifier, launchApp: vi.fn(), focusFile: join(base, 'data', 'app-focus.json'), tmpCaches: { measure, empty },
   });
   const db = () => new DatabaseSync(join(base, 'data', 'metrics.db'), { readOnly: true });
-  return { rec, notify, measure, empty, db };
+  return { rec, notify, measure, empty, db, logs };
 }
 
 const settle = async () => {
@@ -113,4 +114,14 @@ test('mesure qui ne rend jamais la main (système de fichiers bloqué) : l’ale
   } finally {
     vi.useRealTimers();
   }
+});
+
+test('résultat de vidage inattendu : journalisé, jamais un rejet non géré (il ferait tomber le service)', async () => {
+  const s = setup({ result: 'empty-caches', outcome: {} });
+  s.rec.start();
+  s.rec.tick();
+  await settle();
+  expect(s.empty).toHaveBeenCalledWith(['jest']);
+  expect(s.logs.some((m) => m.startsWith('caches de /tmp :'))).toBe(true);
+  s.rec.stop();
 });
