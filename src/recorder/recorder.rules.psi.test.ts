@@ -15,6 +15,7 @@ import { createRecorder } from './recorder';
 const GB = 1024 * 1024;
 const NM = '/home/u/demo/node_modules';
 
+/** `slowTick()` : le prochain tick reste bloqué 15 s avant les règles (écriture ou lecture lente pendant un étouffement). */
 function setup() {
   const base = mkdtempSync(join(tmpdir(), 'pw-psi-'));
   const procRoot = makeProcRoot(100_000);
@@ -44,6 +45,7 @@ function setup() {
   writeFileSync(join(cfgDir, 'config.json'), JSON.stringify({ ...DEFAULT_CONFIG, recorder: { ...DEFAULT_CONFIG.recorder, intervalSec: 5 }, classify: { detectPorts: false, overrides: {} } }));
   let t = 10_000_000;
   let mono = 0;
+  let slow = false;
   const kill = vi.fn<KillFn>();
   const notify = vi.fn(async (_r: NotifyRequest) => null);
   const notifier: Notifier = { notify, state: () => 'actions' };
@@ -51,6 +53,16 @@ function setup() {
     dataDir: join(base, 'data'), configDir: cfgDir, procRoot, now: () => t, cpuCount: 4, log: () => {}, notifier,
     focusFile: join(base, 'data', 'app-focus.json'), kill, selfPid: 900, currentUid: 1000, appRoot: null, monoNow: () => mono,
     ruleTimers: { setTimeout: () => 0 },
+    // une partition surveillée : statfs est lu à chaque tick, avant les règles
+    mountinfo: () => '30 1 8:2 / / rw - ext4 /dev/sda2 rw',
+    statfs: () => {
+      if (slow) {
+        slow = false;
+        t += 15_000;
+        mono += 15_000;
+      }
+      return { sizeKB: 100_000_000, availKB: 50_000_000 };
+    },
   });
   const events = () => {
     const db = new DatabaseSync(join(base, 'data', 'metrics.db'), { readOnly: true });
@@ -66,7 +78,7 @@ function setup() {
       rec.tick();
     }
   };
-  return { rec, kill, notify, events, run, psi, both };
+  return { rec, kill, notify, events, run, psi, both, slowTick: () => { slow = true; } };
 }
 
 const signalled = (k: ReturnType<typeof vi.fn<KillFn>>) => k.mock.calls.map(([pid, sig]) => `${pid}:${sig}`).sort();
@@ -103,5 +115,20 @@ test('noyau sans ligne « full » (PSI some seule, même à 90 %) : jamais', () 
   s.run(3 * 60_000);
   expect(s.kill).not.toHaveBeenCalled();
   expect(s.events()).toEqual([]);
+  s.rec.stop();
+});
+
+test('tick bloqué 15 s pendant l’étouffement : la tenue de la pression continue (pas prise pour une veille)', () => {
+  const s = setup();
+  s.rec.start();
+  s.rec.tick();
+  s.both(70, 55);
+  s.run(10_000); // tenue depuis 5 s
+  s.slowTick();
+  s.run(5_000); // tick à 15 s, bloqué jusqu'à 30 s : évalué à l'instant de ses mesures (10 s de tenue)
+  expect(s.kill).not.toHaveBeenCalled();
+  s.rec.tick(); // le suivant part aussitôt (intervalle échu pendant le blocage) : 25 s de pression, sans trou
+  expect(signalled(s.kill)).toEqual(['700:SIGTERM', '701:SIGTERM', '702:SIGTERM']);
+  expect(s.events()[0]).toMatchObject({ ruleId: 'rec-antigel', trigger: 'pression mémoire 55 % depuis 25 s' });
   s.rec.stop();
 });

@@ -531,8 +531,11 @@ export function createRecorder(deps: RecorderDeps): Recorder {
     }
   };
 
-  /** Règles après l'écriture du tick, dans leur propre try : une erreur ici ne casse jamais l'échantillonnage. */
-  const runRules = (d: DatabaseSync, ts: number, groups: Group[], procs: readonly ProcInfo[], system: SystemInfo, cpuPercent: number) => {
+  /**
+   * Règles après l'écriture du tick, dans leur propre try : une erreur ici ne casse jamais l'échantillonnage. `m` : instant
+   * monotone du début du tick, lu avec `ts` (un tick lent pendant un étouffement n'est jamais pris pour une veille).
+   */
+  const runRules = (d: DatabaseSync, ts: number, m: number, groups: Group[], procs: readonly ProcInfo[], system: SystemInfo, cpuPercent: number) => {
     // interrupteur général éteint, ou aucune règle activée : rien (pas même de classement ni de simulation, ni de crédit)
     if (!rulesCfg.enabled || !rulesCfg.list.some((r) => r.enabled)) {
       lastRulesMono = null;
@@ -541,7 +544,6 @@ export function createRecorder(deps: RecorderDeps): Recorder {
     }
     try {
       counters.ruleEvaluations++;
-      const m = mono();
       const intervalMs = cfg.intervalSec * 1000;
       const delta = lastRulesMono === null ? 0 : Math.min(Math.max(0, m - lastRulesMono), 4 * intervalMs);
       lastRulesMono = m;
@@ -737,6 +739,8 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       if (!db || !writer) return;
       try {
         const ts = now();
+        // instant monotone du tick, lu avec l'heure murale : les règles comparent les deux pour détecter une veille
+        const tickMono = mono();
         const procs = tracker.update(readProcesses(procRoot, { wantCwd, cmdlineCache }), ts);
         const system = readSystem(procRoot);
         const groups = buildGroups(procs, {
@@ -765,7 +769,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
         runDisk(db, ts);
         runForecast(db, ts, system);
         runAntigel(db, ts, procs, groups, system);
-        runRules(db, ts, groups, procs, system, cpuPercent);
+        runRules(db, ts, tickMono, groups, procs, system, cpuPercent);
         st.lastSampleAt = ts;
         ok('tick');
         writeStatus();
