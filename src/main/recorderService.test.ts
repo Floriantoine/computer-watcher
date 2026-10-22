@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { LEGACY_UNIT_NAME, UNIT_NAME, autoManageService, recorderSyncDisabled, ensureRecorderService, recorderAppImage, recorderExecArgs, recorderUnit, systemdQuote, unitPath, type Systemctl } from './recorderService';
+import { LEGACY_UNIT_NAME, RECORDER_MEMORY_LOW_MB, UNIT_NAME, autoManageService, recorderSyncDisabled, ensureRecorderService, recorderAppImage, recorderExecArgs, recorderUnit, systemdQuote, unitPath, type Systemctl } from './recorderService';
 
 test('systemdQuote échappe \\ " $ % et entoure de guillemets', () => {
   expect(systemdQuote('/opt/My App/p%w$x"y\\z')).toBe('"/opt/My App/p%%w$$x\\"y\\\\z"');
@@ -28,8 +28,50 @@ test('recorderUnit', () => {
   expect(unit).toContain('\nDescription=Computer Watcher recorder (historique des processus)\n');
   expect(unit).toContain('Environment=ELECTRON_RUN_AS_NODE=1\n');
   expect(unit).toContain('ExecStart="/opt/My App/pw" "/opt/My App/r.js"\n');
-  expect(unit).toContain('Restart=on-failure\n');
+  expect(unit).toContain('Restart=always\n');
   expect(unit).toContain('WantedBy=default.target\n');
+});
+
+test('E : service réactif pendant un étouffement : session.slice, mémoire protégée, dernier choix des tueurs, jamais Nice=10', () => {
+  const unit = recorderUnit(['/a', '/b']);
+  const service = unit.slice(unit.indexOf('[Service]'), unit.indexOf('[Install]'));
+  // session.slice : protégée par la « protection mémoire système » (bureau prioritaire) ; app.slice la partage avec Warp et Claude
+  expect(service).toContain('\nSlice=session.slice\n');
+  // ≈ 1,7 × le pic observé (RSS + swap, p99 191 Mo) : binaire, base et tas restent en RAM
+  expect(service).toContain(`\nMemoryLow=${RECORDER_MEMORY_LOW_MB}M\n`);
+  expect(RECORDER_MEMORY_LOW_MB).toBe(320);
+  // plancher d'un service utilisateur : la valeur du gestionnaire (100) ; en dessous, systemd l'ignore
+  expect(service).toContain('\nOOMScoreAdjust=100\n');
+  expect(service).toContain('\nManagedOOMPreference=avoid\n');
+  // tué par earlyoom (SIGTERM, sortie « propre ») : relancé quand même
+  expect(service).toContain('\nRestart=always\nRestartSec=5\n');
+  expect(unit).not.toMatch(/^Nice=/m);
+  // jamais un plafond, un poids ni un gel posé sur le service
+  expect(unit).not.toMatch(/^(MemoryMax|MemoryHigh|MemorySwapMax|CPUQuota|CPUWeight|IOWeight|Freeze)/m);
+});
+
+/** Unité telle qu'écrite par la v0.3.2 (et avant) pour ces arguments. */
+const v032Unit = (args: string[]) => [
+  '[Unit]', 'Description=Computer Watcher recorder (historique des processus)', 'StartLimitIntervalSec=300', 'StartLimitBurst=5', '',
+  '[Service]', 'Environment=ELECTRON_RUN_AS_NODE=1', `ExecStart=${args.map(systemdQuote).join(' ')}`, 'Restart=on-failure', 'RestartSec=5', 'Nice=10', '',
+  '[Install]', 'WantedBy=default.target', '',
+].join('\n');
+
+test('E : installation existante (unité de la v0.3.2) → la synchro du lancement suivant la réécrit et relance le service, une fois', async () => {
+  const path = join(mkdtempSync(join(tmpdir(), 'pw-e-')), 'systemd/user/computer-watcher-recorder.service');
+  mkdirSync(dirname(path), { recursive: true });
+  const args = recorderExecArgs({ appImage: '/home/u/Applications/computer-watcher.AppImage', execPath: '/x', appPath: '/y' });
+  writeFileSync(path, v032Unit(args));
+  const f = fake();
+  // synchro au démarrage (index.ts : syncRecorder(false, …)) : unité existante, création non permise, pas de mise à jour d'app
+  expect(await ensureRecorderService({ enabled: true, args, path, run: f.run, allowCreate: false })).toBe('updated');
+  const unit = readFileSync(path, 'utf8');
+  expect(unit).toBe(recorderUnit(args));
+  expect(unit).toContain('Slice=session.slice\n');
+  expect(f.calls).toEqual([['daemon-reload'], ['enable', UNIT_NAME], ['restart', UNIT_NAME]]);
+  f.calls.length = 0;
+  expect(await ensureRecorderService({ enabled: true, args, path, run: f.run, allowCreate: false })).toBe('unchanged');
+  expect(f.calls).toEqual([['enable', '--now', UNIT_NAME]]);
 });
 
 test('unitPath', () => {

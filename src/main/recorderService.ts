@@ -31,6 +31,12 @@ export function recorderExecArgs(p: { appImage?: string; execPath: string; appPa
   return [p.execPath, join(p.appPath, 'out/main/recorder.js')];
 }
 
+/**
+ * Protection mémoire du service (Mo) : ≈ 1,7 × son pic observé (RSS + swap, p99 191 Mo sur 15 jours), pour garder en RAM son
+ * tas, le binaire et les pages chaudes de la base. Compte dans la protection de session.slice à hauteur de son usage réel.
+ */
+export const RECORDER_MEMORY_LOW_MB = 320;
+
 export function recorderUnit(args: string[]): string {
   // une fin de ligne dans un chemin injecterait une directive (ExecStartPre=…) : refusé
   if (args.some((a) => /[\x00-\x1f\x7f]/.test(a))) throw new Error('Argument refusé (caractère de contrôle)');
@@ -44,9 +50,18 @@ export function recorderUnit(args: string[]): string {
     '[Service]',
     'Environment=ELECTRON_RUN_AS_NODE=1',
     `ExecStart=${args.map(systemdQuote).join(' ')}`,
-    'Restart=on-failure',
+    // relancé même après un SIGTERM d'earlyoom (sortie « propre ») ; jamais après un arrêt demandé (systemctl stop)
+    'Restart=always',
     'RestartSec=5',
-    'Nice=10',
+    // Le service doit rester réactif pendant un étouffement : c'est lui qui mesure et applique les règles anti-gel.
+    // session.slice : la « protection mémoire système » (MemoryLow sur user.slice → user@<uid>.service) la protège, sans
+    // la partager avec Warp et Claude comme app.slice ; MemoryLow n'agit que sous cette protection (sinon sans effet).
+    'Slice=session.slice',
+    `MemoryLow=${RECORDER_MEMORY_LOW_MB}M`,
+    // dernier choix d'earlyoom et du tueur du noyau parmi les processus de l'utilisateur : 100 est le plancher (valeur du
+    // gestionnaire utilisateur) ; plus bas, systemd l'ignore. systemd-oomd : candidat seulement faute d'autre.
+    'OOMScoreAdjust=100',
+    'ManagedOOMPreference=avoid',
     '',
     '[Install]',
     'WantedBy=default.target',
