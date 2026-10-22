@@ -63,6 +63,8 @@ import { promises as originalFsp } from 'original-fs';
 import type { TmpConfirmSummary, TmpDeleteOutcome } from '../core/tmpClean';
 import { confirmText, createSetAsideStore, createTmpCleaner, tmpCleanEvent, tmpRootFromEnv, type CleanFs } from './tmpClean';
 import { sharedScan, topTmpDirs } from './tmpUsage';
+import { isTmpCacheIds, tmpCachesEvent, type TmpCaches } from '../core/tmpCaches';
+import { emptyTmpCaches, measureTmpCaches, type CachesFs } from '../core/tmpCachesClean';
 import { createScanCache, scanHome } from './diskScan';
 import { diskRootRunner, runDiskRoot } from './diskRoot';
 import { realProcByName, staticRefusal, type CleanDeps } from './diskClean';
@@ -789,6 +791,34 @@ ipcMain.handle('tmp:emptyQuarantine', async () => {
   tmpTopDirs.reset();
   logTmpClean(outcome);
   return outcome;
+});
+// Caches connus de /tmp (Jest, Node.js…) : vidés en un clic, sans confirmation (rien ne se perd, l'outil les reconstruit) ;
+// noms figés et revérifiés à chaque vidage, fichiers supprimés et dossiers gardés (voir core/tmpCachesClean.ts).
+const tmpCachesFs = originalFsp as unknown as CachesFs;
+let tmpCachesMeasure: Promise<TmpCaches> | null = null;
+ipcMain.handle('tmp:caches', () => (tmpCachesMeasure ??= measureTmpCaches(tmpRoot, { fs: tmpCachesFs }).finally(() => (tmpCachesMeasure = null))));
+let tmpCachesBusy = false;
+ipcMain.handle('tmp:emptyCaches', async (_e, ids: unknown) => {
+  if (!isTmpCacheIds(ids)) throw new Error('Requête invalide (caches connus seulement)');
+  if (tmpCachesBusy) throw new Error('Un vidage est déjà en cours');
+  tmpCachesBusy = true;
+  tmpTopDirs.reset();
+  try {
+    const outcome = await emptyTmpCaches(tmpRoot, ids, { fs: tmpCachesFs });
+    const ev = tmpCachesEvent(outcome, Date.now());
+    if (ev) {
+      try {
+        mkdirSync(data, { recursive: true });
+        appendFileSync(appEventsPath(data), formatAppEvent(ev));
+      } catch (e) {
+        console.error('app event:', e);
+      }
+    }
+    return outcome;
+  } finally {
+    tmpTopDirs.reset();
+    tmpCachesBusy = false;
+  }
 });
 // Page Disque : parcours du dossier personnel (soleil) dans un processus enfant à basse priorité, gardé 10 min.
 const diskScans = createScanCache({ scan: (o, signal) => scanHome(homedir(), { ...o, signal }) });
