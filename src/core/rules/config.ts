@@ -2,7 +2,7 @@
 import { CATEGORIES, isCategory } from '../classify/categories';
 import { APP_NAMES } from '../grouping/rules';
 import { isNeverKillName } from './neverKill';
-import { isPreapproved, RECOMMENDED_RULES, SYSTEM_DEFAULTS, withInactive4h, withRecommendedActive } from './recommended';
+import { isPreapproved, RECOMMENDED_RULES, SYSTEM_DEFAULTS, withAntigelPsi, withInactive4h, withRecommendedActive } from './recommended';
 import { simulationCredit, type SimStats } from './simulation';
 import type { Rule, RuleCondition, RuleIssue, RuleMatch, RuleMode, RulesConfig } from './types';
 
@@ -27,7 +27,7 @@ export const OPT_IN_APPS: readonly string[] = [...APP_NAMES].filter((n) => !isNe
 /** Erreurs de règles gardées (au-delà : une ligne « … et n autres »). */
 export const MAX_RULE_ISSUES = 20;
 
-const MIGRATED = { recommendedActive: true, recommendedInactive4h: true, recommendedSeeded: true } as const;
+const MIGRATED = { recommendedActive: true, recommendedInactive4h: true, recommendedSeeded: true, recommendedPsi: true } as const;
 /**
  * Première installation (config.json absent) : interrupteur allumé, les 3 règles recommandées. Une config existante
  * d'avant les recommandées y arrive aussi, une fois, par la migration « recommandées ajoutées » (withSeeded).
@@ -153,8 +153,11 @@ export function validateRulesDetailed(raw: unknown): { rules: RulesConfig; issue
     ids.add((r as Rule).id);
     out.push(r as Rule);
   });
+  // migration unique : anti-gel recommandé sur la pression mémoire (avant le passage en Active : une config très ancienne
+  // dont l'anti-gel intact est en Simulation le reçoit déjà pré-approuvé)
+  const psi = raw.recommendedPsi === true ? out : withAntigelPsi(out);
   // migration unique : règles recommandées intactes en Active (accord de l'utilisateur du 2026-10-20)
-  const at4h = raw.recommendedInactive4h === true ? out : withInactive4h(out);
+  const at4h = raw.recommendedInactive4h === true ? psi : withInactive4h(psi);
   const migrated = raw.recommendedActive === true ? at4h : withRecommendedActive(at4h);
   const final = raw.recommendedSeeded === true ? { enabled, list: migrated } : withSeeded(enabled, migrated);
   if (dropped) issues.push({ index: -1, id: null, name: null, error: `… et ${dropped} autre${dropped > 1 ? 's' : ''} règle${dropped > 1 ? 's' : ''} refusée${dropped > 1 ? 's' : ''}` });
@@ -206,7 +209,7 @@ export const RULE_TEMPLATES: readonly Omit<Rule, 'id' | 'createdAt'>[] = [
   },
   { name: 'Front/Back de projet inactif depuis 4 h', enabled: false, mode: 'simulate', condition: { kind: 'inactive', categories: ['front', 'back'], forHours: 4 } },
   { name: 'Épuisement prévu dans < 3 min', enabled: false, mode: 'simulate', condition: { kind: 'forecast', underMin: 3, includeApps: [] } },
-  { name: 'Mémoire ou CPU > 95 % : tuer les tests', enabled: false, mode: 'simulate', condition: { kind: 'system', ...SYSTEM_DEFAULTS } },
+  { name: 'Machine saturée : tuer les tests', enabled: false, mode: 'simulate', condition: { kind: 'system', ...SYSTEM_DEFAULTS } },
 ];
 
 /**

@@ -22,9 +22,9 @@ describe('règles recommandées', () => {
       enabled: true, mode: 'active',
       condition: { kind: 'memory', target: 'instance', match: { by: 'category', value: 'test' }, overMB: 4096, forMin: 5 },
     });
-    expect(byId(REC_ANTIGEL_ID)).toMatchObject({
-      enabled: true, mode: 'active', condition: { kind: 'system', memPercent: 95, memForSec: 15, cpuPercent: 95, cpuForSec: 60 },
-    });
+    expect(byId(REC_ANTIGEL_ID)).toMatchObject({ name: 'Machine saturée : tuer les tests', enabled: true, mode: 'active' });
+    // pression mémoire (PSI full) 40 % pendant 20 s : usage normal 0 à 8 %, gel du 2026-10-22 à 60-90 %
+    expect(byId(REC_ANTIGEL_ID).condition).toEqual({ kind: 'system', memPercent: 95, memForSec: 15, cpuPercent: 95, cpuForSec: 60, psiPercent: 40, psiForSec: 20 });
   });
 
   test('DEFAULT_RULES ne partage aucun objet avec RECOMMENDED_RULES', () => {
@@ -94,6 +94,40 @@ describe('règles recommandées', () => {
     expect(byId(REC_INACTIVE_ID).name).toBe('Front/Back de projet inactif depuis 4 h');
   });
 
+  test('migration pression : l’anti-gel recommandé intact (ancienne condition exacte) reçoit la pression et le nouveau nom ; une fois seulement', () => {
+    const oldCondition = { kind: 'system', memPercent: 95, memForSec: 15, cpuPercent: 95, cpuForSec: 60 } as RuleCondition;
+    const oldName = 'Mémoire ou CPU > 95 % : tuer les tests';
+    const old: Rule = { ...byId(REC_ANTIGEL_ID), name: oldName, createdAt: 7, condition: oldCondition };
+    const markers = { recommendedActive: true, recommendedInactive4h: true, recommendedSeeded: true };
+    const out = validateRulesDetailed({ enabled: true, list: [mine, old], ...markers });
+    expect(out.issues).toEqual([]);
+    expect(out.rules.recommendedPsi).toBe(true);
+    expect(out.rules.list).toEqual([mine, { ...byId(REC_ANTIGEL_ID), createdAt: 7 }]);
+    expect(isPreapproved(out.rules.list[1]!)).toBe(true);
+    // idempotente, et la config migrée garde la même révision
+    expect(validateRulesDetailed(out.rules).rules).toEqual(out.rules);
+    // activation et mode de l'utilisateur gardés ; nom personnalisé gardé
+    const off = validateRulesDetailed({ enabled: true, list: [{ ...old, enabled: false, mode: 'simulate' }], ...markers }).rules.list[0]!;
+    expect(off).toMatchObject({ enabled: false, mode: 'simulate', name: byId(REC_ANTIGEL_ID).name, condition: byId(REC_ANTIGEL_ID).condition });
+    const renamed = validateRulesDetailed({ enabled: true, list: [{ ...old, name: 'Mon anti-gel' }], ...markers }).rules.list[0]!;
+    expect(renamed).toMatchObject({ name: 'Mon anti-gel', condition: byId(REC_ANTIGEL_ID).condition });
+    // condition modifiée par l'utilisateur (90 %) : jamais touchée ; même condition sous un autre id : jamais touchée
+    const custom = { ...old, condition: { ...oldCondition, memPercent: 90 } as RuleCondition };
+    expect(validateRulesDetailed({ enabled: true, list: [custom], ...markers }).rules.list[0]).toEqual(custom);
+    const copy = { ...old, id: 'r-copie' };
+    expect(validateRulesDetailed({ enabled: true, list: [copy], ...markers }).rules.list).toEqual([copy]);
+    // migration déjà faite : un retour à l'ancienne condition choisi par l'utilisateur est gardé
+    const kept = validateRulesDetailed({ enabled: true, list: [old], ...markers, recommendedPsi: true });
+    expect(kept.rules.list[0]).toEqual(old);
+  });
+
+  test('migration pression d’une config très ancienne (aucun marqueur, anti-gel en Simulation) : nouvelle condition, puis Active', () => {
+    const old: Rule = { ...byId(REC_ANTIGEL_ID), name: 'Mémoire ou CPU > 95 % : tuer les tests', mode: 'simulate',
+      condition: { kind: 'system', memPercent: 95, memForSec: 15, cpuPercent: 95, cpuForSec: 60 } };
+    const out = validateRulesDetailed({ enabled: true, list: [old] });
+    expect(out.rules.list.find((r) => r.id === REC_ANTIGEL_ID)).toEqual({ ...byId(REC_ANTIGEL_ID), createdAt: old.createdAt });
+  });
+
   test('bouton « Ajouter les règles recommandées » : ajoute les manquantes, sans écraser ni dupliquer, idempotent', () => {
     // l'utilisateur a déjà une règle au même id que la règle de test, modifiée : jamais écrasée
     const custom: Rule = { ...byId(REC_TEST_MEMORY_ID), name: 'perso', mode: 'simulate', enabled: false, createdAt: 9 };
@@ -122,7 +156,7 @@ describe('règles recommandées', () => {
 });
 
 describe('migration « recommandées ajoutées » (mise à jour depuis la v0.3.0 ou avant)', () => {
-  const seeded = { recommendedActive: true, recommendedInactive4h: true, recommendedSeeded: true };
+  const seeded = { recommendedActive: true, recommendedInactive4h: true, recommendedSeeded: true, recommendedPsi: true };
 
   test('config v0.2.0 (interrupteur éteint, liste vide) → les 3 recommandées, interrupteur allumé', () => {
     const out = validateRulesDetailed({ enabled: false, list: [] });

@@ -50,6 +50,11 @@ export interface RulesConfig {
    * la validation ajoute les recommandées manquantes (et allume l'interrupteur s'il n'y avait aucune règle), puis le pose.
    */
   recommendedSeeded?: boolean;
+  /**
+   * Migration « anti-gel recommandé sur la pression mémoire » (2026-10-22) déjà faite. Même principe que
+   * recommendedInactive4h : seule la règle `rec-antigel` à l'ancienne condition exacte est mise à jour, une fois.
+   */
+  recommendedPsi?: boolean;
 }
 
 /** Règle du fichier refusée par la validation : ignorée (désactivée) seule, avec son erreur affichée. */

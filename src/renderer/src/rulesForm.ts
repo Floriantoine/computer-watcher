@@ -25,6 +25,9 @@ export interface RuleForm {
   memForSec: string;
   cpuPercent: string;
   cpuForSec: string;
+  /** Anti-gel : pression mémoire (PSI full, %) et durée (s) ; les deux vides : pas de condition de pression. */
+  psiPercent: string;
+  psiForSec: string;
 }
 
 export type RuleErrors = Partial<Record<keyof RuleForm, string>>;
@@ -34,6 +37,7 @@ const DEFAULT_FORM: RuleForm = {
   categories: ['front', 'back'], forHours: '24', underMin: '3', includeApps: [],
   memPercent: String(SYSTEM_DEFAULTS.memPercent), memForSec: String(SYSTEM_DEFAULTS.memForSec),
   cpuPercent: String(SYSTEM_DEFAULTS.cpuPercent), cpuForSec: String(SYSTEM_DEFAULTS.cpuForSec),
+  psiPercent: String(SYSTEM_DEFAULTS.psiPercent), psiForSec: String(SYSTEM_DEFAULTS.psiForSec),
 };
 
 /** « 4096 » → « 4 », « 4608 » → « 4,5 » (Go, deux décimales au plus). */
@@ -60,6 +64,9 @@ export function ruleToForm(r: Rule): RuleForm {
     f.memForSec = String(c.memForSec);
     f.cpuPercent = String(c.cpuPercent);
     f.cpuForSec = String(c.cpuForSec);
+    // règle d'avant la pression : champs vides (aller-retour sans condition de pression)
+    f.psiPercent = c.psiPercent === undefined ? '' : String(c.psiPercent);
+    f.psiForSec = c.psiForSec === undefined ? '' : String(c.psiForSec);
   }
   return f;
 }
@@ -102,18 +109,22 @@ export function formToRule(f: RuleForm, base: { id: string; createdAt: number; e
     if (underMin === null) errors.underMin = `Un entier entre ${RULE_BOUNDS.underMin[0]} et ${RULE_BOUNDS.underMin[1]}`;
     else condition = { kind: 'forecast', underMin, includeApps: [...new Set(f.includeApps)].sort() };
   } else {
-    const field = (k: 'memPercent' | 'memForSec' | 'cpuPercent' | 'cpuForSec') => {
+    const field = (k: 'memPercent' | 'memForSec' | 'cpuPercent' | 'cpuForSec' | 'psiPercent' | 'psiForSec', suffix = '') => {
       const n = intIn(f[k], RULE_BOUNDS[k]);
-      if (n === null) errors[k] = `Un entier entre ${RULE_BOUNDS[k][0]} et ${RULE_BOUNDS[k][1]}`;
+      if (n === null) errors[k] = `Un entier entre ${RULE_BOUNDS[k][0]} et ${RULE_BOUNDS[k][1]}${suffix}`;
       return n;
     };
     const memPercent = field('memPercent');
     const memForSec = field('memForSec');
     const cpuPercent = field('cpuPercent');
     const cpuForSec = field('cpuForSec');
-    if (memPercent !== null && memForSec !== null && cpuPercent !== null && cpuForSec !== null) {
+    // pression : les deux champs vides → pas de condition de pression ; sinon les deux sont requis
+    const psi = !!(f.psiPercent.trim() || f.psiForSec.trim());
+    const psiPercent = psi ? field('psiPercent', ', ou les deux champs de pression vides') : null;
+    const psiForSec = psi ? field('psiForSec', ', ou les deux champs de pression vides') : null;
+    if (memPercent !== null && memForSec !== null && cpuPercent !== null && cpuForSec !== null && (!psi || (psiPercent !== null && psiForSec !== null))) {
       // même ordre de champs que la validation (comparaison des conditions par JSON)
-      condition = { kind: 'system', memPercent, memForSec, cpuPercent, cpuForSec };
+      condition = { kind: 'system', memPercent, memForSec, cpuPercent, cpuForSec, ...(psi ? { psiPercent: psiPercent!, psiForSec: psiForSec! } : {}) };
     }
   }
   if (Object.keys(errors).length || !condition) return { errors };
@@ -159,7 +170,9 @@ export function ruleSummary(r: Rule): string {
   }
   if (c.kind === 'inactive') return `Si une instance ${catList(c.categories)} de projet est inactive depuis ${duration(c.forHours)} → arrêter`;
   if (c.kind === 'system') {
-    return `Si la mémoire dépasse ${c.memPercent} % pendant ${seconds(c.memForSec)} ou le CPU ${c.cpuPercent} % pendant ${seconds(c.cpuForSec)} → arrêter la plus grosse vérification (tests, tsc, eslint), une à la fois`;
+    const parts = [`la mémoire dépasse ${c.memPercent} % pendant ${seconds(c.memForSec)}`, `le CPU ${c.cpuPercent} % pendant ${seconds(c.cpuForSec)}`];
+    if (c.psiPercent !== undefined && c.psiForSec !== undefined) parts.push(`la pression mémoire ${c.psiPercent} % pendant ${seconds(c.psiForSec)}`);
+    return `Si ${parts.slice(0, -1).join(', ')} ou ${parts[parts.length - 1]} → arrêter la plus grosse vérification (tests, tsc, eslint), une à la fois`;
   }
   const apps = c.includeApps.length ? ` (applis incluses : ${c.includeApps.join(', ')})` : '';
   return `Si la mémoire doit s'épuiser dans moins de ${c.underMin} min → arrêter le plus gros groupe qui grossit${apps}`;

@@ -136,7 +136,7 @@ describe('validateRules', () => {
   test('section mal formée → règles éteintes avec une erreur, jamais une exception', () => {
     for (const raw of ['oui', null, [], { enabled: 'yes', list: [] }, { enabled: true, list: {} }]) {
       const r = validateRulesDetailed(raw);
-      expect(r.rules).toEqual({ enabled: false, list: [], recommendedActive: true, recommendedInactive4h: true, recommendedSeeded: true });
+      expect(r.rules).toEqual({ enabled: false, list: [], recommendedActive: true, recommendedInactive4h: true, recommendedSeeded: true, recommendedPsi: true });
       expect(r.issues).toHaveLength(1);
     }
   });

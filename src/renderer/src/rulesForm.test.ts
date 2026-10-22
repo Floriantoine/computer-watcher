@@ -43,10 +43,29 @@ describe('ruleToForm / formToRule', () => {
 
 describe('condition système (anti-gel)', () => {
   const sysForm = (): RuleForm => ruleToForm({ ...templates[3]!, ...base });
-  test('formulaire : les 4 champs, valeurs par défaut', () => {
-    expect(sysForm()).toMatchObject({ kind: 'system', memPercent: '95', memForSec: '15', cpuPercent: '95', cpuForSec: '60' });
-    // une règle Mémoire passée en « Système » part des valeurs par défaut
-    expect(formToRule({ ...vitestForm(), kind: 'system' }, base).rule?.condition).toEqual({ kind: 'system', memPercent: 95, memForSec: 15, cpuPercent: 95, cpuForSec: 60 });
+  test('formulaire : les 6 champs, valeurs par défaut', () => {
+    expect(sysForm()).toMatchObject({ kind: 'system', memPercent: '95', memForSec: '15', cpuPercent: '95', cpuForSec: '60', psiPercent: '40', psiForSec: '20' });
+    // une règle Mémoire passée en « Système » part des valeurs par défaut, pression comprise
+    expect(formToRule({ ...vitestForm(), kind: 'system' }, base).rule?.condition).toEqual({
+      kind: 'system', memPercent: 95, memForSec: 15, cpuPercent: 95, cpuForSec: 60, psiPercent: 40, psiForSec: 20,
+    });
+  });
+  test('pression : les deux champs vides → pas de condition de pression ; un seul rempli, ou hors bornes → erreur', () => {
+    const err = (patch: Partial<RuleForm>) => formToRule({ ...sysForm(), ...patch }, base).errors;
+    const off = formToRule({ ...sysForm(), psiPercent: ' ', psiForSec: '' }, base).rule!.condition;
+    expect(Object.keys(off)).toEqual(['kind', 'memPercent', 'memForSec', 'cpuPercent', 'cpuForSec']);
+    expect(err({ psiPercent: '9' }).psiPercent).toBe('Un entier entre 10 et 90, ou les deux champs de pression vides');
+    expect(err({ psiPercent: '40,5' }).psiPercent).toBe('Un entier entre 10 et 90, ou les deux champs de pression vides');
+    expect(err({ psiForSec: '301' }).psiForSec).toBe('Un entier entre 5 et 300, ou les deux champs de pression vides');
+    expect(err({ psiPercent: '' }).psiPercent).toBe('Un entier entre 10 et 90, ou les deux champs de pression vides');
+    expect(err({ psiForSec: '' }).psiForSec).toBe('Un entier entre 5 et 300, ou les deux champs de pression vides');
+    expect(formToRule({ ...sysForm(), psiPercent: '55', psiForSec: '30' }, base).rule?.condition).toMatchObject({ psiPercent: 55, psiForSec: 30 });
+  });
+  test('règle perso d’avant la pression : aller-retour sans pression (champs vides), condition inchangée', () => {
+    const old: Rule = { ...templates[3]!, ...base, condition: { kind: 'system', memPercent: 90, memForSec: 20, cpuPercent: 99, cpuForSec: 120 } };
+    const f = ruleToForm(old);
+    expect(f).toMatchObject({ psiPercent: '', psiForSec: '' });
+    expect(JSON.stringify(formToRule(f, base).rule!.condition)).toBe(JSON.stringify(old.condition));
   });
   test('bornes : chaque champ hors bornes ou non entier → son erreur', () => {
     const err = (patch: Partial<RuleForm>) => formToRule({ ...sysForm(), ...patch }, base).errors;
@@ -56,11 +75,16 @@ describe('condition système (anti-gel)', () => {
     expect(err({ cpuPercent: '95,5' }).cpuPercent).toBe('Un entier entre 70 et 100');
     expect(err({ cpuForSec: '' }).cpuForSec).toBe('Un entier entre 10 et 600');
     expect(err({ cpuForSec: '601' }).cpuForSec).toBe('Un entier entre 10 et 600');
-    expect(formToRule({ ...sysForm(), memPercent: '90', cpuForSec: '120' }, base).rule?.condition).toEqual({ kind: 'system', memPercent: 90, memForSec: 15, cpuPercent: 95, cpuForSec: 120 });
+    expect(formToRule({ ...sysForm(), memPercent: '90', cpuForSec: '120' }, base).rule?.condition).toEqual({
+      kind: 'system', memPercent: 90, memForSec: 15, cpuPercent: 95, cpuForSec: 120, psiPercent: 40, psiForSec: 20,
+    });
   });
-  test('résumé : secondes ou minutes', () => {
+  test('résumé : secondes ou minutes ; pression seulement si la règle en a une', () => {
     expect(ruleSummary({ ...templates[3]!, condition: { kind: 'system', memPercent: 90, memForSec: 30, cpuPercent: 99, cpuForSec: 90 } })).toBe(
       'Si la mémoire dépasse 90 % pendant 30 s ou le CPU 99 % pendant 90 s → arrêter la plus grosse vérification (tests, tsc, eslint), une à la fois',
+    );
+    expect(ruleSummary({ ...templates[3]!, condition: { kind: 'system', memPercent: 90, memForSec: 30, cpuPercent: 99, cpuForSec: 90, psiPercent: 50, psiForSec: 120 } })).toBe(
+      'Si la mémoire dépasse 90 % pendant 30 s, le CPU 99 % pendant 90 s ou la pression mémoire 50 % pendant 2 min → arrêter la plus grosse vérification (tests, tsc, eslint), une à la fois',
     );
   });
 });
@@ -86,7 +110,7 @@ describe('ruleSummary', () => {
       'Si une instance Tests dépasse 4 Go pendant 5 min → arrêter',
       'Si une instance Front ou Back de projet est inactive depuis 4 h → arrêter',
       "Si la mémoire doit s'épuiser dans moins de 3 min → arrêter le plus gros groupe qui grossit",
-      'Si la mémoire dépasse 95 % pendant 15 s ou le CPU 95 % pendant 1 min → arrêter la plus grosse vérification (tests, tsc, eslint), une à la fois',
+      'Si la mémoire dépasse 95 % pendant 15 s, le CPU 95 % pendant 1 min ou la pression mémoire 40 % pendant 20 s → arrêter la plus grosse vérification (tests, tsc, eslint), une à la fois',
     ]);
     expect(ruleSummary(vitestRule)).toBe('Si vitest dépasse 4 Go pendant 5 min → arrêter');
   });
