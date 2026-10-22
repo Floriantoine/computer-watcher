@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { addProc, makeProcRoot } from '../core/collector/fakeProc';
-import { ownerDead, parseRootName, purgeOrphanRoots, readStartTime, removeTree, rootPrefix, selfOwner } from './tmpRoot';
+import { createRunRoot, ownerDead, parseRootName, purgeOrphanRoots, readStartTime, removeTree, rootPrefix, selfOwner } from './tmpRoot';
 
 /** base/victime (à supprimer) et base/dehors (cibles des liens : doit rester intact, droits compris). */
 function tree() {
@@ -213,5 +213,29 @@ describe('purgeOrphanRoots', () => {
     expect(() => purgeOrphanRoots(other, { procRoot: proc, ns: NS, mountinfo: noMounts })).toThrow(/pw-vitest/);
     expect(existsSync(join(other, `501-1-${NS}-MortCC`))).toBe(true);
     expect(purgeOrphanRoots(join(other, 'pw-vitest'), { procRoot: proc, ns: NS, mountinfo: noMounts })).toEqual({ purged: [], errors: [] });
+  });
+});
+
+describe('createRunRoot (chargement de la config de Vitest)', () => {
+  test('crée <base>/<pid>-<starttime>-<pidns>-XXXXXX (base en 0700), et y pointe TMPDIR et PROC_WATCH_TEST_TMP', () => {
+    const base = join(mkdtempSync(join(tmpdir(), 'pw-run-')), 'pw-vitest');
+    const env: NodeJS.ProcessEnv = {};
+    const root = createRunRoot(base, env);
+    expect(parseRootName(root.slice(root.lastIndexOf('/') + 1))).toEqual(selfOwner());
+    expect(env).toEqual({ TMPDIR: root, PROC_WATCH_TEST_TMP: root });
+    expect(statSync(base).mode & 0o777).toBe(0o700);
+    expect(statSync(root).isDirectory()).toBe(true);
+  });
+  test('config rechargée dans le même processus : même racine ; racine héritée d’un autre processus : une nouvelle', () => {
+    const base = join(mkdtempSync(join(tmpdir(), 'pw-run-')), 'pw-vitest');
+    const env: NodeJS.ProcessEnv = {};
+    const root = createRunRoot(base, env);
+    expect(createRunRoot(base, env)).toBe(root);
+    const other = join(base, `${process.pid + 1}-1-${selfOwner().ns}-Herite`);
+    mkdirSync(other);
+    const inherited: NodeJS.ProcessEnv = { TMPDIR: other, PROC_WATCH_TEST_TMP: other };
+    const mine = createRunRoot(base, inherited);
+    expect(mine).not.toBe(other);
+    expect(inherited.PROC_WATCH_TEST_TMP).toBe(mine);
   });
 });

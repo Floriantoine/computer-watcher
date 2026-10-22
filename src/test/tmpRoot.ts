@@ -3,8 +3,9 @@
 // (pid du processus principal de Vitest, champ 22 de /proc/<pid>/stat, espace de noms de pid). Aucune fenêtre où une
 // racine existe sans propriétaire connu ; un lancement tué (earlyoom, timeout, Ctrl-C, scope plafonné) laisse une racine
 // dont le propriétaire est mort : le lancement suivant la purge.
-import { chmodSync, lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmdirSync, unlinkSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmdirSync, unlinkSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { basename, dirname, join } from 'node:path';
 import { parseMountinfo } from '../core/mountinfo';
 
 /** Processus principal de Vitest qui possède une racine. `start` : starttime (tops d'horloge depuis le démarrage). */
@@ -68,6 +69,33 @@ export function ownerDead(o: RootOwner, ctx: { ns: string; procRoot?: string }):
   const f = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
   if (!/^\d+$/.test(f[19] ?? '')) return false;
   return f[19] !== o.start;
+}
+
+/** ~/.cache/pw-vitest : sur disque, en 0700. */
+export const testTmpBase = (): string => join(homedir(), '.cache', 'pw-vitest');
+
+/**
+ * Racine du lancement, créée au chargement de la config de Vitest : avant `new Vitest()`, qui lit tmpdir() pour ses propres
+ * dossiers temporaires (copies de modules) ; ainsi tout ce qu'un lancement écrit est dans sa racine. TMPDIR et
+ * PROC_WATCH_TEST_TMP y pointent (les workers en héritent). Config rechargée dans le même processus : même racine ;
+ * racine héritée d'un autre processus (Vitest lancé par un test) : une nouvelle, à soi.
+ */
+export function createRunRoot(base = testTmpBase(), env: NodeJS.ProcessEnv = process.env): string {
+  const me = selfOwner();
+  const prev = env.PROC_WATCH_TEST_TMP;
+  if (prev) {
+    const owner = parseRootName(basename(prev));
+    try {
+      if (owner?.pid === me.pid && owner.start === me.start && lstatSync(prev).isDirectory() && dirname(prev) === realpathSync(base)) return prev;
+    } catch {
+      // disparue : une nouvelle
+    }
+  }
+  mkdirSync(base, { recursive: true, mode: 0o700 });
+  const root = realpathSync(mkdtempSync(join(base, rootPrefix(me))));
+  env.TMPDIR = root;
+  env.PROC_WATCH_TEST_TMP = root;
+  return root;
 }
 
 const errCode = (e: unknown) => (e as NodeJS.ErrnoException)?.code ?? String(e);
