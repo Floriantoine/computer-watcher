@@ -3,8 +3,9 @@
 // (pid du processus principal de Vitest, champ 22 de /proc/<pid>/stat, espace de noms de pid). Aucune fenêtre où une
 // racine existe sans propriétaire connu ; un lancement tué (earlyoom, timeout, Ctrl-C, scope plafonné) laisse une racine
 // dont le propriétaire est mort : le lancement suivant la purge.
-import { chmodSync, lstatSync, readdirSync, readFileSync, readlinkSync, rmdirSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { chmodSync, lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmdirSync, unlinkSync } from 'node:fs';
+import { basename, join } from 'node:path';
+import { parseMountinfo } from '../core/mountinfo';
 
 /** Processus principal de Vitest qui possède une racine. `start` : starttime (tops d'horloge depuis le démarrage). */
 export interface RootOwner {
@@ -139,4 +140,68 @@ export function removeTree(
     }
   };
   return { removed: rm(path), errors };
+}
+
+/** Durée maximale de la purge au lancement : le reste est repris au lancement suivant. */
+const PURGE_BUDGET_MS = 30_000;
+
+/**
+ * Purge les racines orphelines de `base` (~/.cache/pw-vitest) : seulement les dossiers au nom exact `<pid>-<starttime>-
+ * <pidns>-XXXXXX` dont le propriétaire est mort (voir ownerDead). Jamais une racine vivante, d'un autre espace de noms,
+ * au nom inconnu, un lien ou un fichier, ni une racine qui contient un point de montage (mountinfo illisible : rien).
+ * Pas de critère d'âge : une suite longue (mode watch) garde sa racine tant que son processus vit.
+ */
+export function purgeOrphanRoots(
+  base: string,
+  o: { procRoot?: string; ns?: string; mountinfo?: () => string; budgetMs?: number; now?: () => number } = {},
+): { purged: string[]; errors: string[] } {
+  // chemin réel : les points de montage de mountinfo le sont aussi (~/.cache peut être un lien)
+  let real: string;
+  try {
+    real = realpathSync(base);
+  } catch {
+    return { purged: [], errors: [] };
+  }
+  if (basename(real) !== 'pw-vitest') throw new Error(`purge refusée hors d'un dossier pw-vitest : ${base}`);
+  const now = o.now ?? Date.now;
+  const deadline = now() + (o.budgetMs ?? PURGE_BUDGET_MS);
+  const ns = o.ns ?? selfOwner().ns;
+  const purged: string[] = [];
+  const errors: string[] = [];
+  let names: string[];
+  try {
+    names = readdirSync(real);
+  } catch {
+    return { purged, errors };
+  }
+  const dead = names.filter((n) => {
+    const owner = parseRootName(n);
+    return owner !== null && ownerDead(owner, { ns, procRoot: o.procRoot });
+  });
+  if (!dead.length) return { purged, errors };
+  let mounts: string[];
+  try {
+    mounts = parseMountinfo((o.mountinfo ?? (() => readFileSync('/proc/self/mountinfo', 'utf8')))()).map((m) => m.mount);
+  } catch {
+    errors.push(`${real} : points de montage illisibles, rien n'est purgé`);
+    return { purged, errors };
+  }
+  for (const name of dead) {
+    const p = join(real, name);
+    let st;
+    try {
+      st = lstatSync(p);
+    } catch {
+      continue;
+    }
+    if (!st.isDirectory()) continue;
+    if (mounts.some((m) => m === p || m.startsWith(`${p}/`))) {
+      errors.push(`${p} : contient un point de montage, gardée`);
+      continue;
+    }
+    const r = removeTree(p, { mounts: new Set(mounts), deadline, now });
+    if (r.removed) purged.push(name);
+    else errors.push(...r.errors.slice(0, 3));
+  }
+  return { purged, errors };
 }

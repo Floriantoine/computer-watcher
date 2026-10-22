@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import { addProc, makeProcRoot } from '../core/collector/fakeProc';
-import { ownerDead, parseRootName, readStartTime, removeTree, rootPrefix, selfOwner } from './tmpRoot';
+import { ownerDead, parseRootName, purgeOrphanRoots, readStartTime, removeTree, rootPrefix, selfOwner } from './tmpRoot';
 
 /** base/victime (à supprimer) et base/dehors (cibles des liens : doit rester intact, droits compris). */
 function tree() {
@@ -141,5 +141,77 @@ describe('ownerDead : seulement sur preuve', () => {
   test('le vrai processus courant : vivant', () => {
     const me = selfOwner();
     expect(ownerDead(me, { ns: me.ns })).toBe(false);
+  });
+});
+
+describe('purgeOrphanRoots', () => {
+  const NS = '4026531836';
+  const proc = makeProcRoot();
+  addProc(proc, { pid: 500, comm: 'node', starttime: 777 });
+  const noMounts = () => '';
+  /** Fausse ~/.cache/pw-vitest : une racine par cas, chacune avec un sous-dossier en lecture seule. */
+  function base() {
+    const b = join(mkdtempSync(join(tmpdir(), 'pw-purge-')), 'pw-vitest');
+    mkdirSync(b);
+    const root = (name: string) => {
+      const p = join(b, name);
+      mkdirSync(join(p, 'ro', 'x'), { recursive: true });
+      writeFileSync(join(p, 'ro', 'x', 'f.db'), 'x');
+      chmodSync(join(p, 'ro', 'x'), 0o500);
+      chmodSync(join(p, 'ro'), 0o000);
+      return p;
+    };
+    return { b, root };
+  }
+
+  test('seules les racines au propriétaire mort (absent ou pid réutilisé) sont purgées', () => {
+    const { b, root } = base();
+    const out = join(b, '..', 'dehors');
+    mkdirSync(out);
+    writeFileSync(join(out, 'precieux.txt'), 'garder');
+    root(`500-777-${NS}-Vivant`);
+    root(`501-1-${NS}-MortAA`);
+    root(`500-778-${NS}-Reutil`);
+    root(`502-1-4026532000-AutreN`);
+    root('pw-vitest-AbC123');
+    root('notes');
+    writeFileSync(join(b, `503-1-${NS}-Fichie`), 'pas un dossier');
+    symlinkSync(out, join(b, `504-1-${NS}-LienAA`));
+    const r = purgeOrphanRoots(b, { procRoot: proc, ns: NS, mountinfo: noMounts });
+    expect(r.purged.sort()).toEqual([`500-778-${NS}-Reutil`, `501-1-${NS}-MortAA`]);
+    expect(r.errors).toEqual([]);
+    for (const kept of [`500-777-${NS}-Vivant`, `502-1-4026532000-AutreN`, 'pw-vitest-AbC123', 'notes', `503-1-${NS}-Fichie`, `504-1-${NS}-LienAA`])
+      expect(lstatSync(join(b, kept)), kept).toBeTruthy();
+    expect(readFileSync(join(out, 'precieux.txt'), 'utf8')).toBe('garder');
+  });
+
+  test('racine morte qui contient un point de montage : gardée, jamais parcourue, signalée', () => {
+    const { b, root } = base();
+    const p = root(`501-1-${NS}-Montee`);
+    const mi = `36 25 0:99 / ${join(p, 'ro', 'x')} rw,relatime shared:1 - fuse.squashfuse squashfuse ro\n`;
+    const r = purgeOrphanRoots(b, { procRoot: proc, ns: NS, mountinfo: () => mi });
+    expect(r.purged).toEqual([]);
+    expect(r.errors.join('\n')).toMatch(/contient un point de montage/);
+    expect(lstatSync(p).isDirectory()).toBe(true);
+  });
+
+  test('points de montage illisibles : rien n’est purgé', () => {
+    const { b, root } = base();
+    root(`501-1-${NS}-MortBB`);
+    const r = purgeOrphanRoots(b, {
+      procRoot: proc, ns: NS, mountinfo: () => {
+        throw new Error('EACCES');
+      },
+    });
+    expect(r.purged).toEqual([]);
+    expect(r.errors.join('\n')).toMatch(/points de montage illisibles/);
+  });
+
+  test('garde-fou : seulement dans un dossier nommé pw-vitest ; dossier absent : rien', () => {
+    const other = mkdtempSync(join(tmpdir(), 'pw-purge-'));
+    mkdirSync(join(other, `501-1-${NS}-MortCC`));
+    expect(() => purgeOrphanRoots(other, { procRoot: proc, ns: NS, mountinfo: noMounts })).toThrow(/pw-vitest/);
+    expect(existsSync(join(other, `501-1-${NS}-MortCC`))).toBe(true);
+    expect(purgeOrphanRoots(join(other, 'pw-vitest'), { procRoot: proc, ns: NS, mountinfo: noMounts })).toEqual({ purged: [], errors: [] });
   });
 });
