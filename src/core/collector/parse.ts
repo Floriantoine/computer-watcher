@@ -87,3 +87,9 @@ export function parsePsiSome10(content: string): number | null {
   const m = content.match(/^some avg10=([\d.]+)/m);
   return m ? parseFloat(m[1]) : null;
 }
+
+/** Ligne « full » : part du temps où toutes les tâches non inactives attendaient la ressource en même temps. */
+export function parsePsiFull10(content: string): number | null {
+  const m = content.match(/^full avg10=([\d.]+)/m);
+  return m ? parseFloat(m[1]) : null;
+}

@@ -46,6 +46,11 @@ export interface SystemInfo {
   load1: number;
   /** /proc/pressure/memory "some avg10", null si PSI indisponible */
   psiSome10: number | null;
+  /**
+   * /proc/pressure/memory "full avg10" : part du temps où toutes les tâches attendaient la mémoire (étouffement) ; null si
+   * PSI indisponible, absent des instantanés construits ailleurs que par readSystem (tests, anciennes données).
+   */
+  psiFull10?: number | null;
   /** Champ Shmem de /proc/meminfo : fichiers en mémoire (/tmp, /dev/shm) et mémoire partagée */
   shmemKB: number | null;
 }

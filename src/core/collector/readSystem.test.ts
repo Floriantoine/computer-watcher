@@ -10,15 +10,16 @@ function withSystemFiles(psi: boolean): string {
   writeFileSync(join(root, 'loadavg'), '3.50 2.00 1.00 1/100 999\n');
   if (psi) {
     mkdirSync(join(root, 'pressure'));
-    writeFileSync(join(root, 'pressure', 'memory'), 'some avg10=12.50 avg60=0 avg300=0 total=0\n');
+    writeFileSync(join(root, 'pressure', 'memory'), 'some avg10=12.50 avg60=0 avg300=0 total=0\nfull avg10=7.25 avg60=0 avg300=0 total=0\n');
   }
   return root;
 }
 
 test('lit mémoire, charge et PSI', () => {
-  expect(readSystem(withSystemFiles(true))).toEqual({ memTotalKB: 1000, memAvailableKB: 400, swapTotalKB: 2000, swapFreeKB: 500, load1: 3.5, psiSome10: 12.5, shmemKB: 250 });
+  expect(readSystem(withSystemFiles(true))).toEqual({ memTotalKB: 1000, memAvailableKB: 400, swapTotalKB: 2000, swapFreeKB: 500, load1: 3.5, psiSome10: 12.5, psiFull10: 7.25, shmemKB: 250 });
 });
 
 test('PSI absent → null', () => {
   expect(readSystem(withSystemFiles(false)).psiSome10).toBeNull();
+  expect(readSystem(withSystemFiles(false)).psiFull10).toBeNull();
 });

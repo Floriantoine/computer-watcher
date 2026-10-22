@@ -1,12 +1,15 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SystemInfo } from '../types';
-import { parseLoadavg, parseMeminfo, parsePsiSome10 } from './parse';
+import { parseLoadavg, parseMeminfo, parsePsiFull10, parsePsiSome10 } from './parse';
 
 export function readSystem(procRoot = '/proc'): SystemInfo {
   let psiSome10: number | null = null;
+  let psiFull10: number | null = null;
   try {
-    psiSome10 = parsePsiSome10(readFileSync(join(procRoot, 'pressure', 'memory'), 'utf8'));
+    const psi = readFileSync(join(procRoot, 'pressure', 'memory'), 'utf8');
+    psiSome10 = parsePsiSome10(psi);
+    psiFull10 = parsePsiFull10(psi);
   } catch {
     // noyau sans PSI
   }
@@ -14,5 +17,6 @@ export function readSystem(procRoot = '/proc'): SystemInfo {
     ...parseMeminfo(readFileSync(join(procRoot, 'meminfo'), 'utf8')),
     load1: parseLoadavg(readFileSync(join(procRoot, 'loadavg'), 'utf8')),
     psiSome10,
+    psiFull10,
   };
 }
