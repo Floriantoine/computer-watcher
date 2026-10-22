@@ -16,12 +16,13 @@ describe('Réglages › Règles : condition « Saturation »', () => {
     for (const [id, v] of [['rule-mem-percent', '95'], ['rule-mem-for-sec', '15'], ['rule-cpu-percent', '95'], ['rule-cpu-for-sec', '60'], ['rule-psi-percent', '40'], ['rule-psi-for-sec', '20']]) {
       expect(h).toContain(`data-testid="${id}" value="${v}"`);
     }
-    expect(h).toContain('Ou pression mémoire au-dessus de');
+    expect(h).toContain('Ou pression mémoire du bureau et des applis au-dessus de');
   });
 
-  it('une phrase d’aide dit ce qu’est la pression mémoire, et que vides elle ne compte pas', () => {
+  it('une phrase d’aide dit ce qu’est la pression du bureau et des applis, sans les projets freinés, et que vides elle ne compte pas', () => {
     const h = html(ruleToForm(sysRule));
-    expect(h).toContain('part du temps où tout ce qui tourne attend la mémoire');
+    expect(h).toContain('part du temps où ce qu’ils font tourner attend la mémoire');
+    expect(h).toContain('Un projet simplement freiné par son budget n’y compte pas.');
     expect(h).toContain('Les deux champs vides : pas de condition de pression.');
   });
 

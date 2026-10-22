@@ -84,7 +84,7 @@ describe('condition système (anti-gel)', () => {
       'Si la mémoire dépasse 90 % pendant 30 s ou le CPU 99 % pendant 90 s → arrêter la plus grosse vérification (tests, tsc, eslint), une à la fois',
     );
     expect(ruleSummary({ ...templates[3]!, condition: { kind: 'system', memPercent: 90, memForSec: 30, cpuPercent: 99, cpuForSec: 90, psiPercent: 50, psiForSec: 120 } })).toBe(
-      'Si la mémoire dépasse 90 % pendant 30 s, le CPU 99 % pendant 90 s ou la pression mémoire 50 % pendant 2 min → arrêter la plus grosse vérification (tests, tsc, eslint), une à la fois',
+      'Si la mémoire dépasse 90 % pendant 30 s, le CPU 99 % pendant 90 s ou la pression mémoire du bureau et des applis 50 % pendant 2 min → arrêter la plus grosse vérification (tests, tsc, eslint), une à la fois',
     );
   });
 });
@@ -110,7 +110,7 @@ describe('ruleSummary', () => {
       'Si une instance Tests dépasse 4 Go pendant 5 min → arrêter',
       'Si une instance Front ou Back de projet est inactive depuis 4 h → arrêter',
       "Si la mémoire doit s'épuiser dans moins de 3 min → arrêter le plus gros groupe qui grossit",
-      'Si la mémoire dépasse 95 % pendant 15 s, le CPU 95 % pendant 1 min ou la pression mémoire 40 % pendant 20 s → arrêter la plus grosse vérification (tests, tsc, eslint), une à la fois',
+      'Si la mémoire dépasse 95 % pendant 15 s, le CPU 95 % pendant 1 min ou la pression mémoire du bureau et des applis 40 % pendant 20 s → arrêter la plus grosse vérification (tests, tsc, eslint), une à la fois',
     ]);
     expect(ruleSummary(vitestRule)).toBe('Si vitest dépasse 4 Go pendant 5 min → arrêter');
   });

@@ -11,7 +11,7 @@ export const RULE_BOUNDS = {
   overMB: [100, 65_536], forMin: [1, 120], forHours: [1, 720], underMin: [1, 30],
   // anti-gel : jamais sous 70 % (tuerait des tests sur une machine simplement occupée), durées de 5 s à 10 min
   memPercent: [70, 99], memForSec: [5, 600], cpuPercent: [70, 100], cpuForSec: [10, 600],
-  // pression mémoire (PSI full) : jamais sous 10 % (usage normal 0 à 8 %), durées de 5 s à 5 min
+  // pression mémoire du bureau et des applis (PSI full) : jamais sous 10 % (proche de 0 en usage normal), de 5 s à 5 min
   psiPercent: [10, 90], psiForSec: [5, 300],
 } as const;
 export const RULE_ID_RE = /^[a-z0-9-]{1,40}$/;

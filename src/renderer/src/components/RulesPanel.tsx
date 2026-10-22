@@ -76,7 +76,7 @@ function Toggles<T extends string>({ items, selected, onChange, label, testid }:
   );
 }
 
-/** Condition « Saturation » (anti-gel) : mémoire utilisée, CPU total et pression mémoire, chacun avec sa durée. */
+/** Condition « Saturation » (anti-gel) : mémoire utilisée, CPU total et pression mémoire du bureau et des applis, chacun avec sa durée. */
 export function SystemRuleFields({ form: f, errors: err, onChange: setForm }: { form: RuleForm; errors: RuleErrors; onChange: (patch: Partial<RuleForm>) => void }) {
   return (
     <>
@@ -93,9 +93,9 @@ export function SystemRuleFields({ form: f, errors: err, onChange: setForm }: { 
         {(id) => <TextField id={id} value={f.cpuForSec} unit="s" ariaLabel="Durée CPU" invalid={!!err.cpuForSec} testid="rule-cpu-for-sec" onChange={(v) => setForm({ cpuForSec: v })} />}
       </Row>
       <Row
-        label="Ou pression mémoire au-dessus de"
+        label="Ou pression mémoire du bureau et des applis au-dessus de"
         error={err.psiPercent}
-        help="Pression mémoire (PSI « full ») : part du temps où tout ce qui tourne attend la mémoire (swap, cache relu en boucle). 0 à 8 % en temps normal ; vers 60 à 90 %, la machine gèle, même avec la RAM utilisée sous 95 %. Les deux champs vides : pas de condition de pression."
+        help="Pression mémoire du bureau et des applis (PSI « full » de session.slice, app.slice et des sessions de connexion, la plus haute) : part du temps où ce qu’ils font tourner attend la mémoire (swap, cache relu en boucle). Proche de 0 % en temps normal ; elle monte quand ils gèlent, même avec la RAM utilisée sous 95 %. Un projet simplement freiné par son budget n’y compte pas. Sans ces cgroups (session sans systemd) : celle de toute la machine. Les deux champs vides : pas de condition de pression."
       >
         {(id) => <TextField id={id} value={f.psiPercent} unit="%" ariaLabel="Seuil de pression mémoire" invalid={!!err.psiPercent} testid="rule-psi-percent" onChange={(v) => setForm({ psiPercent: v })} />}
       </Row>

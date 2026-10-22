@@ -8,8 +8,8 @@ export const REC_ANTIGEL_ID = 'rec-antigel';
 
 /**
  * Valeurs par défaut de la condition système (formulaire, modèle et règle recommandée), dans l'ordre de la validation.
- * Pression mémoire (PSI full) 40 % pendant 20 s : 0 à 8 % en usage normal, 60 à 90 % pendant le gel du 2026-10-22 (la
- * mémoire utilisée n'y a jamais passé 93 %).
+ * Pression mémoire du bureau et des applis (PSI full) 40 % pendant 20 s : proche de 0 en usage normal ; pendant le gel du
+ * 2026-10-22, la PSI de la machine est restée à 60-90 % alors que la mémoire utilisée n'a jamais passé 93 %.
  */
 export const SYSTEM_DEFAULTS = { memPercent: 95, memForSec: 15, cpuPercent: 95, cpuForSec: 60, psiPercent: 40, psiForSec: 20 } as const;
 

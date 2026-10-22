@@ -25,7 +25,7 @@ export interface RuleForm {
   memForSec: string;
   cpuPercent: string;
   cpuForSec: string;
-  /** Anti-gel : pression mémoire (PSI full, %) et durée (s) ; les deux vides : pas de condition de pression. */
+  /** Anti-gel : pression mémoire du bureau et des applis (PSI full, %) et durée (s) ; les deux vides : pas de condition de pression. */
   psiPercent: string;
   psiForSec: string;
 }
@@ -171,7 +171,7 @@ export function ruleSummary(r: Rule): string {
   if (c.kind === 'inactive') return `Si une instance ${catList(c.categories)} de projet est inactive depuis ${duration(c.forHours)} → arrêter`;
   if (c.kind === 'system') {
     const parts = [`la mémoire dépasse ${c.memPercent} % pendant ${seconds(c.memForSec)}`, `le CPU ${c.cpuPercent} % pendant ${seconds(c.cpuForSec)}`];
-    if (c.psiPercent !== undefined && c.psiForSec !== undefined) parts.push(`la pression mémoire ${c.psiPercent} % pendant ${seconds(c.psiForSec)}`);
+    if (c.psiPercent !== undefined && c.psiForSec !== undefined) parts.push(`la pression mémoire du bureau et des applis ${c.psiPercent} % pendant ${seconds(c.psiForSec)}`);
     return `Si ${parts.slice(0, -1).join(', ')} ou ${parts[parts.length - 1]} → arrêter la plus grosse vérification (tests, tsc, eslint), une à la fois`;
   }
   const apps = c.includeApps.length ? ` (applis incluses : ${c.includeApps.join(', ')})` : '';

@@ -18,8 +18,9 @@ export type RuleCondition =
   | { kind: 'forecast'; underMin: number; includeApps: string[] }
   /**
    * (d) anti-gel : la RAM utilisée (d'après MemAvailable) ≥ `memPercent` pendant `memForSec`, OU le CPU total ≥
-   * `cpuPercent` pendant `cpuForSec`, OU la pression mémoire (PSI « full » avg10 : part du temps où tout ce qui tourne
-   * attend la mémoire) ≥ `psiPercent` pendant `psiForSec`. Les deux champs de pression vont ensemble ; absents (règles
+   * `cpuPercent` pendant `cpuForSec`, OU la pression mémoire du bureau et des applis (PSI « full » avg10 de session.slice,
+   * app.slice et des sessions de connexion ; repli sur la machine) ≥ `psiPercent` pendant `psiForSec`. Un projet freiné par
+   * son budget (cwatch.slice) n'y compte pas. Les deux champs de pression vont ensemble ; absents (règles
    * d'avant le 2026-10-22) : pas de condition de pression. Cible : la plus grosse « vérification » (instance de catégorie
    * Test, ou `tsc` / `eslint` reconnus à leur ligne de commande), une à la fois.
    */
