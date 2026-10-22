@@ -30,7 +30,8 @@ export function appLauncher(p: { appImage?: string; execPath: string; recorderSc
 
 /**
  * Avec systemd-run : unité transitoire du gestionnaire de l'utilisateur, hors du cgroup du service (un redémarrage du
- * service ne tue pas l'app) et sans hériter de sa priorité basse (Nice=10). Sinon lancement direct détaché.
+ * service ne tue pas l'app, la protection mémoire du service ne couvre pas l'app) et sans hériter de ses réglages
+ * (OOMScoreAdjust). Sinon lancement direct détaché.
  */
 export function appLaunchCommand(l: Launcher, extra: string[], systemdRun: string | null): Launcher {
   if (systemdRun) return { cmd: systemdRun, args: ['--user', '--collect', '--quiet', '--', l.cmd, ...l.args, ...extra], timeoutMs: SYSTEMD_RUN_TIMEOUT_MS };
