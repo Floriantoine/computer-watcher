@@ -5,10 +5,10 @@
 // metrics.db), service systemd laissé tranquille (PROC_WATCH_NO_RECORDER_SYNC), racine /tmp factice sous ~/.cache/pw-…
 // (PROC_WATCH_TMP_ROOT, avec son fichier témoin), earlyoom simulé (PROC_WATCH_EARLYOOM_FAKE : aucun pop-up selon la machine).
 // Aucune suppression n'est demandée : aucun bouton « Supprimer » ni
-// « Vider la quarantaine » n'est cliqué. L'alerte tmpfs est simulée en remplaçant, dans le main, les gestionnaires IPC
+// « Vider la quarantaine » n'est cliqué ; seuls de faux caches connus de la racine factice sont vidés (« Vider »). L'alerte tmpfs est simulée en remplaçant, dans le main, les gestionnaires IPC
 // de lecture des alertes. Captures seulement si TMP_PAGE_SHOTS désigne un dossier (hors du dépôt).
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { _electron as electron } from 'playwright';
@@ -36,6 +36,22 @@ fill(join(root, 'Beta-logs', 'app.log'), 1024);
 mkdirSync(join(root, '.proc-watch-trash-1'));
 fill(join(root, '.proc-watch-trash-1', 'reste.bin'), 128);
 chmodSync(join(root, '.proc-watch-trash-1'), 0o700);
+// faux caches connus : Jest (101 Mo : bouton du pop-up à partir de 100 Mo ; dossiers gardés au vidage), Node.js, et un
+// « cache » v8-compile-cache qui n'est qu'un lien vers un dossier précieux (jamais suivi, jamais vidé)
+const uid = process.getuid();
+const jestCache = join(root, `jest_${uid.toString(36)}`);
+mkdirSync(join(jestCache, 'jest-transform-cache-x', '0f'), { recursive: true });
+fill(join(jestCache, 'jest-transform-cache-x', '0f', 'mod_0f'), 101 * 1024);
+fill(join(jestCache, 'haste-map-x'), 64);
+const ncc = join(root, 'node-compile-cache');
+mkdirSync(join(ncc, 'v24-x64-abc'), { recursive: true });
+fill(join(ncc, 'v24-x64-abc', '0026279'), 1024);
+const precious = join(base, 'precieux');
+mkdirSync(precious);
+writeFileSync(join(precious, 'garder.txt'), 'garder');
+symlinkSync(precious, join(root, `v8-compile-cache-${uid}`));
+const CACHE_NAMES = [`jest_${uid.toString(36)}`, 'node-compile-cache', `v8-compile-cache-${uid}`];
+const filesUnder = (d) => readdirSync(d, { recursive: true, withFileTypes: true }).filter((e) => !e.isDirectory()).map((e) => e.name);
 
 const shots = process.env.TMP_PAGE_SHOTS;
 if (shots) mkdirSync(shots, { recursive: true });
@@ -81,9 +97,29 @@ try {
   assert.match(tiles, /Occupé\s*[\d,]+ [KMG]o \/ [\d,]+ [KMG]o[\s\S]*Part de la RAM\s*—\s*pas en RAM[\s\S]*Quarantaine\s*1/);
   assert.equal(await win.locator('[data-testid="tmp-clean-empty-quarantine"]').count(), 1);
   // entrées système de la racine (fichier témoin, quarantaine) : listées, refusées ; hors du contrôle d'ordre
-  const names = async () => (await win.locator('[data-testid="tmp-clean-row"] label').allInnerTexts()).filter((n) => !n.startsWith('.'));
+  const names = async () => (await win.locator('[data-testid="tmp-clean-row"] label').allInnerTexts()).filter((n) => !n.startsWith('.') && !CACHE_NAMES.includes(n));
   assert.deepEqual(await names(), ['acme-build', 'Beta-logs', 'feature-x', 'zeta-notes.txt'], 'tri par taille décroissante par défaut');
   await shot(win, 'tmp-page-taille');
+  // 1 ter) caches connus : Jest et Node.js vidables, le lien refusé ; « Tout vider » ; conseil cacheDirectory
+  const caches = win.locator('[data-testid="tmp-caches"]');
+  await caches.locator('[data-testid="tmp-cache-row"]').first().waitFor();
+  assert.equal(await caches.locator('[data-testid="tmp-cache-row"]').count(), 3);
+  const cachesText = await caches.innerText();
+  assert.match(cachesText, new RegExp(`Cache de transformation de Jest\\s*jest_${uid.toString(36)}\\s*101 Mo`));
+  assert.match(cachesText, /Cache de compilation de Node\.js\s*node-compile-cache\s*1 Mo/);
+  assert.match(cachesText, /v8-compile-cache-\d+\s*lien symbolique \(jamais suivi\)/);
+  assert.match(cachesText, /cacheDirectory/);
+  assert.match(await win.locator('[data-testid="tmp-caches-empty-all"]').innerText(), /Tout vider \(102 Mo\)/);
+  assert.equal(await win.locator('[data-testid="tmp-cache-empty-v8-compile-cache"]').count(), 0);
+  await shotOf(caches, 'tmp-page-caches');
+  // « Vider » Node.js (un clic, sans confirmation) : fichiers supprimés, dossiers gardés, rien d'autre touché
+  await win.locator('[data-testid="tmp-cache-empty-node-compile-cache"]').click();
+  await win.locator('.toast', { hasText: 'Cache Node.js vidé : 1 Mo libérés' }).waitFor();
+  await win.locator('[data-testid="tmp-cache-empty-node-compile-cache"]').waitFor({ state: 'detached' });
+  assert.deepEqual(filesUnder(ncc), [], 'fichiers du cache Node.js supprimés');
+  assert.ok(existsSync(join(ncc, 'v24-x64-abc')), 'dossiers du cache gardés');
+  assert.equal(filesUnder(jestCache).length, 2, 'cache Jest pas encore touché');
+  assert.equal(readFileSync(join(precious, 'garder.txt'), 'utf8'), 'garder', 'lien jamais suivi');
   // 1 bis) même page sur un tmpfs (statfs simulé : 2,5 Go occupés sur 16 Go, 32 Go de RAM)
   await app.evaluate(({ ipcMain }, r) => {
     ipcMain.removeHandler('tmp:stats');
@@ -100,7 +136,7 @@ try {
   await shot(win, 'tmp-page-nom');
   await win.locator('[data-testid="tmp-sort-size"]').click();
   // 3) sélection : résumé et libellé du bouton (sans jamais cliquer « Supprimer »)
-  await win.locator('[data-testid="tmp-clean-row"] input[type="checkbox"]').first().check();
+  await win.locator('[data-testid="tmp-clean-row"]', { hasText: 'acme-build' }).locator('input[type="checkbox"]').check();
   await win.locator('[data-testid="tmp-clean-summary"]').waitFor();
   assert.match(await win.locator('[data-testid="tmp-clean-delete"]').innerText(), /Supprimer la sélection \(1 · 3 Mo\)/);
   await shot(win, 'tmp-page-selection');
@@ -128,12 +164,22 @@ try {
   await open.click();
   await page.waitFor();
 
-  // 7) pop-up d'alerte → page /tmp
+  // 7) pop-up d'alerte → « Vider … » (Jest : au moins 100 Mo), puis page /tmp
   await backToMain();
   const popupGo = win.locator('[data-testid="alert-popup"] .alert-popup-go', { hasText: 'Voir /tmp' });
   await popupGo.waitFor({ timeout: 20000 });
   assert.equal(await popupGo.getAttribute('aria-expanded'), null);
+  const popupEmpty = win.locator('[data-testid="alert-popup-empty-caches"]');
+  await popupEmpty.waitFor();
+  // mesuré à l'apparition du pop-up : avant ou après le vidage de Node.js ci-dessus
+  assert.match(await popupEmpty.innerText(), /Vider (le cache Jest|les caches) \(10[12] Mo\)/);
   await shotOf(win.locator('[data-testid="alert-popup"]').first(), 'popup');
+  await popupEmpty.click();
+  await win.locator('.toast', { hasText: /(Cache Jest vidé|2 caches vidés) : 101 Mo libérés/ }).waitFor();
+  await popupEmpty.waitFor({ state: 'detached' });
+  assert.deepEqual(filesUnder(jestCache), [], 'fichiers du cache Jest supprimés');
+  assert.ok(existsSync(join(jestCache, 'jest-transform-cache-x', '0f')), 'dossiers du cache Jest gardés');
+  assert.equal(readFileSync(join(precious, 'garder.txt'), 'utf8'), 'garder', 'lien jamais suivi');
   await popupGo.click();
   await page.waitFor();
 
