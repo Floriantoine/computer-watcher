@@ -2,7 +2,7 @@
 // utilisateur, vrais cgroups, mais SEULEMENT des processus créés ici (tail, petit allocateur), arrêtés par leur propre
 // ChildProcess.kill, sous des unités de test seulement (amendement A1) :
 //   cwatch.slice/cwatch-e2e<id>.slice                         slice de test racine (plafonds)
-//     └ cwatch-e2e<id>-a.slice                                slice de projet de test (budget MemoryHigh)
+//     └ cwatch-e2e<id>-a.slice                                slice de projet de test (budget : MemoryHigh, MemoryMax, MemorySwapMax)
 //       ├ cwatch-e2e<id>-1.scope                              scope neuf : tail
 //       └ cwatch-e2e<id>-2.scope                              scope neuf : allocateur
 // Jamais d'appel sur cwatch.slice ni sur une unité cwatch-p-… ; tout est arrêté à la fin (nettoyage toujours exécuté).
@@ -22,6 +22,9 @@ const RUN = process.env.PROC_WATCH_ANTIGEL_E2E === '1';
 const SYSFS = '/sys/fs/cgroup';
 // 12 × 8 Mo touchés (96 Mo) à la demande : au-dessus du MemoryHigh de la slice de test (64 Mo), sous son MemoryMax (256 Mo)
 const ALLOC = "const k=[];process.stdin.on('data',()=>{for(let i=0;i<12;i++)k.push(Buffer.alloc(8*1024*1024,1));process.stdout.write('ok\\n')});setInterval(()=>{},1e6);";
+// plafonds de la slice de projet de test (budget, plafond dur, part de swap), en petit
+const T48 = { highBytes: 48 * MiB, maxBytes: 96 * MiB, swapMaxBytes: 12 * MiB };
+const T40 = { highBytes: 40 * MiB, maxBytes: 80 * MiB, swapMaxBytes: 10 * MiB };
 
 const wait = async (fn: () => boolean, ms: number, what: string) => {
   const t0 = Date.now();
@@ -97,20 +100,22 @@ test.skipIf(!RUN)(
       expect(read(sliceDir, 'memory.swap.max').trim()).toBe('0');
       seen.push(`${sliceDir} : memory.high=${read(sliceDir, 'memory.high').trim()} memory.max=${read(sliceDir, 'memory.max').trim()} memory.swap.max=${read(sliceDir, 'memory.swap.max').trim()}`);
 
-      // 2) slice de projet de test avec un budget (48 Mo), sur le chemin réel …/cwatch.slice/cwatch-e2e<id>.slice/cwatch-e2e<id>-a.slice
-      await client.ensureProjectSlice(projSlice, 48 * MiB);
+      // 2) slice de projet de test avec un budget (48 Mo, plafond dur 96 Mo, swap 12 Mo), sur le chemin réel
+      // …/cwatch.slice/cwatch-e2e<id>.slice/cwatch-e2e<id>-a.slice
+      await client.ensureProjectSlice(projSlice, T48);
       await wait(() => existsSync(projDir), 5000, 'slice de projet créée');
       expect(limitOf(projDir, 'memory.high')).toBe(48 * MiB);
-      expect(read(projDir, 'memory.max').trim()).toBe('max'); // seul le budget MemoryHigh est posé sur la slice de projet
-      seen.push(`${projDir} : memory.high=${read(projDir, 'memory.high').trim()} memory.max=${read(projDir, 'memory.max').trim()}`);
+      expect(limitOf(projDir, 'memory.max')).toBe(96 * MiB);
+      expect(limitOf(projDir, 'memory.swap.max')).toBe(12 * MiB);
+      seen.push(`${projDir} : memory.high=${read(projDir, 'memory.high').trim()} memory.max=${read(projDir, 'memory.max').trim()} memory.swap.max=${read(projDir, 'memory.swap.max').trim()}`);
 
       // 7b) slice de projet déjà chargée : « exists » → bascule sur SetUnitProperties (deux appels, budget changé dans /sys)
       const before = client.calls();
-      await client.ensureProjectSlice(projSlice, 40 * MiB);
+      await client.ensureProjectSlice(projSlice, T40);
       expect(client.calls() - before).toBe(2);
-      await wait(() => limitOf(projDir, 'memory.high') === 40 * MiB, 5000, 'budget reposé par SetUnitProperties');
+      await wait(() => limitOf(projDir, 'memory.high') === 40 * MiB && limitOf(projDir, 'memory.max') === 80 * MiB, 5000, 'budget reposé par SetUnitProperties');
       seen.push(`${projDir} après ensureProjectSlice sur slice chargée : memory.high=${read(projDir, 'memory.high').trim()}`);
-      await client.ensureProjectSlice(projSlice, 48 * MiB);
+      await client.ensureProjectSlice(projSlice, T48);
       await wait(() => limitOf(projDir, 'memory.high') === 48 * MiB, 5000, 'budget 48 Mo reposé');
 
       // 3) premier scope neuf avec tail (revérifié juste avant), second scope neuf dans la même slice avec l'allocateur
@@ -141,10 +146,10 @@ test.skipIf(!RUN)(
       // 5) le plafond global s'applique au-dessus : chaque scope est descendant de la slice de test plafonnée ; le budget
       // du projet est d'abord retiré (6a) pour que ce soit bien le MemoryHigh de la slice de test qui freine l'allocateur
       for (const s of [scope1, scope2]) expect(scopeCg(s).startsWith(`${sliceCg}/`)).toBe(true);
-      // 6a) budget de la slice de projet retiré : infinity → « max » dans /sys
-      await client.setProjectHigh(projSlice, null);
-      await wait(() => read(projDir, 'memory.high').trim() === 'max', 5000, 'budget retiré');
-      seen.push(`${projDir} après retrait du budget : memory.high=${read(projDir, 'memory.high').trim()}`);
+      // 6a) budget de la slice de projet retiré : infinity → « max » dans /sys (budget, plafond dur et part de swap)
+      await client.setProjectCaps(projSlice, null);
+      await wait(() => ['memory.high', 'memory.max', 'memory.swap.max'].every((f) => read(projDir, f).trim() === 'max'), 5000, 'budget retiré');
+      seen.push(`${projDir} après retrait du budget : memory.high=${read(projDir, 'memory.high').trim()} memory.max=${read(projDir, 'memory.max').trim()} memory.swap.max=${read(projDir, 'memory.swap.max').trim()}`);
       const ev0 = parseMemoryEvents(read(sliceDir, 'memory.events')).high;
       const local0 = parseMemoryEvents(read(sliceDir, 'memory.events.local')).high;
       alloc.stdin!.write('go\n');

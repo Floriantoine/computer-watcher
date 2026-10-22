@@ -4,6 +4,7 @@ import { buildGroups } from '../grouping/buildGroups';
 import type { ProcInfo, SystemInfo } from '../types';
 import type { AntigelConfig } from './config';
 import { createAntigel } from './controller';
+import { projectCaps } from './limits';
 import type { RunScopeDeps } from './runScopes';
 import { fakeSystemd, sampleStats } from './testFixtures';
 import { hashedProjectSlice } from './run';
@@ -77,8 +78,8 @@ describe('scopes « run » vus par le contrôleur', () => {
       config: { ...ON, budgets: { [A]: 2048 } },
     });
     await h.step();
-    expect(h.fake.calls.map((c) => c[0])).toEqual(['ensureSlice', 'setProjectHigh']);
-    expect(h.fake.calls[1]).toEqual(['setProjectHigh', HS, 2048 * 1024 * 1024]);
+    expect(h.fake.calls.map((c) => c[0])).toEqual(['ensureSlice', 'setProjectCaps']);
+    expect(h.fake.calls[1]).toEqual(['setProjectCaps', HS, projectCaps(2048)]);
     expect(h.ag.state()).toMatchObject({ slices: { [HS]: A }, projects: [{ unit: HS, root: A, procs: 2, budgetMB: 2048 }] });
     // ensuite : rien de plus, ni déplacement ni nouvelle lecture de dossier courant
     h.fake.calls.length = 0;

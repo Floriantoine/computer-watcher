@@ -1,13 +1,15 @@
 import { describe, expect, test } from 'vitest';
-import { GiB, INFINITY_T, MiB } from './limits';
+import { GiB, INFINITY_T, MiB, projectCaps } from './limits';
 import {
-  BusctlError, DESCRIPTION, classifyBusctlError, createBusctl, createSystemdClient, setProjectHighArgv, setSliceArgv,
+  BusctlError, DESCRIPTION, classifyBusctlError, createBusctl, createSystemdClient, setProjectCapsArgv, setSliceArgv,
   startProjectSliceArgv, startScopeArgv, startSliceArgv, stopTestUnitArgv, type ExecLike,
 } from './systemd';
 
 const HEAD = ['--user', '--timeout=5', 'call', 'org.freedesktop.systemd1', '/org/freedesktop/systemd1', 'org.freedesktop.systemd1.Manager'];
 const L = { reserveBytes: 4 * GiB, highBytes: 12 * GiB, maxBytes: 14 * GiB, swapMaxBytes: 4 * GiB };
 const REAL_EXISTS = 'Call failed: Unit cwatch-p-alpha.slice was already loaded or has a fragment file.';
+const C4 = projectCaps(4096); // freine à 4 Go, arrêt à 5 Go, swap 1 Go
+const C6 = projectCaps(6144);
 
 describe('argv busctl figés', () => {
   test('scope neuf : PIDs dédoublonnés, Slice de projet, OOMPolicy=continue, CollectMode=inactive-or-failed, Description, aucune limite', () => {
@@ -33,14 +35,19 @@ describe('argv busctl figés', () => {
     expect(setSliceArgv('cwatch.slice', { ...L, swapMaxBytes: 0 }).slice(-1)).toEqual(['0']);
   });
 
-  test('slice de projet : seulement MemoryHigh (budget ou infinity)', () => {
-    expect(startProjectSliceArgv('cwatch-p-alpha.slice', 4 * GiB)).toEqual([
-      ...HEAD, 'StartTransientUnit', 'ssa(sv)a(sa(sv))', 'cwatch-p-alpha.slice', 'fail', '2', 'Description', 's', DESCRIPTION, 'MemoryHigh', 't', String(4 * GiB), '0',
+  test('slice de projet : budget (MemoryHigh), plafond dur (MemoryMax), part de swap (MemorySwapMax) ; sans budget : infinity', () => {
+    expect(startProjectSliceArgv('cwatch-p-alpha.slice', C4)).toEqual([
+      ...HEAD, 'StartTransientUnit', 'ssa(sv)a(sa(sv))', 'cwatch-p-alpha.slice', 'fail', '4', 'Description', 's', DESCRIPTION,
+      'MemoryHigh', 't', String(4 * GiB), 'MemoryMax', 't', String(5 * GiB), 'MemorySwapMax', 't', String(GiB), '0',
     ]);
-    expect(startProjectSliceArgv('cwatch-p-alpha.slice', null).slice(-2)).toEqual([INFINITY_T, '0']);
-    expect(setProjectHighArgv('cwatch-p-alpha.slice', 6 * GiB)).toEqual([...HEAD, 'SetUnitProperties', 'sba(sv)', 'cwatch-p-alpha.slice', 'true', '1', 'MemoryHigh', 't', String(6 * GiB)]);
-    expect(setProjectHighArgv('cwatch-e2eab12-a.slice', null).slice(-1)).toEqual([INFINITY_T]);
-    expect(setProjectHighArgv('cwatch-p-alpha.slice', null).join(' ')).not.toMatch(/MemoryMax|MemorySwapMax/);
+    expect(startProjectSliceArgv('cwatch-p-alpha.slice', null).slice(-10)).toEqual(['MemoryHigh', 't', INFINITY_T, 'MemoryMax', 't', INFINITY_T, 'MemorySwapMax', 't', INFINITY_T, '0']);
+    expect(setProjectCapsArgv('cwatch-p-alpha.slice', C6)).toEqual([
+      ...HEAD, 'SetUnitProperties', 'sba(sv)', 'cwatch-p-alpha.slice', 'true', '3',
+      'MemoryHigh', 't', String(6 * GiB), 'MemoryMax', 't', String(7.5 * GiB), 'MemorySwapMax', 't', String(1.5 * GiB),
+    ]);
+    expect(setProjectCapsArgv('cwatch-e2eab12-a.slice', null).slice(-9)).toEqual(['MemoryHigh', 't', INFINITY_T, 'MemoryMax', 't', INFINITY_T, 'MemorySwapMax', 't', INFINITY_T]);
+    // plafond dur provisoire (convergence) et part de swap nulle : acceptés
+    expect(setProjectCapsArgv('cwatch-p-alpha.slice', { ...C4, maxBytes: 9 * GiB, swapMaxBytes: 0 }).slice(-6)).toEqual(['MemoryMax', 't', String(9 * GiB), 'MemorySwapMax', 't', '0']);
   });
 
   test('refus : noms d’unités, PIDs, tailles', () => {
@@ -50,9 +57,10 @@ describe('argv busctl figés', () => {
     expect(() => startScopeArgv('cwatch-p-beta-a1.scope', 'cwatch-p-alpha.slice', [700])).toThrow();
     for (const s of ['app.slice', 'user.slice', 'cwatch.slice', 'cwatch-p-alpha-a1.scope', 'cwatch-p-alpha-xyz.slice']) {
       expect(() => startScopeArgv('cwatch-p-alpha-a1.scope', s, [700]), s).toThrow();
-      expect(() => setProjectHighArgv(s, null), s).toThrow();
+      expect(() => setProjectCapsArgv(s, null), s).toThrow();
+      expect(() => startProjectSliceArgv(s, C4), s).toThrow();
     }
-    // MemoryMax / MemorySwapMax : seulement sur une slice racine, jamais sur une slice de projet
+    // plafonds de la slice racine (réserve, plafond dynamique) : jamais sur une slice de projet, qui a les siens
     for (const s of ['app.slice', 'user.slice', 'cwatch-p-alpha.slice', 'cwatch-e2eab12-a.slice', 'cwatch-p-alpha-a1.scope']) {
       expect(() => setSliceArgv(s, null), s).toThrow();
       expect(() => startSliceArgv(s, L), s).toThrow();
@@ -60,7 +68,14 @@ describe('argv busctl figés', () => {
     for (const pids of [[], [1], [0], [-5], [1.5], [4_194_305], Array.from({ length: 257 }, (_, i) => i + 2)]) {
       expect(() => startScopeArgv('cwatch-p-alpha-a1.scope', 'cwatch-p-alpha.slice', pids), JSON.stringify(pids).slice(0, 30)).toThrow();
     }
-    for (const b of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 2]) expect(() => setProjectHighArgv('cwatch-p-alpha.slice', b)).toThrow();
+    for (const b of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 2]) {
+      expect(() => setProjectCapsArgv('cwatch-p-alpha.slice', { ...C4, highBytes: b }), `high ${b}`).toThrow();
+      expect(() => setProjectCapsArgv('cwatch-p-alpha.slice', { ...C4, maxBytes: b }), `max ${b}`).toThrow();
+    }
+    for (const b of [-1, 1.5, Number.NaN]) expect(() => setProjectCapsArgv('cwatch-p-alpha.slice', { ...C4, swapMaxBytes: b }), `swap ${b}`).toThrow();
+    // plafond dur sous le budget : refusé (le noyau tuerait avant de freiner)
+    expect(() => setProjectCapsArgv('cwatch-p-alpha.slice', { ...C4, maxBytes: C4.highBytes - 4096 })).toThrow();
+    expect(() => startProjectSliceArgv('cwatch-p-alpha.slice', { ...C4, maxBytes: C4.highBytes - 4096 })).toThrow();
     expect(() => setSliceArgv('cwatch.slice', { ...L, swapMaxBytes: -1 })).toThrow();
   });
 
@@ -124,9 +139,9 @@ describe('exécution et erreurs', () => {
     await client.ensureSlice('cwatch.slice', L);
     expect(argvs.map((a) => a[6])).toEqual(['StartTransientUnit', 'SetUnitProperties']);
     expect(client.calls()).toBe(2);
-    await client.ensureProjectSlice('cwatch-p-alpha.slice', 4 * GiB);
+    await client.ensureProjectSlice('cwatch-p-alpha.slice', C4);
     expect(argvs.slice(2).map((a) => a[6])).toEqual(['StartTransientUnit', 'SetUnitProperties']);
-    expect(argvs[3]!.slice(-3)).toEqual(['MemoryHigh', 't', String(4 * GiB)]);
+    expect(argvs[3]!.slice(-9)).toEqual(['MemoryHigh', 't', String(4 * GiB), 'MemoryMax', 't', String(5 * GiB), 'MemorySwapMax', 't', String(GiB)]);
     expect(client.calls()).toBe(4);
     await expect(client.startScope('../x.scope', 'cwatch-p-alpha.slice', [700])).rejects.toThrow();
     await expect(client.ensureProjectSlice('cwatch.slice', null)).rejects.toThrow();
@@ -134,7 +149,7 @@ describe('exécution et erreurs', () => {
     expect(MiB).toBe(1024 * 1024);
   });
 
-  test('client : une autre erreur est propagée sans second appel ; startScope et setProjectHigh passent par le lanceur', async () => {
+  test('client : une autre erreur est propagée sans second appel ; startScope et setProjectCaps passent par le lanceur', async () => {
     const argvs: string[][] = [];
     const client = createSystemdClient(async (argv) => {
       argvs.push([...argv]);
@@ -143,7 +158,8 @@ describe('exécution et erreurs', () => {
     await expect(client.ensureProjectSlice('cwatch-p-alpha.slice', null)).rejects.toMatchObject({ code: 'denied' });
     expect(argvs).toHaveLength(1);
     await client.startScope('cwatch-p-alpha-a1.scope', 'cwatch-p-alpha.slice', [700]);
-    await client.setProjectHigh('cwatch-p-alpha.slice', null);
+    await client.setProjectCaps('cwatch-p-alpha.slice', null);
+    expect(argvs.at(-1)!.slice(6, 9)).toEqual(['SetUnitProperties', 'sba(sv)', 'cwatch-p-alpha.slice']);
     await client.stopTestUnit('cwatch-e2eab12-1.scope');
     expect(client.calls()).toBe(4);
   });

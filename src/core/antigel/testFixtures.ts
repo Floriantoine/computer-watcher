@@ -1,7 +1,8 @@
 // Données et faux client systemd pour les tests (service, main, renderer). Noms neutres ; aucun busctl.
 import type { CgroupStats } from './cgroupfs';
 import type { AntigelState } from './state';
-import { BusctlError, setProjectHighArgv, setSliceArgv, startProjectSliceArgv, startScopeArgv, startSliceArgv, type SystemdClient } from './systemd';
+import type { ProjectCaps } from './limits';
+import { BusctlError, setProjectCapsArgv, setSliceArgv, startProjectSliceArgv, startScopeArgv, startSliceArgv, type SystemdClient } from './systemd';
 import { scopePath, slicePath } from './units';
 
 export const sampleState = (o: Partial<AntigelState> = {}): AntigelState => ({
@@ -44,6 +45,7 @@ export function fakeSystemd(o: {
   let n = 0;
   const path = (slice: string) => `${o.userBase}/${slicePath(slice)}`;
   const put = (p: string, s: Partial<CgroupStats>) => sys.set(p, { ...(sys.get(p) ?? sampleStats({ currentBytes: 0 })), ...s });
+  const caps = (c: ProjectCaps | null) => ({ highBytes: c ? c.highBytes : null, maxBytes: c ? c.maxBytes : null, swapMaxBytes: c ? c.swapMaxBytes : null });
   const act = async (name: string, args: unknown[], argv: () => string[], effect: () => void) => {
     argv();
     n++;
@@ -61,12 +63,12 @@ export function fakeSystemd(o: {
       act('setSlice', [s, l ? l.highBytes : null], () => setSliceArgv(s, l), () =>
         put(path(s), { highBytes: l ? l.highBytes : null, maxBytes: l ? l.maxBytes : null, swapMaxBytes: l ? l.swapMaxBytes : null })),
     // une slice de projet neuve est vide ; un scope la peuple
-    ensureProjectSlice: (s, h) =>
-      act('ensureProjectSlice', [s, h], () => startProjectSliceArgv(s, h), () => put(path(s), { highBytes: h, populated: sys.get(path(s))?.populated ?? false })),
-    setProjectHigh: (s, h) =>
-      act('setProjectHigh', [s, h], () => setProjectHighArgv(s, h), () => {
+    ensureProjectSlice: (s, c) =>
+      act('ensureProjectSlice', [s, c], () => startProjectSliceArgv(s, c), () => put(path(s), { ...caps(c), populated: sys.get(path(s))?.populated ?? false })),
+    setProjectCaps: (s, c) =>
+      act('setProjectCaps', [s, c], () => setProjectCapsArgv(s, c), () => {
         if (!sys.has(path(s))) throw new BusctlError(`Unit ${s} not loaded.`, 'no-unit');
-        put(path(s), { highBytes: h });
+        put(path(s), caps(c));
       }),
     startScope: (scope, s, pids) =>
       act('startScope', [scope, s, [...pids]], () => startScopeArgv(scope, s, pids), () => {
