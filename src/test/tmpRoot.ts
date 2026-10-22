@@ -3,7 +3,7 @@
 // (pid du processus principal de Vitest, champ 22 de /proc/<pid>/stat, espace de noms de pid). Aucune fenêtre où une
 // racine existe sans propriétaire connu ; un lancement tué (earlyoom, timeout, Ctrl-C, scope plafonné) laisse une racine
 // dont le propriétaire est mort : le lancement suivant la purge.
-import { readFileSync, readlinkSync } from 'node:fs';
+import { chmodSync, lstatSync, readdirSync, readFileSync, readlinkSync, rmdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
 /** Processus principal de Vitest qui possède une racine. `start` : starttime (tops d'horloge depuis le démarrage). */
@@ -67,4 +67,76 @@ export function ownerDead(o: RootOwner, ctx: { ns: string; procRoot?: string }):
   const f = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
   if (!/^\d+$/.test(f[19] ?? '')) return false;
   return f[19] !== o.start;
+}
+
+const errCode = (e: unknown) => (e as NodeJS.ErrnoException)?.code ?? String(e);
+const MAX_ERRORS = 20;
+
+/**
+ * Supprime `path` et tout ce qu'il contient, sans jamais suivre un lien (lstat ; un lien est supprimé, sa cible jamais
+ * touchée) ni franchir un point de montage (`mounts`, puis système de fichiers différent de celui de `path`). Chaque
+ * dossier est rendu u+rwx avant d'être lu (les tests en laissent en 0o500 ou 0o000 : rm échouerait). ENOENT toléré
+ * (deux purges peuvent passer en même temps). Arrêt à `deadline` (horloge `now`) : le reste sera repris plus tard.
+ */
+export function removeTree(
+  path: string,
+  o: { mounts?: ReadonlySet<string>; deadline?: number; now?: () => number } = {},
+): { removed: boolean; errors: string[] } {
+  const now = o.now ?? Date.now;
+  const errors: string[] = [];
+  const fail = (p: string, why: string) => {
+    if (errors.length < MAX_ERRORS) errors.push(`${p} : ${why}`);
+    return false;
+  };
+  let dev: number | null = null;
+  let late = false;
+  /** Vrai si `p` n'existe plus. */
+  const rm = (p: string): boolean => {
+    if (late || (o.deadline !== undefined && now() > o.deadline)) {
+      if (!late) errors.push('temps écoulé');
+      late = true;
+      return false;
+    }
+    if (o.mounts?.has(p)) return fail(p, 'point de montage');
+    let st;
+    try {
+      st = lstatSync(p);
+    } catch (e) {
+      return errCode(e) === 'ENOENT' || fail(p, errCode(e));
+    }
+    dev ??= st.dev;
+    if (!st.isDirectory()) {
+      try {
+        unlinkSync(p);
+        return true;
+      } catch (e) {
+        return errCode(e) === 'ENOENT' || fail(p, errCode(e));
+      }
+    }
+    if (st.dev !== dev) return fail(p, 'autre système de fichiers');
+    if ((st.mode & 0o700) !== 0o700) {
+      try {
+        chmodSync(p, (st.mode & 0o7777) | 0o700);
+      } catch (e) {
+        if (errCode(e) === 'ENOENT') return true;
+        fail(p, errCode(e));
+      }
+    }
+    let names: string[];
+    try {
+      names = readdirSync(p);
+    } catch (e) {
+      return errCode(e) === 'ENOENT' || fail(p, errCode(e));
+    }
+    let all = true;
+    for (const n of names) all = rm(join(p, n)) && all;
+    if (!all) return false;
+    try {
+      rmdirSync(p);
+      return true;
+    } catch (e) {
+      return errCode(e) === 'ENOENT' || fail(p, errCode(e));
+    }
+  };
+  return { removed: rm(path), errors };
 }
