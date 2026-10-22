@@ -2,7 +2,7 @@
 // gestionnaire systemd utilisateur, vrais cgroups, vrai noyau, mais SEULEMENT des processus créés ici (tail, petits
 // allocateurs node), arrêtés par leur propre ChildProcess.kill, sous des unités de test seulement :
 //   cwatch.slice/cwatch-e2e<id>.slice                  slice de test racine (filet : 256 Mo au plus, swap 32 Mo)
-//     ├ cwatch-e2e<id>-a.slice                         budget minuscule : freine à 60 Mo, swap 8 Mo, arrêt au-delà de 64 Mo
+//     ├ cwatch-e2e<id>-a.slice                         budget minuscule : freine à 58 Mo, swap 8 Mo, arrêt au-delà de 64 Mo
 //     │ └ cwatch-e2e<id>-1.scope                       tail + allocateur
 //     ├ cwatch-e2e<id>-b.slice                         sans budget (un autre projet)
 //     │ └ cwatch-e2e<id>-2.scope                       tail
@@ -27,10 +27,10 @@ const SYSFS = '/sys/fs/cgroup';
 const GROW = "const k=[];process.stdin.on('data',()=>{for(let i=0;i<64;i++)k.push(Buffer.alloc(4*1024*1024,1));process.stdout.write('fini\\n')});setInterval(()=>{},1e6);";
 // « hold » : 12 × 4 Mo touchés (48 Mo) gardés, puis « ok »
 const HOLD = "const k=[];process.stdin.on('data',()=>{for(let i=0;i<12;i++)k.push(Buffer.alloc(4*1024*1024,1));process.stdout.write('ok\\n')});setInterval(()=>{},1e6);";
-// budget minuscule de la slice A : la même forme qu'un vrai budget (freinage, part de swap, plafond dur), en petit. Le
-// freinage au-delà de memory.high ralentit énormément la montée (mesuré : 56 → 64 Mo, ~80 s pour un seul processus) :
-// zone de freinage étroite ici pour un test court.
-const CAPS_A: ProjectCaps = { highBytes: 60 * MiB, maxBytes: 64 * MiB, swapMaxBytes: 8 * MiB };
+// budget minuscule de la slice A : la même forme qu'un vrai budget (freinage, part de swap, plafond dur ~10 % au-dessus),
+// en petit. Le freinage au-delà de memory.high ralentit énormément la montée (mesuré, allocateur seul : marge de 10 % →
+// arrêté en 8 à 11 s ; 14 % → 73 à 107 s).
+const CAPS_A: ProjectCaps = { highBytes: 58 * MiB, maxBytes: 64 * MiB, swapMaxBytes: 8 * MiB };
 // slice C : d'abord sans freinage ni swap (la mémoire de l'allocateur reste en RAM), puis le budget visé (marge 16 Mo)
 const OPEN_C: ProjectCaps = { highBytes: 512 * MiB, maxBytes: 512 * MiB, swapMaxBytes: 0 };
 const CAPS_C: ProjectCaps = { highBytes: 16 * MiB, maxBytes: 32 * MiB, swapMaxBytes: 0 };
@@ -115,7 +115,7 @@ test.skipIf(!RUN)(
       await client.ensureSlice(root, { reserveBytes: 0, highBytes: 192 * MiB, maxBytes: 256 * MiB, swapMaxBytes: 32 * MiB });
       await client.ensureProjectSlice(sa, CAPS_A);
       await wait(() => existsSync(dir(sa)), 5000, 'slice A créée');
-      expect(limitOf(dir(sa), 'memory.high')).toBe(60 * MiB);
+      expect(limitOf(dir(sa), 'memory.high')).toBe(58 * MiB);
       expect(limitOf(dir(sa), 'memory.max')).toBe(64 * MiB);
       expect(limitOf(dir(sa), 'memory.swap.max')).toBe(8 * MiB);
       // le noyau arrête UN processus (le plus gros), jamais le groupe : memory.oom.group à 0

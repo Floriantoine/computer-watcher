@@ -84,16 +84,22 @@ export const budgetBytes = (mb: number): number => mb * MiB;
  * Plafonds de la slice d'un projet qui a un budget : MemoryHigh = budget (au-delà, sa mémoire est poussée vers le swap
  * puis freinée), MemorySwapMax = sa part de swap (il ne remplit plus le swap de tout le système), MemoryMax = plafond dur
  * (au-delà, le noyau arrête le plus gros processus de CETTE slice, jamais ailleurs ; scopes en OOMPolicy=continue).
- * Mémoire comptée à la slice (RAM + swap) : au plus MemoryMax + MemorySwapMax.
+ * Mémoire comptée à la slice (RAM + swap) : au plus MemoryMax + MemorySwapMax (à quelques Mo près pendant un arrêt).
  */
 export interface ProjectCaps { highBytes: number; maxBytes: number; swapMaxBytes: number }
-/** Part de swap d'un projet et marge du plafond dur au-dessus du budget : 25 % du budget chacune. */
+/** Part de swap d'un projet : 25 % du budget. */
 export const PROJECT_SWAP_RATIO = 0.25;
-export const PROJECT_MARGIN_RATIO = 0.25;
-/** Marge minimale du plafond dur (petits budgets) : un pic d'un processus ne fait pas arrêter le projet. */
-export const PROJECT_MIN_MARGIN_BYTES = 512 * MiB;
+/**
+ * Marge du plafond dur au-dessus du budget : 10 %. Au-delà de memory.high le noyau freine de plus en plus fort (attente
+ * qui croît avec le carré du dépassement relatif) : mesuré sur un allocateur seul, 10 % de marge → arrêté en 8 à 11 s,
+ * 14 % → 73 à 107 s, tâche en attente mémoire tout du long (PSI du système entier jusqu'à 29 %). 25 % laisserait un
+ * projet qui déborde freiné des minutes au lieu de l'arrêter.
+ */
+export const PROJECT_MARGIN_RATIO = 0.1;
+/** Marge minimale du plafond dur (petits budgets) : un pic d'un processus Node ne fait pas arrêter le projet. */
+export const PROJECT_MIN_MARGIN_BYTES = 256 * MiB;
 
-/** Budget (Mo) → plafonds : 5 Go → freine à 5 Go, swap 1,25 Go au plus, arrêt au-delà de 6,25 Go (7,5 Go au total). */
+/** Budget (Mo) → plafonds : 5 Go → freine à 5 Go, swap 1,25 Go au plus, arrêt au-delà de 5,5 Go (6,75 Go au total). */
 export function projectCaps(budgetMB: number): ProjectCaps {
   const high = down(budgetBytes(budgetMB));
   return {

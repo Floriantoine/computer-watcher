@@ -144,9 +144,9 @@ setInterval(() => { if (!alive() || !fs.existsSync('package.json') || fs.existsS
   await budgetBtn.click();
   // ce que fait le budget, en une ligne : d'abord le budget par défaut (champ vide), puis le budget saisi
   const effect = win.locator('[data-testid="antigel-budget-dialog"] [data-testid="antigel-budget-effect"]');
-  assert.equal(await effect.innerText(), 'Sans budget propre, budget par défaut (5 Go) : freine à 5 Go · swap 1,25 Go max · au-delà de 6,25 Go, un processus du projet est arrêté.');
+  assert.equal(await effect.innerText(), 'Sans budget propre, budget par défaut (5 Go) : freine à 5 Go · swap 1,25 Go max · au-delà de 5,5 Go, un processus du projet est arrêté.');
   await win.locator('[data-testid="antigel-budget-input"]').fill('6');
-  await waitFor(async () => (await effect.innerText()) === 'Freine à 6 Go · swap 1,5 Go max · au-delà de 7,5 Go, un processus du projet est arrêté.', 'effet du budget saisi');
+  await waitFor(async () => (await effect.innerText()) === 'Freine à 6 Go · swap 1,5 Go max · au-delà de 6,6 Go, un processus du projet est arrêté.', 'effet du budget saisi');
   await shot('antigel-budget-dialogue', win.locator('[data-testid="antigel-budget-dialog"]'));
   await win.locator('[data-testid="antigel-budget-save"]').click();
   await waitFor(() => config().antigel?.budgets?.[proj] === 6144, 'budget 6144 Mo dans config.json');
@@ -200,9 +200,10 @@ setInterval(() => { if (!alive() || !fs.existsSync('package.json') || fs.existsS
   assert.doesNotMatch(agText, /ralentissements/);
   assert.match(agText, /1 projet au frigo · ≈ 1,5 Go sortis de la RAM/);
   assert.match(await win.locator('[data-testid="antigel-mem"]').innerText(), /^Travail : 9,0 Go · marge avant ralentissement : aucune$/);
-  assert.match(agText, /Bureau prioritaire : processeur : bureau 4× et applications 3× prioritaires sur le travail · protection mémoire sans effet ici/);
+  // protection mémoire : « sans effet ici » d'après l'état simulé, ou l'état réel de la machine une fois relu (installée ou non)
+  assert.match(agText, /Bureau prioritaire : processeur : bureau 4× et applications 3× prioritaires sur le travail · protection mémoire (sans effet ici|système active)/);
   await waitFor(async () => (await win.locator('[data-testid="antigel-budget-effect"]').count()) === 1, 'ligne de l’effet du budget sur la carte', 10000);
-  assert.equal(await win.locator('[data-testid="antigel-budget-effect"]').innerText(), 'Budget de 6 Go : freine à 6 Go · swap 1,5 Go max · au-delà de 7,5 Go, un processus du projet est arrêté');
+  assert.equal(await win.locator('[data-testid="antigel-budget-effect"]').innerText(), 'Budget de 6 Go : freine à 6 Go · swap 1,5 Go max · au-delà de 6,6 Go, un processus du projet est arrêté');
   assert.match(await agCard.innerText(), /projets \/ alpha : 2,0 \/ 6 Go — ok · plafond dur provisoire : 9,5 Go/);
   await shot('antigel-metriques');
 
@@ -235,7 +236,7 @@ setInterval(() => { if (!alive() || !fs.existsSync('package.json') || fs.existsS
   // ce que fait le budget par défaut, en une ligne (absente quand il est éteint)
   const defEffect = win.locator('[data-testid="antigel-default-effect"]');
   await waitFor(async () => (await defEffect.count()) === 1, 'ligne de l’effet du budget par défaut');
-  assert.equal(await defEffect.innerText(), 'Budget par défaut (5 Go) : freine à 5 Go · swap 1,25 Go max · au-delà de 6,25 Go, un processus du projet est arrêté');
+  assert.equal(await defEffect.innerText(), 'Budget par défaut (5 Go) : freine à 5 Go · swap 1,25 Go max · au-delà de 5,5 Go, un processus du projet est arrêté');
   // bureau prioritaire : ligne d'état, interrupteur allumé par défaut, éteint puis rallumé (config.antigel.desk)
   assert.match(await win.locator('[data-testid="antigel-desk-status"]').innerText(), /^Bureau prioritaire : processeur/);
   const deskSw = win.locator('#settings-panel-antigel button[role="switch"][aria-label="Bureau prioritaire"]');

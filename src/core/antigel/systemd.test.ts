@@ -8,7 +8,7 @@ import {
 const HEAD = ['--user', '--timeout=5', 'call', 'org.freedesktop.systemd1', '/org/freedesktop/systemd1', 'org.freedesktop.systemd1.Manager'];
 const L = { reserveBytes: 4 * GiB, highBytes: 12 * GiB, maxBytes: 14 * GiB, swapMaxBytes: 4 * GiB };
 const REAL_EXISTS = 'Call failed: Unit cwatch-p-alpha.slice was already loaded or has a fragment file.';
-const C4 = projectCaps(4096); // freine à 4 Go, arrêt à 5 Go, swap 1 Go
+const C4 = projectCaps(4096); // freine à 4 Go, swap 1 Go, arrêt 10 % au-dessus
 const C6 = projectCaps(6144);
 
 describe('argv busctl figés', () => {
@@ -38,12 +38,12 @@ describe('argv busctl figés', () => {
   test('slice de projet : budget (MemoryHigh), plafond dur (MemoryMax), part de swap (MemorySwapMax) ; sans budget : infinity', () => {
     expect(startProjectSliceArgv('cwatch-p-alpha.slice', C4)).toEqual([
       ...HEAD, 'StartTransientUnit', 'ssa(sv)a(sa(sv))', 'cwatch-p-alpha.slice', 'fail', '4', 'Description', 's', DESCRIPTION,
-      'MemoryHigh', 't', String(4 * GiB), 'MemoryMax', 't', String(5 * GiB), 'MemorySwapMax', 't', String(GiB), '0',
+      'MemoryHigh', 't', String(4 * GiB), 'MemoryMax', 't', String(C4.maxBytes), 'MemorySwapMax', 't', String(GiB), '0',
     ]);
     expect(startProjectSliceArgv('cwatch-p-alpha.slice', null).slice(-10)).toEqual(['MemoryHigh', 't', INFINITY_T, 'MemoryMax', 't', INFINITY_T, 'MemorySwapMax', 't', INFINITY_T, '0']);
     expect(setProjectCapsArgv('cwatch-p-alpha.slice', C6)).toEqual([
       ...HEAD, 'SetUnitProperties', 'sba(sv)', 'cwatch-p-alpha.slice', 'true', '3',
-      'MemoryHigh', 't', String(6 * GiB), 'MemoryMax', 't', String(7.5 * GiB), 'MemorySwapMax', 't', String(1.5 * GiB),
+      'MemoryHigh', 't', String(6 * GiB), 'MemoryMax', 't', String(C6.maxBytes), 'MemorySwapMax', 't', String(1.5 * GiB),
     ]);
     expect(setProjectCapsArgv('cwatch-e2eab12-a.slice', null).slice(-9)).toEqual(['MemoryHigh', 't', INFINITY_T, 'MemoryMax', 't', INFINITY_T, 'MemorySwapMax', 't', INFINITY_T]);
     // plafond dur provisoire (convergence) et part de swap nulle : acceptés
@@ -141,7 +141,7 @@ describe('exécution et erreurs', () => {
     expect(client.calls()).toBe(2);
     await client.ensureProjectSlice('cwatch-p-alpha.slice', C4);
     expect(argvs.slice(2).map((a) => a[6])).toEqual(['StartTransientUnit', 'SetUnitProperties']);
-    expect(argvs[3]!.slice(-9)).toEqual(['MemoryHigh', 't', String(4 * GiB), 'MemoryMax', 't', String(5 * GiB), 'MemorySwapMax', 't', String(GiB)]);
+    expect(argvs[3]!.slice(-9)).toEqual(['MemoryHigh', 't', String(4 * GiB), 'MemoryMax', 't', String(C4.maxBytes), 'MemorySwapMax', 't', String(GiB)]);
     expect(client.calls()).toBe(4);
     await expect(client.startScope('../x.scope', 'cwatch-p-alpha.slice', [700])).rejects.toThrow();
     await expect(client.ensureProjectSlice('cwatch.slice', null)).rejects.toThrow();

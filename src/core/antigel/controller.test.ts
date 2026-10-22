@@ -205,7 +205,8 @@ describe('orchestrateur anti-gel', () => {
     const h = harness();
     await h.step({ ...ON, budgets: { [A]: 4096 } });
     expect(h.calls[1]).toEqual(['ensureProjectSlice', PS, CAPS(4096)]);
-    expect(h.calls[1]![2]).toEqual({ highBytes: 4 * GiB, maxBytes: 5 * GiB, swapMaxBytes: GiB });
+    // freine à 4 Go, swap 1 Go, arrêt 10 % au-dessus (arrondi à la page)
+    expect(h.calls[1]![2]).toEqual({ highBytes: 4 * GiB, maxBytes: 4 * GiB + Math.floor((0.4 * GiB) / 4096) * 4096, swapMaxBytes: GiB });
     h.calls.length = 0;
     await h.step({ ...ON, budgets: { [A]: 4096 } });
     expect(h.calls).toEqual([]);
@@ -403,7 +404,7 @@ describe('orchestrateur anti-gel', () => {
     const h = harness();
     await h.step({ ...ON, budgets: { [A]: 4096 } });
     await h.step({ ...ON, budgets: { [A]: 4096 } });
-    expect(h.ag.state().projects).toEqual([expect.objectContaining({ unit: PS, budgetMB: 4096, maxKB: 5 * 1024 * 1024 })]);
+    expect(h.ag.state().projects).toEqual([expect.objectContaining({ unit: PS, budgetMB: 4096, maxKB: CAPS(4096).maxBytes / 1024 })]);
     await h.step(ON);
     await h.step(ON);
     expect(h.ag.state().projects[0]).not.toHaveProperty('maxKB');
@@ -860,7 +861,7 @@ describe('racine trop jeune : revue une seconde plus tard', () => {
 
 describe('plafond dur et part de swap du budget : convergence sans arrêt immédiat', () => {
   const D = { ...ON, defaultBudgetMB: 5120 };
-  const C = CAPS(5120); // freine à 5 Go, arrêt à 6,25 Go, swap 1,25 Go
+  const C = CAPS(5120); // freine à 5 Go, swap 1,25 Go, arrêt à 5,5 Go (marge 512 Mo)
   const M = C.maxBytes - C.highBytes;
   /** Service redémarré sur une slice d'une version d'avant (MemoryHigh seul), processus déjà rangés. */
   const restarted = (currentBytes: number) => {
@@ -893,10 +894,10 @@ describe('plafond dur et part de swap du budget : convergence sans arrêt imméd
     await h.step(D);
     expect(h.calls).toEqual([['setProjectCaps', PS, { ...C, maxBytes: 7 * GiB + M }]]);
     h.calls.length = 0;
-    // il regrossit : jamais remonté ; 500 Mo de mieux seulement : aucun appel
+    // il regrossit : jamais remonté ; moins d'une marge de mieux : aucun appel
     use(h, 8 * GiB);
     await h.step(D);
-    use(h, 6 * GiB + 500 * 1024 * 1024);
+    use(h, 7 * GiB - M / 2);
     await h.step(D);
     expect(h.calls).toEqual([]);
     // revenu sous son budget : plafond dur visé, puis plus rien
