@@ -534,8 +534,13 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
       rootReady = true;
     };
     if (!sameLimits(applied, limits)) steps.push({ critical: true, run: ensureRoot });
-    // Plafonds des slices existantes : un appel par changement (recul après un échec), plafond dur en convergence.
+    // Plafonds des slices existantes : un appel par changement (recul après un échec), plafond dur en convergence. Slice au
+    // frigo : rien (le frigo a levé sa part de swap) ; ce qui y était posé est oublié, et sysfs fait foi au réveil.
     for (const [s, v] of sliceStats) {
+      if (i.frozenSlices?.has(s)) {
+        posed.delete(s);
+        continue;
+      }
       const w = toPose(s);
       if (needsCaps(s, w, v) && budgetDue(s, now)) steps.push(setCaps(s, w));
     }

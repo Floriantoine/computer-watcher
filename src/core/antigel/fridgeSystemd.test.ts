@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { createBusctlSync, createFridgeClient, freezeArgv, thawArgv } from './fridgeSystemd';
+import { createBusctlSync, createFridgeClient, freezeArgv, liftSwapArgv, thawArgv } from './fridgeSystemd';
+import { INFINITY_T } from './limits';
 import { BusctlError } from './systemd';
 
 const HEAD = ['--user', '--timeout=5', 'call', 'org.freedesktop.systemd1', '/org/freedesktop/systemd1', 'org.freedesktop.systemd1.Manager'];
@@ -11,11 +12,17 @@ describe('argv FreezeUnit / ThawUnit', () => {
     expect(freezeArgv('cwatch-e2eab12-a.slice')).toContain('cwatch-e2eab12-a.slice');
   });
 
+  test('part de swap levée pendant le frigo : SetUnitProperties MemorySwapMax=infinity sur la slice du projet, rien d’autre', () => {
+    expect(liftSwapArgv('cwatch-p-alpha.slice')).toEqual([...HEAD, 'SetUnitProperties', 'sba(sv)', 'cwatch-p-alpha.slice', 'true', '1', 'MemorySwapMax', 't', INFINITY_T]);
+    expect(liftSwapArgv('cwatch-e2eab12-a.slice')).toContain('cwatch-e2eab12-a.slice');
+  });
+
   test('refus : cwatch.slice, slices et unités hors cwatch, scopes, noms piégés', () => {
     for (const u of ['cwatch.slice', 'cwatch-e2eab12.slice', 'app.slice', 'session.slice', 'user.slice', 'cwatch-p.slice', 'cwatch-p-alpha-a1.scope',
       'app-dev.warp.Warp@1.service', '../cwatch-p-alpha.slice', 'cwatch-p-alpha.slice ', 'cwatch-p-Alpha.slice', '-.slice', '']) {
       expect(() => freezeArgv(u), u).toThrow();
       expect(() => thawArgv(u), u).toThrow();
+      expect(() => liftSwapArgv(u), u).toThrow();
     }
   });
 });
@@ -27,11 +34,14 @@ describe('client du frigo', () => {
     await expect(c.freeze('cwatch.slice')).rejects.toThrow();
     expect(() => c.thawSync('app.slice')).toThrow();
     expect(c.calls()).toBe(0);
+    await expect(c.liftSwap('cwatch.slice')).rejects.toThrow();
+    expect(c.calls()).toBe(0);
     await c.freeze('cwatch-p-alpha.slice');
+    await c.liftSwap('cwatch-p-alpha.slice');
     await c.thaw('cwatch-p-alpha.slice');
     c.thawSync('cwatch-p-alpha.slice');
-    expect(c.calls()).toBe(3);
-    expect(seen.map((a) => a[6])).toEqual(['FreezeUnit', 'ThawUnit', 'ThawUnit']);
+    expect(c.calls()).toBe(4);
+    expect(seen.map((a) => a[6])).toEqual(['FreezeUnit', 'SetUnitProperties', 'ThawUnit', 'ThawUnit']);
   });
 });
 

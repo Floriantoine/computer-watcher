@@ -265,6 +265,17 @@ export function createFridge(deps: FridgeDeps): Fridge {
         return;
       }
       if (e.abort) return;
+      // part de swap du budget (memory.swap.max de la slice) levée avant de pousser : sinon le reclaim s'arrêterait à elle ;
+      // le contrôleur la repose au réveil. Échec : le frigo pousse quand même, borné par elle.
+      const swapMax = deps.read(cgOf(b, slice), 'memory.swap.max');
+      if (swapMax !== null && swapMax.trim() !== 'max') {
+        try {
+          await client.liftSwap(slice);
+        } catch (err) {
+          deps.log(`anti-gel (frigo) : part de swap de ${slice} gardée : ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      if (e.abort) return;
       e.phase = 'reclaiming';
       // reclaim hors de la file des appels : un réveil (de ce projet ou d'un autre) part tout de suite
       reclaiming++;

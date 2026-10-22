@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { afterEach, expect, test } from 'vitest';
 import { readCgroup, reverify } from '../core/antigel/cgroupfs';
 import { writeFridgeRequest } from '../core/antigel/fridgeRequest';
-import { freezeArgv, thawArgv, type FridgeClient } from '../core/antigel/fridgeSystemd';
+import { freezeArgv, liftSwapArgv, thawArgv, type FridgeClient } from '../core/antigel/fridgeSystemd';
 import { fakeSystemd } from '../core/antigel/testFixtures';
 import { addProc, makeProcRoot } from '../core/collector/fakeProc';
 import { DEFAULT_CONFIG } from '../core/config';
@@ -52,6 +52,7 @@ function setup() {
   const client: FridgeClient = {
     freeze: async (s) => { freezeArgv(s); fcalls.push(`freeze ${s}`); frozen.add(`${BASE}/cwatch.slice/cwatch-p.slice/${s}`); },
     thaw: async (s) => { thawArgv(s); fcalls.push(`thaw ${s}`); frozen.delete(`${BASE}/cwatch.slice/cwatch-p.slice/${s}`); },
+    liftSwap: async (s) => { liftSwapArgv(s); fcalls.push(`liftSwap ${s}`); },
     thawSync: (s) => { thawArgv(s); fcalls.push(`thawSync ${s}`); frozen.delete(`${BASE}/cwatch.slice/cwatch-p.slice/${s}`); },
     calls: () => fcalls.length,
   };
