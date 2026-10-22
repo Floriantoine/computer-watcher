@@ -1,8 +1,11 @@
 // src/recorder/index.ts
 import { mkdirSync, statSync, watch } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { promises as originalFsp } from 'original-fs';
 import { configDir } from '../core/config';
 import { dataDir } from '../core/paths';
+import { emptyTmpCaches, measureTmpCaches, type CachesFs } from '../core/tmpCachesClean';
+import { tmpRootFromEnv } from '../main/tmpClean';
 import { antigelDepsFor } from './antigelDeps';
 import { fridgeDepsFor } from './fridgeDeps';
 import { followEarlyoom } from './journal';
@@ -26,6 +29,10 @@ const launcher = appLauncher({
   },
 });
 const systemdRun = resolveBin('systemd-run', process.env.PATH);
+// Bouton « Vider les caches (X) » des notifications tmpfs : /tmp, sauf racine de test (mêmes règles que l'app) ;
+// original-fs : aucune réécriture des archives .asar.
+const tmpRoot = tmpRootFromEnv(process.env).root;
+const cachesFs = originalFsp as unknown as CachesFs;
 const rec = createRecorder({
   dataDir: dataDir(),
   configDir: configDir(),
@@ -39,6 +46,7 @@ const rec = createRecorder({
   antigel: antigelDepsFor({ env: process.env, uid: process.getuid?.() ?? -1, selfPid: process.pid, dataDir: dataDir() }),
   // Anti-gel lot 3 (« mettre au frigo ») : gel / réveil d'un projet demandé par la fenêtre ; PROC_WATCH_NO_ANTIGEL=1 : rien.
   fridge: fridgeDepsFor({ env: process.env, uid: process.getuid?.() ?? -1, selfPid: process.pid }),
+  tmpCaches: { measure: () => measureTmpCaches(tmpRoot, { fs: cachesFs }), empty: (ids) => emptyTmpCaches(tmpRoot, ids, { fs: cachesFs }) },
 });
 rec.start();
 

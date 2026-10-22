@@ -3,7 +3,8 @@ import { APP_DISPLAY_NAME } from '../core/appName';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, statfsSync, writeFileSync } from 'node:fs';
 import { cpus, homedir } from 'node:os';
 import type { DatabaseSync } from 'node:sqlite';
-import { appFocused, desktopMessage, desktopAllowed, parseFocusState, type AlertEvent, type AlertsConfig } from '../core/alerts';
+import { appFocused, desktopMessage, desktopAllowed, desktopText, DESKTOP_TITLES, parseFocusState, type AlertEvent, type AlertsConfig } from '../core/alerts';
+import { cachesOffer, cachesOutcomeMessage, tmpCachesEvent, type TmpCacheId, type TmpCaches, type TmpCachesOutcome } from '../core/tmpCaches';
 import { createAntigel, type AntigelController, type AntigelDeps } from '../core/antigel/controller';
 import type { AntigelConfig } from '../core/antigel/config';
 import { parseAntigelState, type AntigelState } from '../core/antigel/state';
@@ -51,6 +52,9 @@ import type { RecorderConfig, RecorderStatus, SystemInfo } from '../core/types';
 import type { Notifier } from './notify';
 import { createRuleRunner } from './ruleRunner';
 
+/** Attente maximale de la mesure des caches de /tmp avant d'envoyer la notification tmpfs (sans le bouton). */
+const TMP_CACHES_MEASURE_WAIT_MS = 5_000;
+
 export interface RecorderDeps {
   dataDir: string;
   configDir: string;
@@ -97,6 +101,11 @@ export interface RecorderDeps {
   antigel?: Omit<AntigelDeps, 'log' | 'monoNow' | 'initialSlices'>;
   /** Anti-gel lot 3 (« mettre au frigo ») : FreezeUnit / ThawUnit et memory.reclaim. Actif seulement avec `antigel`. */
   fridge?: Omit<FridgeDeps, 'log' | 'monoNow'>;
+  /**
+   * Caches connus de /tmp (Jest, Node.js…) : mesurés avant la notification tmpfs (bouton « Vider les caches (X) » à partir
+   * de 100 Mo vidables), vidés par le service lui-même au clic (rien à lancer, même sous pression). Absent : sans ce bouton.
+   */
+  tmpCaches?: { measure(): Promise<TmpCaches>; empty(ids: TmpCacheId[]): Promise<TmpCachesOutcome> };
 }
 
 /** statfs(2) en Ko : taille totale et place disponible pour un utilisateur ordinaire (f_bavail). */
@@ -299,21 +308,52 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       const actions = e.type === 'forecast'
         ? [...(launch ? [{ id: 'free', label: 'Libérer…' }] : []), { id: 'snooze', label: 'Ignorer 30 min' }]
         : launch ? [{ id: 'open', label: e.type === 'disk_low' ? 'Voir le disque' : 'Ouvrir' }] : [];
-      notifier
-        .notify({ title, body, urgency: 'critical', actions })
-        .then(
-          (choice) => {
-            if (choice === 'open' || choice === 'free') launch?.([`--alert=${e.id}`]);
-            else if (choice === 'snooze') snooze(now() + SNOOZE_MS);
-          },
-          (err: unknown) => log(`notification: ${(err as Error)?.message ?? String(err)}`),
-        );
+      const send = (offer: ReturnType<typeof cachesOffer>) =>
+        notifier
+          .notify({ title, body, urgency: 'critical', actions: offer ? [...actions, { id: 'empty-caches', label: offer.label }] : actions })
+          .then(
+            (choice) => {
+              if (choice === 'open' || choice === 'free') launch?.([`--alert=${e.id}`]);
+              else if (choice === 'snooze') snooze(now() + SNOOZE_MS);
+              else if (choice === 'empty-caches' && offer) emptyCachesFromNotification(offer.ids);
+            },
+            (err: unknown) => log(`notification: ${(err as Error)?.message ?? String(err)}`),
+          );
+      // tmpfs : caches connus mesurés d'abord (≤ 3 s, en arrière-plan) ; mesure en échec ou bloquée plus de 5 s :
+      // notification sans le bouton (l'alerte n'attend jamais davantage)
+      if (e.type === 'tmpfs' && deps.tmpCaches) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timeout = new Promise<null>((resolve) => (timer = setTimeout(() => resolve(null), TMP_CACHES_MEASURE_WAIT_MS)));
+        void Promise.race([deps.tmpCaches.measure().then(cachesOffer, () => null), timeout]).then((offer) => {
+          clearTimeout(timer);
+          return send(offer);
+        });
+      } else void send(null);
     } catch (err) {
       log(`notification: ${(err as Error).message}`);
     }
   };
   const alert = (id: number, ts: number, type: AlertEvent['type'], groupKey: string | null, groupLabel: string | null, detail: Record<string, unknown>) =>
     notifyAlert({ id, ts, type, groupKey, groupLabel, detail });
+
+  /** « Vider les caches (X) » d'une notification tmpfs : vidage par le service, événement tmp_clean, notification du résultat. */
+  const emptyCachesFromNotification = (ids: TmpCacheId[]) => {
+    deps.tmpCaches?.empty(ids).then(
+      (out) => {
+        const ev = tmpCachesEvent(out, now());
+        if (ev && db) {
+          try {
+            insertEvent(db, ev.ts, 'tmp_clean', null, ev.detail);
+          } catch (err) {
+            log(`caches de /tmp : événement non enregistré : ${(err as Error).message}`);
+          }
+        }
+        const m = cachesOutcomeMessage(out);
+        void deps.notifier?.notify({ title: `${APP_DISPLAY_NAME} — ${DESKTOP_TITLES.tmpfs}`, body: desktopText(m.message), urgency: 'normal', actions: [] });
+      },
+      (err: unknown) => log(`caches de /tmp : ${(err as Error)?.message ?? String(err)}`),
+    );
+  };
 
   /** « Ignorer 30 min » : retenu en mémoire et dans le fichier d'état (survit à un redémarrage du service). */
   const snooze = (until: number) => {
