@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'vitest';
-import { DYN_FLOOR_BYTES, GiB, MiB, autoReserveBytes, budgetBytes, dynamicHigh, dynamicLimits, sameLimits, sliceLimits, type SliceLimits } from './limits';
+import {
+  DYN_FLOOR_BYTES, GiB, MiB, PROJECT_MIN_MARGIN_BYTES, autoReserveBytes, budgetBytes, convergingMax, dynamicHigh, dynamicLimits, projectCaps, sameCaps, sameLimits,
+  sliceLimits, type SliceLimits,
+} from './limits';
 
 const KB = (bytes: number) => bytes / 1024;
 
@@ -81,5 +84,75 @@ describe('plafond dynamique : MemoryHigh = travail + max(0, MemAvailable − ré
     // réserve changée (MemoryMax différent) : réécrit
     const other = sliceLimits(KB(16 * GiB), KB(8 * GiB), 6144)!;
     expect(dynamicLimits(other, { workBytes: 3 * GiB, availKB: KB(9 * GiB) }, applied)).toEqual({ ...other, highBytes: 6 * GiB });
+  });
+});
+
+describe('plafonds d’un budget de projet : MemoryHigh = budget, MemorySwapMax = 25 %, MemoryMax = budget + max(25 %, 512 Mo)', () => {
+  test('5 Go et 8 Go : empreinte RAM + swap bornée à 1,5 × le budget (7,5 Go et 12 Go)', () => {
+    const five = projectCaps(5120);
+    expect(five).toEqual({ highBytes: 5 * GiB, maxBytes: 6400 * MiB, swapMaxBytes: 1280 * MiB });
+    expect(five.maxBytes + five.swapMaxBytes).toBe(7.5 * GiB);
+    const eight = projectCaps(8192);
+    expect(eight).toEqual({ highBytes: 8 * GiB, maxBytes: 10 * GiB, swapMaxBytes: 2 * GiB });
+    expect(eight.maxBytes + eight.swapMaxBytes).toBe(12 * GiB);
+  });
+  test('petits budgets : au moins 512 Mo entre le freinage et l’arrêt ; la part de swap reste 25 %', () => {
+    expect(PROJECT_MIN_MARGIN_BYTES).toBe(512 * MiB);
+    expect(projectCaps(256)).toEqual({ highBytes: 256 * MiB, maxBytes: 768 * MiB, swapMaxBytes: 64 * MiB });
+    expect(projectCaps(1024)).toEqual({ highBytes: GiB, maxBytes: 1536 * MiB, swapMaxBytes: 256 * MiB });
+    expect(projectCaps(2048)).toEqual({ highBytes: 2 * GiB, maxBytes: 2560 * MiB, swapMaxBytes: 512 * MiB });
+  });
+  test('valeurs alignées sur la page, entières même au budget maximal ; MemoryMax jamais sous MemoryHigh', () => {
+    for (const mb of [256, 300, 1000, 1536, 5120, 6656, 1_048_576]) {
+      const c = projectCaps(mb);
+      for (const v of Object.values(c)) {
+        expect(Number.isSafeInteger(v), `${mb} Mo`).toBe(true);
+        expect(v % 4096, `${mb} Mo`).toBe(0);
+      }
+      expect(c.maxBytes).toBeGreaterThan(c.highBytes);
+    }
+  });
+  test('sameCaps', () => {
+    expect(sameCaps(projectCaps(5120), projectCaps(5120))).toBe(true);
+    expect(sameCaps(projectCaps(5120), { ...projectCaps(5120), maxBytes: 7 * GiB })).toBe(false);
+    expect(sameCaps(null, null)).toBe(true);
+    expect(sameCaps(projectCaps(5120), null)).toBe(false);
+  });
+});
+
+describe('convergence du plafond dur : jamais posé sous l’usage actuel + marge, jamais remonté, redescend vers le plafond', () => {
+  const C = projectCaps(5120); // freine à 5 Go, arrêt à 6,25 Go : marge 1,25 Go
+  const M = 1280 * MiB;
+  test('rien de posé, projet sous son budget : plafond visé tout de suite', () => {
+    expect(convergingMax(C, 0, null)).toBe(C.maxBytes);
+    expect(convergingMax(C, 3 * GiB, null)).toBe(C.maxBytes);
+    expect(convergingMax(C, 5 * GiB, null)).toBe(C.maxBytes); // 5 + 1,25 = plafond
+  });
+  test('rien de posé (déploiement), projet déjà au-dessus : usage + marge (aucun arrêt immédiat)', () => {
+    expect(convergingMax(C, 9 * GiB, null)).toBe(9 * GiB + M);
+    expect(convergingMax(C, 9 * GiB + 123, null)).toBe(9 * GiB + M + 4096); // arrondi vers le haut, à la page
+  });
+  test('plafond provisoire : jamais remonté quand le projet regrossit', () => {
+    const applied = 9 * GiB + M;
+    expect(convergingMax(C, 9 * GiB + 512 * MiB, applied)).toBe(applied);
+    expect(convergingMax(C, applied, applied)).toBe(applied);
+  });
+  test('redescend par pas d’au moins une marge, puis jusqu’au plafond dès que la mémoire le permet', () => {
+    const applied = 9 * GiB + M;
+    expect(convergingMax(C, 8 * GiB + 512 * MiB, applied)).toBe(applied); // seulement 512 Mo de mieux : pas d'appel
+    expect(convergingMax(C, 7 * GiB, applied)).toBe(7 * GiB + M); // 2 Go de mieux
+    expect(convergingMax(C, 5 * GiB + 300 * MiB, 7 * GiB + M)).toBe(5 * GiB + 300 * MiB + M);
+    expect(convergingMax(C, 5 * GiB + 300 * MiB, 5 * GiB + 500 * MiB + M)).toBe(5 * GiB + 500 * MiB + M); // 200 Mo : gardé
+    expect(convergingMax(C, 4 * GiB, 5 * GiB + 500 * MiB + M)).toBe(C.maxBytes); // plafond atteint : posé même pour peu
+    expect(convergingMax(C, 4 * GiB, C.maxBytes + 4096)).toBe(C.maxBytes);
+  });
+  test('posé sous le plafond visé (budget relevé) ou égal : plafond visé (remonter ne tue jamais)', () => {
+    expect(convergingMax(C, 3 * GiB, 4 * GiB)).toBe(C.maxBytes);
+    expect(convergingMax(C, 3 * GiB, C.maxBytes)).toBe(C.maxBytes);
+  });
+  test('usage illisible : rien ne descend (posé gardé), sinon plafond visé', () => {
+    expect(convergingMax(C, Number.NaN, 9 * GiB)).toBe(9 * GiB);
+    expect(convergingMax(C, -1, 9 * GiB)).toBe(9 * GiB);
+    expect(convergingMax(C, Number.NaN, null)).toBe(C.maxBytes);
   });
 });
