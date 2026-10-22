@@ -11,6 +11,8 @@ export const RULE_BOUNDS = {
   overMB: [100, 65_536], forMin: [1, 120], forHours: [1, 720], underMin: [1, 30],
   // anti-gel : jamais sous 70 % (tuerait des tests sur une machine simplement occupée), durées de 5 s à 10 min
   memPercent: [70, 99], memForSec: [5, 600], cpuPercent: [70, 100], cpuForSec: [10, 600],
+  // pression mémoire (PSI full) : jamais sous 10 % (usage normal 0 à 8 %), durées de 5 s à 5 min
+  psiPercent: [10, 90], psiForSec: [5, 300],
 } as const;
 export const RULE_ID_RE = /^[a-z0-9-]{1,40}$/;
 export const RULE_NAME_MAX = 80;
@@ -79,9 +81,15 @@ function validateCondition(raw: unknown): RuleCondition | string {
       if (!intIn(raw.memForSec, B.memForSec)) return `durée mémoire hors bornes (${B.memForSec[0]} à ${B.memForSec[1]} s)`;
       if (!intIn(raw.cpuPercent, B.cpuPercent)) return `seuil CPU hors bornes (${B.cpuPercent[0]} à ${B.cpuPercent[1]} %)`;
       if (!intIn(raw.cpuForSec, B.cpuForSec)) return `durée CPU hors bornes (${B.cpuForSec[0]} à ${B.cpuForSec[1]} s)`;
+      // pression : les deux champs ensemble, ou aucun (condition d'avant la pression, jamais déclenchée par elle)
+      const psi = raw.psiPercent !== undefined || raw.psiForSec !== undefined;
+      if (psi && !intIn(raw.psiPercent, B.psiPercent)) return `seuil de pression hors bornes (${B.psiPercent[0]} à ${B.psiPercent[1]} %)`;
+      if (psi && !intIn(raw.psiForSec, B.psiForSec)) return `durée de pression hors bornes (${B.psiForSec[0]} à ${B.psiForSec[1]} s)`;
+      // ordre des champs fixe : les conditions sont comparées par JSON (pré-approbation, révision, crédit de Simulation)
       return {
         kind: 'system', memPercent: raw.memPercent as number, memForSec: raw.memForSec as number,
         cpuPercent: raw.cpuPercent as number, cpuForSec: raw.cpuForSec as number,
+        ...(psi ? { psiPercent: raw.psiPercent as number, psiForSec: raw.psiForSec as number } : {}),
       };
     }
     default:

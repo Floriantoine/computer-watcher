@@ -18,10 +18,12 @@ export type RuleCondition =
   | { kind: 'forecast'; underMin: number; includeApps: string[] }
   /**
    * (d) anti-gel : la RAM utilisée (d'après MemAvailable) ≥ `memPercent` pendant `memForSec`, OU le CPU total ≥
-   * `cpuPercent` pendant `cpuForSec`. Cible : la plus grosse « vérification » (instance de catégorie Test, ou `tsc` /
-   * `eslint` reconnus à leur ligne de commande), une à la fois.
+   * `cpuPercent` pendant `cpuForSec`, OU la pression mémoire (PSI « full » avg10 : part du temps où tout ce qui tourne
+   * attend la mémoire) ≥ `psiPercent` pendant `psiForSec`. Les deux champs de pression vont ensemble ; absents (règles
+   * d'avant le 2026-10-22) : pas de condition de pression. Cible : la plus grosse « vérification » (instance de catégorie
+   * Test, ou `tsc` / `eslint` reconnus à leur ligne de commande), une à la fois.
    */
-  | { kind: 'system'; memPercent: number; memForSec: number; cpuPercent: number; cpuForSec: number };
+  | { kind: 'system'; memPercent: number; memForSec: number; cpuPercent: number; cpuForSec: number; psiPercent?: number; psiForSec?: number };
 
 export interface Rule {
   id: string;
