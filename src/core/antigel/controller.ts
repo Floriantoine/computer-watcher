@@ -89,8 +89,12 @@ export interface AntigelTickInput {
   frozenSlices?: ReadonlySet<string>;
 }
 
-/** `unit` : slice du projet (cwatch-p-<clé>.slice). */
-export interface AntigelOom { unit: string; root: string | null; kills: number }
+/**
+ * `unit` : slice du projet (cwatch-p-<clé>.slice). `budget` : le noyau a manqué de mémoire sous la limite de la slice
+ * elle-même (« oom » de son memory.events : le plafond dur de son budget) ; absent : limite d'un parent (plafond global)
+ * ou mémoire du système entier.
+ */
+export interface AntigelOom { unit: string; root: string | null; kills: number; budget?: boolean }
 
 export interface AntigelController {
   /** Un tick (synchrone, borné) ; renvoie les OOM observés dans les slices de projet depuis le tick précédent. */
@@ -480,7 +484,9 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
       if (!s) continue;
       const prev = lastEvents.get(unit);
       if (prev && s.events.high > prev.high) throttledUntil.set(unit, now + THROTTLE_HOLD_MS);
-      if (prev && s.events.oomKill > prev.oomKill) ooms.push({ unit, root, kills: s.events.oomKill - prev.oomKill });
+      if (prev && s.events.oomKill > prev.oomKill) {
+        ooms.push({ unit, root, kills: s.events.oomKill - prev.oomKill, ...(s.events.oom > prev.oom ? { budget: true } : {}) });
+      }
       lastEvents.set(unit, s.events);
       const pct = recentPct(unit, s, now);
       if (s.populated && projects.length < MAX_UNITS) {
@@ -493,6 +499,7 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
           throttled: rootThrottled || own, budgetThrottled: own,
           ...(outside !== undefined ? { outsideKB: outside } : {}),
           ...(pct !== undefined ? { stallPct: pct } : {}),
+          ...(s.maxBytes !== null ? { maxKB: kb(s.maxBytes) } : {}),
         });
       }
     }

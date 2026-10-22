@@ -387,6 +387,28 @@ describe('orchestrateur anti-gel', () => {
     expect(await h.step()).toEqual([]);
   });
 
+  test('OOM sous le plafond dur du budget (« oom » compté sur la slice du projet) : marqué budget ; plafond global : non', async () => {
+    const h = harness();
+    await h.step({ ...ON, budgets: { [A]: 4096 } });
+    h.sys.set(PSCG, { ...h.sys.get(PSCG)!, events: ev({ max: 3, oom: 1, oomKill: 1 }) });
+    await h.step({ ...ON, budgets: { [A]: 4096 } }); // référence
+    h.sys.set(PSCG, { ...h.sys.get(PSCG)!, events: ev({ max: 9, oom: 2, oomKill: 2 }) });
+    expect(await h.step({ ...ON, budgets: { [A]: 4096 } })).toEqual([{ unit: PS, root: A, kills: 1, budget: true }]);
+    // arrêt compté sur la slice sans « oom » à elle : la limite d'un parent (plafond global) ou le noyau entier
+    h.sys.set(PSCG, { ...h.sys.get(PSCG)!, events: ev({ max: 9, oom: 2, oomKill: 3 }) });
+    expect(await h.step({ ...ON, budgets: { [A]: 4096 } })).toEqual([{ unit: PS, root: A, kills: 1 }]);
+  });
+
+  test('plafond dur en place publié avec le projet (maxKB), provisoire compris ; absent sans plafond', async () => {
+    const h = harness();
+    await h.step({ ...ON, budgets: { [A]: 4096 } });
+    await h.step({ ...ON, budgets: { [A]: 4096 } });
+    expect(h.ag.state().projects).toEqual([expect.objectContaining({ unit: PS, budgetMB: 4096, maxKB: 5 * 1024 * 1024 })]);
+    await h.step(ON);
+    await h.step(ON);
+    expect(h.ag.state().projects[0]).not.toHaveProperty('maxKB');
+  });
+
   test('redémarrage sans état : processus déjà sous la slice du projet → attribution reconstruite, aucun déplacement', async () => {
     const h = harness();
     h.sys.set(PSCG, stats());

@@ -629,7 +629,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
         claudeDirs: claudeConfigDirs, projectRootOf, frozenSlices: fridge?.frozenSlices(),
       });
       lastSwapFreeKB = system.swapFreeKB;
-      for (const o of ooms) insertEvent(d, ts, 'antigel_oom', o.root ? `project:${o.root}` : null, { unit: o.unit, root: o.root, kills: o.kills });
+      for (const o of ooms) insertEvent(d, ts, 'antigel_oom', o.root ? `project:${o.root}` : null, { unit: o.unit, root: o.root, kills: o.kills, ...(o.budget ? { budget: true } : {}) });
       // avec le frigo, l'état est écrit par runFridge (après lui, même si l'échantillonnage échoue)
       if (!fridge) writeAntigelState(antigel.state());
       if (jobErrors.antigel) ok('antigel');

@@ -264,6 +264,9 @@ test('marqueur antigel_oom : libellé « Plafond de travail », au singulier et 
   expect(n!.label).toBe('Plafond de travail : 1 processus arrêté par le noyau (vérifications hors projet)');
   const [o] = eventMarkers([{ ts: 1, type: 'antigel_oom', groupKey: null, groupLabel: null, detail: { unit: 'cwatch-p-beta.slice', root: '/home/u/beta', kills: 1 } }]);
   expect(o!.label).toBe('Plafond de travail : 1 processus arrêté par le noyau (/home/u/beta)');
+  // plafond dur du budget du projet dépassé
+  const [b] = eventMarkers([{ ts: 1, type: 'antigel_oom', groupKey: 'project:/home/u/alpha', groupLabel: 'u / alpha', detail: { unit: 'cwatch-p-alpha.slice', root: '/home/u/alpha', kills: 1, budget: true } }]);
+  expect(b!.label).toBe('Budget dépassé : 1 processus arrêté par le noyau (u / alpha)');
 });
 
 test('antigel_oom figure dans la liste Alertes (pas une action de l’app)', () => {

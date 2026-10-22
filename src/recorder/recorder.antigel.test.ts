@@ -200,7 +200,8 @@ test('OOM dans la slice du projet : événement d’historique antigel_oom (grou
   expect(s.events()).toEqual([]);
   s.sys.set(PSCG, stats({ events: ev({ high: 3, oom: 2, oomKill: 2 }) }));
   await s.tick(); // +1 OOM
-  expect(s.events()).toEqual([{ groupKey: `project:${s.A}`, unit: PS, root: s.A, kills: 1 }]);
+  // « oom » compté sur la slice du projet : son propre plafond dur (budget)
+  expect(s.events()).toEqual([{ groupKey: `project:${s.A}`, unit: PS, root: s.A, kills: 1, budget: true }]);
   s.rec.stop();
 });
 
