@@ -17,6 +17,7 @@ import { CpuTracker } from '../core/collector/cpuTracker';
 import { readListeningPorts } from '../core/collector/ports';
 import { readProcesses } from '../core/collector/readProcesses';
 import { readSystem } from '../core/collector/readSystem';
+import { readInteractivePressure, type MemPressure } from '../core/collector/interactivePressure';
 import { loadConfig } from '../core/config';
 import { buildGroups } from '../core/grouping/buildGroups';
 import { claudeDirs } from '../core/grouping/claudeDirs';
@@ -92,6 +93,11 @@ export interface RecorderDeps {
   statfs?: (mount: string) => { sizeKB: number; availKB: number };
   /** Contenu de /proc/self/mountinfo (défaut : lu à chaque relecture des partitions). */
   mountinfo?: () => string;
+  /**
+   * Racine des cgroups, pour la pression mémoire du bureau et des applis (session.slice, app.slice…). Défaut :
+   * /sys/fs/cgroup avec le vrai /proc ; aucune avec un faux /proc (tests : jamais les vrais cgroups) ; null : aucune.
+   */
+  cgroupRoot?: string | null;
   /** Mesure des familles récupérables (défaut : du à basse priorité sous HOME / XDG). */
   diskMeasure?: () => Promise<FamilyMeasure[]>;
   /**
@@ -179,6 +185,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
   const now = deps.now ?? Date.now;
   const log = deps.log ?? ((m: string) => console.error(m));
   const procRoot = deps.procRoot ?? '/proc';
+  const cgroupRoot = deps.cgroupRoot !== undefined ? deps.cgroupRoot : procRoot === '/proc' ? '/sys/fs/cgroup' : null;
   const ncpu = deps.cpuCount ?? Math.max(1, cpus().length);
   const tracker = new CpuTracker();
   const cmdlineCache = new Map<string, string>();
@@ -575,8 +582,13 @@ export function createRecorder(deps: RecorderDeps): Recorder {
     }
   };
 
-  /** Règles après l'écriture du tick, dans leur propre try : une erreur ici ne casse jamais l'échantillonnage. */
-  const runRules = (d: DatabaseSync, ts: number, groups: Group[], procs: readonly ProcInfo[], system: SystemInfo, cpuPercent: number) => {
+  /**
+   * Règles après l'écriture du tick, dans leur propre try : une erreur ici ne casse jamais l'échantillonnage. `m` : instant
+   * monotone du début du tick, lu avec `ts` (un tick lent pendant un étouffement n'est jamais pris pour une veille).
+   */
+  const runRules = (
+    d: DatabaseSync, ts: number, m: number, groups: Group[], procs: readonly ProcInfo[], system: SystemInfo, cpuPercent: number, pressure: MemPressure | null,
+  ) => {
     // interrupteur général éteint, ou aucune règle activée : rien (pas même de classement ni de simulation, ni de crédit)
     if (!rulesCfg.enabled || !rulesCfg.list.some((r) => r.enabled)) {
       lastRulesMono = null;
@@ -585,7 +597,6 @@ export function createRecorder(deps: RecorderDeps): Recorder {
     }
     try {
       counters.ruleEvaluations++;
-      const m = mono();
       const intervalMs = cfg.intervalSec * 1000;
       const delta = lastRulesMono === null ? 0 : Math.min(Math.max(0, m - lastRulesMono), 4 * intervalMs);
       lastRulesMono = m;
@@ -608,8 +619,12 @@ export function createRecorder(deps: RecorderDeps): Recorder {
         // ralentissement toléré jusqu'à 4 × intervalle ; veille ou saut d'horloge (écart murale/monotone) dès 2 ×
         now: m, wallNow: ts, maxGapMs: 4 * intervalMs, maxSkewMs: 2 * intervalMs,
         enabled: rulesCfg.enabled, rules, groups, classification, forecast: fc, procGrowthKB,
-        // (d) anti-gel : RAM utilisée d'après MemAvailable, CPU total du tick (premier tick : 0 %, aucune mesure de CPU)
-        system: { memUsedPercent: memUsedPercent(system), cpuPercent: Number.isFinite(cpuPercent) ? cpuPercent : null, memTotalKB: system.memTotalKB, cpuCount: ncpu },
+        // (d) anti-gel : RAM utilisée d'après MemAvailable, CPU total du tick (premier tick : 0 %, aucune mesure de CPU),
+        // pression mémoire du bureau et des applis (repli : la machine ; null sans PSI)
+        system: {
+          memUsedPercent: memUsedPercent(system), cpuPercent: Number.isFinite(cpuPercent) ? cpuPercent : null, memTotalKB: system.memTotalKB, cpuCount: ncpu,
+          pressure,
+        },
         // sans historique couvrant toute la période (service récent, trou d'enregistrement) : null, rien n'est « inactif »
         inactive: (targets, since) => {
           const active = historyCovers(d, since, ts) ? queryInactive(d, targets, since, opts, inactiveCpuThreshold(cfg)) : null;
@@ -777,8 +792,13 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       if (!db || !writer) return;
       try {
         const ts = now();
+        // instant monotone du tick, lu avec l'heure murale : les règles comparent les deux pour détecter une veille
+        const tickMono = mono();
         const procs = tracker.update(readProcesses(procRoot, { wantCwd, cmdlineCache }), ts);
         const system = readSystem(procRoot);
+        // pression mémoire du bureau et des applis (PSI full de session.slice, app.slice, sessions) : un projet freiné par
+        // son budget dans cwatch.slice n'y compte pas ; repli sur la machine sans cgroups lisibles
+        const pressure = readInteractivePressure({ cgroupRoot, uid: currentUid, globalFull10: system.psiFull10 ?? null });
         const groups = buildGroups(procs, {
           home: homedir(),
           currentUid,
@@ -789,8 +809,9 @@ export function createRecorder(deps: RecorderDeps): Recorder {
         });
         const cpuPercent = procs.reduce((s, p) => s + p.cpuPercent, 0) / ncpu;
         writer.writeTick({ ts, system, cpuPercent, groups, procs }, cfg);
-        if (shouldRecordPressure(system.psiSome10, lastPressureTs, ts)) {
-          const detail = { psi: system.psiSome10 };
+        // alerte « Pression mémoire » : même signal que la règle (la colonne d'historique reste la PSI some de la machine)
+        if (pressure && shouldRecordPressure(pressure.percent, lastPressureTs, ts)) {
+          const detail = { psi: pressure.percent, scope: pressure.scope };
           alert(insertEvent(db, ts, 'pressure', null, detail), ts, 'pressure', null, null, detail);
           lastPressureTs = ts;
         }
@@ -805,7 +826,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
         runDisk(db, ts);
         runForecast(db, ts, system);
         runAntigel(db, ts, procs, groups, system);
-        runRules(db, ts, groups, procs, system, cpuPercent);
+        runRules(db, ts, tickMono, groups, procs, system, cpuPercent, pressure);
         st.lastSampleAt = ts;
         ok('tick');
         writeStatus();

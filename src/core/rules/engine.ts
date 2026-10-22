@@ -19,7 +19,7 @@ export const FORECAST_MIN_GROWTH_KB = 100 * 1024;
 export const SYSTEM_SETTLE_MS = 15_000;
 /** (d) : victime toujours vivante après ce délai (signal refusé, processus bloqué) : écartée tant qu'elle vit, la suivante peut être visée. */
 export const SYSTEM_STUCK_MS = 60_000;
-/** (d) déclencheur mémoire : la victime pèse au moins 512 Mio et 5 % de la RAM (sinon la tuer ne libère rien d'utile). */
+/** (d) déclencheur mémoire ou pression : la victime pèse au moins 512 Mio et 5 % de la RAM (sinon la tuer ne libère rien d'utile). */
 export const SYSTEM_MIN_MEM_KB = 512 * 1024;
 export const SYSTEM_MIN_MEM_SHARE = 0.05;
 /** (d) déclencheur CPU : la victime occupe au moins 10 % de la machine (tous cœurs). */
@@ -66,9 +66,10 @@ export interface RuleState {
   lastGapWall: number | null;
   /** Début (monotone) de la condition de prévision tenue, observée sans trou. */
   forecastHeldSince: number | null;
-  /** (d) ruleId → début (monotone) du dépassement mémoire, et du dépassement CPU, observés sans trou. */
+  /** (d) ruleId → début (monotone) du dépassement mémoire, du dépassement CPU et de la pression mémoire, observés sans trou. */
   systemMemSince: Map<string, number>;
   systemCpuSince: Map<string, number>;
+  systemPsiSince: Map<string, number>;
   /** (d) ruleId → victime en cours (clés `${pid}:${startTicks}`) et instant du déclenchement (Active seulement). */
   systemPending: Map<string, { keys: string[]; at: number }>;
   /** (d) ruleId → victimes restées vivantes après SYSTEM_STUCK_MS : plus visées tant qu'elles vivent. */
@@ -80,7 +81,7 @@ export interface RuleState {
 export const emptyRuleState = (): RuleState => ({
   overSince: new Map(), lastFire: new Map(), actions: [], dryRuns: [], lastInactiveCheck: new Map(), pausedUntil: new Map(), lastGuard: new Map(),
   lastEval: null, lastGapWall: null, forecastHeldSince: null,
-  systemMemSince: new Map(), systemCpuSince: new Map(), systemPending: new Map(), systemStuck: new Map(), systemNoTarget: new Set(),
+  systemMemSince: new Map(), systemCpuSince: new Map(), systemPsiSince: new Map(), systemPending: new Map(), systemStuck: new Map(), systemNoTarget: new Set(),
 });
 
 /**
@@ -106,11 +107,17 @@ export interface EvalInput {
   groups: readonly Group[];
   classification: Classification | null;
   /**
-   * (d) Mesures du tick : RAM utilisée en % (d'après MemAvailable) et CPU total en % (toutes les cœurs = 100 %).
-   * null, absente ou non finie → la condition n'est jamais tenue (échec fermé).
+   * (d) Mesures du tick : RAM utilisée en % (d'après MemAvailable), CPU total en % (toutes les cœurs = 100 %) et pression
+   * mémoire en %. null, absente ou non finie → la condition n'est jamais tenue (échec fermé).
    */
   system?: {
     memUsedPercent: number | null; cpuPercent: number | null;
+    /**
+     * Pression mémoire « full » avg10 : celle du bureau et des applis (`interactive` : la plus haute de session.slice,
+     * app.slice et des sessions de connexion), ou de toute la machine (`system`) faute de cgroups lisibles. Le travail
+     * freiné par son budget (cwatch.slice) n'y compte pas.
+     */
+    pressure?: { percent: number | null; scope: 'interactive' | 'system' } | null;
     /** MemTotal (Kio) et nombre de cœurs : seuils de contribution de la victime ; absents → seuil mémoire fixe, CPU jamais. */
     memTotalKB?: number | null; cpuCount?: number | null;
   } | null;
@@ -133,7 +140,7 @@ export type SkipReason = 'cooldown' | 'hourly-quota' | 'guard' | 'culprit-protec
 export type RuleDecision =
   | {
     ruleId: string; ruleName: string; mode: RuleMode; outcome: 'fire'; target: RuleTarget; condition: RuleCondition; revision: string;
-    /** (d) mesure qui a déclenché (« mémoire 97 % depuis 15 s »), pour l'historique. */
+    /** (d) mesure qui a déclenché (« mémoire 97 % depuis 15 s », « pression mémoire du bureau et des applis 52 % depuis 20 s »). */
     trigger?: string;
   }
   | { ruleId: string; ruleName: string; mode: RuleMode; outcome: 'skip'; reason: SkipReason; target: RuleTarget | null };
@@ -172,6 +179,7 @@ export function evaluateRules(input: EvalInput, state: RuleState): RuleDecision[
     state.forecastHeldSince = null;
     state.systemMemSince.clear();
     state.systemCpuSince.clear();
+    state.systemPsiSince.clear();
     state.lastGapWall = Math.max(wall, last.wall);
   }
   state.lastEval = { mono: now, wall };
@@ -179,7 +187,7 @@ export function evaluateRules(input: EvalInput, state: RuleState): RuleDecision[
   // état des règles retirées ou désactivées
   const live = new Set(enabledRules.map((r) => r.id));
   for (const k of state.overSince.keys()) if (!live.has(k.slice(0, k.indexOf('|')))) state.overSince.delete(k);
-  for (const m of [state.systemMemSince, state.systemCpuSince, state.systemPending, state.systemStuck]) {
+  for (const m of [state.systemMemSince, state.systemCpuSince, state.systemPsiSince, state.systemPending, state.systemStuck]) {
     for (const k of m.keys()) if (!live.has(k)) m.delete(k);
   }
   state.systemNoTarget.clear();
@@ -348,15 +356,23 @@ export function memUsedPercent(s: { memTotalKB: number; memAvailableKB: number; 
 /** Pourcentage mesuré utilisable (fini) ; sinon null (mesure absente ou illisible). */
 const pct = (v: number | null | undefined): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
-/** (d) « mémoire 97 % depuis 15 s » ou « CPU 99 % depuis 60 s » : la mesure tenue (la mémoire d'abord). */
+/**
+ * (d) « mémoire 97 % depuis 15 s », « pression mémoire du bureau et des applis 52 % depuis 20 s » (« de la machine » en
+ * repli) ou « CPU 99 % depuis 60 s » : la mesure tenue (la mémoire d'abord, puis la pression, puis le CPU).
+ */
 function systemTrigger(c: Extract<RuleCondition, { kind: 'system' }>, ruleId: string, input: EvalInput, state: RuleState, now: number): string | undefined {
-  const held = (v: number | null, since: number | undefined, forSec: number) => v !== null && since !== undefined && now - since >= forSec * 1000;
+  const held = (v: number | null, since: number | undefined, forSec: number | undefined) =>
+    v !== null && since !== undefined && forSec !== undefined && now - since >= forSec * 1000;
   const mem = pct(input.system?.memUsedPercent);
+  const psi = pct(input.system?.pressure?.percent);
+  const where = input.system?.pressure?.scope === 'system' ? 'de la machine' : 'du bureau et des applis';
   const cpu = pct(input.system?.cpuPercent);
   const memSince = state.systemMemSince.get(ruleId);
+  const psiSince = state.systemPsiSince.get(ruleId);
   const cpuSince = state.systemCpuSince.get(ruleId);
   const sec = (since: number) => Math.round((now - since) / 1000);
   if (held(mem, memSince, c.memForSec)) return `mémoire ${Math.round(mem!)} % depuis ${sec(memSince!)} s`;
+  if (held(psi, psiSince, c.psiForSec)) return `pression mémoire ${where} ${Math.round(psi!)} % depuis ${sec(psiSince!)} s`;
   if (held(cpu, cpuSince, c.cpuForSec)) return `CPU ${Math.round(cpu!)} % depuis ${sec(cpuSince!)} s`;
   return undefined;
 }
@@ -489,6 +505,11 @@ function candidatesFor(rule: Rule, input: EvalInput, groups: readonly Group[], s
       };
       const memHeld = track(state.systemMemSince, pct(input.system?.memUsedPercent), c.memPercent, c.memForSec);
       const cpuHeld = track(state.systemCpuSince, pct(input.system?.cpuPercent), c.cpuPercent, c.cpuForSec);
+      // pression mémoire du bureau et des applis : seulement si la condition en a une (une condition d'avant la pression n'en
+      // tient pas compte)
+      const psiHeld = c.psiPercent !== undefined && c.psiForSec !== undefined
+        ? track(state.systemPsiSince, pct(input.system?.pressure?.percent), c.psiPercent, c.psiForSec)
+        : (state.systemPsiSince.delete(rule.id), false);
       // processus vivants (pid + startTicks) : victime précédente encore là ?
       const alive = new Set<string>();
       for (const g of input.groups) for (const p of flattenGroup(g)) alive.add(`${p.pid}:${p.startTicks}`);
@@ -513,7 +534,7 @@ function candidatesFor(rule: Rule, input: EvalInput, groups: readonly Group[], s
         }
         state.systemPending.delete(rule.id);
       }
-      if (!(memHeld || cpuHeld)) return [];
+      if (!(memHeld || cpuHeld || psiHeld)) return [];
       const skip = state.systemStuck.get(rule.id) ?? new Set<string>();
       // Tous les processus connus hors « Autres », Claude compris (accord de l'utilisateur du 2026-10-19 : une vérification
       // lancée par Claude est visable par cette règle) : une vérification emmène ses descendants rangés ailleurs (workers
@@ -572,7 +593,8 @@ function candidatesFor(rule: Rule, input: EvalInput, groups: readonly Group[], s
         const pids = subtree([pid]);
         if (!pids.length) continue;
         const sizeKB = size(pids);
-        if (!((memHeld && sizeKB >= minMemKB) || (cpuHeld && cpuShare(pids) >= SYSTEM_MIN_CPU_SHARE))) continue;
+        // pression mémoire comme mémoire pleine : la victime doit peser en mémoire
+        if (!(((memHeld || psiHeld) && sizeKB >= minMemKB) || (cpuHeld && cpuShare(pids) >= SYSTEM_MIN_CPU_SHARE))) continue;
         const p = byPid.get(pid)!;
         const g = groupOf.get(pid)!;
         out.push({ key: `check:${p.pid}:${p.startTicks}`, kind: 'instance', group: g, label: label(k, g), pids, sizeKB, verification: true });

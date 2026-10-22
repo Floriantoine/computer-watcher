@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { parseCmdline, parseLoadavg, parseMeminfo, parsePsiSome10, parseStat, parseStatus } from './parse';
+import { parseCmdline, parseLoadavg, parseMeminfo, parsePsiFull10, parsePsiSome10, parseStat, parseStatus } from './parse';
 
 const statLine = (comm: string) =>
   `4242 (${comm}) S 1000 4242 4242 0 -1 4194304 100 0 0 0 250 50 0 0 20 0 1 0 123456 1000000 2000 18446744073709551615\n`;
@@ -63,5 +63,13 @@ describe('métriques système', () => {
   test('parsePsiSome10', () => {
     expect(parsePsiSome10('some avg10=28.40 avg60=40.55 avg300=36.75 total=1\nfull avg10=25.34 avg60=1 avg300=1 total=1\n')).toBe(28.4);
     expect(parsePsiSome10('')).toBeNull();
+  });
+  test('parsePsiFull10 : ligne « full » (toutes les tâches attendaient la mémoire), sans casser « some »', () => {
+    const psi = 'some avg10=28.40 avg60=40.55 avg300=36.75 total=1\nfull avg10=25.34 avg60=1 avg300=1 total=1\n';
+    expect(parsePsiFull10(psi)).toBe(25.34);
+    expect(parsePsiSome10(psi)).toBe(28.4);
+    // noyau sans ligne « full » (cpu avant 5.13) ou fichier vide : inconnu
+    expect(parsePsiFull10('some avg10=28.40 avg60=40.55 avg300=36.75 total=1\n')).toBeNull();
+    expect(parsePsiFull10('')).toBeNull();
   });
 });

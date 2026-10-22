@@ -2,7 +2,7 @@
 import { CATEGORIES, isCategory } from '../classify/categories';
 import { APP_NAMES } from '../grouping/rules';
 import { isNeverKillName } from './neverKill';
-import { isPreapproved, RECOMMENDED_RULES, SYSTEM_DEFAULTS, withInactive4h, withRecommendedActive } from './recommended';
+import { isPreapproved, RECOMMENDED_RULES, SYSTEM_DEFAULTS, withAntigelPsi, withInactive4h, withRecommendedActive } from './recommended';
 import { simulationCredit, type SimStats } from './simulation';
 import type { Rule, RuleCondition, RuleIssue, RuleMatch, RuleMode, RulesConfig } from './types';
 
@@ -11,6 +11,8 @@ export const RULE_BOUNDS = {
   overMB: [100, 65_536], forMin: [1, 120], forHours: [1, 720], underMin: [1, 30],
   // anti-gel : jamais sous 70 % (tuerait des tests sur une machine simplement occupée), durées de 5 s à 10 min
   memPercent: [70, 99], memForSec: [5, 600], cpuPercent: [70, 100], cpuForSec: [10, 600],
+  // pression mémoire du bureau et des applis (PSI full) : jamais sous 10 % (proche de 0 en usage normal), de 5 s à 5 min
+  psiPercent: [10, 90], psiForSec: [5, 300],
 } as const;
 export const RULE_ID_RE = /^[a-z0-9-]{1,40}$/;
 export const RULE_NAME_MAX = 80;
@@ -25,7 +27,7 @@ export const OPT_IN_APPS: readonly string[] = [...APP_NAMES].filter((n) => !isNe
 /** Erreurs de règles gardées (au-delà : une ligne « … et n autres »). */
 export const MAX_RULE_ISSUES = 20;
 
-const MIGRATED = { recommendedActive: true, recommendedInactive4h: true, recommendedSeeded: true } as const;
+const MIGRATED = { recommendedActive: true, recommendedInactive4h: true, recommendedSeeded: true, recommendedPsi: true } as const;
 /**
  * Première installation (config.json absent) : interrupteur allumé, les 3 règles recommandées. Une config existante
  * d'avant les recommandées y arrive aussi, une fois, par la migration « recommandées ajoutées » (withSeeded).
@@ -79,9 +81,15 @@ function validateCondition(raw: unknown): RuleCondition | string {
       if (!intIn(raw.memForSec, B.memForSec)) return `durée mémoire hors bornes (${B.memForSec[0]} à ${B.memForSec[1]} s)`;
       if (!intIn(raw.cpuPercent, B.cpuPercent)) return `seuil CPU hors bornes (${B.cpuPercent[0]} à ${B.cpuPercent[1]} %)`;
       if (!intIn(raw.cpuForSec, B.cpuForSec)) return `durée CPU hors bornes (${B.cpuForSec[0]} à ${B.cpuForSec[1]} s)`;
+      // pression : les deux champs ensemble, ou aucun (condition d'avant la pression, jamais déclenchée par elle)
+      const psi = raw.psiPercent !== undefined || raw.psiForSec !== undefined;
+      if (psi && !intIn(raw.psiPercent, B.psiPercent)) return `seuil de pression hors bornes (${B.psiPercent[0]} à ${B.psiPercent[1]} %)`;
+      if (psi && !intIn(raw.psiForSec, B.psiForSec)) return `durée de pression hors bornes (${B.psiForSec[0]} à ${B.psiForSec[1]} s)`;
+      // ordre des champs fixe : les conditions sont comparées par JSON (pré-approbation, révision, crédit de Simulation)
       return {
         kind: 'system', memPercent: raw.memPercent as number, memForSec: raw.memForSec as number,
         cpuPercent: raw.cpuPercent as number, cpuForSec: raw.cpuForSec as number,
+        ...(psi ? { psiPercent: raw.psiPercent as number, psiForSec: raw.psiForSec as number } : {}),
       };
     }
     default:
@@ -145,8 +153,11 @@ export function validateRulesDetailed(raw: unknown): { rules: RulesConfig; issue
     ids.add((r as Rule).id);
     out.push(r as Rule);
   });
+  // migration unique : anti-gel recommandé sur la pression mémoire (avant le passage en Active : une config très ancienne
+  // dont l'anti-gel intact est en Simulation le reçoit déjà pré-approuvé)
+  const psi = raw.recommendedPsi === true ? out : withAntigelPsi(out);
   // migration unique : règles recommandées intactes en Active (accord de l'utilisateur du 2026-10-20)
-  const at4h = raw.recommendedInactive4h === true ? out : withInactive4h(out);
+  const at4h = raw.recommendedInactive4h === true ? psi : withInactive4h(psi);
   const migrated = raw.recommendedActive === true ? at4h : withRecommendedActive(at4h);
   const final = raw.recommendedSeeded === true ? { enabled, list: migrated } : withSeeded(enabled, migrated);
   if (dropped) issues.push({ index: -1, id: null, name: null, error: `… et ${dropped} autre${dropped > 1 ? 's' : ''} règle${dropped > 1 ? 's' : ''} refusée${dropped > 1 ? 's' : ''}` });
@@ -198,7 +209,7 @@ export const RULE_TEMPLATES: readonly Omit<Rule, 'id' | 'createdAt'>[] = [
   },
   { name: 'Front/Back de projet inactif depuis 4 h', enabled: false, mode: 'simulate', condition: { kind: 'inactive', categories: ['front', 'back'], forHours: 4 } },
   { name: 'Épuisement prévu dans < 3 min', enabled: false, mode: 'simulate', condition: { kind: 'forecast', underMin: 3, includeApps: [] } },
-  { name: 'Mémoire ou CPU > 95 % : tuer les tests', enabled: false, mode: 'simulate', condition: { kind: 'system', ...SYSTEM_DEFAULTS } },
+  { name: 'Machine saturée : tuer les tests', enabled: false, mode: 'simulate', condition: { kind: 'system', ...SYSTEM_DEFAULTS } },
 ];
 
 /**

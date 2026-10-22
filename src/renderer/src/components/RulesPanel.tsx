@@ -76,6 +76,36 @@ function Toggles<T extends string>({ items, selected, onChange, label, testid }:
   );
 }
 
+/** Condition « Saturation » (anti-gel) : mémoire utilisée, CPU total et pression mémoire du bureau et des applis, chacun avec sa durée. */
+export function SystemRuleFields({ form: f, errors: err, onChange: setForm }: { form: RuleForm; errors: RuleErrors; onChange: (patch: Partial<RuleForm>) => void }) {
+  return (
+    <>
+      <Row label="Mémoire utilisée au-dessus de" error={err.memPercent} help="RAM utilisée d’après la mémoire disponible (MemAvailable), comme free.">
+        {(id) => <TextField id={id} value={f.memPercent} unit="%" ariaLabel="Seuil mémoire" invalid={!!err.memPercent} testid="rule-mem-percent" onChange={(v) => setForm({ memPercent: v })} />}
+      </Row>
+      <Row label="Pendant" error={err.memForSec}>
+        {(id) => <TextField id={id} value={f.memForSec} unit="s" ariaLabel="Durée mémoire" invalid={!!err.memForSec} testid="rule-mem-for-sec" onChange={(v) => setForm({ memForSec: v })} />}
+      </Row>
+      <Row label="Ou CPU total au-dessus de" error={err.cpuPercent} help="Tous les cœurs : 100 % = machine entièrement occupée.">
+        {(id) => <TextField id={id} value={f.cpuPercent} unit="%" ariaLabel="Seuil CPU" invalid={!!err.cpuPercent} testid="rule-cpu-percent" onChange={(v) => setForm({ cpuPercent: v })} />}
+      </Row>
+      <Row label="Pendant" error={err.cpuForSec}>
+        {(id) => <TextField id={id} value={f.cpuForSec} unit="s" ariaLabel="Durée CPU" invalid={!!err.cpuForSec} testid="rule-cpu-for-sec" onChange={(v) => setForm({ cpuForSec: v })} />}
+      </Row>
+      <Row
+        label="Ou pression mémoire du bureau et des applis au-dessus de"
+        error={err.psiPercent}
+        help="Pression mémoire du bureau et des applis (PSI « full » de session.slice, app.slice et des sessions de connexion, la plus haute) : part du temps où ce qu’ils font tourner attend la mémoire (swap, cache relu en boucle). Proche de 0 % en temps normal ; elle monte quand ils gèlent, même avec la RAM utilisée sous 95 %. Un projet simplement freiné par son budget n’y compte pas. Sans ces cgroups (session sans systemd) : celle de toute la machine. Les deux champs vides : pas de condition de pression."
+      >
+        {(id) => <TextField id={id} value={f.psiPercent} unit="%" ariaLabel="Seuil de pression mémoire" invalid={!!err.psiPercent} testid="rule-psi-percent" onChange={(v) => setForm({ psiPercent: v })} />}
+      </Row>
+      <Row label="Pendant" error={err.psiForSec} help="Cible : la plus grosse vérification (lanceur de tests, tsc, eslint, reconnu à sa ligne de commande) avec ses workers, si elle pèse dans la saturation (≥ 512 Mio et 5 % de la RAM, ou ≥ 10 % du CPU), y compris une lancée par Claude ; jamais Claude lui-même ni ses serveurs MCP. La suivante seulement une fois la précédente arrêtée, si la condition tient toujours.">
+        {(id) => <TextField id={id} value={f.psiForSec} unit="s" ariaLabel="Durée de pression mémoire" invalid={!!err.psiForSec} testid="rule-psi-for-sec" onChange={(v) => setForm({ psiForSec: v })} />}
+      </Row>
+    </>
+  );
+}
+
 /**
  * Réglages › Règles : interrupteur général, liste (activée, mode, résumé, dernier déclenchement, compte sur 7 j),
  * modèles, éditeur par champs (aucun texte interprété). Simulation → Active seulement après confirmation.
@@ -385,22 +415,7 @@ export function RulesPanel({ config, issues, onSaved, onFormState }: Props) {
               </Row>
             </>
           )}
-          {f.kind === 'system' && (
-            <>
-              <Row label="Mémoire utilisée au-dessus de" error={err.memPercent} help="RAM utilisée d’après la mémoire disponible (MemAvailable), comme free.">
-                {(id) => <TextField id={id} value={f.memPercent} unit="%" ariaLabel="Seuil mémoire" invalid={!!err.memPercent} testid="rule-mem-percent" onChange={(v) => setForm({ memPercent: v })} />}
-              </Row>
-              <Row label="Pendant" error={err.memForSec}>
-                {(id) => <TextField id={id} value={f.memForSec} unit="s" ariaLabel="Durée mémoire" invalid={!!err.memForSec} testid="rule-mem-for-sec" onChange={(v) => setForm({ memForSec: v })} />}
-              </Row>
-              <Row label="Ou CPU total au-dessus de" error={err.cpuPercent} help="Tous les cœurs : 100 % = machine entièrement occupée.">
-                {(id) => <TextField id={id} value={f.cpuPercent} unit="%" ariaLabel="Seuil CPU" invalid={!!err.cpuPercent} testid="rule-cpu-percent" onChange={(v) => setForm({ cpuPercent: v })} />}
-              </Row>
-              <Row label="Pendant" error={err.cpuForSec} help="Cible : la plus grosse vérification (lanceur de tests, tsc, eslint, reconnu à sa ligne de commande) avec ses workers, si elle pèse dans la saturation (≥ 512 Mio et 5 % de la RAM, ou ≥ 10 % du CPU) ; jamais une lancée par Claude. La suivante seulement une fois la précédente arrêtée, si la condition tient toujours.">
-                {(id) => <TextField id={id} value={f.cpuForSec} unit="s" ariaLabel="Durée CPU" invalid={!!err.cpuForSec} testid="rule-cpu-for-sec" onChange={(v) => setForm({ cpuForSec: v })} />}
-              </Row>
-            </>
-          )}
+          {f.kind === 'system' && <SystemRuleFields form={f} errors={err} onChange={setForm} />}
           <SaveBar dirty={dirty} disabled={busy || invalid} onSave={() => void saveDraft()} testid="rule-save">
             {backToSim && <span className="hint s-foot-note">Condition modifiée : la règle repassera en Simulation.</span>}
             <button type="button" onClick={() => setDraft(null)} data-testid="rule-cancel">Annuler</button>

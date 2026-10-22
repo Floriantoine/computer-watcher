@@ -102,7 +102,10 @@ describe('alertMessage', () => {
     [ev('earlyoom_kill', { signal: 'SIGTERM', pid: 10, name: 'chrome' }), 'earlyoom a arrêté chrome', 'SIGTERM envoyé au processus 10'],
     [ev('leak', { growthKB: 3 * 1024 * 1024, memKB: 5 * 1024 * 1024, minutes: 60 }, 'acme'), 'Fuite probable : acme', '+3,0 Go en 60 min (5,0 Go au total)'],
     [ev('tmpfs', { shmemKB: 3 * 1024 * 1024, thresholdKB: 2 * 1024 * 1024 }), 'Fichiers en mémoire : 3,0 Go', 'Au-dessus du seuil de 2,0 Go (/tmp, mémoire partagée)'],
+    // ancien événement (PSI some de la machine), puis bureau et applis, puis repli sur la machine (PSI full)
     [ev('pressure', { psi: 31.6 }), 'Pression mémoire 32 %', 'Le système attend la mémoire'],
+    [ev('pressure', { psi: 31.6, scope: 'interactive' }), 'Pression mémoire 32 %', 'Le bureau et les applis attendent la mémoire'],
+    [ev('pressure', { psi: 41, scope: 'system' }), 'Pression mémoire 41 %', 'Toute la machine attend la mémoire'],
     [ev('forecast', { etaMin: 7.6 }), 'Mémoire épuisée dans ~8 min', ''],
   ])('%#', (e, title, body) => {
     const m = alertMessage(e);

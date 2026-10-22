@@ -16,7 +16,8 @@ function setup(o: { alerts?: Partial<AlertsConfig>; launch?: boolean; result?: s
   writeFileSync(join(procRoot, 'meminfo'), 'MemTotal: 32000000 kB\nMemAvailable: 16000000 kB\nSwapTotal: 2000000 kB\nSwapFree: 1000000 kB\n');
   writeFileSync(join(procRoot, 'loadavg'), '1.00 1.00 1.00 1/100 999\n');
   mkdirSync(join(procRoot, 'pressure'));
-  writeFileSync(join(procRoot, 'pressure', 'memory'), 'some avg10=30.00 avg60=0 avg300=0 total=0\n');
+  // faux /proc sans faux cgroups : l'alerte de pression se replie sur la PSI full de la machine
+  writeFileSync(join(procRoot, 'pressure', 'memory'), 'some avg10=30.00 avg60=0 avg300=0 total=0\nfull avg10=30.00 avg60=0 avg300=0 total=0\n');
   addProc(procRoot, { pid: 10, comm: 'chrome', rssKB: 200 * 1024 });
   const cfgDir = join(base, 'cfg');
   mkdirSync(cfgDir, { recursive: true });

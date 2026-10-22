@@ -91,7 +91,7 @@ function label(e: HistoryEvent): string {
   const d = e.detail;
   switch (e.type) {
     case 'earlyoom_kill': return `Kill earlyoom : ${String(d.name ?? '?')}`;
-    case 'pressure': return `Pression ${Math.round(Number(d.psi))} %`;
+    case 'pressure': return `Pression ${d.scope === 'interactive' ? 'bureau et applis ' : ''}${Math.round(Number(d.psi))} %`;
     case 'gap':
       if (d.reason !== undefined || d.backup !== undefined) return 'Base recréée';
       {

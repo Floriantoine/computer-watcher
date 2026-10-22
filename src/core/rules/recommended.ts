@@ -6,8 +6,12 @@ export const REC_INACTIVE_ID = 'rec-inactive-front-back';
 export const REC_TEST_MEMORY_ID = 'rec-test-memory';
 export const REC_ANTIGEL_ID = 'rec-antigel';
 
-/** Valeurs par défaut de la condition système (formulaire, modèle et règle recommandée). */
-export const SYSTEM_DEFAULTS = { memPercent: 95, memForSec: 15, cpuPercent: 95, cpuForSec: 60 } as const;
+/**
+ * Valeurs par défaut de la condition système (formulaire, modèle et règle recommandée), dans l'ordre de la validation.
+ * Pression mémoire du bureau et des applis (PSI full) 40 % pendant 20 s : proche de 0 en usage normal ; pendant le gel du
+ * 2026-10-22, la PSI de la machine est restée à 60-90 % alors que la mémoire utilisée n'a jamais passé 93 %.
+ */
+export const SYSTEM_DEFAULTS = { memPercent: 95, memForSec: 15, cpuPercent: 95, cpuForSec: 60, psiPercent: 40, psiForSec: 20 } as const;
 
 const ANTIGEL_CONDITION: RuleCondition = { kind: 'system', ...SYSTEM_DEFAULTS };
 
@@ -25,7 +29,7 @@ export const RECOMMENDED_RULES: readonly Rule[] = [
     condition: { kind: 'memory', target: 'instance', match: { by: 'category', value: 'test' }, overMB: 4096, forMin: 5 },
   },
   {
-    id: REC_ANTIGEL_ID, name: 'Mémoire ou CPU > 95 % : tuer les tests', enabled: true, mode: 'active', createdAt: 0,
+    id: REC_ANTIGEL_ID, name: 'Machine saturée : tuer les tests', enabled: true, mode: 'active', createdAt: 0,
     condition: ANTIGEL_CONDITION,
   },
 ];
@@ -59,6 +63,25 @@ export function withInactive4h(list: readonly Rule[]): Rule[] {
   return list.map((r) =>
     r.id === REC_INACTIVE_ID && JSON.stringify(r.condition) === JSON.stringify(OLD_INACTIVE_CONDITION)
       ? { ...r, name: rec.name, enabled: true, mode: 'active', condition: structuredClone(rec.condition) }
+      : r,
+  );
+}
+
+/** Ancienne version (jusqu'au 2026-10-22) de la règle anti-gel recommandée : mémoire ou CPU, sans la pression. */
+const OLD_ANTIGEL_CONDITION: RuleCondition = { kind: 'system', memPercent: 95, memForSec: 15, cpuPercent: 95, cpuForSec: 60 };
+const OLD_ANTIGEL_NAME = 'Mémoire ou CPU > 95 % : tuer les tests';
+
+/**
+ * Migration unique (2026-10-22, après un gel où la mémoire utilisée n'a jamais atteint 95 %) : la règle anti-gel
+ * recommandée intacte (ancienne condition exacte) reçoit la condition de pression mémoire, et le nouveau nom si elle
+ * portait l'ancien ; activation et mode restent ceux de l'utilisateur. Une fois faite (marqueur posé par la validation),
+ * un retour à l'ancienne condition est respecté.
+ */
+export function withAntigelPsi(list: readonly Rule[]): Rule[] {
+  const rec = RECOMMENDED_RULES.find((r) => r.id === REC_ANTIGEL_ID)!;
+  return list.map((r) =>
+    r.id === REC_ANTIGEL_ID && JSON.stringify(r.condition) === JSON.stringify(OLD_ANTIGEL_CONDITION)
+      ? { ...r, name: r.name === OLD_ANTIGEL_NAME ? rec.name : r.name, condition: structuredClone(rec.condition) }
       : r,
   );
 }

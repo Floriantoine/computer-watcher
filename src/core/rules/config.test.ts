@@ -64,6 +64,15 @@ describe('validateRules', () => {
     ['système cpuForSec: 9', { ...vitest, condition: { ...sys, cpuForSec: 9 } }, /durée CPU/],
     ['système cpuForSec: Infinity', { ...vitest, condition: { ...sys, cpuForSec: Number.POSITIVE_INFINITY } }, /durée CPU/],
     ['système champ absent', { ...vitest, condition: { kind: 'system', memPercent: 95, memForSec: 15, cpuPercent: 95 } }, /durée CPU/],
+    ['pression psiPercent: 9', { ...vitest, condition: { ...sys, psiPercent: 9, psiForSec: 20 } }, /seuil de pression/],
+    ['pression psiPercent: 91', { ...vitest, condition: { ...sys, psiPercent: 91, psiForSec: 20 } }, /seuil de pression/],
+    ['pression psiPercent non entier', { ...vitest, condition: { ...sys, psiPercent: 40.5, psiForSec: 20 } }, /seuil de pression/],
+    ['pression psiPercent texte', { ...vitest, condition: { ...sys, psiPercent: '40', psiForSec: 20 } }, /seuil de pression/],
+    ['pression psiPercent null', { ...vitest, condition: { ...sys, psiPercent: null, psiForSec: 20 } }, /seuil de pression/],
+    ['pression psiForSec: 4', { ...vitest, condition: { ...sys, psiPercent: 40, psiForSec: 4 } }, /durée de pression/],
+    ['pression psiForSec: 301', { ...vitest, condition: { ...sys, psiPercent: 40, psiForSec: 301 } }, /durée de pression/],
+    ['pression : seuil sans durée', { ...vitest, condition: { ...sys, psiPercent: 40 } }, /durée de pression/],
+    ['pression : durée sans seuil', { ...vitest, condition: { ...sys, psiForSec: 20 } }, /seuil de pression/],
   ])('refusée : %s (seule cette règle, avec son erreur)', (_label, bad, msg) => {
     const ok = { ...vitest, id: 'r-ok' };
     const r = validateRulesDetailed({ enabled: true, list: [bad, ok], recommendedSeeded: true });
@@ -100,6 +109,23 @@ describe('validateRules', () => {
     expect(r.rules.list[0]!.condition).toEqual({ kind: 'system', memPercent: 70, memForSec: 600, cpuPercent: 100, cpuForSec: 10 });
   });
 
+  test('condition système avec pression : reconstruite dans l’ordre (comparaisons JSON), bornes incluses', () => {
+    for (const [psiPercent, psiForSec] of [[10, 5], [90, 300], [40, 20]]) {
+      const r = one({ ...vitest, condition: { psiForSec, x: 1, psiPercent, ...sys } });
+      expect(r.issues).toEqual([]);
+      const c = r.rules.list[0]!.condition;
+      expect(c).toEqual({ ...sys, psiPercent, psiForSec });
+      expect(Object.keys(c)).toEqual(['kind', 'memPercent', 'memForSec', 'cpuPercent', 'cpuForSec', 'psiPercent', 'psiForSec']);
+    }
+  });
+
+  test('condition système d’avant la pression (sans ses champs) : toujours valide, aucune pression ajoutée', () => {
+    const r = one({ ...vitest, condition: sys });
+    expect(r.issues).toEqual([]);
+    expect(Object.keys(r.rules.list[0]!.condition)).toEqual(['kind', 'memPercent', 'memForSec', 'cpuPercent', 'cpuForSec']);
+    expect(JSON.stringify(r.rules.list[0]!.condition)).toBe(JSON.stringify(sys));
+  });
+
   test("champ inconnu (action: 'rm') ignoré, non recopié", () => {
     const r = one({ ...vitest, action: 'rm', condition: { ...vitest.condition, exec: 'rm -rf /' } });
     expect(r.issues).toEqual([]);
@@ -110,7 +136,7 @@ describe('validateRules', () => {
   test('section mal formée → règles éteintes avec une erreur, jamais une exception', () => {
     for (const raw of ['oui', null, [], { enabled: 'yes', list: [] }, { enabled: true, list: {} }]) {
       const r = validateRulesDetailed(raw);
-      expect(r.rules).toEqual({ enabled: false, list: [], recommendedActive: true, recommendedInactive4h: true, recommendedSeeded: true });
+      expect(r.rules).toEqual({ enabled: false, list: [], recommendedActive: true, recommendedInactive4h: true, recommendedSeeded: true, recommendedPsi: true });
       expect(r.issues).toHaveLength(1);
     }
   });
