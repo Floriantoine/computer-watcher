@@ -82,6 +82,8 @@ describe('shouldWrap : déjà enveloppée, interactive, changement d’état du 
     'f() { jest; }; f', 'function f { jest }', 'case x in a) jest;; esac', 'coproc make',
     'cat <<EOF\nx\nEOF\njest', 'jest &\nmake', 'jest & make', 'make |& tee log', 'jest; !!', 'npm test "$(cat <<EOF',
     'echo "non fermé; jest', "jest 'non fermé", 'jest \\', 'make $(echo', '( jest', 'jest )',
+    // Claude n'est jamais rangé dans une slice de projet (plafond dur : le noyau pourrait l'y arrêter)
+    'jest && claude -p résume', 'claude -p x; npm test', '/usr/bin/claude --continue && make',
   ])('%s → faux', (cmd) => {
     expect(shouldWrap(cmd, IN, ctx())).toBe(false);
   });

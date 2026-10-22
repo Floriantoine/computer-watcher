@@ -4,6 +4,7 @@ import { buildGroups } from '../grouping/buildGroups';
 import type { ProcInfo, SystemInfo } from '../types';
 import type { AntigelConfig } from './config';
 import { createAntigel } from './controller';
+import { projectCaps } from './limits';
 import { fakeSystemd } from './testFixtures';
 
 const BASE = '/user.slice/user-1000.slice/user@1000.service';
@@ -42,4 +43,45 @@ test('projet au frigo : aucun scope vers sa slice ; au réveil, ses nouveaux pro
   expect(fake.calls.map((c) => c[0])).toEqual(['ensureSlice']);
   await tick(new Set());
   expect(fake.calls.map((c) => c[0])).toEqual(['ensureSlice', 'ensureProjectSlice', 'startScope']);
+});
+
+test('projet au frigo : ses plafonds ne sont pas touchés (le frigo a levé sa part de swap) ; au réveil, ils sont reposés une fois', async () => {
+  const fake = fakeSystemd({ userBase: BASE });
+  let mono = 0;
+  const ag = createAntigel({
+    client: fake.client, probe: () => ({ ok: true, userBase: BASE, busctl: '/usr/bin/busctl' }), reverify: (t) => [...t], log: () => {},
+    monoNow: () => mono, perfNow: () => 0, stats: (path) => fake.sys.get(path) ?? null, cgroupOf: (pid) => fake.cg.get(pid) ?? WARP,
+  });
+  const procs = [
+    p(600, 500, 'warp', 'warp'), p(601, 600, 'zsh', 'zsh', A),
+    p(700, 601, 'MainThread', `node ${A}/node_modules/vitest/vitest.mjs run`, A),
+  ];
+  const config = { ...ON, budgets: { [A]: 4096 } };
+  const tick = async (frozen?: Set<string>) => {
+    mono += 5000;
+    ag.tick({
+      ts: 1_000_000 + mono, procs, system: SYS, config, currentUid: 1000, selfPid: 900, appRoot: null, home: '/home/u',
+      isProtected: (n) => ['zsh', 'warp'].includes(n), frozenSlices: frozen,
+      groups: buildGroups(procs, { home: '/home/u', currentUid: 1000, isProtected: () => false, othersThreshold: { memMB: 0, cpuPercent: 0 }, projectRootOf: (c) => (c.startsWith(A) ? A : null) }),
+    });
+    await ag.idle();
+  };
+  const PS = 'cwatch-p-alpha.slice';
+  const PSCG = `${BASE}/cwatch.slice/cwatch-p.slice/${PS}`;
+  await tick();
+  expect(fake.calls.map((c) => c[0])).toEqual(['ensureSlice', 'ensureProjectSlice', 'startScope']);
+  fake.calls.length = 0;
+  // au frigo : le frigo lève MemorySwapMax ; budget changé pendant ce temps : rien n'est posé sur la slice gelée
+  const frozen = new Set([PS]);
+  fake.sys.set(PSCG, { ...fake.sys.get(PSCG)!, swapMaxBytes: null });
+  await tick(frozen);
+  config.budgets[A] = 6144;
+  await tick(frozen);
+  expect(fake.calls).toEqual([]);
+  // réveil : plafonds du budget reposés (part de swap comprise), une seule fois
+  await tick(new Set());
+  expect(fake.calls).toEqual([['setProjectCaps', PS, projectCaps(6144)]]);
+  fake.calls.length = 0;
+  await tick(new Set());
+  expect(fake.calls).toEqual([]);
 });

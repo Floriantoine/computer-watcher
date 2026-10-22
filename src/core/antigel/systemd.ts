@@ -2,7 +2,7 @@
 // d'unités validés, PIDs et tailles bornés, délai court. Jamais le bus système, jamais d'unité hors cwatch.
 import { execFile } from 'node:child_process';
 import { cleanEnv } from '../childEnv';
-import { INFINITY_T, type SliceLimits } from './limits';
+import { INFINITY_T, type ProjectCaps, type SliceLimits } from './limits';
 import { isProjectSliceName, isRootSliceName, isScopeName, isTestUnitName, scopeBelongs } from './units';
 
 const DEST = 'org.freedesktop.systemd1';
@@ -53,7 +53,7 @@ export function startScopeArgv(scope: string, projectSlice: string, pids: number
   return [...head('StartTransientUnit', 'ssa(sv)a(sa(sv))'), scope, 'fail', String(props.length), ...props.flat(), '0'];
 }
 
-/** Slice racine (cwatch.slice ou slice de test) : seule porteuse de MemoryMax / MemorySwapMax. */
+/** Slice racine (cwatch.slice ou slice de test) : plafonds du travail entier (réserve, plafond dynamique). */
 export function startSliceArgv(slice: string, l: SliceLimits): string[] {
   const props = [['Description', 's', DESCRIPTION], ...sliceProps(l)];
   return [...head('StartTransientUnit', 'ssa(sv)a(sa(sv))'), unit(slice, isRootSliceName), 'fail', String(props.length), ...props.flat(), '0'];
@@ -65,14 +65,29 @@ export function setSliceArgv(slice: string, l: SliceLimits | null): string[] {
   return [...head('SetUnitProperties', 'sba(sv)'), unit(slice, isRootSliceName), 'true', String(props.length), ...props.flat()];
 }
 
-/** Slice d'un projet : seulement le budget MemoryHigh (null : infinity). */
-export function startProjectSliceArgv(slice: string, highBytes: number | null): string[] {
-  const props = [['Description', 's', DESCRIPTION], ['MemoryHigh', 't', bytes(highBytes)]];
+/**
+ * Plafonds d'une slice de projet (voir ProjectCaps) : budget MemoryHigh, plafond dur MemoryMax, part de swap
+ * MemorySwapMax ; null (aucun budget) : les trois à « infinity ». Un plafond dur sous le budget est refusé.
+ */
+const projectProps = (c: ProjectCaps | null): string[][] => {
+  if (c !== null && !(c.maxBytes >= c.highBytes)) throw new Error(`plafond dur sous le budget refusé : ${c.maxBytes} < ${c.highBytes}`);
+  return [
+    ['MemoryHigh', 't', bytes(c ? c.highBytes : null)],
+    ['MemoryMax', 't', bytes(c ? c.maxBytes : null)],
+    ['MemorySwapMax', 't', c ? swapBytes(c.swapMaxBytes) : INFINITY_T],
+  ];
+};
+
+/** Slice d'un projet avec ses plafonds (null : infinity). */
+export function startProjectSliceArgv(slice: string, caps: ProjectCaps | null): string[] {
+  const props = [['Description', 's', DESCRIPTION], ...projectProps(caps)];
   return [...head('StartTransientUnit', 'ssa(sv)a(sa(sv))'), unit(slice, isProjectSliceName), 'fail', String(props.length), ...props.flat(), '0'];
 }
 
-export function setProjectHighArgv(slice: string, highBytes: number | null): string[] {
-  return [...head('SetUnitProperties', 'sba(sv)'), unit(slice, isProjectSliceName), 'true', '1', 'MemoryHigh', 't', bytes(highBytes)];
+/** Plafonds d'une slice de projet (runtime : rien de persistant) ; null : remis à « infinity ». */
+export function setProjectCapsArgv(slice: string, caps: ProjectCaps | null): string[] {
+  const props = projectProps(caps);
+  return [...head('SetUnitProperties', 'sba(sv)'), unit(slice, isProjectSliceName), 'true', String(props.length), ...props.flat()];
 }
 
 /** Nettoyage de l'e2e seulement : jamais cwatch.slice, une slice de projet ni un scope de projet. */
@@ -129,10 +144,10 @@ export interface SystemdClient {
   ensureSlice(slice: string, l: SliceLimits): Promise<void>;
   /** Plafonds de la slice racine ; null : remis à « infinity » (interrupteur éteint). */
   setSlice(slice: string, l: SliceLimits | null): Promise<void>;
-  /** Slice d'un projet avec son budget MemoryHigh (null : infinity) ; si elle existe déjà, pose le budget. */
-  ensureProjectSlice(slice: string, highBytes: number | null): Promise<void>;
-  /** Budget MemoryHigh de la slice d'un projet (null : infinity). */
-  setProjectHigh(slice: string, highBytes: number | null): Promise<void>;
+  /** Slice d'un projet avec ses plafonds (budget, plafond dur, part de swap ; null : infinity) ; si elle existe déjà, les pose. */
+  ensureProjectSlice(slice: string, caps: ProjectCaps | null): Promise<void>;
+  /** Plafonds de la slice d'un projet (null : infinity). */
+  setProjectCaps(slice: string, caps: ProjectCaps | null): Promise<void>;
   /** Scope neuf (OOMPolicy=continue, aucune limite) sous la slice de projet, avec ces PIDs. */
   startScope(scope: string, projectSlice: string, pids: number[]): Promise<void>;
   /** e2e seulement (unités cwatch-e2e…). */
@@ -161,8 +176,8 @@ export function createSystemdClient(run: BusctlRun): SystemdClient {
   return {
     ensureSlice: (slice, l) => ensure(() => startSliceArgv(slice, l), () => setSliceArgv(slice, l)),
     setSlice: (slice, l) => call(() => setSliceArgv(slice, l)),
-    ensureProjectSlice: (slice, h) => ensure(() => startProjectSliceArgv(slice, h), () => setProjectHighArgv(slice, h)),
-    setProjectHigh: (slice, h) => call(() => setProjectHighArgv(slice, h)),
+    ensureProjectSlice: (slice, c) => ensure(() => startProjectSliceArgv(slice, c), () => setProjectCapsArgv(slice, c)),
+    setProjectCaps: (slice, c) => call(() => setProjectCapsArgv(slice, c)),
     startScope: (scope, slice, pids) => call(() => startScopeArgv(scope, slice, pids)),
     stopTestUnit: (name) => call(() => stopTestUnitArgv(name)),
     calls: () => n,

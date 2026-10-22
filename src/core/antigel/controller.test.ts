@@ -5,7 +5,7 @@ import type { ProcInfo, SystemInfo } from '../types';
 import type { Availability, CgroupStats } from './cgroupfs';
 import type { AntigelConfig } from './config';
 import { BUDGET_RETRY_MS, PROBE_EVERY_MS, RECHECK_YOUNG_MS, THROTTLE_HOLD_MS, createAntigel, type AntigelDeps } from './controller';
-import { GiB } from './limits';
+import { GiB, projectCaps } from './limits';
 import { BusctlError, MAX_PIDS } from './systemd';
 import { fakeSystemd, sampleStats as stats } from './testFixtures';
 import { shortHash } from './units';
@@ -24,6 +24,8 @@ const OFF: AntigelConfig = { ...ON, enabled: false };
 const SYS: SystemInfo = { memTotalKB: 16 * 1024 * 1024, memAvailableKB: 16 * 1024 * 1024, swapTotalKB: 8 * 1024 * 1024, swapFreeKB: 8 * 1024 * 1024, load1: 1, psiSome10: null, shmemKB: null };
 const ROOT_CALL = ['ensureSlice', 'cwatch.slice', 12 * GiB, 14 * GiB, 4 * GiB];
 const ev = (o: Partial<CgroupStats['events']> = {}) => ({ high: 0, max: 0, oom: 0, oomKill: 0, ...o });
+/** Plafonds d'un budget (Mo) : MemoryHigh, MemoryMax, MemorySwapMax (voir limits.ts). */
+const CAPS = projectCaps;
 
 let stc = 1;
 const p = (pid: number, ppid: number, name: string, cmdline: string, cwd: string | null = null): ProcInfo => ({
@@ -202,18 +204,20 @@ describe('orchestrateur anti-gel', () => {
   test('budget : posé à la création de la slice du projet, changé, retiré ; un seul appel par changement', async () => {
     const h = harness();
     await h.step({ ...ON, budgets: { [A]: 4096 } });
-    expect(h.calls[1]).toEqual(['ensureProjectSlice', PS, 4 * GiB]);
+    expect(h.calls[1]).toEqual(['ensureProjectSlice', PS, CAPS(4096)]);
+    // freine à 4 Go, swap 1 Go, arrêt 10 % au-dessus (arrondi à la page)
+    expect(h.calls[1]![2]).toEqual({ highBytes: 4 * GiB, maxBytes: 4 * GiB + Math.floor((0.4 * GiB) / 4096) * 4096, swapMaxBytes: GiB });
     h.calls.length = 0;
     await h.step({ ...ON, budgets: { [A]: 4096 } });
     expect(h.calls).toEqual([]);
     expect(h.ag.state().projects).toMatchObject([{ unit: PS, budgetMB: 4096 }]);
     await h.step({ ...ON, budgets: { [A]: 6144 } });
-    expect(h.calls).toEqual([['setProjectHigh', PS, 6 * GiB]]);
+    expect(h.calls).toEqual([['setProjectCaps', PS, CAPS(6144)]]);
     h.calls.length = 0;
     await h.step({ ...ON, budgets: { [A]: 6144 } });
     expect(h.calls).toEqual([]);
     await h.step(ON);
-    expect(h.calls).toEqual([['setProjectHigh', PS, null]]);
+    expect(h.calls).toEqual([['setProjectCaps', PS, null]]);
     h.calls.length = 0;
     await h.step(ON);
     expect(h.calls).toEqual([]);
@@ -223,18 +227,18 @@ describe('orchestrateur anti-gel', () => {
     const h = harness();
     const def = (mb: number | null) => ({ ...ON, defaultBudgetMB: mb });
     await h.step(def(5120));
-    expect(h.calls[1]).toEqual(['ensureProjectSlice', PS, 5 * GiB]);
+    expect(h.calls[1]).toEqual(['ensureProjectSlice', PS, CAPS(5120)]);
     h.calls.length = 0;
     await h.step(def(5120));
     expect(h.calls).toEqual([]);
     expect(h.ag.state().projects).toMatchObject([{ unit: PS, budgetMB: 5120, budgetDefault: true }]);
     // défaut changé : appliqué au tick suivant
     await h.step(def(8192));
-    expect(h.calls).toEqual([['setProjectHigh', PS, 8 * GiB]]);
+    expect(h.calls).toEqual([['setProjectCaps', PS, CAPS(8192)]]);
     h.calls.length = 0;
-    // défaut retiré : memory.high remis à infinity
+    // défaut retiré : memory.high, memory.max et memory.swap.max remis à infinity
     await h.step(def(null));
-    expect(h.calls).toEqual([['setProjectHigh', PS, null]]);
+    expect(h.calls).toEqual([['setProjectCaps', PS, null]]);
     expect(h.ag.state().projects[0]).toMatchObject({ budgetMB: null });
     expect(h.ag.state().projects[0]).not.toHaveProperty('budgetDefault');
     h.calls.length = 0;
@@ -245,18 +249,18 @@ describe('orchestrateur anti-gel', () => {
   test('budget par défaut : le budget explicite l’emporte, « sans budget » l’écarte, hors projet jamais', async () => {
     const h = harness();
     await h.step({ ...ON, defaultBudgetMB: 5120, budgets: { [A]: 2048 } });
-    expect(h.calls[1]).toEqual(['ensureProjectSlice', PS, 2 * GiB]);
+    expect(h.calls[1]).toEqual(['ensureProjectSlice', PS, CAPS(2048)]);
     await h.step({ ...ON, defaultBudgetMB: 5120, budgets: { [A]: 2048 } });
     expect(h.ag.state().projects[0]).toMatchObject({ budgetMB: 2048 });
     expect(h.ag.state().projects[0]).not.toHaveProperty('budgetDefault');
     h.calls.length = 0;
     // budget explicite retiré : le défaut prend le relais
     await h.step({ ...ON, defaultBudgetMB: 5120 });
-    expect(h.calls).toEqual([['setProjectHigh', PS, 5 * GiB]]);
+    expect(h.calls).toEqual([['setProjectCaps', PS, CAPS(5120)]]);
     h.calls.length = 0;
-    // projet explicitement sans budget : infinity malgré le défaut
+    // projet explicitement sans budget : infinity malgré le défaut (ni plafond dur ni part de swap)
     await h.step({ ...ON, defaultBudgetMB: 5120, noBudget: [A] });
-    expect(h.calls).toEqual([['setProjectHigh', PS, null]]);
+    expect(h.calls).toEqual([['setProjectCaps', PS, null]]);
     h.calls.length = 0;
     // vérification hors projet : jamais le défaut
     const o = harness();
@@ -265,18 +269,20 @@ describe('orchestrateur anti-gel', () => {
     expect(o.calls[1]).toEqual(['ensureProjectSlice', 'cwatch-p-autres.slice', null]);
   });
 
-  test('budget par défaut : éteint → retiré comme un budget explicite ; redémarrage avec le défaut déjà posé (sysfs) → aucun appel', async () => {
+  test('budget par défaut : éteint → retiré comme un budget explicite ; redémarrage avec les plafonds du défaut déjà posés (sysfs) → aucun appel', async () => {
     const h = harness();
     await h.step({ ...ON, defaultBudgetMB: 5120 });
     h.calls.length = 0;
     await h.step({ ...OFF, defaultBudgetMB: 5120 });
-    expect(h.calls).toEqual([['setSlice', 'cwatch.slice', null], ['setProjectHigh', PS, null]]);
-    // service redémarré : slice du projet déjà au budget par défaut dans sysfs
+    expect(h.calls).toEqual([['setSlice', 'cwatch.slice', null], ['setProjectCaps', PS, null]]);
+    // service redémarré : slice du projet déjà aux plafonds du budget par défaut dans sysfs
     const r = harness({ initialSlices: { [PS]: A } });
     r.cg.set(700, `${PSCG}/cwatch-p-alpha-x.scope`);
-    r.sys.set(PSCG, stats({ highBytes: 5 * GiB, populated: true }));
+    const C = CAPS(5120);
+    r.sys.set(PSCG, stats({ highBytes: C.highBytes, maxBytes: C.maxBytes, swapMaxBytes: C.swapMaxBytes, populated: true }));
     await r.step({ ...ON, defaultBudgetMB: 5120 });
-    expect(r.calls.filter((c) => c[0] === 'setProjectHigh' || (c[0] === 'ensureProjectSlice' && c[2] !== 5 * GiB))).toEqual([]);
+    expect(r.calls.filter((c) => c[0] === 'setProjectCaps')).toEqual([]);
+    for (const c of r.calls.filter((x) => x[0] === 'ensureProjectSlice')) expect(c[2]).toEqual(C);
   });
 
   test('interrupteur éteint : cwatch.slice et slices de projet remises à infinity une seule fois, aucun déplacement', async () => {
@@ -284,7 +290,7 @@ describe('orchestrateur anti-gel', () => {
     await h.step({ ...ON, budgets: { [A]: 4096 } });
     h.calls.length = 0;
     await h.step(OFF);
-    expect(h.calls).toEqual([['setSlice', 'cwatch.slice', null], ['setProjectHigh', PS, null]]);
+    expect(h.calls).toEqual([['setSlice', 'cwatch.slice', null], ['setProjectCaps', PS, null]]);
     h.calls.length = 0;
     h.setProcs([...world().slice(0, 2), vitest(720)]);
     for (let k = 0; k < 3; k++) await h.step(OFF);
@@ -299,16 +305,16 @@ describe('orchestrateur anti-gel', () => {
     await h.step(OFF);
     h.calls.length = 0;
     await h.step({ ...ON, budgets: { [A]: 4096 } });
-    expect(h.calls).toEqual([ROOT_CALL, ['setProjectHigh', PS, 4 * GiB]]);
+    expect(h.calls).toEqual([ROOT_CALL, ['setProjectCaps', PS, CAPS(4096)]]);
   });
 
   test('éteint au démarrage (service redémarré) : plafonds et budgets encore posés remis à infinity, une seule fois', async () => {
     const h = harness({ initialSlices: { [PS]: A } });
     h.sys.set(ROOT, stats({ highBytes: 12 * GiB, maxBytes: 14 * GiB, swapMaxBytes: 4 * GiB }));
-    h.sys.set(PSCG, stats({ highBytes: 4 * GiB }));
+    h.sys.set(PSCG, stats({ highBytes: 4 * GiB, maxBytes: 5 * GiB, swapMaxBytes: GiB }));
     for (const pid of [700, 701, 702, 703, 704]) h.cg.set(pid, `${PSCG}/cwatch-p-alpha-old.scope`);
     await h.step(OFF);
-    expect(h.calls).toEqual([['setSlice', 'cwatch.slice', null], ['setProjectHigh', PS, null]]);
+    expect(h.calls).toEqual([['setSlice', 'cwatch.slice', null], ['setProjectCaps', PS, null]]);
     h.calls.length = 0;
     for (let k = 0; k < 3; k++) await h.step(OFF);
     expect(h.calls).toEqual([]);
@@ -329,7 +335,7 @@ describe('orchestrateur anti-gel', () => {
     h.sys.set(PSCG, stats({ highBytes: 4 * GiB }));
     for (const pid of [700, 701, 702, 703, 704]) h.cg.set(pid, `${PSCG}/cwatch-p-alpha-old.scope`);
     await h.step(OFF);
-    expect(h.calls).toEqual([['setProjectHigh', PS, null]]);
+    expect(h.calls).toEqual([['setProjectCaps', PS, null]]);
   });
 
   test('éteint, rien de posé : aucun appel', async () => {
@@ -380,6 +386,28 @@ describe('orchestrateur anti-gel', () => {
     expect(h.ag.state().projects[0]).toMatchObject({ throttled: false });
     h.sys.set(PSCG, stats({ events: ev({ high: 0, oomKill: 0 }) })); // slice recréée : compteurs repartis de zéro
     expect(await h.step()).toEqual([]);
+  });
+
+  test('OOM sous le plafond dur du budget (« oom » compté sur la slice du projet) : marqué budget ; plafond global : non', async () => {
+    const h = harness();
+    await h.step({ ...ON, budgets: { [A]: 4096 } });
+    h.sys.set(PSCG, { ...h.sys.get(PSCG)!, events: ev({ max: 3, oom: 1, oomKill: 1 }) });
+    await h.step({ ...ON, budgets: { [A]: 4096 } }); // référence
+    h.sys.set(PSCG, { ...h.sys.get(PSCG)!, events: ev({ max: 9, oom: 2, oomKill: 2 }) });
+    expect(await h.step({ ...ON, budgets: { [A]: 4096 } })).toEqual([{ unit: PS, root: A, kills: 1, budget: true }]);
+    // arrêt compté sur la slice sans « oom » à elle : la limite d'un parent (plafond global) ou le noyau entier
+    h.sys.set(PSCG, { ...h.sys.get(PSCG)!, events: ev({ max: 9, oom: 2, oomKill: 3 }) });
+    expect(await h.step({ ...ON, budgets: { [A]: 4096 } })).toEqual([{ unit: PS, root: A, kills: 1 }]);
+  });
+
+  test('plafond dur en place publié avec le projet (maxKB), provisoire compris ; absent sans plafond', async () => {
+    const h = harness();
+    await h.step({ ...ON, budgets: { [A]: 4096 } });
+    await h.step({ ...ON, budgets: { [A]: 4096 } });
+    expect(h.ag.state().projects).toEqual([expect.objectContaining({ unit: PS, budgetMB: 4096, maxKB: CAPS(4096).maxBytes / 1024 })]);
+    await h.step(ON);
+    await h.step(ON);
+    expect(h.ag.state().projects[0]).not.toHaveProperty('maxKB');
   });
 
   test('redémarrage sans état : processus déjà sous la slice du projet → attribution reconstruite, aucun déplacement', async () => {
@@ -478,7 +506,7 @@ describe('orchestrateur anti-gel', () => {
     h.calls.length = 0;
     const big = { ...ON, reserveMB: 16_000, budgets: { [A]: 4096 } };
     await h.step(big);
-    expect(h.calls).toEqual([['setSlice', 'cwatch.slice', null], ['setProjectHigh', PS, null]]);
+    expect(h.calls).toEqual([['setSlice', 'cwatch.slice', null], ['setProjectCaps', PS, null]]);
     h.calls.length = 0;
     h.setProcs([...world(), vitest(720)]);
     for (let k = 0; k < 3; k++) await h.step(big);
@@ -571,7 +599,7 @@ describe('orchestrateur anti-gel', () => {
     await h.step();
     expect(h.ag.state().projects).toEqual([]);
     expect(h.ag.state().slices).toEqual({ [PS]: A });
-    expect(h.calls).toEqual([ROOT_CALL, ['setProjectHigh', PS, null]]);
+    expect(h.calls).toEqual([ROOT_CALL, ['setProjectCaps', PS, null]]);
     h.sys.set(PSCG, { ...h.sys.get(PSCG)!, populated: true });
     await h.step();
     expect(h.ag.state().projects).toMatchObject([{ unit: PS, root: A }]);
@@ -579,14 +607,14 @@ describe('orchestrateur anti-gel', () => {
 
   test('budget en échec persistant sur un projet : les déplacements des autres projets partent quand même, sans nouvel essai à chaque tick', async () => {
     const B = '/home/u/beta';
-    const h = harness({ roots: { [B]: B }, fail: (m, a) => (m === 'setProjectHigh' && a[0] === PS ? new BusctlError('Call failed: boom', 'other') : null) });
+    const h = harness({ roots: { [B]: B }, fail: (m, a) => (m === 'setProjectCaps' && a[0] === PS ? new BusctlError('Call failed: boom', 'other') : null) });
     await h.step();
     h.calls.length = 0;
     const withBudget = { ...ON, budgets: { [A]: 4096 } };
     h.setProcs([...world(), p(730, 601, 'MainThread', `node ${B}/node_modules/vitest/vitest.mjs run`, B)]);
     await h.step(withBudget);
     expect(h.calls).toEqual([
-      ['setProjectHigh', PS, 4 * GiB],
+      ['setProjectCaps', PS, CAPS(4096)],
       ['ensureProjectSlice', 'cwatch-p-beta.slice', null],
       ['startScope', expect.stringMatching(/^cwatch-p-beta-[a-z0-9]+\.scope$/), 'cwatch-p-beta.slice', [730]],
     ]);
@@ -595,19 +623,19 @@ describe('orchestrateur anti-gel', () => {
     await h.step(withBudget);
     expect(h.calls).toEqual([]); // recul : pas un busctl par tick
     await h.step(withBudget, BUDGET_RETRY_MS);
-    expect(h.calls).toEqual([['setProjectHigh', PS, 4 * GiB]]);
+    expect(h.calls).toEqual([['setProjectCaps', PS, CAPS(4096)]]);
   });
 
   test('budget refusé en no-unit (slice inconnue de systemd) : repassage par ensureProjectSlice, puis plus aucun appel', async () => {
-    const h = harness({ fail: (m) => (m === 'setProjectHigh' ? new BusctlError(`Call failed: Unit ${PS} not loaded.`, 'no-unit') : null) });
+    const h = harness({ fail: (m) => (m === 'setProjectCaps' ? new BusctlError(`Call failed: Unit ${PS} not loaded.`, 'no-unit') : null) });
     await h.step();
     h.calls.length = 0;
     const withBudget = { ...ON, budgets: { [A]: 4096 } };
     await h.step(withBudget);
-    expect(h.calls).toEqual([['setProjectHigh', PS, 4 * GiB]]);
+    expect(h.calls).toEqual([['setProjectCaps', PS, CAPS(4096)]]);
     h.calls.length = 0;
     await h.step(withBudget);
-    expect(h.calls).toEqual([['ensureProjectSlice', PS, 4 * GiB]]);
+    expect(h.calls).toEqual([['ensureProjectSlice', PS, CAPS(4096)]]);
     h.calls.length = 0;
     await h.step(withBudget);
     expect(h.calls).toEqual([]);
@@ -828,5 +856,96 @@ describe('racine trop jeune : revue une seconde plus tard', () => {
     u.setProcs(young(0.3));
     await u.step();
     expect(u.ag.recheckMs()).toBeNull();
+  });
+});
+
+describe('plafond dur et part de swap du budget : convergence sans arrêt immédiat', () => {
+  const D = { ...ON, defaultBudgetMB: 5120 };
+  const C = CAPS(5120); // freine à 5 Go, swap 1,25 Go, arrêt à 5,5 Go (marge 512 Mo)
+  const M = C.maxBytes - C.highBytes;
+  /** Service redémarré sur une slice d'une version d'avant (MemoryHigh seul), processus déjà rangés. */
+  const restarted = (currentBytes: number) => {
+    const h = harness({ initialSlices: { [PS]: A } });
+    for (const pid of [700, 701, 702, 703, 704]) h.cg.set(pid, `${PSCG}/cwatch-p-alpha-old.scope`);
+    h.sys.set(PSCG, stats({ highBytes: C.highBytes, currentBytes, populated: true }));
+    return h;
+  };
+  const use = (h: ReturnType<typeof harness>, currentBytes: number) => h.sys.set(PSCG, { ...h.sys.get(PSCG)!, currentBytes });
+
+  test('version d’avant, projet sous son budget : plafond dur et part de swap ajoutés une fois', async () => {
+    const h = restarted(2 * GiB);
+    await h.step(D);
+    expect(h.calls).toEqual([ROOT_CALL, ['setProjectCaps', PS, C]]);
+    h.calls.length = 0;
+    await h.step(D);
+    expect(h.calls).toEqual([]);
+  });
+
+  test('déploiement sur un projet déjà au-dessus du plafond dur : MemoryMax = usage + marge, puis redescente avec l’usage', async () => {
+    const h = restarted(9 * GiB);
+    await h.step(D);
+    // jamais MemoryMax sous memory.current : le noyau récupérerait puis tuerait aussitôt
+    expect(h.calls).toEqual([ROOT_CALL, ['setProjectCaps', PS, { ...C, maxBytes: 9 * GiB + M }]]);
+    h.calls.length = 0;
+    await h.step(D);
+    expect(h.calls).toEqual([]);
+    // 2 Go libérés : redescend d'autant
+    use(h, 7 * GiB);
+    await h.step(D);
+    expect(h.calls).toEqual([['setProjectCaps', PS, { ...C, maxBytes: 7 * GiB + M }]]);
+    h.calls.length = 0;
+    // il regrossit : jamais remonté ; moins d'une marge de mieux : aucun appel
+    use(h, 8 * GiB);
+    await h.step(D);
+    use(h, 7 * GiB - M / 2);
+    await h.step(D);
+    expect(h.calls).toEqual([]);
+    // revenu sous son budget : plafond dur visé, puis plus rien
+    use(h, 3 * GiB);
+    await h.step(D);
+    expect(h.calls).toEqual([['setProjectCaps', PS, C]]);
+    h.calls.length = 0;
+    use(h, 9 * GiB); // (impossible au-delà du plafond dans la réalité) : jamais remonté
+    await h.step(D);
+    expect(h.calls).toEqual([]);
+  });
+
+  test('budget baissé sous l’usage actuel : plafond dur provisoire ; budget relevé : plafond visé tout de suite', async () => {
+    const h = harness();
+    await h.step({ ...ON, budgets: { [A]: 8192 } });
+    expect(h.calls[1]).toEqual(['ensureProjectSlice', PS, CAPS(8192)]);
+    use(h, 7 * GiB);
+    h.calls.length = 0;
+    await h.step({ ...ON, budgets: { [A]: 5120 } });
+    expect(h.calls).toEqual([['setProjectCaps', PS, { ...C, maxBytes: 7 * GiB + M }]]);
+    h.calls.length = 0;
+    await h.step({ ...ON, budgets: { [A]: 8192 } });
+    expect(h.calls).toEqual([['setProjectCaps', PS, CAPS(8192)]]);
+    // au-delà du plafond provisoire possible : budget baissé, plafond dur gardé tel quel (seuls budget et swap changent)
+    use(h, 9 * GiB + 512 * 1024 * 1024);
+    h.calls.length = 0;
+    await h.step({ ...ON, budgets: { [A]: 5120 } });
+    expect(h.calls).toEqual([['setProjectCaps', PS, { ...C, maxBytes: CAPS(8192).maxBytes }]]);
+  });
+
+  test('slice au-dessus du plafond assurée au premier déplacement après un redémarrage : jamais les plafonds nominaux', async () => {
+    const h = harness({ initialSlices: { [PS]: A } });
+    h.sys.set(PSCG, stats({ highBytes: C.highBytes, currentBytes: 9 * GiB, populated: true }));
+    h.setProcs([...world().slice(0, 2), vitest(720)]);
+    await h.step(D);
+    const P = { ...C, maxBytes: 9 * GiB + M };
+    expect(h.calls).toEqual([ROOT_CALL, ['setProjectCaps', PS, P], ['ensureProjectSlice', PS, P], ['startScope', expect.stringMatching(SCOPE), PS, [720]]]);
+  });
+
+  test('éteint pendant la convergence : les trois plafonds remis à infinity, une seule fois', async () => {
+    const h = restarted(9 * GiB);
+    await h.step(D);
+    h.calls.length = 0;
+    await h.step({ ...D, enabled: false });
+    expect(h.calls).toEqual([['setSlice', 'cwatch.slice', null], ['setProjectCaps', PS, null]]);
+    expect(h.sys.get(PSCG)).toMatchObject({ highBytes: null, maxBytes: null, swapMaxBytes: null });
+    h.calls.length = 0;
+    await h.step({ ...D, enabled: false });
+    expect(h.calls).toEqual([]);
   });
 });

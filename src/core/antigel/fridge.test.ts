@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { BusctlError } from './systemd';
 import { RECLAIM_CHUNK, RECLAIM_MAX_MS, SWAP_MARGIN, STOP_DEADLINE_MS, createFridge, reclaimTarget, type FridgeDeps } from './fridge';
-import { freezeArgv, thawArgv, type FridgeClient } from './fridgeSystemd';
+import { freezeArgv, liftSwapArgv, thawArgv, type FridgeClient } from './fridgeSystemd';
 import { MAX_FROZEN, type FridgeRequest } from './fridgeState';
 import type { AntigelState } from './state';
 import { sampleState } from './testFixtures';
@@ -19,9 +19,11 @@ function setup(o: { fail?: (m: string, s: string) => BusctlError | null; reclaim
   const reclaims: [string, number][] = [];
   let clock = 0;
   const put = (cg: string, f: string, v: string) => files.set(`${cg}/${f}`, v);
-  const addSlice = (name: string, o2: { frozen?: boolean; pids?: number[]; current?: number } = {}) => {
+  /** `swapMax` : part de swap du budget du projet (memory.swap.max de sa slice) ; absente : fichier absent. */
+  const addSlice = (name: string, o2: { frozen?: boolean; pids?: number[]; current?: number; swapMax?: number } = {}) => {
     const cg = `${P}/${name}`;
     dirs.set(P, [...(dirs.get(P) ?? []), name]);
+    if (o2.swapMax !== undefined) put(cg, 'memory.swap.max', String(o2.swapMax));
     put(cg, 'cgroup.freeze', o2.frozen ? '1\n' : '0\n');
     put(cg, 'cgroup.events', `populated 1\nfrozen ${o2.frozen ? 1 : 0}\n`);
     put(cg, 'memory.current', String(o2.current ?? 3 * GiB));
@@ -49,6 +51,13 @@ function setup(o: { fail?: (m: string, s: string) => BusctlError | null; reclaim
       if (!files.has(`${P}/${s}/cgroup.freeze`)) throw new BusctlError(`Unit ${s} not loaded.`, 'no-unit');
       put(`${P}/${s}`, 'cgroup.freeze', '0\n');
       put(`${P}/${s}`, 'cgroup.events', 'populated 1\nfrozen 0\n');
+    },
+    liftSwap: async (s) => {
+      liftSwapArgv(s);
+      calls.push(`liftSwap ${s}`);
+      const e = o.fail?.('liftSwap', s);
+      if (e) throw e;
+      put(`${P}/${s}`, 'memory.swap.max', 'max\n');
     },
     thawSync: (s) => {
       thawArgv(s);
@@ -126,6 +135,31 @@ describe('mettre au frigo', () => {
     await s.tick();
     expect([...s.fridge.frozenSlices()]).toEqual([ALPHA]);
     expect([...s.fridge.frozenPids()].sort()).toEqual([700, 701]);
+  });
+
+  test('projet avec une part de swap (budget) : levée une fois le gel effectif, avant de pousser ; sans part de swap : aucun appel', async () => {
+    const s = setup();
+    s.addSlice(ALPHA, { swapMax: 768 * 1024 ** 2 });
+    await s.tick([freezeReq()]);
+    expect(s.calls).toEqual([`freeze ${ALPHA}`, `liftSwap ${ALPHA}`]);
+    expect(s.files.get(`${P}/${ALPHA}/memory.swap.max`)).toBe('max\n');
+    expect(s.reclaims.reduce((a, [, n]) => a + n, 0)).toBe(3 * GiB);
+    // déjà « max » (aucun budget, ou levée par une version précédente) : pas d'appel
+    const t = setup();
+    t.addSlice(ALPHA, { swapMax: undefined });
+    t.put(`${P}/${ALPHA}`, 'memory.swap.max', 'max\n');
+    await t.tick([freezeReq()]);
+    expect(t.calls).toEqual([`freeze ${ALPHA}`]);
+  });
+
+  test('part de swap non levée (échec) : le frigo pousse quand même, borné par elle, et le dit dans le journal', async () => {
+    const s = setup({ fail: (m) => (m === 'liftSwap' ? new BusctlError('Call failed: boom', 'other') : null) });
+    s.addSlice(ALPHA, { swapMax: 768 * 1024 ** 2 });
+    await s.tick([freezeReq()]);
+    expect(s.calls).toEqual([`freeze ${ALPHA}`, `liftSwap ${ALPHA}`]);
+    expect(s.reclaims.length).toBeGreaterThan(0);
+    expect(s.fridge.publish().fridge).toMatchObject([{ unit: ALPHA, phase: 'frozen' }]);
+    expect(s.logs.some((l) => /part de swap.*gardée.*boom/.test(l))).toBe(true);
   });
 
   test('deuxième demande : rien de plus', async () => {

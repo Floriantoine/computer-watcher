@@ -27,6 +27,14 @@ describe('antigel-state.json', () => {
       expect(parseAntigelState(JSON.stringify(sampleState(bad as never))), JSON.stringify(bad)).toBeNull();
     }
   });
+  test('plafond dur en place sur la slice d’un projet (maxKB) : aller-retour, absent toléré, refusé si invalide', () => {
+    const p = { ...proj('cwatch-p-alpha.slice', '/home/u/alpha'), budgetMB: 5120, maxKB: 6400 * 1024 };
+    expect(parseAntigelState(JSON.stringify(sampleState({ projects: [p] })))?.projects).toEqual([p]);
+    expect(parseAntigelState(JSON.stringify(sampleState()))?.projects[0]).not.toHaveProperty('maxKB');
+    for (const bad of [-1, '6 Go', null, Number.MAX_SAFE_INTEGER * 2]) {
+      expect(parseAntigelState(JSON.stringify(sampleState({ projects: [{ ...p, maxKB: bad as never }] }))), String(bad)).toBeNull();
+    }
+  });
   test('budget par défaut (budgetDefault) : aller-retour, absent toléré, refusé si invalide', () => {
     const p = { ...proj('cwatch-p-alpha.slice', '/home/u/alpha'), budgetMB: 5120, budgetDefault: true };
     expect(parseAntigelState(JSON.stringify(sampleState({ projects: [p] })))?.projects).toEqual([p]);

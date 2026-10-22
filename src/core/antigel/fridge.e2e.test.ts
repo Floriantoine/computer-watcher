@@ -1,7 +1,8 @@
 // Frigo (anti-gel lot 3), e2e RÉEL (`npm run test:fridge`, PROC_WATCH_ANTIGEL_E2E=1) : vrai gestionnaire systemd utilisateur,
 // vrais cgroups, mais SEULEMENT des processus créés ici (tail, petit allocateur), sous des unités de test seulement :
 //   cwatch.slice/cwatch-e2e<id>.slice                 slice de test racine (plafonds, swap permise)
-//     └ cwatch-e2e<id>-a.slice                        slice de projet de test : gelée, reclaim, dégelée
+//     └ cwatch-e2e<id>-a.slice                        slice de projet de test (budget, part de swap 8 Mo) : gelée, part de
+//                                                     swap levée, reclaim, dégelée
 //       ├ cwatch-e2e<id>-1.scope                      tail + allocateur
 //       └ cwatch-e2e<id>-2.scope                      tentative de scope sous la slice gelée (refusée par systemd)
 // Jamais d'appel sur cwatch.slice ni sur une unité cwatch-p-… ; tout est dégelé puis arrêté à la fin (nettoyage toujours exécuté).
@@ -90,8 +91,10 @@ test.skipIf(!RUN)(
 
       // 1) slice de test racine (swap permise : le reclaim peut pousser l'anonyme en swap) et slice de projet de test
       await client.ensureSlice(slice, { reserveBytes: 0, highBytes: 768 * MiB, maxBytes: 1024 * MiB, swapMaxBytes: 512 * MiB });
-      await client.ensureProjectSlice(projSlice, null);
+      // budget de la slice de projet : freinage et plafond dur loin de ses 64 Mo, part de swap de 8 Mo seulement
+      await client.ensureProjectSlice(projSlice, { highBytes: 256 * MiB, maxBytes: 512 * MiB, swapMaxBytes: 8 * MiB });
       await wait(() => existsSync(projDir), 5000, 'slice de projet créée');
+      expect(read(projDir, 'memory.swap.max').trim()).toBe(String(8 * MiB));
       const live = reverify('/proc', uid, [tail, alloc].map((k) => ({ pid: k.pid!, startTicks: startTicks(k.pid!) })), own);
       expect(live).toHaveLength(2);
       await client.startScope(scope1, projSlice, live.map((t) => t.pid));
@@ -112,6 +115,13 @@ test.skipIf(!RUN)(
       expect(oks).toBe(1);
       // FreezeUnit répété : sans effet (idempotent)
       await fridge.client.freeze(projSlice);
+      // part de swap du budget levée sur la slice gelée (SetUnitProperties MemorySwapMax=infinity) ; budget et plafond dur gardés
+      await fridge.client.liftSwap(projSlice);
+      await wait(() => read(projDir, 'memory.swap.max').trim() === 'max', 5000, 'part de swap levée');
+      expect(read(projDir, 'memory.high').trim()).toBe(String(256 * MiB));
+      expect(read(projDir, 'memory.max').trim()).toBe(String(512 * MiB));
+      expect(/^frozen 1$/m.test(read(projDir, 'cgroup.events'))).toBe(true);
+      seen.push(`part de swap levée sur la slice gelée : memory.swap.max=${read(projDir, 'memory.swap.max').trim()} memory.high=${read(projDir, 'memory.high').trim()} memory.max=${read(projDir, 'memory.max').trim()}`);
 
       // 3) scope neuf sous la slice gelée : busctl répond, mais systemd refuse le job ; le processus reste où il est
       const live2 = reverify('/proc', uid, [{ pid: tail2.pid!, startTicks: startTicks(tail2.pid!) }], own);
@@ -137,6 +147,8 @@ test.skipIf(!RUN)(
       const after = Number(fridge.read(projCg, 'memory.current'));
       seen.push(`reclaim : cible ${target} o, écrits ${done} o (${results.join(',')}) ; memory.current ${before} → ${after} ; memory.swap.current=${read(projDir, 'memory.swap.current').trim()} ; zswap=${existsSync(join(projDir, 'memory.zswap.current')) ? read(projDir, 'memory.zswap.current').trim() : '?'}`);
       expect(after).toBeLessThan(before - 16 * MiB);
+      // au-delà de l'ancienne part de swap (8 Mo) : la levée a servi
+      expect(Number(read(projDir, 'memory.swap.current'))).toBeGreaterThan(8 * MiB);
       expect(oks).toBe(1); // toujours gelé
       await expect(fridge.reclaim(`${avail.userBase}/${slicePath(slice)}`, MiB)).rejects.toThrow(/refusé/); // jamais la slice racine
 

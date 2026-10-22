@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, expect, test, vi } from 'vitest';
 import { readCgroup, reverify, type CgroupStats } from '../core/antigel/cgroupfs';
-import { GiB, MiB } from '../core/antigel/limits';
+import { GiB, projectCaps } from '../core/antigel/limits';
 import { fakeSystemd, sampleStats as stats, type FakeSystemd } from '../core/antigel/testFixtures';
 import { addProc, makeProcRoot } from '../core/collector/fakeProc';
 import { DEFAULT_CONFIG } from '../core/config';
@@ -108,7 +108,7 @@ test('config sans budget par défaut (écrite avant ce réglage) : 5 Go posés s
   const s = setup({ antigel: { enabled: true, reserveMB: null, budgets: {} } });
   s.rec.start();
   await s.tick();
-  expect(s.calls.slice(0, 2)).toEqual([ROOT_CALL, ['ensureProjectSlice', PS, 5 * GiB]]);
+  expect(s.calls.slice(0, 2)).toEqual([ROOT_CALL, ['ensureProjectSlice', PS, projectCaps(5120)]]);
   await s.tick();
   expect(JSON.parse(readFileSync(s.statePath, 'utf8')).projects).toMatchObject([{ unit: PS, budgetMB: 5120, budgetDefault: true }]);
   s.calls.length = 0;
@@ -116,7 +116,7 @@ test('config sans budget par défaut (écrite avant ce réglage) : 5 Go posés s
   s.rec.reloadConfig();
   await s.tick();
   await s.tick();
-  expect(s.calls).toEqual([['setProjectHigh', PS, null]]);
+  expect(s.calls).toEqual([['setProjectCaps', PS, null]]);
   s.rec.stop();
 });
 
@@ -181,12 +181,12 @@ test('budget du projet : posé à la création de sa slice ; interrupteur étein
   s.rec.reloadConfig();
   s.rec.start();
   await s.tick();
-  expect(s.calls[1]).toEqual(['ensureProjectSlice', PS, 1024 * MiB]);
+  expect(s.calls[1]).toEqual(['ensureProjectSlice', PS, projectCaps(1024)]);
   s.calls.length = 0;
   s.writeCfg({ enabled: false, reserveMB: null, budgets: { [s.A]: 1024 } });
   s.rec.reloadConfig();
   await s.tick();
-  expect(s.calls).toEqual([['setSlice', 'cwatch.slice', null], ['setProjectHigh', PS, null]]);
+  expect(s.calls).toEqual([['setSlice', 'cwatch.slice', null], ['setProjectCaps', PS, null]]);
   expect(JSON.parse(readFileSync(s.statePath, 'utf8'))).toMatchObject({ status: 'off', enabled: false });
   s.rec.stop();
 });
@@ -200,7 +200,8 @@ test('OOM dans la slice du projet : événement d’historique antigel_oom (grou
   expect(s.events()).toEqual([]);
   s.sys.set(PSCG, stats({ events: ev({ high: 3, oom: 2, oomKill: 2 }) }));
   await s.tick(); // +1 OOM
-  expect(s.events()).toEqual([{ groupKey: `project:${s.A}`, unit: PS, root: s.A, kills: 1 }]);
+  // « oom » compté sur la slice du projet : son propre plafond dur (budget)
+  expect(s.events()).toEqual([{ groupKey: `project:${s.A}`, unit: PS, root: s.A, kills: 1, budget: true }]);
   s.rec.stop();
 });
 

@@ -32,6 +32,7 @@ export function AntigelCard({ view, onSettings }: { view: AntigelView | null; on
           data-testid={b.hint ? 'antigel-late' : 'antigel-budget-line'}>{b.text}</p>
       ))}
       {m.late.map((l) => <p key={l.text} className="sub antigel-late" title={l.hint} data-testid="antigel-late">{l.text}</p>)}
+      {m.effects.map((t) => <p key={t} className="sub antigel-budget-effect" data-testid="antigel-budget-effect">{t}</p>)}
     </section>
   );
 }

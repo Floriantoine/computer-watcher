@@ -27,6 +27,11 @@ export interface AntigelProjectState {
   stallPct?: number;
   /** `budgetMB` est le budget par défaut des projets (aucun budget explicite) ; absent : budget explicite ou aucun. */
   budgetDefault?: boolean;
+  /**
+   * Plafond dur en place sur sa slice (MemoryMax, Ko) : au-delà, le noyau arrête un processus du projet. Au-dessus de celui
+   * du budget pendant une convergence (déploiement, budget baissé : jamais posé sous l'usage actuel). Absent : aucun.
+   */
+  maxKB?: number;
 }
 export interface AntigelState {
   version: 1;
@@ -78,7 +83,8 @@ function project(v: unknown): v is AntigelProjectState {
   if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
   const p = v as Record<string, unknown>;
   return isProdProjectSliceName(p.unit) && root(p.root) && int(p.procs) && num(p.currentKB) && numOrNull(p.budgetMB) && typeof p.throttled === 'boolean' &&
-    (p.outsideKB === undefined || num(p.outsideKB)) && optBool(p.budgetThrottled) && pct(p.stallPct) && optBool(p.budgetDefault);
+    (p.outsideKB === undefined || num(p.outsideKB)) && optBool(p.budgetThrottled) && pct(p.stallPct) && optBool(p.budgetDefault) &&
+    (p.maxKB === undefined || num(p.maxKB));
 }
 
 // Reconstruction champ par champ : aucune propriété en plus (ni __proto__) ne traverse.
@@ -90,7 +96,7 @@ const copyProject = (v: AntigelProjectState): AntigelProjectState => ({
   unit: v.unit, root: v.root, procs: v.procs, currentKB: v.currentKB, budgetMB: v.budgetMB, throttled: v.throttled,
   ...(v.outsideKB !== undefined ? { outsideKB: v.outsideKB } : {}),
   ...(v.budgetThrottled !== undefined ? { budgetThrottled: v.budgetThrottled } : {}), ...(v.stallPct !== undefined ? { stallPct: v.stallPct } : {}),
-  ...(v.budgetDefault !== undefined ? { budgetDefault: v.budgetDefault } : {}),
+  ...(v.budgetDefault !== undefined ? { budgetDefault: v.budgetDefault } : {}), ...(v.maxKB !== undefined ? { maxKB: v.maxKB } : {}),
 });
 
 export function parseAntigelState(t: string): AntigelState | null {

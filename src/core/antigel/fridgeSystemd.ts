@@ -4,6 +4,7 @@
 // Jamais cwatch.slice, jamais une unité hors cwatch.
 import { execFileSync } from 'node:child_process';
 import { cleanEnv } from '../childEnv';
+import { INFINITY_T } from './limits';
 import { BUSCTL_TIMEOUT_S, BusctlError, classifyBusctlError, type BusctlRun } from './systemd';
 import { isProjectSliceName } from './units';
 
@@ -21,6 +22,12 @@ function projectSlice(name: string): string {
 /** Gel récursif de la slice d'un projet (ses scopes passent « frozen-by-parent »). */
 export const freezeArgv = (slice: string): string[] => [...ARGV_PREFIX, 'call', DEST, OBJ, IFACE, 'FreezeUnit', 's', projectSlice(slice)];
 export const thawArgv = (slice: string): string[] => [...ARGV_PREFIX, 'call', DEST, OBJ, IFACE, 'ThawUnit', 's', projectSlice(slice)];
+/**
+ * Part de swap du budget levée pendant le frigo (MemorySwapMax=infinity, runtime) : sinon le reclaim s'arrêterait à elle.
+ * La mise au frigo reste bornée par la swap libre et la marge de cwatch.slice ; le contrôleur repose la part au réveil.
+ */
+export const liftSwapArgv = (slice: string): string[] =>
+  [...ARGV_PREFIX, 'call', DEST, OBJ, IFACE, 'SetUnitProperties', 'sba(sv)', projectSlice(slice), 'true', '1', 'MemorySwapMax', 't', INFINITY_T];
 
 export type BusctlRunSync = (argv: readonly string[]) => void;
 type ExecSyncLike = (file: string, args: string[], opts: { env: NodeJS.ProcessEnv; timeout: number; maxBuffer: number; stdio: ['ignore', 'pipe', 'pipe'] }) => unknown;
@@ -49,6 +56,8 @@ export function createBusctlSync(bin: string, env: NodeJS.ProcessEnv = process.e
 export interface FridgeClient {
   freeze(slice: string): Promise<void>;
   thaw(slice: string): Promise<void>;
+  /** Part de swap du budget de la slice levée (MemorySwapMax=infinity) pendant le frigo. */
+  liftSwap(slice: string): Promise<void>;
   /** Dégel synchrone (arrêt du service). */
   thawSync(slice: string): void;
   calls(): number;
@@ -65,6 +74,7 @@ export function createFridgeClient(run: BusctlRun, runSync: BusctlRunSync): Frid
   return {
     freeze: (s) => call(() => freezeArgv(s)),
     thaw: (s) => call(() => thawArgv(s)),
+    liftSwap: (s) => call(() => liftSwapArgv(s)),
     thawSync: (s) => {
       const argv = thawArgv(s);
       n++;

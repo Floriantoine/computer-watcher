@@ -55,10 +55,11 @@ export const HEAVY_NAMES: readonly string[] = [...HEAVY_ANY, ...Object.keys(HEAV
 
 /**
  * Jamais de réécriture si la ligne en contient une : déjà enveloppée ou élévation de droits, changement d'état du shell
- * appelant (qu'un `<shell> -c` perdrait), commande interactive plein écran ou syntaxe trop délicate.
+ * appelant (qu'un `<shell> -c` perdrait), commande interactive plein écran ou syntaxe trop délicate. Ni Claude : une ligne
+ * composée l'aurait rangé dans la slice du projet, sous son plafond dur (le noyau pourrait l'y arrêter).
  */
 const BLOCK = new Set([
-  'computer-watcher', 'systemd-run', 'sudo', 'doas', 'su', 'pkexec', 'run0',
+  'computer-watcher', 'systemd-run', 'sudo', 'doas', 'su', 'pkexec', 'run0', 'claude',
   'cd', 'pushd', 'popd', 'export', 'source', '.', 'alias', 'unalias', 'unset', 'set', 'setopt', 'unsetopt', 'shopt', 'eval', 'exec',
   'exit', 'return', 'logout', 'typeset', 'declare', 'local', 'readonly', 'integer', 'float', 'read', 'ulimit', 'limit', 'umask', 'trap',
   'fg', 'bg', 'jobs', 'wait', 'disown', 'hash', 'rehash', 'bindkey', 'zle', 'autoload', 'emulate', 'enable', 'disable', 'builtin',

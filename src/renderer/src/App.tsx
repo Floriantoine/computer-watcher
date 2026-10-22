@@ -32,7 +32,7 @@ import { parsePortQuery } from '../../core/portQuery';
 import { freePortCheck } from './ports';
 import type { SettingsSection } from './settingsNav';
 import { leakTimes } from './recorderForm';
-import { antigelMarks, withBudget } from './antigel';
+import { antigelMarks, defaultBudgetFor, withBudget } from './antigel';
 import { budgetKey } from '../../core/antigel/config';
 import { useAntigel } from './useAntigel';
 import { fridgeEntry, newFridgeNotice } from './fridge';
@@ -559,6 +559,10 @@ export function App() {
                   const r = projectRoot(route.groupId);
                   const k = r ? budgetKey(r) : null;
                   return k ? configState.config.antigel.budgets[k] ?? null : null;
+                })()}
+                budgetDefaultMB={(() => {
+                  const r = projectRoot(route.groupId);
+                  return r ? defaultBudgetFor(configState.config.antigel, r) : null;
                 })()}
                 onSetBudget={projectRoot(route.groupId) ? (mb) => setBudget(projectRoot(route.groupId)!, mb) : undefined}
                 fridge={fridgeEntry(antigel, projectRoot(route.groupId))}

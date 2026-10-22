@@ -1,4 +1,4 @@
-// Anti-gel : plafonds de cwatch.slice (pur, sans import Node).
+// Anti-gel : plafonds de cwatch.slice et des slices de projet (pur, sans import Node).
 import { RESERVE_MAX_MB, RESERVE_MIN_MB } from './config';
 
 export const MiB = 1024 * 1024;
@@ -10,6 +10,7 @@ export const INFINITY_T = '18446744073709551615';
 export interface SliceLimits { reserveBytes: number; highBytes: number; maxBytes: number; swapMaxBytes: number }
 
 const down = (n: number) => Math.floor(n / PAGE) * PAGE;
+const up = (n: number) => Math.ceil(n / PAGE) * PAGE;
 
 /** Réserve automatique pour le bureau : max(4 Go, 15 % de la RAM). */
 export function autoReserveBytes(memTotalBytes: number): number {
@@ -78,3 +79,58 @@ export function dynamicLimits(l: SliceLimits, o: { workBytes: number; availKB: n
 }
 
 export const budgetBytes = (mb: number): number => mb * MiB;
+
+/**
+ * Plafonds de la slice d'un projet qui a un budget : MemoryHigh = budget (au-delà, sa mémoire est poussée vers le swap
+ * puis freinée), MemorySwapMax = sa part de swap (il ne remplit plus le swap de tout le système), MemoryMax = plafond dur
+ * (au-delà, le noyau arrête le plus gros processus de CETTE slice, jamais ailleurs ; scopes en OOMPolicy=continue).
+ * Mémoire comptée à la slice (RAM + swap) : au plus MemoryMax + MemorySwapMax (à quelques Mo près pendant un arrêt).
+ */
+export interface ProjectCaps { highBytes: number; maxBytes: number; swapMaxBytes: number }
+/** Part de swap d'un projet : 25 % du budget. */
+export const PROJECT_SWAP_RATIO = 0.25;
+/**
+ * Marge du plafond dur au-dessus du budget : 10 %. Au-delà de memory.high le noyau freine de plus en plus fort (attente
+ * qui croît avec le carré du dépassement relatif) : mesuré sur un allocateur seul, 10 % de marge → arrêté en 8 à 11 s,
+ * 14 % → 73 à 107 s, tâche en attente mémoire tout du long (PSI du système entier jusqu'à 29 %). 25 % laisserait un
+ * projet qui déborde freiné des minutes au lieu de l'arrêter.
+ */
+export const PROJECT_MARGIN_RATIO = 0.1;
+/** Marge minimale du plafond dur (petits budgets) : un pic d'un processus Node ne fait pas arrêter le projet. */
+export const PROJECT_MIN_MARGIN_BYTES = 256 * MiB;
+
+/** Budget (Mo) → plafonds : 5 Go → freine à 5 Go, swap 1,25 Go au plus, arrêt au-delà de 5,5 Go (6,75 Go au total). */
+export function projectCaps(budgetMB: number): ProjectCaps {
+  const high = down(budgetBytes(budgetMB));
+  return {
+    highBytes: high,
+    maxBytes: high + Math.max(PROJECT_MIN_MARGIN_BYTES, down(PROJECT_MARGIN_RATIO * high)),
+    swapMaxBytes: down(PROJECT_SWAP_RATIO * high),
+  };
+}
+
+export function sameCaps(a: ProjectCaps | null, b: ProjectCaps | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.highBytes === b.highBytes && a.maxBytes === b.maxBytes && a.swapMaxBytes === b.swapMaxBytes;
+}
+
+/**
+ * MemoryMax à poser sur la slice d'un projet. Écrire memory.max sous memory.current fait récupérer puis tuer aussitôt par
+ * le noyau : le plafond dur n'est jamais posé à moins d'une marge (celle du budget) au-dessus de l'usage actuel. Au-dessus
+ * du plafond visé, il ne remonte jamais (sinon il suivrait un projet qui grossit) ; il redescend avec l'usage par pas d'au
+ * moins une marge (chaque écriture repose aussi MemoryHigh, que le noyau fait respecter aussitôt : peu d'appels), et d'un
+ * coup jusqu'au plafond visé dès que l'usage le permet. Le remonter (budget relevé) ne tue jamais.
+ * `applied` : MemoryMax en place (null : aucun) ; `currentBytes` : memory.current de la slice (0 si elle n'existe pas
+ * encore ; illisible : rien ne descend).
+ */
+export function convergingMax(caps: ProjectCaps, currentBytes: number, applied: number | null): number {
+  const target = caps.maxBytes;
+  if (applied !== null && applied <= target) return target;
+  if (!Number.isFinite(currentBytes) || currentBytes < 0) return applied ?? target;
+  const margin = caps.maxBytes - caps.highBytes;
+  const floor = up(currentBytes + margin);
+  if (floor <= target) return target;
+  if (applied === null) return floor;
+  if (floor >= applied) return applied;
+  return applied - floor >= margin ? floor : applied;
+}

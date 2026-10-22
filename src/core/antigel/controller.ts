@@ -1,6 +1,7 @@
-// Anti-gel (lot 1) : orchestration par tick du service. Plafonds de cwatch.slice, une slice par projet (budget), un scope
-// neuf par lot de déplacement (amendement A1), OOM et ralentissements lus sur la slice du projet. Les appels D-Bus partent
-// en arrière-plan, un enchaînement à la fois : le tick n'attend jamais busctl, et en régime établi il ne fait aucun appel.
+// Anti-gel (lot 1) : orchestration par tick du service. Plafonds de cwatch.slice, une slice par projet (budget : freinage,
+// part de swap, plafond dur), un scope neuf par lot de déplacement (amendement A1), OOM et ralentissements lus sur la slice
+// du projet. Les appels D-Bus partent en arrière-plan, un enchaînement à la fois : le tick n'attend jamais busctl, et en
+// régime établi il ne fait aucun appel.
 //
 // Ordre garanti dans un enchaînement : cwatch.slice assurée (plafonds) avant toute slice de projet ; slice de projet
 // assurée (budget ou infinity) dans ce processus avant tout scope rangé dedans : jamais de scope vers une slice que systemd
@@ -10,7 +11,7 @@ import type { Group, ProcInfo, SystemInfo } from '../types';
 import type { Availability, CgroupStats, MemoryEvents } from './cgroupfs';
 import { effectiveBudget, type AntigelConfig } from './config';
 import { createDeskPriority, type DeskDeps } from './desk';
-import { budgetBytes, dynamicLimits, sameLimits, sliceLimits, type SliceLimits } from './limits';
+import { convergingMax, dynamicLimits, projectCaps, sameCaps, sameLimits, sliceLimits, type ProjectCaps, type SliceLimits } from './limits';
 import { createRecent, type Recent } from './recent';
 import { MIN_ROOT_AGE_SEC, planMoves, type PlanMove, type PlanTarget } from './plan';
 import type { AntigelProjectState, AntigelSliceState, AntigelState } from './state';
@@ -88,8 +89,12 @@ export interface AntigelTickInput {
   frozenSlices?: ReadonlySet<string>;
 }
 
-/** `unit` : slice du projet (cwatch-p-<clé>.slice). */
-export interface AntigelOom { unit: string; root: string | null; kills: number }
+/**
+ * `unit` : slice du projet (cwatch-p-<clé>.slice). `budget` : le noyau a manqué de mémoire sous la limite de la slice
+ * elle-même (« oom » de son memory.events : le plafond dur de son budget) ; absent : limite d'un parent (plafond global)
+ * ou mémoire du système entier.
+ */
+export interface AntigelOom { unit: string; root: string | null; kills: number; budget?: boolean }
 
 export interface AntigelController {
   /** Un tick (synchrone, borné) ; renvoie les OOM observés dans les slices de projet depuis le tick précédent. */
@@ -159,8 +164,8 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
   const slices = new Map<string, string | null>();
   /** Slices de projet assurées (StartTransientUnit ou propriété posée) par ce processus. */
   const ensured = new Set<string>();
-  /** Budget posé par ce processus sur chaque slice de projet (null : infinity). */
-  const posed = new Map<string, number | null>();
+  /** Plafonds posés par ce processus sur chaque slice de projet (budget, plafond dur, part de swap ; null : infinity). */
+  const posed = new Map<string, ProjectCaps | null>();
   const lastEvents = new Map<string, MemoryEvents>();
   const throttledUntil = new Map<string, number>();
   /** Événements de cwatch.slice au tick précédent : le plafond global qui freine compte son « high » sur elle seule. */
@@ -260,20 +265,35 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
       });
   };
 
-  /** Budget d'une slice de projet à poser ? Ce que ce processus a posé fait foi ; sinon (redémarrage) ce que montre sysfs. */
-  const needsHigh = (slice: string, want: number | null, s: CgroupStats) => (posed.has(slice) ? posed.get(slice) !== want : s.highBytes !== want);
   /**
-   * Budget d'une slice de projet. Après un « no-unit » (systemd ne connaît plus la slice), repassage par
+   * Plafonds à poser sur une slice de projet pour ce budget (null : aucun) : ceux du budget, avec MemoryMax en convergence,
+   * jamais sous l'usage actuel + marge (voir convergingMax : poser memory.max sous memory.current ferait tuer aussitôt).
+   * MemoryMax en place : ce que ce processus a posé, sinon (redémarrage) ce que montre sysfs. Slice absente : usage nul.
+   */
+  const capsToPose = (slice: string, budget: ProjectCaps | null, s: CgroupStats | undefined): ProjectCaps | null => {
+    if (budget === null) return null;
+    const applied = posed.has(slice) ? (posed.get(slice)?.maxBytes ?? null) : (s?.maxBytes ?? null);
+    return { ...budget, maxBytes: convergingMax(budget, s?.currentBytes ?? 0, applied) };
+  };
+  /** Plafonds d'une slice de projet à poser ? Ce que ce processus a posé fait foi ; sinon (redémarrage) ce que montre sysfs. */
+  const needsCaps = (slice: string, want: ProjectCaps | null, s: CgroupStats) => {
+    if (posed.has(slice)) return !sameCaps(posed.get(slice) ?? null, want);
+    return want === null
+      ? s.highBytes !== null || s.maxBytes !== null || s.swapMaxBytes !== null
+      : s.highBytes !== want.highBytes || s.maxBytes !== want.maxBytes || s.swapMaxBytes !== want.swapMaxBytes;
+  };
+  /**
+   * Plafonds d'une slice de projet. Après un « no-unit » (systemd ne connaît plus la slice), repassage par
    * ensureProjectSlice ; après un autre échec, recul de BUDGET_RETRY_MS (voir `budgetDue`).
    */
-  const setHigh = (slice: string, want: number | null): Step => ({
+  const setCaps = (slice: string, want: ProjectCaps | null): Step => ({
     run: async () => {
       try {
         if (lost.has(slice)) {
           await client.ensureProjectSlice(slice, want);
           ensured.add(slice);
           lost.delete(slice);
-        } else await client.setProjectHigh(slice, want);
+        } else await client.setProjectCaps(slice, want);
       } catch (e) {
         if (e instanceof BusctlError && e.code === 'no-unit') {
           ensured.delete(slice);
@@ -401,7 +421,7 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
             },
           });
         }
-        for (const [s, v] of sliceStats) if (needsHigh(s, null, v) && budgetDue(s, now)) steps.push(setHigh(s, null));
+        for (const [s, v] of sliceStats) if (needsCaps(s, null, v) && budgetDue(s, now)) steps.push(setCaps(s, null));
         run(steps);
       }
       const reason = i.config.enabled ? RESERVE_TOO_BIG : null;
@@ -464,7 +484,9 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
       if (!s) continue;
       const prev = lastEvents.get(unit);
       if (prev && s.events.high > prev.high) throttledUntil.set(unit, now + THROTTLE_HOLD_MS);
-      if (prev && s.events.oomKill > prev.oomKill) ooms.push({ unit, root, kills: s.events.oomKill - prev.oomKill });
+      if (prev && s.events.oomKill > prev.oomKill) {
+        ooms.push({ unit, root, kills: s.events.oomKill - prev.oomKill, ...(s.events.oom > prev.oom ? { budget: true } : {}) });
+      }
       lastEvents.set(unit, s.events);
       const pct = recentPct(unit, s, now);
       if (s.populated && projects.length < MAX_UNITS) {
@@ -477,6 +499,7 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
           throttled: rootThrottled || own, budgetThrottled: own,
           ...(outside !== undefined ? { outsideKB: outside } : {}),
           ...(pct !== undefined ? { stallPct: pct } : {}),
+          ...(s.maxBytes !== null ? { maxKB: kb(s.maxBytes) } : {}),
         });
       }
     }
@@ -488,10 +511,13 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
     youngSeen = plan.refused.some((r) => r.reason === 'young');
     if (inFlight) return ooms;
 
-    const want = (root: string | null): number | null => {
+    /** Plafonds du budget d'une racine (budget, part de swap, plafond dur) ; null : aucun budget. */
+    const budgetCaps = (root: string | null): ProjectCaps | null => {
       const mb = budgetOf(root);
-      return mb === null ? null : budgetBytes(mb);
+      return mb === null ? null : projectCaps(mb);
     };
+    /** Plafonds à poser par slice ce tick-ci (convergence comprise), aussi pour une slice assurée par un déplacement. */
+    const toPose = (s: string): ProjectCaps | null => capsToPose(s, budgetCaps(slices.get(s) ?? null), sliceStats.get(s));
     const steps: Step[] = [];
     // cwatch.slice en place avec nos plafonds : sinon (premier tick, plafonds changés, slice disparue) assurée d'abord.
     let rootReady = sameLimits(applied, limits) && rootStats !== null;
@@ -508,10 +534,15 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
       rootReady = true;
     };
     if (!sameLimits(applied, limits)) steps.push({ critical: true, run: ensureRoot });
-    // Budgets des slices existantes : un appel par changement (recul après un échec).
+    // Plafonds des slices existantes : un appel par changement (recul après un échec), plafond dur en convergence. Slice au
+    // frigo : rien (le frigo a levé sa part de swap) ; ce qui y était posé est oublié, et sysfs fait foi au réveil.
     for (const [s, v] of sliceStats) {
-      const w = want(slices.get(s) ?? null);
-      if (needsHigh(s, w, v) && budgetDue(s, now)) steps.push(setHigh(s, w));
+      if (i.frozenSlices?.has(s)) {
+        posed.delete(s);
+        continue;
+      }
+      const w = toPose(s);
+      if (needsCaps(s, w, v) && budgetDue(s, now)) steps.push(setCaps(s, w));
     }
 
     // Déplacements regroupés par slice de projet : un seul scope neuf par projet et par tick.
@@ -532,7 +563,7 @@ export function createAntigel(deps: AntigelDeps): AntigelController {
       bySlice.set(s, [...(bySlice.get(s) ?? []), m]);
     }
     for (const [s, moves] of bySlice) {
-      const w = want(slices.get(s) ?? null);
+      const w = toPose(s);
       const exists = sliceStats.has(s);
       steps.push({ run: async () => {
         // rien de vivant : aucun appel (ni slice de projet, ni scope)
