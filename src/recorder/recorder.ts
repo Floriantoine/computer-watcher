@@ -564,8 +564,12 @@ export function createRecorder(deps: RecorderDeps): Recorder {
         // ralentissement toléré jusqu'à 4 × intervalle ; veille ou saut d'horloge (écart murale/monotone) dès 2 ×
         now: m, wallNow: ts, maxGapMs: 4 * intervalMs, maxSkewMs: 2 * intervalMs,
         enabled: rulesCfg.enabled, rules, groups, classification, forecast: fc, procGrowthKB,
-        // (d) anti-gel : RAM utilisée d'après MemAvailable, CPU total du tick (premier tick : 0 %, aucune mesure de CPU)
-        system: { memUsedPercent: memUsedPercent(system), cpuPercent: Number.isFinite(cpuPercent) ? cpuPercent : null, memTotalKB: system.memTotalKB, cpuCount: ncpu },
+        // (d) anti-gel : RAM utilisée d'après MemAvailable, CPU total du tick (premier tick : 0 %, aucune mesure de CPU),
+        // pression mémoire PSI « full » (null sans PSI)
+        system: {
+          memUsedPercent: memUsedPercent(system), cpuPercent: Number.isFinite(cpuPercent) ? cpuPercent : null, memTotalKB: system.memTotalKB, cpuCount: ncpu,
+          psiFull10: system.psiFull10 ?? null,
+        },
         // sans historique couvrant toute la période (service récent, trou d'enregistrement) : null, rien n'est « inactif »
         inactive: (targets, since) => {
           const active = historyCovers(d, since, ts) ? queryInactive(d, targets, since, opts, inactiveCpuThreshold(cfg)) : null;
