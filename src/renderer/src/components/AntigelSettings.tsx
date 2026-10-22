@@ -3,7 +3,7 @@ import { Snowflake, Trash2 } from 'lucide-react';
 import type { Config } from '../../../core/types';
 import { deskLine } from '../antigelDesk';
 import { DEFAULT_BUDGET_MB } from '../../../core/antigel/config';
-import { antigelStatusLine, budgetLabel, budgetRows, budgetUsage, formatGo, formatGoInput, reserveHint, validateBudget, validateReserve, withBudget, withNoBudget } from '../antigel';
+import { antigelStatusLine, budgetEffect, budgetEffectLine, budgetLabel, budgetRows, budgetUsage, formatGo, formatGoInput, reserveHint, validateBudget, validateReserve, withBudget, withNoBudget } from '../antigel';
 import { useAntigel } from '../useAntigel';
 import { DeskRootRow, useDeskRoot } from './DeskRoot';
 import { Card, Row, SaveBar, Switch } from './settingsUi';
@@ -57,7 +57,7 @@ export function AntigelSettingsCard({ config, onSave }: { config: Config; onSave
       </Row>
       <SaveBar dirty={dirty} disabled={!v.ok || !dirty} onSave={save} testid="antigel-save" />
       <Row label="Budget par défaut de chaque projet" error={def !== null && !dv.ok ? dv.error : null}
-        help="Budget mémoire de chaque projet capturé qui n’a pas le sien (MemoryHigh de sa slice de projet, comme un budget posé à la main) ; jamais pour les vérifications hors projet. Un budget posé sur un projet l’emporte ; « Sans budget » en exclut un projet. Éteint : aucun budget par défaut.">
+        help="Budget mémoire de chaque projet capturé qui n’a pas le sien (mêmes plafonds de sa slice de projet qu’un budget posé à la main : freinage, part de swap, plafond dur) ; jamais pour les vérifications hors projet. Un budget posé sur un projet l’emporte ; « Sans budget » en exclut un projet. Éteint : aucun budget par défaut.">
         {(id) => (
           <span className="antigel-default-budget">
             <Switch checked={def !== null} label="Budget par défaut de chaque projet" disabled={!ag.enabled} onToggle={toggleDef} />
@@ -67,6 +67,7 @@ export function AntigelSettingsCard({ config, onSave }: { config: Config; onSave
           </span>
         )}
       </Row>
+      {def !== null && <p className="sub antigel-budget-effect" data-testid="antigel-default-effect">{budgetEffectLine(dv.ok ? dv.mb : def, true)}</p>}
       <SaveBar dirty={defDirty} disabled={!dv.ok || !defDirty} onSave={saveDef} testid="antigel-default-save" />
       <h4 className="antigel-budgets-title">Budgets par projet</h4>
       {budgets.length === 0 ? (
@@ -79,7 +80,7 @@ export function AntigelSettingsCard({ config, onSave }: { config: Config; onSave
             return (
               <li key={root} data-testid="antigel-budget-row" data-root={root} data-source={source}>
                 <span className="mono" title={root}>{budgetLabel(root)}</span>
-                <span className="mono">
+                <span className="mono" title={mb === null ? undefined : budgetEffect(mb)}>
                   {mb === null ? 'sans budget' : formatGo(mb)}
                   {source === 'default' && <small className="sub"> (par défaut)</small>}
                 </span>

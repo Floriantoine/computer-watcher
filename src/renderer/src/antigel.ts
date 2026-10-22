@@ -1,6 +1,6 @@
 // Plafond de travail (anti-gel), fenêtre (logique pure) : marques des projets, carte Métriques, formulaires (Go).
 import { BUDGET_MAX_MB, BUDGET_MIN_MB, RESERVE_MAX_MB, RESERVE_MIN_MB, budgetKey, effectiveBudget, type AntigelConfig } from '../../core/antigel/config';
-import { MiB, autoReserveBytes } from '../../core/antigel/limits';
+import { MiB, autoReserveBytes, projectCaps } from '../../core/antigel/limits';
 import type { FridgePhase } from '../../core/antigel/fridgeState';
 import type { AntigelSliceState, AntigelState, AntigelView } from '../../core/antigel/state';
 import type { DeskRootStatus } from '../../core/antigel/deskRoot';
@@ -70,6 +70,42 @@ export function withBudget(budgets: Record<string, number>, root: string, mb: nu
   if (mb === null) delete out[k];
   else out[k] = mb;
   return out;
+}
+
+/** « 5 Go », « 1,25 Go » ; en Mo sous 1 Go (« 768 Mo »). */
+export const formatBudgetSize = (mb: number): string => (mb < 1024 ? `${Math.round(mb)} Mo` : formatGo(mb));
+
+/**
+ * Ce que fait un budget (plafonds de la slice du projet, voir projectCaps) : « freine à 5 Go · swap 1,25 Go max · au-delà
+ * de 6,25 Go, un processus du projet est arrêté ».
+ */
+export function budgetEffect(mb: number): string {
+  const c = projectCaps(mb);
+  const size = (b: number) => formatBudgetSize(b / MiB);
+  return `freine à ${size(c.highBytes)} · swap ${size(c.swapMaxBytes)} max · au-delà de ${size(c.maxBytes)}, un processus du projet est arrêté`;
+}
+
+/** « Budget par défaut (5 Go) : freine à … », « Budget de 8 Go : freine à … ». */
+export const budgetEffectLine = (mb: number, isDefault: boolean): string =>
+  `${isDefault ? `Budget par défaut (${formatBudgetSize(mb)})` : `Budget de ${formatBudgetSize(mb)}`} : ${budgetEffect(mb)}`;
+
+/** Budget par défaut d'un projet, sans tenir compte de son budget propre : null s'il est « Sans budget », si le défaut est éteint, ou racine refusée. */
+export function defaultBudgetFor(ag: AntigelConfig, root: string): number | null {
+  const k = budgetKey(root);
+  return k === null ? null : (effectiveBudget({ ...ag, budgets: {} }, k)?.mb ?? null);
+}
+
+/** Ligne du dialogue « Budget mémoire… » : effet du budget saisi ; vide : celui du budget par défaut du projet (ou aucun) ; saisie invalide : null. */
+export function budgetDialogEffect(text: string, defaultMB: number | null): string | null {
+  if (text.trim() === '') {
+    return defaultMB === null
+      ? 'Sans budget propre : aucun budget, seul le plafond de travail global s’applique.'
+      : `Sans budget propre, budget par défaut (${formatBudgetSize(defaultMB)}) : ${budgetEffect(defaultMB)}.`;
+  }
+  const v = validateBudget(text);
+  if (!v.ok) return null;
+  const e = budgetEffect(v.mb);
+  return `${e.charAt(0).toUpperCase()}${e.slice(1)}.`;
 }
 
 /** Projet explicitement sans budget (le budget par défaut ne s'y applique pas) ou rendu au budget par défaut. */
@@ -182,11 +218,26 @@ export interface AntigelCardModel {
   budgets: BudgetLine[];
   /** Projets sans budget dont une part de la mémoire est comptée ailleurs (capturés tard), avec l'infobulle. */
   late: LateLine[];
+  /** Ce que fait chaque budget en cours, une ligne par valeur (le budget par défaut d'abord) : voir budgetEffectLine. */
+  effects: string[];
+}
+
+/** Lignes « Budget par défaut (5 Go) : freine à … » des budgets des projets en cours, une par valeur. */
+function budgetEffects(projects: readonly Proj[]): string[] {
+  const by = new Map<number, boolean>();
+  for (const p of projects) if (p.budgetMB !== null) by.set(p.budgetMB, (by.get(p.budgetMB) ?? false) || p.budgetDefault === true);
+  return [...by].sort(([a, da], [b, db]) => Number(db) - Number(da) || a - b).map(([mb, d]) => budgetEffectLine(mb, d));
+}
+
+/** « · plafond dur provisoire : 10,25 Go » : MemoryMax encore au-dessus de celui du budget (convergence sans arrêt immédiat). */
+function provisionalText(p: Proj): string {
+  if (p.budgetMB === null || p.maxKB === undefined || p.maxKB <= projectCaps(p.budgetMB).maxBytes / 1024) return '';
+  return ` · plafond dur provisoire : ${formatBudgetSize(Math.round(p.maxKB / 1024))}`;
 }
 
 /** `root` : protection mémoire système du bureau (ligne du bureau prioritaire), facultative. */
 export function antigelCard(v: AntigelView | null, root?: DeskRootStatus | null): AntigelCardModel {
-  const none = { usedKB: null, highKB: null, maxKB: null, fillPercent: null, memLine: null, memHint: null, budgets: [], late: [] };
+  const none = { usedKB: null, highKB: null, maxKB: null, fillPercent: null, memLine: null, memHint: null, budgets: [], late: [], effects: [] };
   if (!v || !v.state) return { tone: 'na', title: 'Plafond de travail : en attente du service d’enregistrement', ...none, lines: ['Le service d’enregistrement applique le plafond de travail ; il ne tourne pas ou n’a pas encore écrit son état.'] };
   if (!v.fresh) return { tone: 'na', title: 'Plafond de travail : service d’enregistrement arrêté', ...none, lines: ['Les plafonds déjà posés restent en place ; aucun nouveau processus n’est déplacé.'] };
   const s = v.state;
@@ -232,10 +283,14 @@ export function antigelCard(v: AntigelView | null, root?: DeskRootStatus | null)
         const now = ownBrake(p, rootBrake);
         const late = p.outsideKB ? ` · ~${formatKB(p.outsideKB)} hors budget (capturé tard)` : '';
         const def = p.budgetDefault ? ' (par défaut)' : '';
-        return { text: `${label(p.root)} : ${usedOfBudget(p.currentKB, p.budgetMB!)}${def} — ${brakeText(now, p.stallPct)}${late}`, hint: p.outsideKB ? LATE_HINT : null, throttled: now };
+        return {
+          text: `${label(p.root)} : ${usedOfBudget(p.currentKB, p.budgetMB!)}${def} — ${brakeText(now, p.stallPct)}${late}${provisionalText(p)}`,
+          hint: p.outsideKB ? LATE_HINT : null, throttled: now,
+        };
       }),
     late: s.projects
       .filter((p) => p.outsideKB && p.budgetMB === null)
       .map((p) => ({ text: `${label(p.root)} : ${usageText(p)}`, hint: LATE_HINT })),
+    effects: budgetEffects(s.projects),
   };
 }

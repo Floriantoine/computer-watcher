@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { sampleState } from '../../core/antigel/testFixtures';
 import {
   LATE_HINT, antigelCard, antigelMarks, budgetUsage, antigelStatusLine, budgetLabel, formatGo, parseGo, reserveHint, sameMark, validateBudget, validateReserve, withBudget,
-  budgetRows, withNoBudget,
+  budgetRows, withNoBudget, budgetEffect, budgetEffectLine, budgetDialogEffect, defaultBudgetFor, formatBudgetSize,
 } from './antigel';
 
 const fresh = (o = {}) => ({ state: sampleState(o), fresh: true });
@@ -187,5 +187,53 @@ describe('fenêtre : plafond de travail', () => {
         .toEqual({ text: '5,0 Go dans le budget — freiné en ce moment', hint: null });
       expect(budgetUsage(fresh({ slice, projects: [proj] }), '/home/u/projet-a')).toEqual({ text: '5,0 Go dans le budget — ok', hint: null });
     });
+  });
+});
+
+describe('ce que fait un budget, en une ligne (freinage, part de swap, plafond dur)', () => {
+  test('5 Go, 8 Go, petits budgets (Mo sous 1 Go)', () => {
+    expect(budgetEffect(5120)).toBe('freine à 5 Go · swap 1,25 Go max · au-delà de 6,25 Go, un processus du projet est arrêté');
+    expect(budgetEffect(8192)).toBe('freine à 8 Go · swap 2 Go max · au-delà de 10 Go, un processus du projet est arrêté');
+    expect(budgetEffect(256)).toBe('freine à 256 Mo · swap 64 Mo max · au-delà de 768 Mo, un processus du projet est arrêté');
+    expect(budgetEffect(1536)).toBe('freine à 1,5 Go · swap 384 Mo max · au-delà de 2 Go, un processus du projet est arrêté');
+    expect(formatBudgetSize(1023)).toBe('1023 Mo');
+    expect(formatBudgetSize(1024)).toBe('1 Go');
+    expect(budgetEffectLine(5120, true)).toBe('Budget par défaut (5 Go) : freine à 5 Go · swap 1,25 Go max · au-delà de 6,25 Go, un processus du projet est arrêté');
+    expect(budgetEffectLine(8192, false)).toMatch(/^Budget de 8 Go : freine à 8 Go · /);
+  });
+  test('dialogue « Budget mémoire… » : budget saisi ; vide : budget par défaut du projet (ou aucun) ; saisie invalide : rien', () => {
+    expect(budgetDialogEffect('6', 5120)).toBe('Freine à 6 Go · swap 1,5 Go max · au-delà de 7,5 Go, un processus du projet est arrêté.');
+    expect(budgetDialogEffect(' ', 5120)).toBe('Sans budget propre, budget par défaut (5 Go) : freine à 5 Go · swap 1,25 Go max · au-delà de 6,25 Go, un processus du projet est arrêté.');
+    expect(budgetDialogEffect('', null)).toBe('Sans budget propre : aucun budget, seul le plafond de travail global s’applique.');
+    expect(budgetDialogEffect('six', 5120)).toBeNull();
+    expect(budgetDialogEffect('0,1', 5120)).toBeNull();
+  });
+  test('budget par défaut d’un projet (sans tenir compte de son budget propre) : aucun s’il est « Sans budget » ou si le défaut est éteint', () => {
+    const ag = { enabled: true, reserveMB: null, budgets: { '/home/u/projet-a': 2048 }, defaultBudgetMB: 5120 };
+    expect(defaultBudgetFor(ag, '/home/u/projet-a')).toBe(5120);
+    expect(defaultBudgetFor(ag, '/home/u/demo/')).toBe(5120);
+    expect(defaultBudgetFor({ ...ag, noBudget: ['/home/u/demo'] }, '/home/u/demo')).toBeNull();
+    expect(defaultBudgetFor({ ...ag, defaultBudgetMB: null }, '/home/u/demo')).toBeNull();
+    expect(defaultBudgetFor(ag, 'relatif')).toBeNull();
+  });
+  test('carte Métriques : une ligne par budget en cours (le défaut d’abord), aucune sans budget', () => {
+    const p = (root: string, o: object) => ({ unit: 'cwatch-p-projet-a.slice', root, procs: 1, currentKB: 1024, budgetMB: 5120, throttled: false, ...o });
+    const c = antigelCard(fresh({ projects: [
+      p('/home/u/demo', { budgetMB: 8192 }), p('/home/u/projet-a', { budgetDefault: true }), p('/home/u/projet-b', { budgetDefault: true }),
+      p('/home/u/projet-c', { budgetMB: null }),
+    ] }));
+    expect(c.effects).toEqual([
+      'Budget par défaut (5 Go) : freine à 5 Go · swap 1,25 Go max · au-delà de 6,25 Go, un processus du projet est arrêté',
+      'Budget de 8 Go : freine à 8 Go · swap 2 Go max · au-delà de 10 Go, un processus du projet est arrêté',
+    ]);
+    expect(antigelCard(fresh()).effects).toEqual([]);
+    expect(antigelCard(null).effects).toEqual([]);
+  });
+  test('carte : plafond dur provisoire (convergence) sur la ligne du projet ; rien quand il vaut celui du budget', () => {
+    const G = 1024 * 1024;
+    const p = { unit: 'cwatch-p-projet-a.slice', root: '/home/u/projet-a', procs: 9, currentKB: 4.5 * G, budgetMB: 5120, throttled: false };
+    const c = antigelCard(fresh({ projects: [{ ...p, maxKB: 10.25 * G }] }));
+    expect(c.budgets[0]!.text).toBe('u / projet-a : 4,5 / 5 Go — ok · plafond dur provisoire : 10,25 Go');
+    expect(antigelCard(fresh({ projects: [{ ...p, maxKB: 6.25 * G }] })).budgets[0]!.text).toBe('u / projet-a : 4,5 / 5 Go — ok');
   });
 });

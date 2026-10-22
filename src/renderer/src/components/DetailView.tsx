@@ -48,6 +48,8 @@ interface Props {
   antigel?: AntigelMark;
   /** Budget mémoire du projet (Mo) ; null : aucun. */
   budgetMB?: number | null;
+  /** Budget par défaut que le projet aurait sans budget propre (Mo) ; null : aucun (« Sans budget », défaut éteint). */
+  budgetDefaultMB?: number | null;
   /** « Budget mémoire… » (projets seulement) ; absent : bouton caché. */
   onSetBudget?: (mb: number | null) => void;
   /** Lot 3 : entrée du frigo de ce projet (null : pas au frigo) et nombre de ses processus sous le plafond. */
@@ -251,7 +253,7 @@ export function DetailView(props: Props) {
       )}
       <AnimatePresence>
         {budgetOpenFor === group.id && group.kind === 'project' && props.onSetBudget && (
-          <BudgetDialog label={group.label} currentMB={props.budgetMB ?? null} onCancel={() => setBudgetOpenFor(null)}
+          <BudgetDialog label={group.label} currentMB={props.budgetMB ?? null} defaultMB={props.budgetDefaultMB ?? null} onCancel={() => setBudgetOpenFor(null)}
             onSave={(mb) => { setBudgetOpenFor(null); props.onSetBudget!(mb); }} />
         )}
         {fridgeOpenFor === group.id && group.kind === 'project' && props.onFridge && !props.fridge && (
