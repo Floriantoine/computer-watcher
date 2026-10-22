@@ -206,6 +206,8 @@ export function App() {
     setToasts((t) => [...t, { id, message, kind }]);
     setTimeout(() => setToasts((t) => t.slice(1)), 5000);
   };
+  // stable pour les pop-ups d'alerte (mémoïsés) : pushToast ne dépend que de setToasts et d'une ref, stables eux aussi
+  const popupToast = useCallback((m: string, kind: Toast['kind']) => pushToast(m, kind), []);
 
   // B8 bis : earlyoom absent, arrêté ou à mettre à jour → pop-up au lancement (élément mémoïsé : AlertPopups reste mémoïsé entre deux snapshots).
   const eoReminder = useEarlyoomReminder({ onState: setConfigState, onToast: (m, kind) => pushToast(m, kind) });
@@ -656,6 +658,7 @@ export function App() {
           onFree={requestFree}
           onSnooze={snoozeForecast}
           lead={leads}
+          onToast={popupToast}
         />
       </div>
     </MotionConfig>

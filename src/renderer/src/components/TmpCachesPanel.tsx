@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { BrushCleaning, Recycle } from 'lucide-react';
-import { cachesOutcomeMessage, JEST_CACHE_ADVICE, type TmpCacheId, type TmpCaches } from '../../../core/tmpCaches';
+import { cachesOffer, cachesOutcomeMessage, JEST_CACHE_ADVICE, type TmpCacheId, type TmpCaches } from '../../../core/tmpCaches';
 import { cacheRows, emptyAllAction, showJestAdvice } from '../tmpCaches';
 import { createSingleFlight } from '../tmpClean';
 import { ipcErrorMessage } from '../viewModel';
@@ -110,4 +110,20 @@ export function TmpCachesPanel({ state, disabled = false }: { state: Pick<TmpCac
       )}
     </section>
   );
+}
+
+/** Bouton « Vider les caches (X) » du pop-up d'alerte tmpfs : seulement si les caches vidables font au moins 100 Mo. */
+export function TmpCachesOfferButton({ state }: { state: Pick<TmpCachesState, 'caches' | 'busy' | 'empty'> }) {
+  const offer = cachesOffer(state.caches);
+  if (!offer) return null;
+  return (
+    <button className="alert-popup-caches" data-testid="alert-popup-empty-caches" disabled={state.busy !== null} title={EMPTY_TITLE} onClick={() => void state.empty(offer.ids)}>
+      <BrushCleaning size={12} strokeWidth={2} /> {state.busy ? 'Vidage…' : offer.label}
+    </button>
+  );
+}
+
+/** Le même, avec sa lecture des caches (à l'apparition du pop-up, puis après le vidage : le bouton disparaît). */
+export function TmpfsAlertCachesButton({ onToast }: { onToast?: (message: string, kind: 'info' | 'error') => void }) {
+  return <TmpCachesOfferButton state={useTmpCaches(onToast)} />;
 }

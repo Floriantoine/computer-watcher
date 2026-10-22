@@ -7,6 +7,7 @@ import type { Route } from '../App';
 import { badgeCount, clickTarget, pendingPopups, popupAction, popupSnooze, popupStack, sameUnseen, seenAfterClose } from '../alertPopups';
 import { useHistory } from '../history';
 import { settingsSectionForAlert } from '../settingsNav';
+import { TmpfsAlertCachesButton } from './TmpCachesPanel';
 import { eventMarkers, formatInstant } from '../metrics';
 import '../alerts.css';
 
@@ -75,10 +76,12 @@ interface Props {
   onSnooze: (id: number) => void;
   /** Pop-up en tête de pile, hors alertes enregistrées (earlyoom absent au lancement, B8 bis) ; élément avec une `key`. */
   lead?: ReactNode;
+  /** Résultat de « Vider les caches » d'une alerte tmpfs (fonction stable : le composant est mémoïsé). */
+  onToast?: (message: string, kind: 'info' | 'error') => void;
 }
 
 /** Pop-ups en haut à droite : restent jusqu'à fermeture, 3 au plus, le reste regroupé en « + n autres ». */
-export const AlertPopups = memo(function AlertPopups({ pending, onClose, onCloseAll, groupPresent, onNavigate, onFree, onSnooze, lead }: Props) {
+export const AlertPopups = memo(function AlertPopups({ pending, onClose, onCloseAll, groupPresent, onNavigate, onFree, onSnooze, lead, onToast }: Props) {
   const { visible, more } = popupStack(pending);
   // Mesure de mise en page seulement quand la pile change (pas à chaque snapshot).
   const stackKey = `${visible.map((e) => e.id).join(',')}|${more > 0}`;
@@ -124,6 +127,7 @@ export const AlertPopups = memo(function AlertPopups({ pending, onClose, onClose
                   >
                     {action.label}
                   </button>
+                  {e.type === 'tmpfs' && <TmpfsAlertCachesButton onToast={onToast} />}
                   {snooze && (
                     <button data-testid="alert-popup-snooze" onClick={() => onSnooze(e.id)}>
                       {snooze}

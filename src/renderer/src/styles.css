@@ -1164,6 +1164,9 @@ button.primary:hover:not(:disabled) { background: rgba(124, 92, 255, 0.32); bord
 .tmp-caches button { flex: none; display: inline-flex; align-items: center; gap: 5px; width: auto; padding: 3px 9px; font-size: 11px; font-weight: 600; }
 .tmp-caches button:disabled { opacity: 0.45; cursor: not-allowed; }
 .tmp-caches .note { margin-top: 6px; color: var(--label); font-size: 11px; font-style: italic; }
+/* pop-up d'alerte tmpfs : « Vider les caches (X) » en plus de « Voir /tmp » → la ligne d'actions passe à la ligne */
+.alert-popup-actions:has(.alert-popup-caches) { flex-wrap: wrap; }
+.alert-popup-actions .alert-popup-caches { display: inline-flex; align-items: center; gap: 5px; }
 @media (max-width: 720px) {
   .tmp-tiles { grid-template-columns: minmax(0, 1fr); }
   .tmp-page .page-head .sub { display: none; }
