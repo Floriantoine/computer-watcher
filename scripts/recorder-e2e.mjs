@@ -1,13 +1,15 @@
 // scripts/recorder-e2e.mjs — lance le vrai service 12 s sur des dossiers temporaires
 import { spawn } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createRequire } from 'node:module';
 
 const electron = createRequire(import.meta.url)('electron');
-const base = mkdtempSync(join(tmpdir(), 'pw-e2e-'));
+// sous ~/.cache (disque) : /tmp est en RAM, un arrêt brutal y laisserait la base et les journaux
+mkdirSync(join(homedir(), '.cache'), { recursive: true });
+const base = mkdtempSync(join(homedir(), '.cache', 'pw-e2e-'));
 // Faux notify-send en tête du PATH : aucune vraie notification du bureau pendant la vérification ; il note ses arguments.
 const fakeBin = join(base, 'bin');
 const calls = join(base, 'notify-calls');
