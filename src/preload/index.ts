@@ -12,6 +12,7 @@ import type { MigrationReport } from '../core/nameMigration';
 import type { RuleStats } from '../core/rules/types';
 import type { SwapView } from '../core/swap';
 import type { TmpDeleteItem, TmpDeleteOutcome, TmpListing } from '../core/tmpClean';
+import type { TmpCacheId, TmpCaches, TmpCachesOutcome } from '../core/tmpCaches';
 import type { UpdateView } from '../core/update';
 import type { WrapAction, WrapApplyResponse, WrapSetupStatus, WrapTarget } from '../core/wrapSetup';
 import type {
@@ -149,6 +150,10 @@ const api = {
     delete: (items: TmpDeleteItem[]): Promise<TmpDeleteOutcome> => ipcRenderer.invoke('tmp:delete', items),
     /** Vide les quarantaines restées (suppressions interrompues), après confirmation native du main. */
     emptyQuarantine: (): Promise<TmpDeleteOutcome> => ipcRenderer.invoke('tmp:emptyQuarantine'),
+    /** Caches connus présents (Jest, Node.js…), avec leur taille ; lecture seule. */
+    caches: (): Promise<TmpCaches> => ipcRenderer.invoke('tmp:caches'),
+    /** Vide ces caches (fichiers supprimés, dossiers gardés), revérifiés par le main ; sans confirmation : ils se reconstruisent. */
+    emptyCaches: (ids: TmpCacheId[]): Promise<TmpCachesOutcome> => ipcRenderer.invoke('tmp:emptyCaches', ids),
   },
   disk: {
     /** Arbre du dossier personnel pour le soleil (gardé 10 min ; `force` : « Actualiser »). */

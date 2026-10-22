@@ -6,7 +6,7 @@
 import { spawn } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -20,7 +20,9 @@ const SAMPLE_S = Number(process.env.MEASURE_SAMPLE_S ?? 120);
 const CLK_TCK = 100;
 
 const electron = createRequire(import.meta.url)('electron');
-const base = mkdtempSync(join(tmpdir(), 'pw-measure-rec-'));
+// sous ~/.cache (disque) : /tmp est en RAM, un arrêt brutal y laisserait la base de mesure
+mkdirSync(join(homedir(), '.cache'), { recursive: true });
+const base = mkdtempSync(join(homedir(), '.cache', 'pw-measure-rec-'));
 const fakeBin = join(base, 'bin');
 mkdirSync(fakeBin);
 writeFileSync(join(fakeBin, 'notify-send'), `#!/bin/sh\nif [ "$1" = "--help" ]; then echo '  -A, --action=[NAME=]Text'; exit 0; fi\nexit 0\n`);

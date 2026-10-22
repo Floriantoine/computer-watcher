@@ -18,7 +18,7 @@
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 const SETTLE_S = Number(process.env.MEASURE_SETTLE_S ?? 20);
@@ -130,7 +130,8 @@ const electronPath = createRequire(import.meta.url)('electron');
 /** KWin virtuel imbriqué ; renvoie le nom de son socket Wayland et de quoi l'arrêter. */
 async function startKwin(n) {
   const socket = `pw-measure-${process.pid}-${n}`;
-  const cfg = mkdtempSync(join(tmpdir(), 'pw-kwin-'));
+  mkdirSync(join(homedir(), '.cache'), { recursive: true });
+  const cfg = mkdtempSync(join(homedir(), '.cache', 'pw-kwin-'));
   const child = spawn('dbus-run-session', ['--', 'kwin_wayland', '--virtual', '--no-lockscreen', '--socket', socket, '--width', '1600', '--height', '1000'], {
     env: { ...process.env, XDG_CONFIG_HOME: cfg },
     stdio: 'ignore',
@@ -160,7 +161,9 @@ async function startKwin(n) {
 /** Lance une app (`dossier`, `dossier:reduced` pour « Effets visuels réduits », `dossier:pss` pour « Mémoire : PSS ») et se connecte à l'inspecteur de son main. */
 async function launch(spec, kwin) {
   const [dir, variant] = spec.split(':');
-  const cfg = mkdtempSync(join(tmpdir(), 'pw-measure-'));
+  // sous ~/.cache (disque) : /tmp est en RAM
+  mkdirSync(join(homedir(), '.cache'), { recursive: true });
+  const cfg = mkdtempSync(join(homedir(), '.cache', 'pw-measure-'));
   // Accueil déjà fait : pas d'assistant (fond flouté) par-dessus la page mesurée.
   mkdirSync(join(cfg, 'computer-watcher'), { recursive: true });
   writeFileSync(join(cfg, 'computer-watcher', 'onboarding.json'), '{"version":1,"done":true}\n');
