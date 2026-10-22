@@ -108,12 +108,16 @@ export interface EvalInput {
   classification: Classification | null;
   /**
    * (d) Mesures du tick : RAM utilisée en % (d'après MemAvailable), CPU total en % (toutes les cœurs = 100 %) et pression
-   * mémoire en % (PSI « full » avg10). null, absente ou non finie → la condition n'est jamais tenue (échec fermé).
+   * mémoire en %. null, absente ou non finie → la condition n'est jamais tenue (échec fermé).
    */
   system?: {
     memUsedPercent: number | null; cpuPercent: number | null;
-    /** /proc/pressure/memory « full avg10 » : part du temps où toutes les tâches attendaient la mémoire. */
-    psiFull10?: number | null;
+    /**
+     * Pression mémoire « full » avg10 : celle du bureau et des applis (`interactive` : la plus haute de session.slice,
+     * app.slice et des sessions de connexion), ou de toute la machine (`system`) faute de cgroups lisibles. Le travail
+     * freiné par son budget (cwatch.slice) n'y compte pas.
+     */
+    pressure?: { percent: number | null; scope: 'interactive' | 'system' } | null;
     /** MemTotal (Kio) et nombre de cœurs : seuils de contribution de la victime ; absents → seuil mémoire fixe, CPU jamais. */
     memTotalKB?: number | null; cpuCount?: number | null;
   } | null;
@@ -136,7 +140,7 @@ export type SkipReason = 'cooldown' | 'hourly-quota' | 'guard' | 'culprit-protec
 export type RuleDecision =
   | {
     ruleId: string; ruleName: string; mode: RuleMode; outcome: 'fire'; target: RuleTarget; condition: RuleCondition; revision: string;
-    /** (d) mesure qui a déclenché (« mémoire 97 % depuis 15 s », « pression mémoire 52 % depuis 20 s »), pour l'historique. */
+    /** (d) mesure qui a déclenché (« mémoire 97 % depuis 15 s », « pression mémoire du bureau et des applis 52 % depuis 20 s »). */
     trigger?: string;
   }
   | { ruleId: string; ruleName: string; mode: RuleMode; outcome: 'skip'; reason: SkipReason; target: RuleTarget | null };
@@ -353,21 +357,22 @@ export function memUsedPercent(s: { memTotalKB: number; memAvailableKB: number; 
 const pct = (v: number | null | undefined): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
 /**
- * (d) « mémoire 97 % depuis 15 s », « pression mémoire 52 % depuis 20 s » ou « CPU 99 % depuis 60 s » : la mesure tenue
- * (la mémoire d'abord, puis la pression, puis le CPU).
+ * (d) « mémoire 97 % depuis 15 s », « pression mémoire du bureau et des applis 52 % depuis 20 s » (« de la machine » en
+ * repli) ou « CPU 99 % depuis 60 s » : la mesure tenue (la mémoire d'abord, puis la pression, puis le CPU).
  */
 function systemTrigger(c: Extract<RuleCondition, { kind: 'system' }>, ruleId: string, input: EvalInput, state: RuleState, now: number): string | undefined {
   const held = (v: number | null, since: number | undefined, forSec: number | undefined) =>
     v !== null && since !== undefined && forSec !== undefined && now - since >= forSec * 1000;
   const mem = pct(input.system?.memUsedPercent);
-  const psi = pct(input.system?.psiFull10);
+  const psi = pct(input.system?.pressure?.percent);
+  const where = input.system?.pressure?.scope === 'system' ? 'de la machine' : 'du bureau et des applis';
   const cpu = pct(input.system?.cpuPercent);
   const memSince = state.systemMemSince.get(ruleId);
   const psiSince = state.systemPsiSince.get(ruleId);
   const cpuSince = state.systemCpuSince.get(ruleId);
   const sec = (since: number) => Math.round((now - since) / 1000);
   if (held(mem, memSince, c.memForSec)) return `mémoire ${Math.round(mem!)} % depuis ${sec(memSince!)} s`;
-  if (held(psi, psiSince, c.psiForSec)) return `pression mémoire ${Math.round(psi!)} % depuis ${sec(psiSince!)} s`;
+  if (held(psi, psiSince, c.psiForSec)) return `pression mémoire ${where} ${Math.round(psi!)} % depuis ${sec(psiSince!)} s`;
   if (held(cpu, cpuSince, c.cpuForSec)) return `CPU ${Math.round(cpu!)} % depuis ${sec(cpuSince!)} s`;
   return undefined;
 }
@@ -500,9 +505,10 @@ function candidatesFor(rule: Rule, input: EvalInput, groups: readonly Group[], s
       };
       const memHeld = track(state.systemMemSince, pct(input.system?.memUsedPercent), c.memPercent, c.memForSec);
       const cpuHeld = track(state.systemCpuSince, pct(input.system?.cpuPercent), c.cpuPercent, c.cpuForSec);
-      // pression mémoire (PSI full) : seulement si la condition en a une (une condition d'avant la pression n'en tient pas compte)
+      // pression mémoire du bureau et des applis : seulement si la condition en a une (une condition d'avant la pression n'en
+      // tient pas compte)
       const psiHeld = c.psiPercent !== undefined && c.psiForSec !== undefined
-        ? track(state.systemPsiSince, pct(input.system?.psiFull10), c.psiPercent, c.psiForSec)
+        ? track(state.systemPsiSince, pct(input.system?.pressure?.percent), c.psiPercent, c.psiForSec)
         : (state.systemPsiSince.delete(rule.id), false);
       // processus vivants (pid + startTicks) : victime précédente encore là ?
       const alive = new Set<string>();

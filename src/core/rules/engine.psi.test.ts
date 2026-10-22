@@ -1,6 +1,6 @@
-// Condition système (anti-gel) sur la pression mémoire (PSI « full » avg10) : le gel du 2026-10-22 rejoué (mémoire utilisée
-// sous 95 %, pression 55 % tenue), une vérification à la fois, jamais Claude ni ses serveurs MCP, conditions d'avant la
-// pression muettes.
+// Condition système (anti-gel) sur la pression mémoire du bureau et des applis (PSI « full » avg10 des cgroups interactifs,
+// repli sur la machine) : le gel du 2026-10-22 rejoué (mémoire utilisée sous 95 %, pression 55 % tenue), une vérification à
+// la fois, jamais Claude ni ses serveurs MCP, conditions d'avant la pression muettes.
 import { describe, expect, test } from 'vitest';
 import { group, node, proc } from '../classify/testFixtures';
 import type { Group, GroupKind, ProcInfo, ProcNode } from '../types';
@@ -71,9 +71,9 @@ function world(dead: ReadonlySet<number> = new Set()) {
 
 const antigel = (over: Partial<Rule> = {}): Rule => ({ ...RECOMMENDED_RULES.find((r) => r.id === REC_ANTIGEL_ID)!, ...over });
 
-/** Mémoire utilisée 90 % (sous le seuil de 95 % : comme pendant le gel), CPU 30 % sur 16 cœurs, PSI full `psi`. */
-const sys = (psi: number | null | undefined, mem = 90, cpu = 30): EvalInput['system'] => ({
-  memUsedPercent: mem, cpuPercent: cpu, memTotalKB: 32 * GB, cpuCount: 16, ...(psi === undefined ? {} : { psiFull10: psi }),
+/** Mémoire utilisée 90 % (sous le seuil de 95 % : comme pendant le gel), CPU 30 % sur 16 cœurs, pression du bureau et des applis `psi`. */
+const sys = (psi: number | null | undefined, mem = 90, cpu = 30, scope: 'interactive' | 'system' = 'interactive'): EvalInput['system'] => ({
+  memUsedPercent: mem, cpuPercent: cpu, memTotalKB: 32 * GB, cpuCount: 16, ...(psi === undefined ? {} : { pressure: { percent: psi, scope } }),
 });
 
 function input(over: Partial<EvalInput>): EvalInput {
@@ -104,7 +104,7 @@ describe('pression mémoire : le gel rejoué', () => {
     const d = step(st, 80 * SEC, 55, dead);
     expect(victim(d)).toEqual([JEST]);
     const f = fires(d)[0]!;
-    expect(f).toMatchObject({ ruleId: REC_ANTIGEL_ID, mode: 'active', trigger: 'pression mémoire 55 % depuis 20 s' });
+    expect(f).toMatchObject({ ruleId: REC_ANTIGEL_ID, mode: 'active', trigger: 'pression mémoire du bureau et des applis 55 % depuis 20 s' });
     expect(f.target).toMatchObject({ label: 'jest (demo)', memKB: 7 * GB, verification: true });
     // 25 s tenus, jest toujours vivant : rien (une victime à la fois)
     expect(step(st, 85 * SEC, 55, dead)).toEqual([]);
@@ -113,7 +113,7 @@ describe('pression mémoire : le gel rejoué', () => {
     JEST.forEach((p) => dead.add(p));
     const d2 = step(st, 100 * SEC, 60, dead);
     expect(victim(d2)).toEqual([VITEST]);
-    expect(fires(d2)[0]!.trigger).toBe('pression mémoire 60 % depuis 40 s');
+    expect(fires(d2)[0]!.trigger).toBe('pression mémoire du bureau et des applis 60 % depuis 40 s');
     VITEST.forEach((p) => dead.add(p));
     // la pression retombe : plus rien, même si le vitest de Claude tourne encore
     for (let t = 105 * SEC; t < 10 * 60 * SEC; t += 5 * SEC) expect(step(st, t, 3, dead)).toEqual([]);
@@ -141,6 +141,18 @@ describe('pression mémoire : le gel rejoué', () => {
       for (let t = 0; t <= 5 * 60 * SEC; t += 5 * SEC) expect(step(st, t, psi)).toEqual([]);
       expect(st.systemPsiSince.size).toBe(0);
     }
+    const st = emptyRuleState();
+    const w = world();
+    for (let t = 0; t <= 60 * SEC; t += 5 * SEC) {
+      expect(evaluateRules(input({ now: t, ...w, system: { memUsedPercent: 90, cpuPercent: 30, memTotalKB: 32 * GB, cpuCount: 16, pressure: null } }), st)).toEqual([]);
+    }
+  });
+
+  test('repli sur la pression de la machine (cgroups illisibles) : même tenue, déclencheur qui le dit', () => {
+    const st = emptyRuleState();
+    const at = (t: number) => evaluateRules(input({ now: t, ...world(), system: sys(55, 90, 30, 'system') }), st);
+    for (let t = 0; t < 20 * SEC; t += 5 * SEC) expect(at(t)).toEqual([]);
+    expect(fires(at(20 * SEC))[0]!.trigger).toBe('pression mémoire de la machine 55 % depuis 20 s');
   });
 
   test('déclencheur : la mémoire d’abord, puis la pression, puis le CPU', () => {
@@ -153,7 +165,7 @@ describe('pression mémoire : le gel rejoué', () => {
     const at2 = (t: number, psi: number) => evaluateRules(input({ now: t, ...world(), system: sys(psi, 50, 99) }), st2);
     for (let t = 0; t < 40 * SEC; t += 5 * SEC) expect(at2(t, 10)).toEqual([]);
     for (let t = 40 * SEC; t < 60 * SEC; t += 5 * SEC) expect(at2(t, 70)).toEqual([]);
-    expect(fires(at2(60 * SEC, 70))[0]!.trigger).toBe('pression mémoire 70 % depuis 20 s');
+    expect(fires(at2(60 * SEC, 70))[0]!.trigger).toBe('pression mémoire du bureau et des applis 70 % depuis 20 s');
   });
 });
 
@@ -220,7 +232,7 @@ describe('pression mémoire : compatibilité et état', () => {
     const rules = [antigel({ mode: 'simulate' })];
     step(st, 0, 50, new Set(), { rules });
     const d = step(st, 20 * SEC, 50, new Set(), { rules });
-    expect(fires(d)).toEqual([expect.objectContaining({ mode: 'simulate', trigger: 'pression mémoire 50 % depuis 20 s' })]);
+    expect(fires(d)).toEqual([expect.objectContaining({ mode: 'simulate', trigger: 'pression mémoire du bureau et des applis 50 % depuis 20 s' })]);
     expect(st.systemPending.size).toBe(0);
   });
 
