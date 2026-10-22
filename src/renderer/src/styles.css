@@ -1151,9 +1151,23 @@ button.primary:hover:not(:disabled) { background: rgba(124, 92, 255, 0.32); bord
 .tmp-page-list .tmp-clean li { display: flex; gap: 8px; padding: 4px 6px; border-radius: var(--r-sm); }
 .tmp-page-list .tmp-clean > ul > li:hover { background: rgba(255, 255, 255, 0.03); }
 .tmp-page-list .tmp-clean-summary li { padding: 1px 0; }
+/* Caches connus (Jest, Node.js…) : vidés en un clic */
+.tmp-caches > .sub { color: var(--label); font-size: 11.5px; margin: -2px 0 6px; }
+.tmp-caches ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.tmp-caches li { display: flex; align-items: center; gap: 10px; padding: 4px 6px; border-radius: var(--r-sm); font-size: 12px; }
+.tmp-caches li:hover { background: rgba(255, 255, 255, 0.03); }
+.tmp-caches .tmp-cache-label { flex: none; color: var(--text); }
+.tmp-caches li.refused .tmp-cache-label { color: var(--text-2); }
+.tmp-caches .path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--label); font-size: 11.5px; }
+.tmp-caches .tmp-why { flex: none; max-width: 40%; font-size: 11px; color: var(--amber); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tmp-caches .size { flex: none; min-width: 64px; text-align: right; font-variant-numeric: tabular-nums; }
+.tmp-caches button { flex: none; display: inline-flex; align-items: center; gap: 5px; width: auto; padding: 3px 9px; font-size: 11px; font-weight: 600; }
+.tmp-caches button:disabled { opacity: 0.45; cursor: not-allowed; }
+.tmp-caches .note { margin-top: 6px; color: var(--label); font-size: 11px; font-style: italic; }
 @media (max-width: 720px) {
   .tmp-tiles { grid-template-columns: minmax(0, 1fr); }
   .tmp-page .page-head .sub { display: none; }
+  .tmp-caches .tmp-cache-label { display: none; }
 }
 
 /* Métriques : petit graphe « Espace libre » en cinquième position */

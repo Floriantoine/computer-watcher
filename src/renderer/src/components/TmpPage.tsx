@@ -4,6 +4,7 @@ import { APP_DISPLAY_NAME } from '../../../core/appName';
 import type { TmpFsStats } from '../../../core/types';
 import { DEFAULT_TMP_SORT, tmpTiles, type TmpSort, type TmpTile } from '../tmpClean';
 import { ipcErrorMessage } from '../viewModel';
+import { TmpCachesPanel, useTmpCaches } from './TmpCachesPanel';
 import { TmpCleanList, useTmpClean } from './TmpCleanList';
 
 interface Props {
@@ -82,7 +83,20 @@ export function TmpPage({ onToast }: Props) {
     );
   }, []);
   useEffect(() => loadStats(), [loadStats]);
-  const clean = useTmpClean(onToast, loadStats);
+  // caches connus relus après « Actualiser » et après chaque suppression de la liste ; la liste, après chaque vidage
+  const [cachesKey, setCachesKey] = useState(0);
+  const clean = useTmpClean(onToast, () => {
+    loadStats();
+    setCachesKey((k) => k + 1);
+  });
+  const caches = useTmpCaches(
+    onToast,
+    () => {
+      loadStats();
+      clean.load();
+    },
+    cachesKey,
+  );
   const tiles = tmpTiles({ stats, statsError, listing: clean.listing, listingError: clean.error });
   const root = clean.listing?.root ?? stats?.root ?? '/tmp';
 
@@ -104,12 +118,14 @@ export function TmpPage({ onToast }: Props) {
           onClick={() => {
             loadStats();
             clean.load();
+            setCachesKey((k) => k + 1);
           }}
         >
           <RefreshCw size={13} strokeWidth={2} /> Actualiser
         </button>
       </div>
       <TmpTiles tiles={tiles} busy={clean.busy} onEmptyQuarantine={() => void clean.emptyQuarantine()} />
+      <TmpCachesPanel state={caches} disabled={clean.busy} />
       <section className="chart-panel tmp-page-list">
         <div className="chart-panel-head">
           <h3>Éléments de premier niveau</h3>
