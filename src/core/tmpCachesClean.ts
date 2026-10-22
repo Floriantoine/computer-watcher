@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import { APP_DISPLAY_NAME } from './appName';
 import { parseMountinfo } from './mountinfo';
 import { TMP_CACHE_IDS, tmpCacheName, type TmpCache, type TmpCacheId, type TmpCacheResult, type TmpCaches, type TmpCachesOutcome } from './tmpCaches';
+import { isTrashName, systemEntry } from './tmpClean';
 
 /** Sous-ensemble de fs/promises utilisé (le main et le service passent celui d'`original-fs` : aucune réécriture .asar). */
 export interface CachesFs {
@@ -88,7 +89,9 @@ async function inspect(id: TmpCacheId, c: Ctx): Promise<{ name: string; path: st
     return code(e) === 'ENOENT' ? null : { name, path, mode: 0, refusal: `illisible (${code(e)})` };
   }
   const refusal =
-    c.uid === 0 ? `refusé : ${APP_DISPLAY_NAME} tourne en root`
+    // défense en profondeur : jamais un nom de la liste système de /tmp (claude-*, ssh-*…) ni une quarantaine
+    systemEntry(name) || isTrashName(name) ? 'système'
+    : c.uid === 0 ? `refusé : ${APP_DISPLAY_NAME} tourne en root`
     : c.mounts === null ? NO_MOUNTS
     : st.isSymbolicLink() ? 'lien symbolique (jamais suivi)'
     : !st.isDirectory() ? 'pas un dossier'

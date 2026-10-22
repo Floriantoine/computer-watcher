@@ -164,3 +164,14 @@ describe('emptyTmpCaches', () => {
     expect(r2.results[0]).toMatchObject({ ok: true });
   });
 });
+
+test('défense en profondeur : aucun nom figé n’est dans la liste système de /tmp (claude-*, ssh-*, .X11-unix…) ni une quarantaine', async () => {
+  const { systemEntry, isTrashName } = await import('./tmpClean');
+  const { TMP_CACHE_IDS } = await import('./tmpCaches');
+  for (const uid of [0, 1, 1000, 1001, 65534, 4294967294]) {
+    for (const id of TMP_CACHE_IDS) {
+      const name = tmpCacheName(id, uid);
+      expect(systemEntry(name) || isTrashName(name) || name.includes('/') || name.startsWith('.'), name).toBe(false);
+    }
+  }
+});
