@@ -50,26 +50,29 @@ export function DeskRootRow({ disabled }: { disabled?: boolean }) {
   const { busy, message, run } = useDeskRootAction();
   if (!st) return null;
   const s = deskRootSummary(st);
+  // état et message sous la ligne, sur toute la largeur ; boutons seuls à droite du libellé
   return (
     <Row label="Protection mémoire système"
-      help="Le noyau ne protège la mémoire d’un groupe de processus que si chaque niveau au-dessus l’est aussi ; les niveaux système de la session (user.slice, user-<uid>.slice, user@<uid>.service) ne le sont pas par défaut. « Activer » y pose la réserve du bureau (MemoryLow) par trois petits fichiers dans /etc/systemd/system, avec le mot de passe administrateur ; « Retirer » les supprime.">
-      {() => (
+      help="Le noyau ne protège la mémoire d’un groupe de processus que si chaque niveau au-dessus l’est aussi ; les niveaux système de la session (user.slice, user-<uid>.slice, user@<uid>.service) ne le sont pas par défaut. « Activer » y pose la réserve du bureau (MemoryLow) par trois petits fichiers dans /etc/systemd/system, avec le mot de passe administrateur ; « Retirer » les supprime."
+      note={
         <div className="desk-root" data-testid="desk-root">
           <p className={`sub desk-root-summary tone-${s.tone}`} data-testid="desk-root-summary">{s.text}</p>
-          <span className="desk-root-actions">
-            {s.action && (
-              <button type="button" className="primary" data-testid="desk-root-apply" disabled={busy || disabled} onClick={() => run('install')}>
-                <ShieldCheck size={13} strokeWidth={2} /> {label(s.action)}
-              </button>
-            )}
-            {s.canRemove && (
-              <button type="button" data-testid="desk-root-remove" disabled={busy} onClick={() => run('remove')}>
-                <Trash2 size={13} strokeWidth={2} /> Retirer
-              </button>
-            )}
-          </span>
           {message && <p className={message.error ? 'field-error' : 'sub'} data-testid="desk-root-message">{message.text}</p>}
         </div>
+      }>
+      {() => (
+        <span className="desk-root-actions">
+          {s.action && (
+            <button type="button" className="primary" data-testid="desk-root-apply" disabled={busy || disabled} onClick={() => run('install')}>
+              <ShieldCheck size={13} strokeWidth={2} /> {label(s.action)}
+            </button>
+          )}
+          {s.canRemove && (
+            <button type="button" data-testid="desk-root-remove" disabled={busy} onClick={() => run('remove')}>
+              <Trash2 size={13} strokeWidth={2} /> Retirer
+            </button>
+          )}
+        </span>
       )}
     </Row>
   );

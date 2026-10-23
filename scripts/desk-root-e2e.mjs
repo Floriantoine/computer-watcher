@@ -5,7 +5,7 @@
 // script). PROC_WATCH_DESK_ROOT_FAKE (hors paquet seulement) : /etc/systemd/system, systemctl et /sys/fs/cgroup remplacés par
 // des fichiers du dossier temporaire ; le VRAI script root est lancé par /usr/bin/bash, JAMAIS pkexec. Le faux systemctl, sur
 // daemon-reload, recopie la valeur des drop-ins dans le faux memory.low (comme systemd). La boîte de confirmation native est
-// remplacée, dans le main, par une réponse enregistrée.
+// remplacée, dans le main, par une réponse enregistrée. Captures seulement si DESK_ROOT_SHOTS désigne un dossier (hors du dépôt).
 import assert from 'node:assert/strict';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, totalmem } from 'node:os';
@@ -119,6 +119,22 @@ ${levels.map((l) => `printf '%s\\n' "$v" > "$D/cgroup/${l}/memory.low"`).join('\
     };
   });
   const confirms = () => app.evaluate(() => globalThis.__drConfirms);
+  const shots = process.env.DESK_ROOT_SHOTS;
+  if (shots) mkdirSync(shots, { recursive: true });
+  const shot = async (name, el) => { if (shots) await el.screenshot({ path: join(shots, `${name}.png`) }); };
+  /** Ligne lisible : résumé sans fond de jauge, libellé ni écrasé ni recouvert par le résumé ou les boutons. */
+  const assertRowLayout = async (what) => {
+    const row = win.locator('.s-row', { has: win.locator('[data-testid="desk-root-summary"]') });
+    const box = async (loc) => (await loc.count() ? loc.boundingBox() : null);
+    const label = await box(row.locator('.s-label'));
+    const parts = (await Promise.all(['[data-testid="desk-root-summary"]', '[data-testid="desk-root-apply"]', '[data-testid="desk-root-remove"]']
+      .map((s) => box(row.locator(s))))).filter(Boolean);
+    const overlap = (a, b) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+    assert.ok(label.width >= 120, `${what} : libellé écrasé (${Math.round(label.width)} px)`);
+    for (const p of parts) assert.ok(!overlap(label, p), `${what} : le libellé chevauche ${JSON.stringify(p)}`);
+    const bg = await row.locator('[data-testid="desk-root-summary"]').evaluate((el) => getComputedStyle(el).backgroundImage);
+    assert.equal(bg, 'none', `${what} : fond du résumé`);
+  };
 
   // 1) Métriques : ligne « sans effet ici » avec l'invitation, bouton « Activer » ; annulé → rien d'écrit
   await press(win.locator('[data-testid="tab-metrics"]'));
@@ -148,6 +164,8 @@ ${levels.map((l) => `printf '%s\\n' "$v" > "$D/cgroup/${l}/memory.low"`).join('\
   await summary.waitFor({ timeout: 10000 });
   assert.match(await summary.innerText(), new RegExp(`^Non activée : user\\.slice, user-${uid}\\.slice et user@${uid}\\.service n’ont aucune protection mémoire.*« Activer » y pose ${mb} Mo \\(réserve du bureau\\)\\. \\(simulé\\)$`));
   assert.equal(await win.locator('[data-testid="desk-root-remove"]').count(), 0);
+  await shot('desk-root-absent', win.locator('[data-testid="antigel-settings"]'));
+  await assertRowLayout('« Non activée »');
   await app.evaluate(() => { globalThis.__drAnswer = 1; });
   await press(win.locator('[data-testid="desk-root-apply"]'));
   await waitFor(async () => /^Active : /.test(await summary.innerText()), 'résumé « Active »');
@@ -161,6 +179,8 @@ ${levels.map((l) => `printf '%s\\n' "$v" > "$D/cgroup/${l}/memory.low"`).join('\
   assert.equal(log(), 'daemon-reload\n');
   for (const l of levels) assert.equal(readFileSync(join(fake, 'cgroup', l, 'memory.low'), 'utf8'), `${mb * MiB}\n`);
   assert.equal(await win.locator('[data-testid="desk-root-apply"]').count(), 0, 'plus rien à activer');
+  await shot('desk-root-active', win.locator('[data-testid="antigel-settings"]'));
+  await assertRowLayout('« Active »');
   // ligne du bureau prioritaire dans Réglages
   await waitFor(async () => /protection mémoire système active, prise en compte par le service sous 5 min/.test(await win.locator('[data-testid="antigel-desk-status"]').innerText()), 'ligne Réglages « active »');
 

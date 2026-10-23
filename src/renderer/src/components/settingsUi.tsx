@@ -24,15 +24,23 @@ export function Card({ title, icon, children, danger, testid, className }: {
 
 /**
  * Ligne de formulaire : libellé à gauche, contrôle aligné à droite (unité après le champ), aide et erreur dessous.
- * `children` reçoit l'id à poser sur le contrôle (lien avec le libellé).
+ * `children` reçoit l'id à poser sur le contrôle (lien avec le libellé). `note` : texte d'état sur toute la largeur, entre
+ * le contrôle et l'aide (un long texte dans le contrôle écraserait le libellé).
  */
-export function Row({ label, help, error, children }: { label: ReactNode; help?: ReactNode; error?: string | null; children: (id: string) => ReactNode }) {
+export function Row({ label, help, error, note, children }: {
+  label: ReactNode;
+  help?: ReactNode;
+  error?: string | null;
+  note?: ReactNode;
+  children: (id: string) => ReactNode;
+}) {
   const id = useId();
   return (
     <div className="s-row">
       <label className="s-label" htmlFor={id}>{label}</label>
       <div className="s-ctl">{children(id)}</div>
       {error && <span className="field-error s-error">{error}</span>}
+      {note && <div className="s-note">{note}</div>}
       {help && <p className="s-help">{help}</p>}
     </div>
   );

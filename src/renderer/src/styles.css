@@ -122,11 +122,12 @@ select option { background: var(--surface-solid); color: var(--text); }
 /* ---------- Jauges ---------- */
 .bar { height: 5px; border-radius: 99px; background: var(--track); overflow: hidden; }
 .bar i { display: block; height: 100%; border-radius: 99px; transition: width 0.4s var(--ease-out); }
-.tone-mem { background: var(--g-mem); }
-.tone-swap { background: var(--g-swap); }
-.tone-psi { background: var(--g-psi); }
-.tone-warn { background: var(--g-warn); }
-.tone-bad { background: var(--g-bad); }
+/* remplissages réservés aux jauges : un texte ou une carte « tone-warn » ailleurs garde son fond */
+.bar i.tone-mem { background: var(--g-mem); }
+.bar i.tone-swap { background: var(--g-swap); }
+.bar i.tone-psi { background: var(--g-psi); }
+.bar i.tone-warn { background: var(--g-warn); }
+.bar i.tone-bad { background: var(--g-bad); }
 
 /* ---------- Barre système ---------- */
 .system-bar {
@@ -996,8 +997,9 @@ table.tree .pss-denied { text-decoration: underline dotted var(--muted); text-un
 .settings .hint.s-card-note { margin: 8px 0 0; font-size: 11.5px; }
 .settings .hint.s-auto { margin: 10px 0 0; font-size: 11.5px; }
 
-/* Ligne de formulaire : libellé à gauche, contrôle à droite, aide dessous */
-.s-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 14px; row-gap: 2px; align-items: center; padding: 8px 0; }
+/* Ligne de formulaire : libellé à gauche, contrôle à droite, aide dessous ; le libellé garde une largeur minimale même si
+   le contrôle est large (sinon sa colonne tombe à 0 et le contrôle le recouvre) */
+.s-row { display: grid; grid-template-columns: minmax(min(9rem, 40%), 1fr) auto; column-gap: 14px; row-gap: 2px; align-items: center; padding: 8px 0; }
 .s-row + .s-row { border-top: 1px solid var(--border); }
 .settings .s-row .s-label { display: block; color: var(--text-2); min-width: 0; }
 .s-ctl { justify-self: end; display: flex; align-items: center; gap: 6px; }
@@ -1005,6 +1007,7 @@ table.tree .pss-denied { text-decoration: underline dotted var(--muted); text-un
 .s-ctl input[aria-invalid='true'] { border-color: rgba(255, 92, 138, 0.6); }
 .s-unit { width: 26px; color: var(--muted); font-size: 12px; }
 .s-row .s-error { grid-column: 1 / -1; justify-self: end; }
+.s-note { grid-column: 1 / -1; min-width: 0; margin: 2px 0; }
 .s-help { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 11.5px; }
 
 .s-add { display: flex; gap: 8px; margin-top: 12px; }
