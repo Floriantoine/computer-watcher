@@ -99,6 +99,8 @@ export interface FullSnapshot {
   memMetric?: MemoryMetric;
   /** Ports lus dans les fd des processus de l'utilisateur (tous, en mode « ports ») et sockets en écoute de /proc/net. */
   listen?: { byPid: ReadonlyMap<number, number[]>; sockets: readonly ListenSocket[]; tooBig?: number };
+  /** PID du service d'enregistrement s'il mesure (voir historyIpc.servicePid). */
+  recorderPid?: number | null;
 }
 
 /** Le renderer a besoin des ports de tous les processus : panneau « Ports ouverts » ou recherche `:port`. */
@@ -137,6 +139,7 @@ export function buildSnapshot(full: FullSnapshot, watch: Watch): Snapshot {
     detail: followed ? { groupId: followed.id, roots: followed.roots } : null,
     memMetric: full.memMetric ?? 'rss',
     openPorts: ports,
+    recorderPid: full.recorderPid ?? null,
   };
 }
 

@@ -6,7 +6,7 @@ import { memLabel, procMemTitle } from '../memMetric';
 import { Sparkline } from './charts/Sparkline';
 import { procRowDisplayEqual, sameSeries } from '../renderEquality';
 import { allExpandableKeys, branchTotals, nodeKey, type BranchTotal } from '../tree';
-import { ForceButton, KillButton } from './ui';
+import { ForceButton, KillButton, RestartButton } from './ui';
 
 const DAY = 86400;
 const COLLAPSE_ABOVE = 20;
@@ -26,12 +26,17 @@ interface Props {
   onForce: (pid: number) => void;
   /** Mémoire affichée : en PSS, un processus illisible garde son RSS (infobulle « RSS (PSS illisible) »). */
   memMetric?: MemoryMetric;
+  /** PID du service d'enregistrement (null s'il ne mesure pas) : « Redémarrer le service » sur sa ligne. */
+  servicePid?: number | null;
+  restartingService?: boolean;
+  onRestartService?: () => void;
 }
 
 interface RowActions {
   toggle: (key: string) => void;
   kill: (node: ProcNode) => void;
   force: (pid: number) => void;
+  restart: () => void;
 }
 
 interface RowProps {
@@ -44,10 +49,13 @@ interface RowProps {
   pending: boolean;
   canKill: boolean;
   memMetric: MemoryMetric;
+  /** Processus du service d'enregistrement : bouton « Redémarrer le service » à côté du kill. */
+  service: boolean;
+  restarting: boolean;
   actions: RowActions;
 }
 
-function ProcRowImpl({ node: n, depth, open, total, spark: values, stuck, pending, canKill, memMetric, actions }: RowProps) {
+function ProcRowImpl({ node: n, depth, open, total, spark: values, stuck, pending, canKill, memMetric, service, restarting, actions }: RowProps) {
   const memTitle = procMemTitle(n.proc, memMetric);
   const p = n.proc;
   const key = nodeKey(n);
@@ -76,11 +84,14 @@ function ProcRowImpl({ node: n, depth, open, total, spark: values, stuck, pendin
       <td className="num mono">{formatKB(p.swapKB)}</td>
       <td className={`num mono ${p.ageSec > DAY ? 'old' : ''}`}>{formatAge(p.ageSec)}</td>
       <td className="act">
-        {stuck ? (
-          <ForceButton onClick={() => actions.force(p.pid)} />
-        ) : (
-          <KillButton size="sm" pending={pending} disabled={!canKill} onClick={() => actions.kill(n)} />
-        )}
+        <span className="foot-actions">
+          {service && <RestartButton size="sm" pending={restarting} onClick={actions.restart} />}
+          {stuck ? (
+            <ForceButton onClick={() => actions.force(p.pid)} />
+          ) : (
+            <KillButton size="sm" pending={pending} disabled={!canKill} onClick={() => actions.kill(n)} />
+          )}
+        </span>
       </td>
     </tr>
   );
@@ -100,13 +111,15 @@ const ProcRow = memo(
     a.pending === b.pending &&
     a.canKill === b.canKill &&
     a.memMetric === b.memMetric &&
+    a.service === b.service &&
+    a.restarting === b.restarting &&
     (a.node.children.length > 0) === (b.node.children.length > 0) &&
     sameTotal(a.total, b.total) &&
     sameSeries(a.spark, b.spark) &&
     procRowDisplayEqual(a.node.proc, b.node.proc),
 );
 
-export function ProcTree({ roots, stuckPids, pendingPids, currentUid, sparkOf, onKill, onForce, memMetric = 'rss' }: Props) {
+export function ProcTree({ roots, stuckPids, pendingPids, currentUid, sparkOf, onKill, onForce, memMetric = 'rss', servicePid = null, restartingService = false, onRestartService }: Props) {
   const [expanded, setExpanded] = useState<Set<string>>(() =>
     count(roots) > COLLAPSE_ABOVE ? new Set() : new Set(allExpandableKeys(roots)),
   );
@@ -120,10 +133,10 @@ export function ProcTree({ roots, stuckPids, pendingPids, currentUid, sparkOf, o
       }),
     [],
   );
-  const latest = useRef({ onKill, onForce });
-  latest.current = { onKill, onForce };
+  const latest = useRef({ onKill, onForce, onRestartService });
+  latest.current = { onKill, onForce, onRestartService };
   const actions = useMemo<RowActions>(
-    () => ({ toggle, kill: (n) => latest.current.onKill(n), force: (pid) => latest.current.onForce(pid) }),
+    () => ({ toggle, kill: (n) => latest.current.onKill(n), force: (pid) => latest.current.onForce(pid), restart: () => latest.current.onRestartService?.() }),
     [toggle],
   );
   const totals = useMemo(() => branchTotals(roots), [roots]);
@@ -152,6 +165,8 @@ export function ProcTree({ roots, stuckPids, pendingPids, currentUid, sparkOf, o
           pending={pendingPids.has(n.proc.pid)}
           canKill={n.proc.uid === currentUid}
           memMetric={memMetric}
+          service={servicePid !== null && n.proc.pid === servicePid}
+          restarting={restartingService}
           actions={actions}
         />,
       );

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { DEFAULT_CONFIG } from '../core/config';
 import type { RecorderStatus } from '../core/types';
-import { swapSettingsChanged, applyOverride, checkConfigSet, noKill, clampToDetail, classifySetKey, isGroupKeys, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState } from './historyIpc';
+import { swapSettingsChanged, applyOverride, checkConfigSet, noKill, clampToDetail, classifySetKey, isGroupKeys, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState, restartConfirmed, servicePid } from './historyIpc';
 
 test('isRange : préréglages et plages valides uniquement', () => {
   for (const ok of ['1h', '6h', '24h', '7d', '30d', { from: 0, to: 10 }]) expect(isRange(ok)).toBe(true);
@@ -18,6 +18,24 @@ test('recorderState : running selon lastSampleAt (3 intervalles + 2 s)', () => {
   expect(recorderState({ ...base, status: status(100_000 - 17_000) }).running).toBe(false);
   const s = status(99_000);
   expect(recorderState({ ...base, available: false, enabled: false, status: s })).toEqual({ available: false, enabled: false, running: true, status: s });
+});
+
+test('servicePid : PID du service seulement tant que son statut est frais', () => {
+  expect(servicePid(recorderState({ ...base, status: status(99_000) }))).toBe(1);
+  expect(servicePid(recorderState({ ...base, status: status(100_000 - 17_000) }))).toBeNull();
+  expect(servicePid(recorderState({ ...base, status: status(null) }))).toBeNull();
+  expect(servicePid(recorderState({ ...base, status: null }))).toBeNull();
+});
+
+test('restartConfirmed : un processus démarré après la demande, qui a déjà mesuré', () => {
+  const st = (startedAt: number, lastSampleAt: number | null): RecorderStatus => ({ ...status(lastSampleAt), pid: 2, startedAt });
+  expect(restartConfirmed(null, 1000)).toBe(false);
+  // l'ancien processus écrit encore son statut (relance pas encore faite, ou systemctl en échec)
+  expect(restartConfirmed(st(999, 5000), 1000)).toBe(false);
+  // le nouveau n'a pas encore mesuré
+  expect(restartConfirmed(st(1000, null), 1000)).toBe(false);
+  expect(restartConfirmed(st(1000, 1000), 1000)).toBe(true);
+  expect(restartConfirmed(st(1200, 1500), 1000)).toBe(true);
 });
 
 test('isTopOptions : absent, ou limit / peakLimit entiers 1..50', () => {

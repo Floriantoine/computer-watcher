@@ -125,6 +125,8 @@ export interface Snapshot {
   memMetric: MemoryMetric;
   /** Ports ouverts : non nul seulement si `Watch.ports` ou une recherche de port (`:3000`). */
   openPorts: OpenPortsInfo | null;
+  /** PID du service d'enregistrement tant qu'il mesure (statut frais) : bouton « Redémarrer le service » ; null sinon. */
+  recorderPid: number | null;
 }
 
 export interface RecorderConfig {
@@ -291,6 +293,8 @@ export interface RecorderState {
   running: boolean; // statut écrit il y a moins de 3 intervalles
   status: RecorderStatus | null;
 }
+/** Bouton « Redémarrer le service » : ok seulement quand le nouveau processus a mesuré. */
+export interface RecorderRestartResult { ok: boolean; message: string }
 export interface RecorderStatus { pid: number; startedAt: number; lastSampleAt: number | null; lastError: string | null; earlyoomSource: 'ok' | 'unavailable'; dbSizeBytes: number; /** Avertissement non bloquant (ex. migration faite sans copie de sécurité) */ warning?: string | null; jobErrors?: Partial<Record<'tick' | 'minute' | 'earlyoom' | 'rules' | 'antigel', string | null>>; /** Prévision ② : en préparation (moins de 6 min depuis le démarrage), calculée, ou indisponible (moins de 5 échantillons sur 5 min) */ forecast?: 'warming' | 'ok' | 'unavailable' }
 
 /** État d'earlyoom vu par l'app (Réglages › earlyoom). */

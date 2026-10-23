@@ -12,7 +12,7 @@ import { barWidth } from '../motionBudget';
 import { cardDisplayEqual, sameSeries } from '../renderEquality';
 import { cardTone } from '../theme';
 import { Sparkline } from './charts/Sparkline';
-import { AnimatedNumber, ForceButton, GroupIcon, KillButton, LeakBadge } from './ui';
+import { AnimatedNumber, ForceButton, GroupIcon, KillButton, LeakBadge, RestartButton } from './ui';
 
 const DAY = 86400;
 
@@ -24,6 +24,8 @@ export interface GroupActions {
   leak: (id: string) => void;
   /** Déplie / replie la carte (et la ligne) « Autres ». */
   toggleOthers: (open: boolean) => void;
+  /** « Redémarrer le service » d'enregistrement (carte ou ligne qui contient son processus). */
+  restartService: () => void;
 }
 
 interface Props {
@@ -42,6 +44,10 @@ interface Props {
   othersOpen?: boolean;
   /** Mémoire affichée (libellé de l'infobulle du total). */
   memMetric?: MemoryMetric;
+  /** Contient le processus du service d'enregistrement : bouton « Redémarrer le service » à côté du kill. */
+  service?: boolean;
+  /** Redémarrage du service en cours (bouton désactivé, icône qui tourne). */
+  restarting?: boolean;
   ref?: Ref<HTMLDivElement>;
 }
 
@@ -81,7 +87,7 @@ function OthersPreview({ group, onOpen }: { group: Group; onOpen: (id: string) =
   );
 }
 
-function GroupCardImpl({ group, memTotalKB, spark, stuck, pending, leak, antigel, layoutKey, actions, othersOpen = false, memMetric = 'rss', ref }: Props) {
+function GroupCardImpl({ group, memTotalKB, spark, stuck, pending, leak, antigel, layoutKey, actions, othersOpen = false, memMetric = 'rss', service = false, restarting = false, ref }: Props) {
   const isPresent = useIsPresent();
   const total = group.rssKB + group.swapKB;
   const pct = Math.min(100, (total / memTotalKB) * 100);
@@ -152,10 +158,15 @@ function GroupCardImpl({ group, memTotalKB, spark, stuck, pending, leak, antigel
         </span>
         {group.kind === 'others' ? (
           <OthersToggle open={othersOpen} onToggle={stop(() => actions.toggleOthers(!othersOpen))} />
-        ) : stuck ? (
-          <ForceButton onClick={stop(() => actions.force(group.id))} />
         ) : (
-          <KillButton pending={pending} disabled={!group.killable} onClick={stop(() => actions.kill(group.id))} />
+          <span className="foot-actions">
+            {service && <RestartButton pending={restarting} onClick={stop(actions.restartService)} />}
+            {stuck ? (
+              <ForceButton onClick={stop(() => actions.force(group.id))} />
+            ) : (
+              <KillButton pending={pending} disabled={!group.killable} onClick={stop(() => actions.kill(group.id))} />
+            )}
+          </span>
         )}
       </div>
     </motion.div>
@@ -175,6 +186,8 @@ export const GroupCard = memo(
     sameMark(a.antigel, b.antigel) &&
     a.othersOpen === b.othersOpen &&
     a.memMetric === b.memMetric &&
+    a.service === b.service &&
+    a.restarting === b.restarting &&
     sameSeries(a.spark, b.spark) &&
     cardDisplayEqual(a.group, b.group, a.memTotalKB, b.memTotalKB) &&
     (!a.othersOpen || othersPreviewEqual(a.group, b.group)),

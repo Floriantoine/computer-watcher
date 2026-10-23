@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, type MouseEvent } from 'react';
 import { motion, useReducedMotionConfig } from 'motion/react';
-import { AppWindow, Bot, Folder, Package, SquareTerminal, Trash2, TrendingUp, X, Zap, type LucideIcon } from 'lucide-react';
+import { AppWindow, Bot, Folder, Package, RotateCw, SquareTerminal, Trash2, TrendingUp, X, Zap, type LucideIcon } from 'lucide-react';
 import type { GroupKind } from '../../../core/types';
 import { formatKB } from '../format';
 import { TWEEN_TICK_MS, tweenSteps, worthAnimating } from '../motionBudget';
@@ -84,6 +84,25 @@ export function KillButton({ pending, disabled, size = 'md', onClick }: KillProp
       onClick={onClick}
     >
       <X size={size === 'sm' ? 13 : 15} strokeWidth={2.4} />
+    </motion.button>
+  );
+}
+
+/** « Redémarrer le service » d'enregistrement : carré icône, à côté du kill ; tourne tant que le redémarrage n'est pas confirmé. */
+export function RestartButton({ pending, size = 'md', onClick }: { pending?: boolean; size?: 'sm' | 'md'; onClick: (e: MouseEvent) => void }) {
+  return (
+    <motion.button
+      type="button"
+      className={`restart ${size === 'sm' ? 'sm' : ''} ${pending ? 'is-restarting' : ''}`}
+      data-testid="service-restart"
+      title="Redémarrer le service d’enregistrement (unité mise à jour si l’app a changé ; quelques secondes sans mesures)"
+      aria-label="Redémarrer le service"
+      aria-busy={pending || undefined}
+      disabled={pending}
+      whileTap={pending ? undefined : { scale: 0.92 }}
+      onClick={onClick}
+    >
+      <RotateCw size={size === 'sm' ? 13 : 15} strokeWidth={2.4} />
     </motion.button>
   );
 }

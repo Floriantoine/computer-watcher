@@ -36,6 +36,13 @@ export function recorderState(
   return { available: p.available, enabled: p.enabled, running, status };
 }
 
+/** PID du service tant que son statut est frais (un PID d'un statut périmé peut avoir été réattribué). */
+export const servicePid = (s: RecorderState): number | null => (s.running && s.status ? s.status.pid : null);
+
+/** Redémarrage effectif : statut d'un processus démarré après la demande (`since`), qui a déjà mesuré. */
+export const restartConfirmed = (st: RecorderStatus | null, since: number): boolean =>
+  !!st && st.startedAt >= since && st.lastSampleAt !== null;
+
 export const MAX_INSTANCE_KEYS = 200;
 /** Une clé d'instance contient l'id du groupe, donc un chemin de projet (PATH_MAX 4096) + `#pid:startTicks`. */
 export const MAX_INSTANCE_KEY_LEN = 4096;

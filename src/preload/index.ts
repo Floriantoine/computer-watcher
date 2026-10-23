@@ -17,7 +17,7 @@ import type { UpdateView } from '../core/update';
 import type { WrapAction, WrapApplyResponse, WrapSetupStatus, WrapTarget } from '../core/wrapSetup';
 import type {
   ApplyResult, Category, DiskHistory, EarlyoomStatus, Config, ConfigState, Culprit, InstanceTargets, ProcInfo, Watch, GroupHistory, GroupsHistory, HistoryEvent, KillResult, KillTarget, KillSignal, ProcsHistory, ProcTreeAt, RangePreset,
-  RecorderState, Snapshot, SystemSeries, TimeRange, TmpFsStats, TmpUsage, TopOptions, TopResult,
+  RecorderRestartResult, RecorderState, Snapshot, SystemSeries, TimeRange, TmpFsStats, TmpUsage, TopOptions, TopResult,
 } from '../core/types';
 
 const api = {
@@ -273,6 +273,8 @@ const api = {
     status: (): Promise<RecorderState> => ipcRenderer.invoke('recorder:status'),
     setEnabled: (enabled: boolean): Promise<RecorderState> => ipcRenderer.invoke('recorder:setEnabled', enabled),
     clearHistory: (): Promise<{ mode: 'deleted' | 'requested'; backups: number }> => ipcRenderer.invoke('recorder:clearHistory'),
+    /** Unité réécrite si l'app a changé, service relancé ; résolu quand le nouveau processus a mesuré (ou au bout de 15 s). */
+    restart: (): Promise<RecorderRestartResult> => ipcRenderer.invoke('recorder:restart'),
   },
 };
 

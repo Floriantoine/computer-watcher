@@ -11,6 +11,7 @@ import { findGroup, visibleGroups } from '../viewModel';
 import type { AntigelMark } from '../antigel';
 import { GroupCard, type GroupActions } from './GroupCard';
 import { GroupList } from './GroupList';
+import { hasService } from '../serviceRestart';
 import { PortResults } from './PortResults';
 import { ViewToggle, loadView, type ViewMode } from './ViewToggle';
 
@@ -46,6 +47,10 @@ interface Props {
   openPorts?: OpenPortsInfo | null;
   onFreePort?: (row: OpenPort) => void;
   onOpenPortGroup?: (groupId: string) => void;
+  /** PID du service d'enregistrement (null s'il ne mesure pas) : « Redémarrer le service » sur sa carte ou sa ligne. */
+  servicePid?: number | null;
+  restartingService?: boolean;
+  onRestartService?: () => void;
 }
 
 const CATEGORIES_KEY = 'pw.categories';
@@ -69,7 +74,7 @@ function saveCategories(sel: Set<Category>): void {
 const AGES: [string, number][] = [['Tous', 0], ['> 1 h', 3600], ['> 1 j', 86400], ['> 7 j', 7 * 86400]];
 
 export function MainView(props: Props) {
-  const { groups, matches, memTotalKB, filter, onFilter, stuckPids, pendingPids, sparkOf, leakAt, othersOpen, memMetric = 'rss' } = props;
+  const { groups, matches, memTotalKB, filter, onFilter, stuckPids, pendingPids, sparkOf, leakAt, othersOpen, memMetric = 'rss', servicePid = null, restartingService = false } = props;
   const [view, setView] = useState<ViewMode>(loadView);
   const [categories, setCategories] = useState<Set<Category>>(loadCategories);
   const pickCategories = useCallback((next: Set<Category>) => {
@@ -103,6 +108,7 @@ export function MainView(props: Props) {
         if (ts !== undefined) latest.current.onLeak?.(ts);
       },
       toggleOthers: (open) => latest.current.onToggleOthers(open),
+      restartService: () => latest.current.onRestartService?.(),
     };
   }, []);
   const categoriesRef = useRef(categories);
@@ -156,7 +162,8 @@ export function MainView(props: Props) {
       {shown.length === 0 ? (
         port !== null ? null : <p className="empty">Aucun groupe ne correspond.</p>
       ) : view === 'list' ? (
-        <GroupList groups={shown} sparkOf={sparkOf} stuckPids={stuckPids} pendingPids={pendingPids} actions={actions} leakAt={leakAt} antigelMarks={props.antigelMarks} othersOpen={othersOpen} memMetric={memMetric} />
+        <GroupList groups={shown} sparkOf={sparkOf} stuckPids={stuckPids} pendingPids={pendingPids} actions={actions} leakAt={leakAt} antigelMarks={props.antigelMarks} othersOpen={othersOpen} memMetric={memMetric}
+          servicePid={servicePid} restartingService={restartingService} />
       ) : (
         <div className="cards">
           <AnimatePresence mode="popLayout" initial={false}>
@@ -174,6 +181,8 @@ export function MainView(props: Props) {
                 actions={actions}
                 othersOpen={g.kind === 'others' && othersOpen}
                 memMetric={memMetric}
+                service={hasService(g, servicePid)}
+                restarting={restartingService}
               />
             ))}
           </AnimatePresence>

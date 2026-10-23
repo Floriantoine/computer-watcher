@@ -27,7 +27,7 @@ import { alertIdFromArgv } from '../core/alerts';
 import { ACTIVE_CPU_PERCENT } from '../core/history/queries';
 import { swapTargets, swapView, SWAP_IDLE_MS, SWAP_LOOKBACK_MS, type SwapView } from '../core/swap';
 import { buildSnapshot, flattenGroup, groupProcs, instanceTargets, isWatch, othersFollowed, type Classification, type FullSnapshot } from '../core/snapshot';
-import type { ConfigState, Group, KillResult, ProcInfo, RecorderState, Watch } from '../core/types';
+import type { ConfigState, Group, KillResult, ProcInfo, RecorderRestartResult, RecorderState, Watch } from '../core/types';
 import { createFreeOpener, hiddenPlacement, secondInstanceAction, startWindowShown, wantsFree } from './launchArgs';
 import {
   appPaths, autostartState, installAppImage, launchTarget, rootsFrom, runUninstall, setAutostart, stopRecorderForUninstall,
@@ -83,7 +83,7 @@ import { defaultDu, measureFamilies, readFamiliesFile, writeFamiliesFile } from 
 import { tmpFsStats } from './tmpFsStats';
 import { closeAction, confirmTray, createTrayController, defaultRun, statusNotifierAvailable, type TrayController } from './tray';
 import {
-  applyOverride, checkConfigSet, classifySetKey, swapSettingsChanged, isGroupKeys, noKill, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState as computeRecorderState,
+  applyOverride, checkConfigSet, classifySetKey, swapSettingsChanged, isGroupKeys, noKill, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState as computeRecorderState, restartConfirmed, servicePid,
 } from './historyIpc';
 import { readAntigelView } from './antigelIpc';
 import { applyWrap, ownedWrapParts, realProbe, removeWrap, wrapReminder, wrapStatus, type WrapSetupDeps } from './wrapSetup';
@@ -93,7 +93,7 @@ import {
 } from '../core/wrapSetup';
 import { requestFridge } from './fridgeIpc';
 import { createDeskRootService } from './deskRoot';
-import { autoManageService, defaultSystemctl, recorderSyncDisabled, ensureRecorderService, recorderAppImage, recorderExecArgs, systemctlAvailable, unitPath } from './recorderService';
+import { UNIT_NAME, autoManageService, defaultSystemctl, recorderSyncDisabled, ensureRecorderService, recorderAppImage, recorderExecArgs, systemctlAvailable, unitPath } from './recorderService';
 import { cliArgsFromArgv, reexecAsCli } from './runEntry';
 
 // `computer-watcher run -- <commande>` (anti-gel, lot 4), should-wrap, shell-init, claude-hook : avant tout le reste,
@@ -458,7 +458,10 @@ function takeSnapshot(): FullSnapshot {
   const classification = classify(groups, now);
   portSweep.setMode(sweepWanted());
   portSweep.tick(); // la passe lit `last` : planifiée, elle s'exécute après ce snapshot
-  return { takenAt: Date.now(), currentUid: uid, system: readSystem(), groups, classification, memMetric: config.ui.memoryMetric, listen: portSweep.listen };
+  return {
+    takenAt: Date.now(), currentUid: uid, system: readSystem(), groups, classification, memMetric: config.ui.memoryMetric, listen: portSweep.listen,
+    recorderPid: servicePid(recorderState()),
+  };
 }
 
 /** Dernier snapshot complet (arbres compris) : sert au kill de groupe et aux réponses immédiates à `watch`. */
@@ -1084,6 +1087,34 @@ ipcMain.handle('recorder:setEnabled', async (_e, enabled: unknown) => {
   config = next;
   await syncRecorder(true);
   return recorderState();
+});
+/** Délai d'attente de la première mesure du service relancé (démarrage d'Electron, ouverture de la base, premier tick). */
+const RESTART_WAIT_MS = 15_000;
+let restarting: Promise<RecorderRestartResult> | null = null;
+/**
+ * « Redémarrer le service » (carte, ligne du processus) : unité réécrite depuis cette version de l'app si elle a changé
+ * (comme au lancement), service relancé, puis attente d'une mesure du nouveau processus. Un second clic pendant
+ * l'attente reçoit la même réponse.
+ */
+async function restartRecorder(): Promise<RecorderRestartResult> {
+  if (!config.recorder.enabled) return { ok: false, message: 'Enregistrement désactivé (Réglages › Enregistrement) : aucun service à redémarrer.' };
+  if (recorderSyncDisabled()) return { ok: false, message: 'Service géré hors de l’app (PROC_WATCH_NO_RECORDER_SYNC) : rien n’est relancé.' };
+  const since = Date.now();
+  if (!(await syncRecorder(true, true))) {
+    return { ok: false, message: systemdOk ? `Redémarrage impossible : voir journalctl --user -u ${UNIT_NAME}.` : 'systemd utilisateur indisponible : redémarrage impossible.' };
+  }
+  for (let waited = 0; waited < RESTART_WAIT_MS; waited += 500) {
+    await new Promise((r) => setTimeout(r, 500));
+    const st = history.status();
+    if (st && restartConfirmed(st, since)) return { ok: true, message: `Service d’enregistrement redémarré (PID ${st.pid}).` };
+  }
+  return { ok: false, message: `Aucune mesure du service ${RESTART_WAIT_MS / 1000} s après la relance demandée : voir Réglages › Enregistrement.` };
+}
+ipcMain.handle('recorder:restart', () => {
+  restarting ??= restartRecorder().finally(() => {
+    restarting = null;
+  });
+  return restarting;
 });
 ipcMain.handle('recorder:clearHistory', () => clearHistory(data, { running: recorderState().running, pid: history.status()?.pid, beforeDelete: history.close }));
 

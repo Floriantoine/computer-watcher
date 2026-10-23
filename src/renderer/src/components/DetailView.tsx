@@ -57,6 +57,10 @@ interface Props {
   fridgeProcs?: number | null;
   /** « Mettre au frigo… » / « Réveiller » (projet plafonné seulement) ; absent : boutons cachés. */
   onFridge?: (action: 'freeze' | 'thaw') => void;
+  /** PID du service d'enregistrement (null s'il ne mesure pas) : « Redémarrer le service » sur la ligne de son processus. */
+  servicePid?: number | null;
+  restartingService?: boolean;
+  onRestartService?: () => void;
 }
 
 function BackButton({ onBack }: { onBack: () => void }) {
@@ -249,6 +253,9 @@ export function DetailView(props: Props) {
           onKill={guardedKill}
           onForce={guardedForce}
           memMetric={memMetric}
+          servicePid={props.servicePid}
+          restartingService={props.restartingService}
+          onRestartService={props.onRestartService}
         />
       )}
       <AnimatePresence>

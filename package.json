@@ -27,6 +27,7 @@
     "test:fridge": "PROC_WATCH_ANTIGEL_E2E=1 vitest run src/core/antigel/fridge.e2e.test.ts --disableConsoleIntercept",
     "test:antigel-ui": "electron-vite build && node scripts/antigel-ui-e2e.mjs",
     "test:desk-root": "electron-vite build && node scripts/desk-root-e2e.mjs",
+    "test:service-restart": "electron-vite build && node scripts/service-restart-e2e.mjs",
     "test:wrap-setup": "electron-vite build && node scripts/wrap-setup-e2e.mjs",
     "test:antigel-run": "electron-vite build && PROC_WATCH_ANTIGEL_E2E=1 vitest run src/cli/run.e2e.test.ts --disableConsoleIntercept",
     "dist": "electron-vite build && electron-builder --linux",

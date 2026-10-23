@@ -12,7 +12,8 @@ import { sortForList, type ListColumn } from '../listSort';
 import { rowDisplayEqual, sameSeries } from '../renderEquality';
 import { OthersToggle, type GroupActions } from './GroupCard';
 import { Sparkline } from './charts/Sparkline';
-import { AnimatedNumber, ForceButton, GroupIcon, KillButton, LeakBadge } from './ui';
+import { AnimatedNumber, ForceButton, GroupIcon, KillButton, LeakBadge, RestartButton } from './ui';
+import { hasService } from '../serviceRestart';
 
 const DAY = 86400;
 
@@ -29,6 +30,9 @@ interface Props {
   othersOpen: boolean;
   /** Mémoire affichée : en-tête « RAM » ou « PSS ». */
   memMetric?: MemoryMetric;
+  /** PID du service d'enregistrement (null s'il ne mesure pas) et redémarrage en cours : bouton de sa ligne. */
+  servicePid?: number | null;
+  restartingService?: boolean;
 }
 
 const COLUMNS: { col: ListColumn; label: string; num: boolean }[] = [
@@ -51,10 +55,13 @@ interface RowProps {
   actions: GroupActions;
   /** Ligne « Autres » seulement. */
   othersOpen?: boolean;
+  /** Contient le processus du service d'enregistrement : bouton « Redémarrer le service » à côté du kill. */
+  service?: boolean;
+  restarting?: boolean;
   ref?: Ref<HTMLTableRowElement>;
 }
 
-function GroupRowImpl({ group, spark, stuck, pending, leak, antigel, layoutKey, actions, othersOpen = false, ref }: RowProps) {
+function GroupRowImpl({ group, spark, stuck, pending, leak, antigel, layoutKey, actions, othersOpen = false, service = false, restarting = false, ref }: RowProps) {
   const isPresent = useIsPresent();
   const tag = primaryTag(group);
   const stop = (fn: () => void) => (e: MouseEvent) => {
@@ -100,10 +107,15 @@ function GroupRowImpl({ group, spark, stuck, pending, leak, antigel, layoutKey, 
       <td className="act">
         {group.kind === 'others' ? (
           <OthersToggle open={othersOpen} onToggle={stop(() => actions.toggleOthers(!othersOpen))} />
-        ) : stuck ? (
-          <ForceButton onClick={stop(() => actions.force(group.id))} />
         ) : (
-          <KillButton size="sm" pending={pending} disabled={!group.killable} onClick={stop(() => actions.kill(group.id))} />
+          <span className="foot-actions">
+            {service && <RestartButton size="sm" pending={restarting} onClick={stop(actions.restartService)} />}
+            {stuck ? (
+              <ForceButton onClick={stop(() => actions.force(group.id))} />
+            ) : (
+              <KillButton size="sm" pending={pending} disabled={!group.killable} onClick={stop(() => actions.kill(group.id))} />
+            )}
+          </span>
         )}
       </td>
     </motion.tr>
@@ -121,6 +133,8 @@ const GroupRow = memo(
     a.leak === b.leak &&
     sameMark(a.antigel, b.antigel) &&
     a.othersOpen === b.othersOpen &&
+    a.service === b.service &&
+    a.restarting === b.restarting &&
     sameSeries(a.spark, b.spark) &&
     rowDisplayEqual(a.group, b.group),
 );
@@ -166,7 +180,7 @@ function OthersRowsImpl({ group, actions }: { group: Group; actions: GroupAction
 
 const OthersRows = memo(OthersRowsImpl, (a, b) => a.actions === b.actions && a.group.procCount === b.group.procCount && othersPreviewEqual(a.group, b.group));
 
-export function GroupList({ groups, sparkOf, stuckPids, pendingPids, actions, leakAt, antigelMarks, othersOpen, memMetric = 'rss' }: Props) {
+export function GroupList({ groups, sparkOf, stuckPids, pendingPids, actions, leakAt, antigelMarks, othersOpen, memMetric = 'rss', servicePid = null, restartingService = false }: Props) {
   const [sort, setSort] = useState<{ col: ListColumn; dir: 'asc' | 'desc' }>({ col: 'mem', dir: 'desc' });
   const order = useRef<{ key: string; ids: string[] }>({ key: '', ids: [] });
   const sortKey = `${sort.col}:${sort.dir}`;
@@ -224,6 +238,8 @@ export function GroupList({ groups, sparkOf, stuckPids, pendingPids, actions, le
                 layoutKey={layoutKey}
                 actions={actions}
                 othersOpen={g.kind === 'others' && othersOpen}
+                service={hasService(g, servicePid)}
+                restarting={restartingService}
               />
             ))}
           </AnimatePresence>

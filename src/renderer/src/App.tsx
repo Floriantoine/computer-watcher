@@ -67,6 +67,9 @@ export function App() {
   const bulkRef = useRef(bulk);
   bulkRef.current = bulk;
   const bulkInFlight = useRef(false);
+  // « Redémarrer le service » (carte, ligne du processus) : un seul à la fois, bouton qui tourne jusqu'à la réponse du main.
+  const [restartingService, setRestartingService] = useState(false);
+  const restartingRef = useRef(false);
 
   // Assistant d'accueil : ouvert au premier lancement (ou à la reprise après relance), rouvrable depuis Réglages › À propos.
   const [onboarding, setOnboarding] = useState<OnboardingInfo | null>(null);
@@ -389,6 +392,21 @@ export function App() {
     const one = instances.every((i) => i.groupId === instances[0]!.groupId) ? nameOf(instances[0]!) : null;
     setBulk({ instances, launchersOf, title: bulkDialogTitle(instances, launchersOf, one) });
   };
+  // Le main réécrit l'unité si l'app a changé, relance le service et attend sa première mesure (15 s au plus).
+  const restartService = async () => {
+    if (restartingRef.current) return;
+    restartingRef.current = true;
+    setRestartingService(true);
+    try {
+      const r = await window.procWatch.recorder.restart();
+      pushToast(r.message, r.ok ? 'info' : 'error');
+    } catch (e) {
+      pushToast(ipcErrorMessage(e));
+    } finally {
+      restartingRef.current = false;
+      setRestartingService(false);
+    }
+  };
   // « Tuer (n) » : cibles fraîches du main, puis le handler `kill` (≤ 2 000 cibles par appel), puis un toast récapitulatif.
   const confirmBulk = async (req: BulkRequest) => {
     if (bulkInFlight.current) return;
@@ -528,6 +546,9 @@ export function App() {
                 openPorts={portQuery !== null && snapshot.query === query ? snapshot.openPorts : null}
                 onFreePort={onFreePort}
                 onOpenPortGroup={onOpenPortGroup}
+                servicePid={snapshot.recorderPid}
+                restartingService={restartingService}
+                onRestartService={restartService}
                 onToggleOthers={(open) => {
                   writeOthersOpen(open);
                   setOthersOpen(open);
@@ -570,6 +591,9 @@ export function App() {
                 fridge={fridgeEntry(antigel, projectRoot(route.groupId))}
                 fridgeProcs={antigel?.state?.projects.find((p) => p.root !== null && p.root === projectRoot(route.groupId))?.procs ?? null}
                 onFridge={projectRoot(route.groupId) ? (action) => requestFridge(route.groupId, action) : undefined}
+                servicePid={snapshot.recorderPid}
+                restartingService={restartingService}
+                onRestartService={restartService}
               />
             )}
             {route.view === 'metrics' && (

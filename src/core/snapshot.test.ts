@@ -71,6 +71,11 @@ describe('buildSnapshot', () => {
     expect(none.groups[0]).toMatchObject({ categories: [], instances: [] });
   });
 
+  test('PID du service d\'enregistrement transmis tel quel ; absent : null', () => {
+    expect(buildSnapshot({ ...base, recorderPid: 42 }, { groupId: null, query: '' }).recorderPid).toBe(42);
+    expect(buildSnapshot(base, { groupId: null, query: '' }).recorderPid).toBeNull();
+  });
+
   test('sans suivi : résumés seulement, ni arbre ni recherche', () => {
     const s = buildSnapshot(base, { groupId: null, query: '' });
     expect(s).toMatchObject({ takenAt: 5, currentUid: 1000, system, query: '', matches: null, detail: null });
