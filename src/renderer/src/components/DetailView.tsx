@@ -21,7 +21,7 @@ import { ReclassMenu } from './ReclassMenu';
 import { ProcTree } from './ProcTree';
 import { ReplayPanelLive } from './ReplayPanel';
 import { ForceButton, GroupIcon } from './ui';
-import { projectDirOf } from '../viewModel';
+import { projectDirOf, projectProtection } from '../viewModel';
 
 interface Props {
   group: Group | undefined;
@@ -39,8 +39,8 @@ interface Props {
   onKillProc: (node: ProcNode) => void;
   onForce: (pids: number[]) => void;
   onToggleProtect: (g: Group) => void;
-  /** Dossier du projet dans la liste des projets protégés. */
-  projectProtected: boolean;
+  /** Liste des projets protégés (état du bouton « Protéger le projet »). */
+  protectedProjects: readonly string[];
   onToggleProtectProject: (g: Group) => void;
   onReclassify: (inst: InstanceSummary, category: Category | null) => void;
   onKillInstance: (inst: InstanceSummary) => void;
@@ -79,6 +79,8 @@ export function DetailView(props: Props) {
   const { group, onBack, memMetric = 'rss' } = props;
   const groupId = group?.id;
   const others = group?.kind === 'others';
+  /** Dossier protégeable par « Protéger le projet » (vraie racine de projet), null sinon. */
+  const projectDir = group ? projectDirOf(group) : null;
   const procs = useHistory(
     () => (groupId && !others ? window.procWatch.history.procs(groupId, '1h') : Promise.resolve(null)),
     [groupId, others],
@@ -199,16 +201,27 @@ export function DetailView(props: Props) {
             {props.rootProtectedByName ? `Retirer la protection de « ${group.rootName} »` : `Protéger « ${group.rootName} »`}
           </button>
         )}
-        {projectDirOf(group) !== null && (
-          <button
-            data-testid="protect-project-button"
-            onClick={() => props.onToggleProtectProject(group)}
-            title={`Tout ce qui tourne dans ${projectDirOf(group)} : jamais arrêté par les règles ni déplacé par l'anti-gel, confirmation pour l'arrêter à la main. earlyoom ne connaît que des noms.`}
-          >
-            {props.projectProtected ? <FolderOpen size={14} strokeWidth={2} /> : <FolderLock size={14} strokeWidth={2} />}
-            {props.projectProtected ? 'Retirer la protection du projet' : 'Protéger le projet'}
-          </button>
-        )}
+        {projectDir !== null && (() => {
+          const { self, by } = projectProtection(props.protectedProjects, projectDir);
+          // protégé par un dossier parent (monorepo) : rien à ajouter ni à retirer ici
+          if (!self && by !== null) {
+            return (
+              <button data-testid="protect-project-button" disabled title={`Déjà protégé : ${by} (Réglages › Protégés)`}>
+                <FolderLock size={14} strokeWidth={2} /> Protégé par « {by.slice(by.lastIndexOf('/') + 1)} »
+              </button>
+            );
+          }
+          return (
+            <button
+              data-testid="protect-project-button"
+              onClick={() => props.onToggleProtectProject(group)}
+              title={`Tout ce qui tourne dans ${projectDir} : jamais arrêté par les règles ni déplacé par l'anti-gel, confirmation pour l'arrêter à la main. earlyoom ne connaît que des noms.`}
+            >
+              {self ? <FolderOpen size={14} strokeWidth={2} /> : <FolderLock size={14} strokeWidth={2} />}
+              {self ? 'Retirer la protection du projet' : 'Protéger le projet'}
+            </button>
+          );
+        })()}
         {group.kind !== 'others' &&
           (stuck.length ? (
             <ForceButton onClick={() => props.onForce(stuck)} />
