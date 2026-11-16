@@ -2,6 +2,7 @@
 // protégée modifiable). Appliquée par le moteur ET de nouveau juste avant chaque signal (ruleRunner).
 
 import { APP_SELF_NAMES } from '../appName';
+import type { IsProtected } from '../protection';
 
 /** Longueur maximale du nom d'un processus (comm, TASK_COMM_LEN − 1) : au-delà, le noyau tronque. */
 export const COMM_MAX = 15;
@@ -148,7 +149,8 @@ export interface GuardContext {
   currentUid: number;
   selfPid: number;
   appRoot: string | null;
-  isProtected: (name: string) => boolean;
+  /** Liste protégée : nom, ou dossier de travail dans un projet protégé. */
+  isProtected: IsProtected;
   /** Dossiers de config de Claude (chemins réels) : un processus qui y travaille, ou un de ses descendants, est à Claude. */
   claudeDirs?: readonly string[];
   /** Pids du groupe Claude du dernier instantané (outils détachés compris). */
@@ -182,7 +184,7 @@ function ownReason(pid: number, ctx: GuardContext, selfChain: ReadonlySet<number
   if (p.uid !== ctx.currentUid) return 'uid';
   if (selfChain.has(pid)) return 'self';
   if (isNeverKill(p, ctx.appRoot)) return 'never-kill';
-  if (ctx.isProtected(p.name)) return 'protected';
+  if (ctx.isProtected(p.name, p.cwd)) return 'protected';
   const verification = !!ctx.verification?.has(pid);
   if (verification ? isClaudeItself(p, ctx) : isClaude(p, ctx)) return 'claude';
   // ancêtre Claude (session, outil, outil de dev lancé par Claude) ou l'app (fenêtres de l'app, sous ses deux noms) ; un ancêtre absent

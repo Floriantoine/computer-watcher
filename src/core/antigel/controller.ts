@@ -8,6 +8,7 @@
 // créerait vide. Un échec de cwatch.slice (ou du gestionnaire : refus, injoignable, délai) arrête l'enchaînement ; un échec
 // propre à un projet (son budget, sa slice, son scope) n'arrête que la suite de ce projet, les autres projets continuent.
 import type { Group, ProcInfo, SystemInfo } from '../types';
+import type { IsProtected } from '../protection';
 import type { Availability, CgroupStats, MemoryEvents } from './cgroupfs';
 import { effectiveBudget, type AntigelConfig } from './config';
 import { createDeskPriority, type DeskDeps } from './desk';
@@ -79,7 +80,7 @@ export interface AntigelTickInput {
   currentUid: number;
   selfPid: number;
   appRoot: string | null;
-  isProtected: (name: string) => boolean;
+  isProtected: IsProtected;
   home: string;
   /** Dossiers de config de Claude (comme pour buildGroups) : shells de l'outil Bash. */
   claudeDirs?: readonly string[];

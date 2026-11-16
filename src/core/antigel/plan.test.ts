@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import type { ProcInfo } from '../types';
 import { MIN_ROOT_AGE_SEC, planMoves, type PlanMove } from './plan';
+import { compileProtection } from '../protection';
 
 const BASE = '/user.slice/user-1000.slice/user@1000.service';
 const WARP = `${BASE}/app.slice/app-dev.warp.Warp@1.service`;
@@ -312,5 +313,18 @@ describe('course au lancement et intouchables (relecture, correction 1)', () => 
       p(401, 400, 'code', '/usr/share/code/code /usr/share/code/resources/app/extensions/node_modules/typescript/lib/tsserver.js --serverMode partialSemantic')];
     const r = run(procs, { cg: { 400: CODE, 401: CODE } });
     expect(r.moves.map((m) => [m.rootPid, m.anchorCgroup, pidsOf(m)])).toEqual([[401, CODE, [401]]]);
+  });
+});
+
+describe('dossier de projet protégé', () => {
+  test('npm et next dev qui travaillent dans le projet protégé : jamais déplacés', () => {
+    const procs = [...warp(), p(700, 601, 'npm run dev', 'npm run dev', { cwd: A }), p(701, 700, 'MainThread', `node ${NM}/.bin/next dev`, { cwd: A })];
+    const r = planMoves({
+      procs, currentUid: 1000, selfPid: 900, appRoot: null, userBase: BASE,
+      projectOf: (pid) => (pid >= 700 ? A : null),
+      isProtected: compileProtection(['bash', 'zsh', 'sh', 'warp', 'claude'], [A]).isProtected,
+      cgroupOf: () => WARP,
+    });
+    expect(r.moves).toEqual([]);
   });
 });

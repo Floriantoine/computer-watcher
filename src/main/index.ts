@@ -228,7 +228,7 @@ let ruleIssues = loaded.ruleIssues ?? [];
     }
   }
 }
-let protection = compileProtection(config.protected);
+let protection = compileProtection(config.protected, config.protectedProjects ?? []);
 const tracker = new CpuTracker();
 const uid = process.getuid!();
 
@@ -654,7 +654,7 @@ ipcMain.handle('config:set', (_e, next: unknown) => {
   if (swapSettingsChanged(config, valid)) history.clearSwapCache();
   config = valid;
   if (overridesChanged) overridesVersion++; // autre réglage : le cache de classement reste valable
-  protection = compileProtection(config.protected);
+  protection = compileProtection(config.protected, config.protectedProjects ?? []);
   warning = null;
   ruleIssues = [];
   saveConfig(dir, config);

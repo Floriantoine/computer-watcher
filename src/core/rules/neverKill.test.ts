@@ -3,6 +3,7 @@ import {
   APP_PATH, filterTargets, isClaudeProc, isIdeName, isIdeNodeScript, isIdeProc, isNeverKill, isNeverKillName, isTerminalName, NEVER_KILL, SHELL_COMMS, TERMINAL_NAMES,
   type GuardContext, type GuardProc,
 } from './neverKill';
+import { compileProtection } from '../protection';
 
 const p = (name: string, cmdline = name) => ({ name, cmdline });
 
@@ -177,5 +178,32 @@ describe('anti-gel : terminaux, éditeurs, Claude', () => {
     expect(isIdeNodeScript(ext, { name: 'zsh', cmdline: 'zsh' })).toBe(false);
     // script relatif même sous un éditeur : jamais
     expect(isIdeNodeScript({ name: 'code', cmdline: '/usr/share/code/code dist/server.js' }, host)).toBe(false);
+  });
+});
+
+describe('filterTargets : dossier de projet protégé', () => {
+  const L = '/p/LaCrypte';
+  const procs: GuardProc[] = [
+    { pid: 500, ppid: 1, name: 'systemd', cmdline: 'systemd --user', uid: 1000 },
+    { pid: 600, ppid: 500, name: 'zsh', cmdline: 'zsh', uid: 1000, cwd: '/home/u' },
+    { pid: 610, ppid: 600, name: 'npm run dev', cmdline: 'npm run dev', uid: 1000, cwd: L },
+    { pid: 611, ppid: 610, name: 'MainThread', cmdline: `node ${L}/node_modules/.bin/next dev`, uid: 1000, cwd: L },
+    { pid: 612, ppid: 611, name: 'next-server (v1', cmdline: 'next-server (v16.4.3)', uid: 1000, cwd: L },
+    { pid: 620, ppid: 600, name: 'MainThread', cmdline: 'node next dev', uid: 1000, cwd: '/p/Autre' },
+  ];
+  const ctx: GuardContext = {
+    byPid: new Map(procs.map((x) => [x.pid, x])), currentUid: 1000, selfPid: 900, appRoot: null,
+    isProtected: compileProtection([], [L]).isProtected,
+  };
+  test('next dev et next-server du projet → refusés « protected » ; un autre projet reste visé', () => {
+    const r = filterTargets([611, 612, 620], ctx);
+    expect(r.kept).toEqual([620]);
+    expect(r.refused.get(611)).toBe('protected');
+    expect(r.refused.get(612)).toBe('protected');
+  });
+  test('lanceur hors du projet d’un processus du projet → refusé « launcher »', () => {
+    const outside = { ...procs[2]!, cwd: '/home/u' };
+    const r = filterTargets([610], { ...ctx, byPid: new Map([...ctx.byPid, [610, outside]]) });
+    expect(r.refused.get(610)).toBe('launcher');
   });
 });

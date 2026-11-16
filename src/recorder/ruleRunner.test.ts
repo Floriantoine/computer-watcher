@@ -7,6 +7,7 @@ import type { AlertEvent } from '../core/alerts';
 import { openHistoryDb } from '../core/history/db';
 import { ruleEventsSince } from '../core/history/events';
 import type { KillFn } from '../core/kill';
+import { compileProtection } from '../core/protection';
 import { restoreRuleState, type RuleDecision, type RuleTarget } from '../core/rules/engine';
 import type { ProcSample } from '../core/types';
 import { createRuleRunner, ESCALATE_MS, serviceKill, type RuleRunnerDeps } from './ruleRunner';
@@ -228,4 +229,17 @@ test('restoreRuleState : 3 rule_action dans l’heure + 1 il y a 2 h → 3 actio
   expect(st.dryRuns).toHaveLength(1);
   expect(st.lastFire.get('r-a')).toBe(now - 10 * 60_000);
   expect(st.pausedUntil.get('r-d')).toBe(now - 4 * 60_000 + 3600_000);
+});
+
+test('revérification avant le SIGTERM : processus dans un dossier de projet protégé → GUARD:protected, aucun signal', () => {
+  const inProject = { ...vitest, cwd: '/home/u/acme/web' };
+  const s = setup({ procs: [[...base, inProject]] });
+  const r = createRuleRunner({
+    db: s.db, kill: s.kill, readProcs: s.readProcs, selfPid: 900, currentUid: 1000, appRoot: null,
+    isProtected: compileProtection([], ['/home/u/acme']).isProtected,
+    notify: s.notify, setTimeout: () => 0, now: () => 1, log: () => {}, ruleRevision: () => 'rev',
+  });
+  r.run([fire('active')]);
+  expect(s.kill).not.toHaveBeenCalled();
+  expect(s.events()[0]!.refused).toEqual([{ pid: 700, error: 'GUARD:protected' }]);
 });

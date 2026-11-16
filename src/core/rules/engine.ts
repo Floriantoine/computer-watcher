@@ -4,6 +4,7 @@ import { checkCommand, matchCommand } from '../classify/rules';
 import { HOLD_MS, MIN_DECLINING, type Forecast } from '../forecast/forecast';
 import { flattenGroup, type Classification } from '../snapshot';
 import type { Group, KillTarget, ProcInfo } from '../types';
+import type { IsProtected } from '../protection';
 import { filterTargets, type GuardContext } from './neverKill';
 import { verificationKind, verificationPids } from './verification';
 import type { Rule, RuleCondition, RuleMode } from './types';
@@ -127,7 +128,7 @@ export interface EvalInput {
   procGrowthKB: ReadonlyMap<string, number> | null;
   /** clés `${pid}:${startTicks}` ACTIVES depuis `sinceMs` ; null sans historique couvrant la période */
   inactive: ((targets: KillTarget[], sinceMs: number) => Set<string> | null) | null;
-  isProtected: (name: string) => boolean;
+  isProtected: IsProtected;
   appRoot: string | null;
   currentUid: number;
   selfPid: number;

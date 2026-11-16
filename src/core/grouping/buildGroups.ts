@@ -1,5 +1,6 @@
 // src/core/grouping/buildGroups.ts
 import type { Group, GroupKind, ProcInfo, ProcNode } from '../types';
+import type { IsProtected } from '../protection';
 import { baseName, programIndex, splitArgs } from '../classify/argv';
 import { isMcpServer } from '../classify/rules';
 import { isUnderAny } from './claudeDirs';
@@ -9,7 +10,7 @@ import { APP_NAMES, CLAUDE_NAME, appLabel, isBashToolShell, isDevTool, isTestBro
 export interface GroupingOptions {
   home: string;
   currentUid: number;
-  isProtected: (name: string) => boolean;
+  isProtected: IsProtected;
   othersThreshold: { memMB: number; cpuPercent: number };
   projectRootOf: (cwd: string) => string | null;
   /** Groupes à ne pas ranger dans « Autres » même sous les seuils (hystérésis des cartes, voir stickyCards). */
@@ -244,7 +245,7 @@ function makeGroup(id: string, { kind, label }: Meta, list: ProcInfo[], opts: Gr
     rssKB: list.reduce((s, p) => s + p.rssKB, 0),
     swapKB: list.reduce((s, p) => s + p.swapKB, 0),
     oldestAgeSec: Math.max(...list.map((p) => p.ageSec)),
-    protected: list.some((p) => opts.isProtected(p.name)),
+    protected: list.some((p) => opts.isProtected(p.name, p.cwd)),
     killable: list.some((p) => p.uid === opts.currentUid),
     subgroups: [],
   };

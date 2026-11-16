@@ -3,6 +3,7 @@ import { classifyGroups, decide, type ClassifyContext } from './classify';
 import { buildGroups } from '../grouping/buildGroups';
 import { group, node, proc } from './testFixtures';
 import { readPackageHints, type PackageHints } from './packageJson';
+import { compileProtection } from '../protection';
 
 const pkg: PackageHints = { scripts: { dev: 'vite --port 1', build: 'tsc' } };
 const viteRule = () => ({ category: 'front' as const, label: 'Vite' });
@@ -441,5 +442,15 @@ describe('classifyGroups', () => {
     const c = proc('chrome', '/opt/google/chrome/chrome');
     const g = group('app:chrome', 'app', [node(c)]);
     expect(classifyGroups([g], ctx()).get(g.id)!.launcherPids).toEqual([]);
+  });
+});
+
+describe('classifyGroups : dossier de projet protégé', () => {
+  it('instance dont un processus travaille dans le dossier protégé → protected', () => {
+    const npm = proc('npm run dev', 'npm run dev', { cwd: '/home/u/acme' });
+    const vite = proc('node', 'node /home/u/acme/node_modules/.bin/vite', { cwd: '/home/u/acme' });
+    const ctx = { overrides: {}, ports: new Map(), pkg: () => null, isProtected: compileProtection([], ['/home/u/acme']).isProtected };
+    const inst = classifyGroups([group('project:/home/u/acme', 'project', [node(npm, node(vite))])], ctx).get('project:/home/u/acme')!.instances[0]!;
+    expect(inst.protected).toBe(true);
   });
 });

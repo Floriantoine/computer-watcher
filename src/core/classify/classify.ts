@@ -1,4 +1,5 @@
 import type { Group, InstanceSummary, ProcInfo, ProcNode } from '../types';
+import type { IsProtected } from '../protection';
 import { CATEGORIES, DUPLICATE_CATEGORIES, type Category } from './categories';
 import { isMatched, splitInstances } from './instances';
 import type { CommandMatch } from './match';
@@ -40,7 +41,7 @@ export interface ClassifyContext {
   /** Ports en écoute par pid (vide si non lus) */
   ports: Map<number, number[]>;
   pkg: (projectRoot: string) => PackageHints | null;
-  isProtected: (name: string) => boolean;
+  isProtected: IsProtected;
   /**
    * Cache facultatif des décisions par instance (clé : groupe, racine, empreinte des `pid:startTicks` de l'instance). L'appelant le vide quand les
    * corrections ou les ports changent (et périodiquement, pour le cache de package.json) ; les entrées non revues sont retirées.
@@ -115,7 +116,7 @@ function classifyGroup(group: Group, ctx: ClassifyContext, hasInstanceBelow: (pi
     let rssKB = 0; let swapKB = 0; let cpuPercent = 0; let prot = false;
     for (const p of procs) {
       rssKB += p.rssKB; swapKB += p.swapKB; cpuPercent += p.cpuPercent;
-      if (!prot && ctx.isProtected(p.name)) prot = true;
+      if (!prot && ctx.isProtected(p.name, p.cwd)) prot = true;
     }
     const inst: InstanceSummary = {
       key: `${group.id}#${rp.pid}:${rp.startTicks}`, groupId: group.id, project: projectRoot,
