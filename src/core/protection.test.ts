@@ -43,3 +43,7 @@ test('normalizeProjectDirs : absolus, sans / final, sans / seul ni doublon ; aut
   expect(normalizeProjectDirs('x')).toEqual([]);
   expect(normalizeProjectDirs(undefined)).toEqual([]);
 });
+
+test('normalizeProjectDirs : // fusionnés, segments . ou .. refusés (jamais égaux au cwd réel lu dans /proc)', () => {
+  expect(normalizeProjectDirs(['/p//L', '/p/./L', '/p/x/../L', '/p/L/.', '/p/..'])).toEqual(['/p/L']);
+});

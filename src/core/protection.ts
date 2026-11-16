@@ -7,22 +7,23 @@ export interface Protection {
 }
 
 /**
- * Dossiers de projet protégés, tels que lus dans la config : chemins absolus, sans `/` final, jamais `/` seul (tout
- * serait protégé), sans doublon. Autre chose qu'un tableau → [] (jamais une raison de rejeter la config).
+ * Dossiers de projet protégés, tels que lus dans la config : chemins absolus, `//` fusionnés, sans `/` final, jamais `/`
+ * seul (tout serait protégé), sans doublon. Un segment `.` ou `..` est refusé : le cwd lu dans /proc est toujours canonique,
+ * l'entrée ne correspondrait jamais. Autre chose qu'un tableau → [] (jamais une raison de rejeter la config).
  */
 export function normalizeProjectDirs(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   const out = new Set<string>();
   for (const x of raw) {
     if (typeof x !== 'string' || !x.startsWith('/')) continue;
-    const dir = x.replace(/\/+$/, '');
-    if (dir) out.add(dir);
+    const dir = x.replace(/\/{2,}/g, '/').replace(/\/+$/, '');
+    if (dir && !dir.split('/').some((seg) => seg === '.' || seg === '..')) out.add(dir);
   }
   return [...out];
 }
 
 /** `cwd` est `dir` ou un de ses sous-dossiers (`/p/L` ne couvre pas `/p/L2`). */
-const isUnder = (cwd: string, dir: string) => cwd === dir || cwd.startsWith(`${dir}/`);
+export const isUnder = (cwd: string, dir: string) => cwd === dir || cwd.startsWith(`${dir}/`);
 
 /**
  * Une entrée de nom est un nom exact, ou une regex écrite entre slashs : /^systemd/. `projects` : dossiers de projet
