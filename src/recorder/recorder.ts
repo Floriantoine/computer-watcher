@@ -15,7 +15,7 @@ import { classifyGroups, type InstanceDecision } from '../core/classify/classify
 import { readPackageHints } from '../core/classify/packageJson';
 import { CpuTracker } from '../core/collector/cpuTracker';
 import { readListeningPorts } from '../core/collector/ports';
-import { readProcesses } from '../core/collector/readProcesses';
+import { readProcesses, type CwdEntry } from '../core/collector/readProcesses';
 import { readSystem } from '../core/collector/readSystem';
 import { readInteractivePressure, type MemPressure } from '../core/collector/interactivePressure';
 import { loadConfig } from '../core/config';
@@ -52,6 +52,9 @@ import { antigelStatePath, appEventsPath, clearRequestPath, dbPath, diskFamilies
 import type { RecorderConfig, RecorderStatus, SystemInfo } from '../core/types';
 import type { Notifier } from './notify';
 import { createRuleRunner } from './ruleRunner';
+
+/** Âge maximal d'un dossier de travail lu (comme l'app). */
+const CWD_MAX_AGE_MS = 30_000;
 
 /** Attente maximale de la mesure des caches de /tmp avant d'envoyer la notification tmpfs (sans le bouton). */
 const TMP_CACHES_MEASURE_WAIT_MS = 5_000;
@@ -190,8 +193,14 @@ export function createRecorder(deps: RecorderDeps): Recorder {
   const tracker = new CpuTracker();
   const cmdlineCache = new Map<string, string>();
   const projectRootOf = createProjectRootCache();
-  const wantCwd = (name: string, cmdline: string) => isDevTool(name, cmdline);
-  // Outils Claude détachés : rangés dans Claude (seuls les outils de dev ont leur dossier de travail lu ici).
+  // Dossier de travail : lu pour les outils de dev (projets) ; pour tous les processus dès qu'un dossier de projet est
+  // protégé (sinon next-server, php, ruby… d'un projet protégé arriveraient au moteur et à l'anti-gel sans cwd). Lectures
+  // gardées 30 s par processus, comme dans l'app.
+  let anyProjectProtected = false;
+  const wantCwd = (name: string, cmdline: string) => anyProjectProtected || isDevTool(name, cmdline);
+  const cwdEntries = new Map<string, CwdEntry>();
+  const readOpts = () => ({ wantCwd, cmdlineCache, cwdCache: { entries: cwdEntries, now: now(), maxAgeMs: CWD_MAX_AGE_MS } });
+  // Outils Claude détachés : rangés dans Claude (seuls les outils de dev ont leur dossier de travail lu ici, sauf projet protégé).
   const claudeConfigDirs = claudeDirs();
   const loadedInitial = loadConfig(deps.configDir);
   const initial = loadedInitial.config;
@@ -201,6 +210,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
   let overrides = initial.classify.overrides;
   let detectPorts = initial.classify.detectPorts;
   let protection: Protection = compileProtection(initial.protected, initial.protectedProjects ?? []);
+  anyProjectProtected = (initial.protectedProjects ?? []).length > 0;
   let antigelCfg: AntigelConfig = initial.antigel;
   /** Une seule ligne par ensemble de règles invalides, et seulement quand il change (la config est relue à chaque écriture). */
   let lastIssues = '';
@@ -715,7 +725,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       try {
         const ts = now();
         // cpuPercent à 0 : l'anti-gel ne s'en sert pas, et le CpuTracker garde l'intervalle du tick
-        const procs = readProcesses(procRoot, { wantCwd, cmdlineCache }).map((p) => ({ ...p, cpuPercent: 0 }));
+        const procs = readProcesses(procRoot, readOpts()).map((p) => ({ ...p, cpuPercent: 0 }));
         const groups = buildGroups(procs, {
           home: homedir(), currentUid, isProtected: protection.isProtected, othersThreshold: { memMB: 0, cpuPercent: 0 }, projectRootOf, claudeDirs: claudeConfigDirs,
         });
@@ -794,7 +804,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
         const ts = now();
         // instant monotone du tick, lu avec l'heure murale : les règles comparent les deux pour détecter une veille
         const tickMono = mono();
-        const procs = tracker.update(readProcesses(procRoot, { wantCwd, cmdlineCache }), ts);
+        const procs = tracker.update(readProcesses(procRoot, readOpts()), ts);
         const system = readSystem(procRoot);
         // pression mémoire du bureau et des applis (PSI full de session.slice, app.slice, sessions) : un projet freiné par
         // son budget dans cwatch.slice n'y compte pas ; repli sur la machine sans cgroups lisibles
@@ -942,6 +952,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       overrides = c.classify.overrides;
       detectPorts = c.classify.detectPorts;
       protection = compileProtection(c.protected, c.protectedProjects ?? []);
+      anyProjectProtected = (c.protectedProjects ?? []).length > 0;
       logRuleIssues(loaded.ruleIssues);
       rulesCfg = c.rules;
       antigelCfg = c.antigel;

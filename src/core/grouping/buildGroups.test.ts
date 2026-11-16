@@ -487,3 +487,22 @@ describe('dossier de projet protégé', () => {
     expect(byId(groups, 'project:/home/u/proj').protected).toBe(true);
   });
 });
+
+describe('projectDir : dossier protégeable depuis le détail', () => {
+  test('racine de projet trouvée → projectDir ; repli sur le cwd (aucun projet) → absent', () => {
+    const groups = buildGroups([
+      proc({ pid: 12, name: 'node', cwd: '/home/u/proj/web', cmdline: 'node next dev' }),
+      proc({ pid: 13, name: 'node', cwd: '/home/u/scratch', cmdline: 'node x.js' }),
+    ], opts());
+    expect(byId(groups, 'project:/home/u/proj').projectDir).toBe('/home/u/proj');
+    expect(byId(groups, 'project:/home/u/scratch').projectDir).toBeUndefined();
+  });
+  test('racine = le home ou un de ses parents (dépôt de dotfiles) → absent', () => {
+    const groups = buildGroups([
+      proc({ pid: 12, name: 'node', cwd: '/home/u', cmdline: 'node x.js' }),
+      proc({ pid: 13, name: 'node', cwd: '/home', cmdline: 'node y.js' }),
+    ], opts({ projectRootOf: (cwd) => cwd }));
+    expect(byId(groups, 'project:/home/u').projectDir).toBeUndefined();
+    expect(byId(groups, 'project:/home').projectDir).toBeUndefined();
+  });
+});

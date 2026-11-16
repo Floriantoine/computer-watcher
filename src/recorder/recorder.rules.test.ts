@@ -16,7 +16,7 @@ import { createRecorder } from './recorder';
 const GB = 1024 * 1024;
 const vitestRule = (over: Partial<Rule> = {}): Rule => ({ ...RULE_TEMPLATES[0]!, id: 'r-v', createdAt: 0, enabled: true, ...over });
 
-function setup(o: { rules?: RulesConfig; protectedNames?: string[] } = {}) {
+function setup(o: { rules?: RulesConfig; protectedNames?: string[]; protectedProjects?: string[]; extra?: (procRoot: string) => void } = {}) {
   const base = mkdtempSync(join(tmpdir(), 'pw-rules-'));
   const procRoot = makeProcRoot(100_000);
   writeFileSync(join(procRoot, 'meminfo'), 'MemTotal: 32000000 kB\nMemAvailable: 16000000 kB\nSwapTotal: 2000000 kB\nSwapFree: 1000000 kB\n');
@@ -30,11 +30,12 @@ function setup(o: { rules?: RulesConfig; protectedNames?: string[] } = {}) {
     pid: 700, comm: 'node', ppid: 500, starttime: 7000, rssKB: 5 * GB, cwd: '/home/u/acme',
     cmdline: ['node', '/home/u/acme/node_modules/.bin/vitest', 'run'],
   });
+  o.extra?.(procRoot);
   const cfgDir = join(base, 'cfg');
   mkdirSync(cfgDir, { recursive: true });
   const writeCfg = (rules: RulesConfig) =>
     writeFileSync(join(cfgDir, 'config.json'), JSON.stringify({
-      ...DEFAULT_CONFIG, recorder: { ...DEFAULT_CONFIG.recorder, intervalSec: 30 }, protected: o.protectedNames ?? DEFAULT_CONFIG.protected,
+      ...DEFAULT_CONFIG, recorder: { ...DEFAULT_CONFIG.recorder, intervalSec: 30 }, protected: o.protectedNames ?? DEFAULT_CONFIG.protected, protectedProjects: o.protectedProjects ?? [],
       classify: { detectPorts: false, overrides: {} }, rules: { recommendedSeeded: true, ...rules },
     }));
   writeCfg(o.rules ?? { enabled: true, list: [vitestRule()] });
@@ -150,4 +151,27 @@ test('règle invalide écrite à la main → ignorée seule, journalisée ; la v
   s.run(6 * 60_000);
   expect(s.events().map((e) => e.ruleId)).toEqual(['r-v']);
   s.rec.stop();
+});
+
+// Revue du 2026-11-16 : le service ne lisait le dossier de travail que des outils de dev (node, npm, vite…) ; next-server
+// d'un projet protégé arrivait au moteur sans cwd, était visé puis refusé au dernier moment (notification, quota consommé).
+const nextServer = (procRoot: string) =>
+  addProc(procRoot, { pid: 710, comm: 'next-server (v1', ppid: 500, starttime: 7100, rssKB: 5 * GB, cwd: '/home/u/shop', cmdline: ['next-server (v16.4.3)'] });
+const frontRule = vitestRule({ condition: { kind: 'memory', target: 'instance', match: { by: 'category', value: 'front' }, overMB: 4096, forMin: 5 } });
+
+test('next-server (pas un outil de dev) hors projet protégé : visé (témoin)', () => {
+  const s = setup({ rules: { enabled: true, list: [frontRule] }, extra: nextServer });
+  s.rec.start();
+  s.rec.tick();
+  s.run(6 * 60_000);
+  expect(s.events()).toEqual([expect.objectContaining({ type: 'rule_dry_run', pids: [710] })]);
+});
+
+test('next-server dans un dossier de projet protégé : jamais visé par le moteur (aucun événement, aucun signal)', () => {
+  const s = setup({ rules: { enabled: true, list: [frontRule] }, extra: nextServer, protectedProjects: ['/home/u/shop'] });
+  s.rec.start();
+  s.rec.tick();
+  s.run(6 * 60_000);
+  expect(s.events()).toEqual([]);
+  expect(s.kill).not.toHaveBeenCalled();
 });
