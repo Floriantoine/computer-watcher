@@ -390,10 +390,9 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
               <p className="hint">
                 Tout ce qui tourne dans ces dossiers (sous-dossiers compris), quel que soit son nom : jamais arrêté par les règles ni
                 déplacé par l'anti-gel, confirmation pour l'arrêter à la main. earlyoom ne connaît que des noms et ne les respecte pas.
-                Ajout depuis le détail d'un projet (« Protéger le projet »).
               </p>
               <div className="pills" data-testid="protected-projects">
-                {(config.protectedProjects ?? []).length === 0 && <span className="hint" style={{ margin: 0 }}>Aucun projet protégé.</span>}
+                {(config.protectedProjects ?? []).length === 0 && <span className="hint" style={{ margin: 0 }}>Aucun projet protégé. Ajoute-en un depuis le détail de sa carte (« Protéger le projet »).</span>}
                 {(config.protectedProjects ?? []).map((d) => (
                   <span key={d} className="pill" title={d}>
                     {d}

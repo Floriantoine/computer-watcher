@@ -518,6 +518,7 @@ export function App() {
           const pts = live.current.system();
           return { mem: pts.map((p) => p.memUsedKB), swap: pts.map((p) => p.swapUsedKB), psi: pts.map((p) => p.psi), load: pts.map((p) => p.load) };
         })();
+  const detailGroup = route.view === 'detail' ? findGroup(snapshot.groups, route.groupId) : undefined;
 
   return (
     <MotionConfig reducedMotion={reducedEffects ? 'always' : 'user'}>
@@ -564,27 +565,20 @@ export function App() {
             )}
             {route.view === 'detail' && (
               <DetailView
-                group={findGroup(snapshot.groups, route.groupId)}
+                group={detailGroup}
                 roots={snapshot.detail?.groupId === route.groupId ? snapshot.detail.roots : null}
                 pending={snapshot.watched !== route.groupId}
                 stuckPids={stuckPids}
                 pendingPids={pendingPids}
                 currentUid={snapshot.currentUid}
-                rootProtectedByName={(() => {
-                  const g = findGroup(snapshot.groups, route.groupId);
-                  return !!g && configState.config.protected.includes(g.rootName);
-                })()}
+                rootProtectedByName={!!detailGroup && configState.config.protected.includes(detailGroup.rootName)}
                 onBack={() => setRoute({ view: 'main' })}
                 onOpenGroup={(id) => setRoute({ view: 'detail', groupId: id })}
                 onKillGroup={killGroup}
                 onKillProc={killProc}
                 onForce={forceKill}
                 onToggleProtect={toggleProtect}
-                projectProtected={(() => {
-                  const g = findGroup(snapshot.groups, route.groupId);
-                  const dir = g ? projectDirOf(g) : null;
-                  return dir !== null && (configState.config.protectedProjects ?? []).includes(dir);
-                })()}
+                protectedProjects={configState.config.protectedProjects ?? []}
                 onToggleProtectProject={toggleProtectProject}
                 onReclassify={reclassify}
                 onKillInstance={killInstance}

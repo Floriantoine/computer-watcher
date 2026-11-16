@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { compileProtection } from '../../core/protection';
 import type { GroupSummary, InstanceSummary, ProcInfo, SystemInfo } from '../../core/types';
 import {
-  findGroup, ipcErrorMessage, projectDirOf, toggleProjectDir, sortForTile, killErrorMessage, killResultMessages, killRequestForGroup, killRequestForInstance, killRequestForProc, pressureLevel, trackKills, visibleGroups,
+  findGroup, ipcErrorMessage, projectDirOf, projectProtection, toggleProjectDir, sortForTile, killErrorMessage, killResultMessages, killRequestForGroup, killRequestForInstance, killRequestForProc, pressureLevel, trackKills, visibleGroups,
 } from './viewModel';
 
 const proc = (pid: number, name: string, extra: Partial<ProcInfo> = {}): ProcInfo => ({
@@ -193,5 +193,15 @@ describe('protection du projet depuis son détail', () => {
     expect(toggleProjectDir(['/p/L'], '/p/L')).toEqual([]);
     expect(toggleProjectDir([], '/p/L')).toEqual(['/p/L']);
     expect(toggleProjectDir(['/a'], '/p/L')).toEqual(['/a', '/p/L']);
+  });
+});
+
+describe('projectProtection : état du bouton « Protéger le projet »', () => {
+  test('protégé lui-même, par un dossier parent, ou pas', () => {
+    expect(projectProtection(['/m/apps/web'], '/m/apps/web')).toEqual({ self: true, by: null });
+    expect(projectProtection(['/m'], '/m/apps/web')).toEqual({ self: false, by: '/m' });
+    expect(projectProtection(['/m', '/m/apps'], '/m/apps/web')).toEqual({ self: false, by: '/m/apps' });
+    expect(projectProtection(['/m', '/m/apps/web'], '/m/apps/web')).toEqual({ self: true, by: '/m' });
+    expect(projectProtection(['/m2', '/m/apps/webx'], '/m/apps/web')).toEqual({ self: false, by: null });
   });
 });

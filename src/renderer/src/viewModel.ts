@@ -1,6 +1,6 @@
 import { APP_DISPLAY_NAME } from '../../core/appName';
 import type { GroupSummary, InstanceSummary, KillResult, KillTarget, ProcInfo, SystemInfo } from '../../core/types';
-import type { IsProtected } from '../../core/protection';
+import { isUnder, type IsProtected } from '../../core/protection';
 import { cpuOutOfOrder, memOutOfOrder, stableOrder } from './stableOrder';
 
 export type SortKey = 'mem' | 'swap' | 'cpu' | 'age' | 'name';
@@ -173,4 +173,14 @@ export function projectDirOf(g: Pick<GroupSummary, 'projectDir'>): string | null
 /** Bouton « Protéger le projet » : ajoute le dossier à la liste, ou l'en retire s'il y est. */
 export function toggleProjectDir(list: readonly string[], dir: string): string[] {
   return list.includes(dir) ? list.filter((d) => d !== dir) : [...list, dir];
+}
+
+/**
+ * État du bouton « Protéger le projet » : `self` = le dossier est dans la liste (bouton « Retirer ») ; `by` = dossier
+ * parent le plus proche qui le protège déjà (monorepo : bouton désactivé « Protégé par … »), null s'il n'y en a pas.
+ */
+export function projectProtection(list: readonly string[], dir: string): { self: boolean; by: string | null } {
+  let by: string | null = null;
+  for (const d of list) if (d !== dir && isUnder(dir, d) && (by === null || d.length > by.length)) by = d;
+  return { self: list.includes(dir), by };
 }
