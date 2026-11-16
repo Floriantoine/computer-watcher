@@ -185,10 +185,9 @@ describe('dossier de projet protégé', () => {
 });
 
 describe('protection du projet depuis son détail', () => {
-  test('projectDirOf : dossier d’un groupe projet, null sinon', () => {
-    expect(projectDirOf({ id: 'project:/p/L', kind: 'project' })).toBe('/p/L');
-    expect(projectDirOf({ id: 'app:firefox', kind: 'app' })).toBeNull();
-    expect(projectDirOf({ id: 'deleted', kind: 'deleted' })).toBeNull();
+  test('projectDirOf : dossier protégeable du groupe (vraie racine de projet), null sinon', () => {
+    expect(projectDirOf({ projectDir: '/p/L' })).toBe('/p/L');
+    expect(projectDirOf({})).toBeNull();
   });
   test('toggleProjectDir : ajoute ou retire', () => {
     expect(toggleProjectDir(['/p/L'], '/p/L')).toEqual([]);

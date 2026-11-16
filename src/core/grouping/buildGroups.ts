@@ -22,6 +22,8 @@ export interface GroupingOptions {
 interface Meta {
   kind: GroupKind;
   label: string;
+  /** Voir Group.projectDir. */
+  projectDir?: string;
 }
 
 const mem = (x: { rssKB: number; swapKB: number }) => x.rssKB + x.swapKB;
@@ -107,9 +109,13 @@ export function buildGroups(procs: ProcInfo[], opts: GroupingOptions): Group[] {
       meta.set(key, { kind: 'command', label: p.name });
       return key;
     }
-    const root = opts.projectRootOf(p.cwd) ?? p.cwd;
+    const found = opts.projectRootOf(p.cwd);
+    const root = found ?? p.cwd;
     const key = `project:${root}`;
-    meta.set(key, { kind: 'project', label: projectLabel(root, opts.home) });
+    // protégeable seulement une vraie racine de projet, jamais le home ni un de ses parents (tout serait protégé)
+    const home = opts.home.replace(/\/+$/, '');
+    const wide = found !== null && (found === home || home.startsWith(`${found.replace(/\/+$/, '')}/`));
+    meta.set(key, { kind: 'project', label: projectLabel(root, opts.home), ...(found !== null && !wide ? { projectDir: found } : {}) });
     return key;
   };
 
@@ -209,7 +215,7 @@ export function buildGroups(procs: ProcInfo[], opts: GroupingOptions): Group[] {
   return applyOthers(groups, opts.othersThreshold, opts.keepSeparate, opts.home);
 }
 
-function makeGroup(id: string, { kind, label }: Meta, list: ProcInfo[], opts: GroupingOptions): Group {
+function makeGroup(id: string, { kind, label, projectDir }: Meta, list: ProcInfo[], opts: GroupingOptions): Group {
   const nodes = new Map<number, ProcNode>(list.map((p) => [p.pid, { proc: p, children: [] }]));
   const roots: ProcNode[] = [];
   for (const p of list) {
@@ -248,6 +254,7 @@ function makeGroup(id: string, { kind, label }: Meta, list: ProcInfo[], opts: Gr
     protected: list.some((p) => opts.isProtected(p.name, p.cwd)),
     killable: list.some((p) => p.uid === opts.currentUid),
     subgroups: [],
+    ...(projectDir !== undefined ? { projectDir } : {}),
   };
 }
 

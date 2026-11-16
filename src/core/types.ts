@@ -81,6 +81,11 @@ export interface Group {
   killable: boolean;
   /** Seulement pour la carte « Autres » */
   subgroups: Group[];
+  /**
+   * Projet : dossier protégeable par « Protéger le projet » (vraie racine de projet trouvée) ; absent pour un groupe sans
+   * racine (repli sur le dossier de travail), pour le home ou un de ses parents (tout serait protégé), et hors projets.
+   */
+  projectDir?: string;
   /** Pids sortis d'une session Claude (outil de dev lancé par Claude dans un projet, et ses descendants) ; absent si aucun. */
   launchedByClaude?: number[];
 }
