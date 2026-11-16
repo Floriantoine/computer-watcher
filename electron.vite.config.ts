@@ -5,6 +5,8 @@ import { resolve } from 'node:path';
 
 export default defineConfig({
   main: {
+    // Empreinte du build, commune à l'app et au service (src/core/buildId.ts)
+    define: { __CW_BUILD_ID__: JSON.stringify(`${Date.now().toString(36)}-${process.pid}`) },
     build: {
       rollupOptions: {
         // diskScanWorker : processus enfant du parcours du dossier personnel (page Disque)

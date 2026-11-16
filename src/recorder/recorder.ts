@@ -52,6 +52,7 @@ import { antigelStatePath, appEventsPath, clearRequestPath, dbPath, diskFamilies
 import type { RecorderConfig, RecorderStatus, SystemInfo } from '../core/types';
 import type { Notifier } from './notify';
 import { createRuleRunner } from './ruleRunner';
+import { BUILD_ID } from '../core/buildId';
 
 /** Âge maximal d'un dossier de travail lu (comme l'app). */
 const CWD_MAX_AGE_MS = 30_000;
@@ -233,7 +234,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
   /** Première heure pas encore close dans les tables horaires. */
   let lastHour = 0;
   let purges = 0;
-  const st: RecorderStatus = { pid: process.pid, startedAt: now(), lastSampleAt: null, lastError: null, earlyoomSource: 'unavailable', dbSizeBytes: 0, warning: null };
+  const st: RecorderStatus = { pid: process.pid, startedAt: now(), lastSampleAt: null, lastError: null, earlyoomSource: 'unavailable', dbSizeBytes: 0, warning: null, buildId: BUILD_ID };
 
   type Job = 'tick' | 'minute' | 'earlyoom' | 'rules' | 'antigel';
   const jobErrors: Record<Job, string | null> = { tick: null, minute: null, earlyoom: null, rules: null, antigel: null };

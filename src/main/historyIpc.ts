@@ -39,6 +39,13 @@ export function recorderState(
 /** PID du service tant que son statut est frais (un PID d'un statut périmé peut avoir été réattribué). */
 export const servicePid = (s: RecorderState): number | null => (s.running && s.status ? s.status.pid : null);
 
+/**
+ * Service à relancer au lancement de l'app : il tourne (statut frais) avec un autre build qu'elle, ou sans empreinte (code
+ * antérieur). Arrêté ou statut périmé : la synchronisation le démarre déjà sur le code actuel. App sans empreinte : jamais.
+ */
+export const serviceOutdated = (s: RecorderState, appBuild: string | null): boolean =>
+  appBuild !== null && s.running && !!s.status && s.status.buildId !== appBuild;
+
 /** Redémarrage effectif : statut d'un processus démarré après la demande (`since`), qui a déjà mesuré. */
 export const restartConfirmed = (st: RecorderStatus | null, since: number): boolean =>
   !!st && st.startedAt >= since && st.lastSampleAt !== null;

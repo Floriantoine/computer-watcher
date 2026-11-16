@@ -83,7 +83,7 @@ import { defaultDu, measureFamilies, readFamiliesFile, writeFamiliesFile } from 
 import { tmpFsStats } from './tmpFsStats';
 import { closeAction, confirmTray, createTrayController, defaultRun, statusNotifierAvailable, type TrayController } from './tray';
 import {
-  applyOverride, checkConfigSet, classifySetKey, swapSettingsChanged, isGroupKeys, noKill, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState as computeRecorderState, restartConfirmed, servicePid,
+  applyOverride, checkConfigSet, classifySetKey, swapSettingsChanged, isGroupKeys, noKill, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState as computeRecorderState, restartConfirmed, serviceOutdated, servicePid,
 } from './historyIpc';
 import { readAntigelView } from './antigelIpc';
 import { applyWrap, ownedWrapParts, realProbe, removeWrap, wrapReminder, wrapStatus, type WrapSetupDeps } from './wrapSetup';
@@ -93,6 +93,7 @@ import {
 } from '../core/wrapSetup';
 import { requestFridge } from './fridgeIpc';
 import { createDeskRootService } from './deskRoot';
+import { BUILD_ID } from '../core/buildId';
 import { UNIT_NAME, autoManageService, defaultSystemctl, recorderSyncDisabled, ensureRecorderService, recorderAppImage, recorderExecArgs, systemctlAvailable, unitPath } from './recorderService';
 import { cliArgsFromArgv, reexecAsCli } from './runEntry';
 
@@ -1767,11 +1768,17 @@ ipcMain.handle('update:openRelease', (_e, url: unknown) => {
 /**
  * Nouvelle version depuis le lancement précédent (mise à jour) : le service est relancé (nouveau code), puis la version est
  * mémorisée, seulement si la synchronisation a abouti (sinon nouvel essai au prochain lancement). Sources : jamais.
+ * Hors version empaquetée (dont la copie déployée par PROC_WATCH_RECORDER_DEV), le numéro ne change pas d'un build à
+ * l'autre : un service en marche sur un autre build que l'app (ou sans empreinte) est relancé une fois à son lancement.
  */
 async function syncAfterUpdate(): Promise<void> {
   const version = app.getVersion();
   const changed = app.isPackaged && updatePrefs.load().lastRunVersion !== version;
-  const ok = await syncRecorder(false, changed);
+  const outdated =
+    !app.isPackaged &&
+    serviceOutdated(computeRecorderState({ available: true, enabled: config.recorder.enabled, intervalSec: config.recorder.intervalSec, status: history.status(), now: Date.now() }), BUILD_ID);
+  if (outdated) console.log(`recorder service: autre build (${history.status()?.buildId ?? 'sans empreinte'} → ${BUILD_ID}), relance`);
+  const ok = await syncRecorder(false, changed || outdated);
   if (!changed || !ok) return;
   try {
     updatePrefs.save({ ...updatePrefs.load(), lastRunVersion: version });

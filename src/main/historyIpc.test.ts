@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { DEFAULT_CONFIG } from '../core/config';
 import type { RecorderStatus } from '../core/types';
-import { swapSettingsChanged, applyOverride, checkConfigSet, noKill, clampToDetail, classifySetKey, isGroupKeys, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState, restartConfirmed, servicePid } from './historyIpc';
+import { swapSettingsChanged, applyOverride, checkConfigSet, noKill, clampToDetail, classifySetKey, isGroupKeys, isInstanceKeys, isOptionalGroupKey, isProcTreeRequest, isRange, isSinceMs, isTopOptions, recorderState, restartConfirmed, serviceOutdated, servicePid } from './historyIpc';
 
 test('isRange : préréglages et plages valides uniquement', () => {
   for (const ok of ['1h', '6h', '24h', '7d', '30d', { from: 0, to: 10 }]) expect(isRange(ok)).toBe(true);
@@ -25,6 +25,20 @@ test('servicePid : PID du service seulement tant que son statut est frais', () =
   expect(servicePid(recorderState({ ...base, status: status(100_000 - 17_000) }))).toBeNull();
   expect(servicePid(recorderState({ ...base, status: status(null) }))).toBeNull();
   expect(servicePid(recorderState({ ...base, status: null }))).toBeNull();
+});
+
+test('serviceOutdated : service en marche avec un autre build que l’app (ou sans empreinte : ancien code)', () => {
+  const run = (buildId?: string | null) => recorderState({ ...base, status: { ...status(99_000), ...(buildId === undefined ? {} : { buildId }) } });
+  expect(serviceOutdated(run('b2'), 'b2')).toBe(false);
+  expect(serviceOutdated(run('b1'), 'b2')).toBe(true);
+  // service antérieur à l’empreinte (le statut n’a pas de buildId) ou sans empreinte (sources sans define)
+  expect(serviceOutdated(run(), 'b2')).toBe(true);
+  expect(serviceOutdated(run(null), 'b2')).toBe(true);
+  // service arrêté ou statut périmé : la synchronisation le (re)démarre déjà sur le code actuel
+  expect(serviceOutdated(recorderState({ ...base, status: { ...status(100_000 - 17_000), buildId: 'b1' } }), 'b2')).toBe(false);
+  expect(serviceOutdated(recorderState({ ...base, status: null }), 'b2')).toBe(false);
+  // app sans empreinte (tests, Vitest) : jamais
+  expect(serviceOutdated(run('b1'), null)).toBe(false);
 });
 
 test('restartConfirmed : un processus démarré après la demande, qui a déjà mesuré', () => {

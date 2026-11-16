@@ -304,7 +304,7 @@ export interface RecorderState {
 }
 /** Bouton « Redémarrer le service » : ok seulement quand le nouveau processus a mesuré. */
 export interface RecorderRestartResult { ok: boolean; message: string }
-export interface RecorderStatus { pid: number; startedAt: number; lastSampleAt: number | null; lastError: string | null; earlyoomSource: 'ok' | 'unavailable'; dbSizeBytes: number; /** Avertissement non bloquant (ex. migration faite sans copie de sécurité) */ warning?: string | null; jobErrors?: Partial<Record<'tick' | 'minute' | 'earlyoom' | 'rules' | 'antigel', string | null>>; /** Prévision ② : en préparation (moins de 6 min depuis le démarrage), calculée, ou indisponible (moins de 5 échantillons sur 5 min) */ forecast?: 'warming' | 'ok' | 'unavailable' }
+export interface RecorderStatus { pid: number; startedAt: number; lastSampleAt: number | null; lastError: string | null; earlyoomSource: 'ok' | 'unavailable'; dbSizeBytes: number; /** Empreinte du build du service (absente : service antérieur à l'empreinte) */ buildId?: string | null; /** Avertissement non bloquant (ex. migration faite sans copie de sécurité) */ warning?: string | null; jobErrors?: Partial<Record<'tick' | 'minute' | 'earlyoom' | 'rules' | 'antigel', string | null>>; /** Prévision ② : en préparation (moins de 6 min depuis le démarrage), calculée, ou indisponible (moins de 5 échantillons sur 5 min) */ forecast?: 'warming' | 'ok' | 'unavailable' }
 
 /** État d'earlyoom vu par l'app (Réglages › earlyoom). */
 export interface EarlyoomStatus {
