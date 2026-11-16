@@ -7,6 +7,7 @@ import {
   BellRing,
   Bot,
   Clock,
+  FolderLock,
   FolderSearch,
   HardDrive,
   Info,
@@ -228,6 +229,7 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
     setEntry('');
   };
   const remove = (v: string) => onSave({ ...config, protected: config.protected.filter((x) => x !== v) });
+  const removeProject = (d: string) => onSave({ ...config, protectedProjects: (config.protectedProjects ?? []).filter((x) => x !== d) });
   const othersValid = (s: string) => s.trim() !== '' && Number.isFinite(Number(s)) && Number(s) >= 0;
   const saveThresholds = () => {
     const m = Number(memMB);
@@ -346,6 +348,7 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
           {panel(
             'protected',
             'protected-panel',
+            <>
             <Card title="Programmes protégés" icon={<ShieldCheck size={14} strokeWidth={2} />}>
               <p className="hint">
                 Nom exact du processus, ou expression régulière entre slashs (ex. <code>/^systemd/</code>). Les tuer demande toujours une
@@ -382,7 +385,26 @@ export function SettingsView({ state, onSave, onBack, onInstallDesktop, onToast,
                 )}
                 <button onClick={() => onSave({ ...config, protected: [...DEFAULT_CONFIG.protected] })}>Réinitialiser</button>
               </div>
-            </Card>,
+            </Card>
+            <Card title="Projets protégés" icon={<FolderLock size={14} strokeWidth={2} />}>
+              <p className="hint">
+                Tout ce qui tourne dans ces dossiers (sous-dossiers compris), quel que soit son nom : jamais arrêté par les règles ni
+                déplacé par l'anti-gel, confirmation pour l'arrêter à la main. earlyoom ne connaît que des noms et ne les respecte pas.
+                Ajout depuis le détail d'un projet (« Protéger le projet »).
+              </p>
+              <div className="pills" data-testid="protected-projects">
+                {(config.protectedProjects ?? []).length === 0 && <span className="hint" style={{ margin: 0 }}>Aucun projet protégé.</span>}
+                {(config.protectedProjects ?? []).map((d) => (
+                  <span key={d} className="pill" title={d}>
+                    {d}
+                    <button onClick={() => removeProject(d)} aria-label={`Retirer ${d}`} title={`Retirer ${d}`}>
+                      <X size={12} strokeWidth={2.4} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            </Card>
+            </>,
           )}
 
           {panel(

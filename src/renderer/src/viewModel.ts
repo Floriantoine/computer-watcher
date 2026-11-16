@@ -164,3 +164,13 @@ export function ipcErrorMessage(e: unknown): string {
   const msg = e instanceof Error ? e.message : String(e);
   return msg.replace(/^Error invoking remote method '[^']*': (?:Error: )?/, '');
 }
+
+/** Dossier d'un groupe projet (son id sans le préfixe `project:`), protégeable depuis son détail ; null pour les autres groupes. */
+export function projectDirOf(g: Pick<GroupSummary, 'id' | 'kind'>): string | null {
+  return g.kind === 'project' && g.id.startsWith('project:') ? g.id.slice('project:'.length) : null;
+}
+
+/** Bouton « Protéger le projet » : ajoute le dossier à la liste, ou l'en retire s'il y est. */
+export function toggleProjectDir(list: readonly string[], dir: string): string[] {
+  return list.includes(dir) ? list.filter((d) => d !== dir) : [...list, dir];
+}

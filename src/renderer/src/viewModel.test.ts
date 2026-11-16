@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { compileProtection } from '../../core/protection';
 import type { GroupSummary, InstanceSummary, ProcInfo, SystemInfo } from '../../core/types';
 import {
-  findGroup, ipcErrorMessage, sortForTile, killErrorMessage, killResultMessages, killRequestForGroup, killRequestForInstance, killRequestForProc, pressureLevel, trackKills, visibleGroups,
+  findGroup, ipcErrorMessage, projectDirOf, toggleProjectDir, sortForTile, killErrorMessage, killResultMessages, killRequestForGroup, killRequestForInstance, killRequestForProc, pressureLevel, trackKills, visibleGroups,
 } from './viewModel';
 
 const proc = (pid: number, name: string, extra: Partial<ProcInfo> = {}): ProcInfo => ({
@@ -181,5 +181,18 @@ describe('dossier de projet protégé', () => {
     const p = proc(5, 'MainThread', { cwd: '/p/L/web' });
     expect(killRequestForProc(p, prot, 1000).needsConfirm).toBe(true);
     expect(killRequestForGroup({ label: 'L' }, [p], prot, 1000).protectedProcs).toEqual([p]);
+  });
+});
+
+describe('protection du projet depuis son détail', () => {
+  test('projectDirOf : dossier d’un groupe projet, null sinon', () => {
+    expect(projectDirOf({ id: 'project:/p/L', kind: 'project' })).toBe('/p/L');
+    expect(projectDirOf({ id: 'app:firefox', kind: 'app' })).toBeNull();
+    expect(projectDirOf({ id: 'deleted', kind: 'deleted' })).toBeNull();
+  });
+  test('toggleProjectDir : ajoute ou retire', () => {
+    expect(toggleProjectDir(['/p/L'], '/p/L')).toEqual([]);
+    expect(toggleProjectDir([], '/p/L')).toEqual(['/p/L']);
+    expect(toggleProjectDir(['/a'], '/p/L')).toEqual(['/a', '/p/L']);
   });
 });
