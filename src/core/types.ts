@@ -186,6 +186,8 @@ export interface InstanceSummary {
 export interface Config {
   version: 1;
   protected: string[];
+  /** Dossiers de projet protégés (chemins absolus) : tout processus qui y travaille est protégé. Absent → aucun. */
+  protectedProjects?: string[];
   othersThreshold: { memMB: number; cpuPercent: number };
   recorder: RecorderConfig;
   ui: UiConfig;

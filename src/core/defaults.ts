@@ -31,6 +31,7 @@ export const DEFAULT_CONFIG: Config = {
     'kwin_wayland', 'kwin_x11', 'plasmashell', 'gnome-shell', 'Xwayland', 'Xorg', 'sddm', 'gdm',
     '/^systemd/',
   ],
+  protectedProjects: [],
   othersThreshold: { memMB: 100, cpuPercent: 1 },
   recorder: DEFAULT_RECORDER,
   ui: DEFAULT_UI,

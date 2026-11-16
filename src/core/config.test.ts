@@ -295,3 +295,16 @@ test('antigel : budget par défaut absent d’une config existante → 5 Go ; ch
   saveConfig(dir, { ...r.config, antigel: { ...r.config.antigel, defaultBudgetMB: 8192 } });
   expect(loadConfig(dir).config.antigel.defaultBudgetMB).toBe(8192);
 });
+
+describe('protectedProjects', () => {
+  const { protectedProjects: _omit, ...withoutField } = DEFAULT_CONFIG;
+  test('absent (ancienne config) → []', () => {
+    expect(validateConfig(withoutField)?.protectedProjects).toEqual([]);
+  });
+  test('illisible → [], la config reste valide', () => {
+    expect(validateConfig({ ...withoutField, protectedProjects: 'oops' })?.protectedProjects).toEqual([]);
+  });
+  test('normalisé', () => {
+    expect(validateConfig({ ...DEFAULT_CONFIG, protectedProjects: ['/x/', 'rel'] })?.protectedProjects).toEqual(['/x']);
+  });
+});
