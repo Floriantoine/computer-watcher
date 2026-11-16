@@ -193,11 +193,11 @@ test('instanceTargets : cibles {pid, startTicks} des instances (disparues absent
   cls.set('a', { categories: ['front'], instances: [inst('a', 1, [1, 4])], launcherPids: [4] });
   const full = { takenAt: 5, currentUid: 1000, system, groups, classification: cls };
   expect(instanceTargets(full, ['a#1:10', 'c#3:30', 'a#9:90', 'zz'])).toEqual([
-    { key: 'a#1:10', targets: [{ pid: 1, startTicks: 10 }, { pid: 4, startTicks: 40 }], names: ['vite', 'esbuild'] },
-    { key: 'c#3:30', targets: [{ pid: 3, startTicks: 30 }], names: ['cron'] },
+    { key: 'a#1:10', targets: [{ pid: 1, startTicks: 10 }, { pid: 4, startTicks: 40 }], names: ['vite', 'esbuild'], cwds: ['/home/u/acme', null] },
+    { key: 'c#3:30', targets: [{ pid: 3, startTicks: 30 }], names: ['cron'], cwds: [null] },
   ]);
-  expect(instanceTargets(full, ['a'])).toEqual([{ key: 'a', targets: [{ pid: 4, startTicks: 40 }], names: ['esbuild'], covers: [] }]);
-  expect(instanceTargets(full, ['b'])).toEqual([{ key: 'b', targets: [], names: [], covers: [] }]);
+  expect(instanceTargets(full, ['a'])).toEqual([{ key: 'a', targets: [{ pid: 4, startTicks: 40 }], names: ['esbuild'], cwds: [null], covers: [] }]);
+  expect(instanceTargets(full, ['b'])).toEqual([{ key: 'b', targets: [], names: [], cwds: [], covers: [] }]);
 });
 
 test('instanceTargets : pour une clé de groupe, les instances (tous groupes) que ses lanceurs couvrent, d\'après le snapshot frais', () => {
@@ -215,7 +215,7 @@ test('instanceTargets : pour une clé de groupe, les instances (tous groupes) qu
   ]);
   const full = { takenAt: 5, currentUid: 1000, system, groups: [p, q], classification: cls };
   expect(instanceTargets(full, ['p'])).toEqual([
-    { key: 'p', targets: [{ pid: 10, startTicks: 100 }], names: ['npm'], covers: ['p#11:110', 'p#12:120', 'q#20:200'] },
+    { key: 'p', targets: [{ pid: 10, startTicks: 100 }], names: ['npm'], cwds: [null], covers: ['p#11:110', 'p#12:120', 'q#20:200'] },
   ]);
 });
 

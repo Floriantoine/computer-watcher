@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { compileProtection } from '../../core/protection';
 import type { GroupSummary, InstanceSummary, ProcInfo, SystemInfo } from '../../core/types';
 import {
   findGroup, ipcErrorMessage, sortForTile, killErrorMessage, killResultMessages, killRequestForGroup, killRequestForInstance, killRequestForProc, pressureLevel, trackKills, visibleGroups,
@@ -171,5 +172,14 @@ describe('killRequestForInstance', () => {
   test('cible dont le processus a changé (startTicks) ou disparu : écartée', () => {
     const procs = [proc(1, 'node', { startTicks: 5 })];
     expect(killRequestForInstance(inst(), [{ pid: 1, startTicks: 1 }, { pid: 2, startTicks: 2 }], procs, isProtected, 1000).targets).toEqual([]);
+  });
+});
+
+describe('dossier de projet protégé', () => {
+  const prot = compileProtection([], ['/p/L']).isProtected;
+  test('processus seul, groupe : un processus du projet est protégé', () => {
+    const p = proc(5, 'MainThread', { cwd: '/p/L/web' });
+    expect(killRequestForProc(p, prot, 1000).needsConfirm).toBe(true);
+    expect(killRequestForGroup({ label: 'L' }, [p], prot, 1000).protectedProcs).toEqual([p]);
   });
 });

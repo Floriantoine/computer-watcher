@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { compileProtection } from '../../core/protection';
 import type { Category, GroupSummary, InstanceSummary, InstanceTargets, KillResult, KillTarget } from '../../core/types';
 import { MAX_KILL_TARGETS as CORE_MAX } from '../../core/kill';
 import {
@@ -469,4 +470,15 @@ test('freeBlockedReason : « Libérer » demandé pendant un envoi groupé ou av
   expect(freeBlockedReason({ sending: false, dialogOpen: false })).toBeNull();
   expect(freeBlockedReason({ sending: true, dialogOpen: false })).toBe('Libérer de la mémoire : un kill groupé est en cours d’envoi, réessayer dans un instant');
   expect(freeBlockedReason({ sending: false, dialogOpen: true })).toBe('Libérer de la mémoire : un dialogue de kill groupé est déjà ouvert');
+});
+
+describe('planBulk : dossier de projet protégé', () => {
+  const prot = compileProtection([], ['/p/L']).isProtected;
+  test('instance du projet protégé non montrée protégée : cible retirée ; montrée et cochée : envoyée', () => {
+    const e: InstanceTargets = { key: 'a', targets: [T(1)], names: ['MainThread'], cwds: ['/p/L'] };
+    const kept = planBulk({ checked: ['a'], protectedChecked: new Set() }, [e], prot);
+    expect(kept.instances).toEqual([]);
+    expect(kept.protectedKept).toBe(1);
+    expect(planBulk({ checked: ['a'], protectedChecked: new Set(['a']) }, [e], prot).instances).toEqual([{ key: 'a', targets: [T(1)] }]);
+  });
 });

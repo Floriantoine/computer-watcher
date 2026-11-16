@@ -202,7 +202,7 @@ export function App() {
     return out;
   }, [snapshot]);
 
-  const isProtected = useMemo(() => compileProtection(configState?.config.protected ?? []).isProtected, [configState]);
+  const isProtected = useMemo(() => compileProtection(configState?.config.protected ?? [], configState?.config.protectedProjects ?? []).isProtected, [configState]);
 
   const pushToast = (message: string, kind: Toast['kind'] = 'error') => {
     const id = ++toastId.current;

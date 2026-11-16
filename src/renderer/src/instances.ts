@@ -1,5 +1,6 @@
 // Section « Instances » du détail d'un groupe : tri, mini-courbes, actions groupées d'en-tête, « Reclasser » (fonctions pures).
 import { CATEGORIES } from '../../core/classify/categories';
+import type { IsProtected } from '../../core/protection';
 import type { Category, GroupSummary, InstanceSummary, KillTarget, ProcInfo, ProcNode } from '../../core/types';
 import { sameSeries } from './renderEquality';
 import { killRequestForInstance, type KillRequest } from './viewModel';
@@ -89,7 +90,7 @@ export function instanceKillPlan(
   inst: InstanceSummary,
   entries: { key: string; targets: KillTarget[] }[],
   all: ProcInfo[],
-  isProtected: (n: string) => boolean,
+  isProtected: IsProtected,
   currentUid: number,
 ): { request: KillRequest } | { error: string } {
   const targets = entries.find((e) => e.key === inst.key)?.targets ?? [];
