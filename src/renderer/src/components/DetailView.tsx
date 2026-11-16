@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { ArrowLeft, ChevronRight, Lock, PenLine, Refrigerator, Shield, ShieldOff, Snowflake, Sunrise, X } from 'lucide-react';
+import { ArrowLeft, ChevronRight, FolderLock, FolderOpen, Lock, PenLine, Refrigerator, Shield, ShieldOff, Snowflake, Sunrise, X } from 'lucide-react';
 import type { Category, GroupSummary as Group, InstanceSummary, MemoryMetric, ProcNode } from '../../../core/types';
 import { formatAge, formatKB } from '../format';
 import { formatGo, type AntigelMark } from '../antigel';
@@ -21,6 +21,7 @@ import { ReclassMenu } from './ReclassMenu';
 import { ProcTree } from './ProcTree';
 import { ReplayPanelLive } from './ReplayPanel';
 import { ForceButton, GroupIcon } from './ui';
+import { projectDirOf } from '../viewModel';
 
 interface Props {
   group: Group | undefined;
@@ -38,6 +39,9 @@ interface Props {
   onKillProc: (node: ProcNode) => void;
   onForce: (pids: number[]) => void;
   onToggleProtect: (g: Group) => void;
+  /** Dossier du projet dans la liste des projets protégés. */
+  projectProtected: boolean;
+  onToggleProtectProject: (g: Group) => void;
   onReclassify: (inst: InstanceSummary, category: Category | null) => void;
   onKillInstance: (inst: InstanceSummary) => void;
   /** Dialogue de confirmation groupée (BulkKillDialog) pré-filtré ; absent : boutons d'en-tête de « Instances » désactivés. */
@@ -193,6 +197,16 @@ export function DetailView(props: Props) {
           <button onClick={() => props.onToggleProtect(group)}>
             {props.rootProtectedByName ? <ShieldOff size={14} strokeWidth={2} /> : <Shield size={14} strokeWidth={2} />}
             {props.rootProtectedByName ? `Retirer la protection de « ${group.rootName} »` : `Protéger « ${group.rootName} »`}
+          </button>
+        )}
+        {projectDirOf(group) !== null && (
+          <button
+            data-testid="protect-project-button"
+            onClick={() => props.onToggleProtectProject(group)}
+            title={`Tout ce qui tourne dans ${projectDirOf(group)} : jamais arrêté par les règles ni déplacé par l'anti-gel, confirmation pour l'arrêter à la main. earlyoom ne connaît que des noms.`}
+          >
+            {props.projectProtected ? <FolderOpen size={14} strokeWidth={2} /> : <FolderLock size={14} strokeWidth={2} />}
+            {props.projectProtected ? 'Retirer la protection du projet' : 'Protéger le projet'}
           </button>
         )}
         {group.kind !== 'others' &&

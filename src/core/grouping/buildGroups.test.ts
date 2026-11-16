@@ -2,6 +2,7 @@
 import { describe, expect, test } from 'vitest';
 import type { Group, ProcInfo } from '../types';
 import { buildGroups, type GroupingOptions } from './buildGroups';
+import { compileProtection } from '../protection';
 
 let nextStart = 0;
 const proc = (p: Partial<ProcInfo> & { pid: number; name: string }): ProcInfo => ({
@@ -473,5 +474,16 @@ describe('Node ≥ 24 : comm « MainThread »', () => {
   test('un MainThread qui n’est pas lancé par un outil de dev reste rangé par nom', () => {
     const groups = buildGroups([proc({ pid: 5, name: 'MainThread', cmdline: '/opt/app/bin/app --x', cwd: '/home/u/proj' })], opts());
     expect(byId(groups, 'command:MainThread').kind).toBe('command');
+  });
+});
+
+describe('dossier de projet protégé', () => {
+  test('groupe du projet → protected, quel que soit le nom de ses processus', () => {
+    const groups = buildGroups([
+      proc({ pid: 10, name: 'warp' }),
+      proc({ pid: 11, name: 'zsh', ppid: 10 }),
+      proc({ pid: 12, name: 'MainThread', ppid: 11, cwd: '/home/u/proj', cmdline: 'node next dev' }),
+    ], opts({ isProtected: compileProtection(['zsh', 'warp'], ['/home/u/proj']).isProtected }));
+    expect(byId(groups, 'project:/home/u/proj').protected).toBe(true);
   });
 });

@@ -8,6 +8,7 @@ import { inBounds, RECORDER_BOUNDS, type RecorderNumField } from './recorderBoun
 import { isCategory } from './classify/categories';
 import { validateAlerts } from './alerts';
 import { validateAntigel } from './antigel/config';
+import { normalizeProjectDirs } from './protection';
 import { validateEarlyoomReminder } from './earlyoomSetup';
 import { RULES_OFF, validateRulesDetailed } from './rules/config';
 import { normalizeProjectRoots } from './disk/projects';
@@ -124,7 +125,7 @@ export function validateConfig(raw: unknown): Config | null {
   // Rappel earlyoom illisible : simplement absent (le pop-up revient), jamais une raison de réinitialiser la config.
   const earlyoomReminder = validateEarlyoomReminder(r.earlyoomReminder);
   return {
-    version: 1, protected: [...r.protected], othersThreshold: { memMB: t.memMB, cpuPercent: t.cpuPercent }, recorder, ui, classify, alerts, rules, antigel,
+    version: 1, protected: [...r.protected], protectedProjects: normalizeProjectDirs(r.protectedProjects), othersThreshold: { memMB: t.memMB, cpuPercent: t.cpuPercent }, recorder, ui, classify, alerts, rules, antigel,
     ...(earlyoomReminder ? { earlyoomReminder } : {}),
   };
 }

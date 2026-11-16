@@ -1,6 +1,7 @@
 // Dialogue de confirmation groupée (« Tuer la sélection », « Tuer le front / le back », « Tout arrêter ») : fonctions pures.
 import { APP_DISPLAY_NAME } from '../../core/appName';
 import { MAX_KILL_TARGETS } from '../../core/kill';
+import type { IsProtected } from '../../core/protection';
 import type { GroupSummary, InstanceSummary, InstanceTargets as FreshEntry, KillResult, KillTarget } from '../../core/types';
 
 /** Cibles au plus par appel du handler `kill` (le main lève une erreur au-delà). */
@@ -237,7 +238,7 @@ export interface BulkPlan {
  * - les lanceurs ne partent que si toutes les instances qu'ils couvrent maintenant sont cochées
  *   (une instance apparue pendant que le dialogue était ouvert les retient).
  */
-export function planBulk(req: BulkRequest, entries: readonly FreshEntry[], isProtected: (name: string) => boolean): BulkPlan {
+export function planBulk(req: BulkRequest, entries: readonly FreshEntry[], isProtected: IsProtected): BulkPlan {
   const byKey = new Map(entries.map((e) => [e.key, e]));
   let protectedKept = 0;
   // Instances dont un processus protégé a été retiré (les lanceurs qui les couvrent restent alors en place).
@@ -246,7 +247,7 @@ export function planBulk(req: BulkRequest, entries: readonly FreshEntry[], isPro
   const keep = (e: FreshEntry, allowProtected: boolean): KillTarget[] =>
     e.targets.filter((_, i) => {
       const name = e.names[i];
-      if (allowProtected || (name !== undefined && !isProtected(name))) return true;
+      if (allowProtected || (name !== undefined && !isProtected(name, e.cwds?.[i] ?? null))) return true;
       protectedKept++;
       trimmed.add(e.key);
       return false;
@@ -279,7 +280,7 @@ export interface BulkDeps {
   targets: TargetsFn;
   /** Un appel du handler `kill` (SIGTERM), ≤ 2 000 cibles. */
   kill: (batch: KillTarget[]) => Promise<KillResult[]>;
-  isProtected: (name: string) => boolean;
+  isProtected: IsProtected;
   errorMessage: (e: unknown) => string;
 }
 

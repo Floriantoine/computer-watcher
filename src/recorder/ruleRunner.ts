@@ -7,6 +7,7 @@ import type { AlertEvent } from '../core/alerts';
 import { insertEvent } from '../core/history/events';
 import { planKill, sendSignals, type KillFn } from '../core/kill';
 import type { RuleDecision, RuleTarget } from '../core/rules/engine';
+import type { IsProtected } from '../core/protection';
 import { filterTargets } from '../core/rules/neverKill';
 import { verificationPids } from '../core/rules/verification';
 import type { KillResult, KillSignal, KillTarget, ProcSample } from '../core/types';
@@ -21,8 +22,8 @@ export interface RuleRunnerDeps {
   currentUid: number;
   /** Dossier de l'app (jamais visée), null si inconnu. */
   appRoot: string | null;
-  /** Liste protégée courante (relue avec la config). */
-  isProtected: (name: string) => boolean;
+  /** Liste protégée courante (noms et dossiers de projet, relue avec la config). */
+  isProtected: IsProtected;
   /** Pop-up et notification du bureau pour un événement enregistré (selon son canal). */
   notify: (e: AlertEvent) => void;
   setTimeout: (fn: () => void, ms: number) => unknown;

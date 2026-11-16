@@ -4,6 +4,7 @@ import { checkCommand, launchesClaude, matchCommand } from '../classify/rules';
 import { APP_NAMES, isBashToolShell, isTestBrowser } from '../grouping/rules';
 import { APP_PATH, SHELL_COMMS, isClaudeProc, isIdeNodeScript, isIdeProc, isNeverKill, isTerminalName } from '../rules/neverKill';
 import type { ProcInfo } from '../types';
+import type { IsProtected } from '../protection';
 import { ROOT_SLICE } from './units';
 
 /** Catégories de travail (classement par ligne de commande, jamais par le comm). */
@@ -30,7 +31,7 @@ export interface PlanInput {
   currentUid: number;
   selfPid: number;
   appRoot: string | null;
-  isProtected: (name: string) => boolean;
+  isProtected: IsProtected;
   /** cgroup v2 d'un processus (« /user.slice/… »), null si illisible ; appelé seulement pour les ancres, racines retenues et leurs descendants. */
   cgroupOf: (pid: number) => string | null;
   /** Unité du gestionnaire utilisateur : « /user.slice/user-1000.slice/user@1000.service ». */
@@ -88,7 +89,7 @@ export function planMoves(input: PlanInput): PlanResult {
   const isAnchor = (p: ProcInfo) => isTerminalName(p.name) || isIdeProc(p, parentOf(p)) || isClaudeProc(p);
   const neverMove = (p: ProcInfo) =>
     p.pid <= 1 || p.pid === input.selfPid || isNeverKill(p, input.appRoot) || isIdeProc(p, parentOf(p)) || isRealApp(p, parentOf(p)) || inAppDir(p) ||
-    launchesClaude(p.name, p.cmdline) || input.isProtected(p.name);
+    launchesClaude(p.name, p.cmdline) || input.isProtected(p.name, p.cwd);
   const isWork = (p: ProcInfo): boolean => {
     if (input.projectOf(p.pid) !== null) return true;
     const key = `${p.pid}:${p.startTicks}`;

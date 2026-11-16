@@ -200,7 +200,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
   let rulesCfg: RulesConfig = initial.rules;
   let overrides = initial.classify.overrides;
   let detectPorts = initial.classify.detectPorts;
-  let protection: Protection = compileProtection(initial.protected);
+  let protection: Protection = compileProtection(initial.protected, initial.protectedProjects ?? []);
   let antigelCfg: AntigelConfig = initial.antigel;
   /** Une seule ligne par ensemble de règles invalides, et seulement quand il change (la config est relue à chaque écriture). */
   let lastIssues = '';
@@ -507,7 +507,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
     (runner ??= createRuleRunner({
       // relecture complète (dossier de travail de chaque processus : appartenance à Claude par ~/.claude)
       db: d, kill: deps.kill ?? noKill, readProcs: () => readProcesses(procRoot, { cmdlineCache }), selfPid, currentUid, appRoot,
-      isProtected: (name) => protection.isProtected(name),
+      isProtected: (name, cwd) => protection.isProtected(name, cwd),
       notify: (e) => notifyAlert(e, e.type === 'rule_action'),
       setTimeout: (fn, ms) => (deps.ruleTimers ?? { setTimeout: (f: () => void, t: number) => setTimeout(f, t) }).setTimeout(fn, ms),
       now, monoNow: mono, log, ruleRevision: currentRevision, claudeDirs: claudeConfigDirs, claudePids: () => claudePids,
@@ -941,7 +941,7 @@ export function createRecorder(deps: RecorderDeps): Recorder {
       if (JSON.stringify(c.classify.overrides) !== JSON.stringify(overrides) || c.classify.detectPorts !== detectPorts) decisions.clear();
       overrides = c.classify.overrides;
       detectPorts = c.classify.detectPorts;
-      protection = compileProtection(c.protected);
+      protection = compileProtection(c.protected, c.protectedProjects ?? []);
       logRuleIssues(loaded.ruleIssues);
       rulesCfg = c.rules;
       antigelCfg = c.antigel;

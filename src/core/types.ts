@@ -186,6 +186,8 @@ export interface InstanceSummary {
 export interface Config {
   version: 1;
   protected: string[];
+  /** Dossiers de projet protégés (chemins absolus) : tout processus qui y travaille est protégé. Absent → aucun. */
+  protectedProjects?: string[];
   othersThreshold: { memMB: number; cpuPercent: number };
   recorder: RecorderConfig;
   ui: UiConfig;
@@ -222,6 +224,8 @@ export interface InstanceTargets {
   targets: KillTarget[];
   /** Nom du processus de chaque cible (même ordre), pour revérifier la protection au moment du kill. */
   names: string[];
+  /** Dossier de travail de chaque cible (même ordre) : dossiers de projet protégés. Absent (ancien appelant) → inconnu. */
+  cwds?: (string | null)[];
   /** Clé de groupe seulement : instances (tous groupes) dont la racine descend d'un de ses lanceurs. */
   covers?: string[];
 }

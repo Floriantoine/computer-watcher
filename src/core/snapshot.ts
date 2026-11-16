@@ -161,16 +161,18 @@ export function instanceTargets(full: FullSnapshot, keys: string[]): InstanceTar
     }
     return m;
   };
-  const toTargets = (groupId: string, pids: number[]): { targets: KillTarget[]; names: string[] } => {
+  const toTargets = (groupId: string, pids: number[]): { targets: KillTarget[]; names: string[]; cwds: (string | null)[] } => {
     const targets: KillTarget[] = [];
     const names: string[] = [];
+    const cwds: (string | null)[] = [];
     for (const pid of pids) {
       const p = procs(groupId).get(pid);
       if (!p) continue;
       targets.push({ pid, startTicks: p.startTicks });
       names.push(p.name);
+      cwds.push(p.cwd);
     }
-    return { targets, names };
+    return { targets, names, cwds };
   };
   let ppidOf: Map<number, number> | undefined;
   // Instances (tous groupes) dont la racine descend d'un des lanceurs : tuer le lanceur peut les emporter.

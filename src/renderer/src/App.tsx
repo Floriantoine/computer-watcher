@@ -36,7 +36,7 @@ import { antigelMarks, defaultBudgetFor, withBudget } from './antigel';
 import { budgetKey } from '../../core/antigel/config';
 import { useAntigel } from './useAntigel';
 import { fridgeEntry, newFridgeNotice } from './fridge';
-import { findGroup, sortForTile, tileForSort, visibleGroups, ipcErrorMessage, killResultMessages, killRequestForGroup, killRequestForProc, trackKills, type KillRequest, type ViewFilter } from './viewModel';
+import { findGroup, sortForTile, tileForSort, visibleGroups, ipcErrorMessage, killResultMessages, killRequestForGroup, killRequestForProc, projectDirOf, toggleProjectDir, trackKills, type KillRequest, type ViewFilter } from './viewModel';
 
 export type Route = { view: 'main' } | { view: 'detail'; groupId: string } | { view: 'settings'; section?: SettingsSection } | { view: 'metrics'; at?: number } | { view: 'tmp' } | { view: 'disk' };
 
@@ -202,7 +202,7 @@ export function App() {
     return out;
   }, [snapshot]);
 
-  const isProtected = useMemo(() => compileProtection(configState?.config.protected ?? []).isProtected, [configState]);
+  const isProtected = useMemo(() => compileProtection(configState?.config.protected ?? [], configState?.config.protectedProjects ?? []).isProtected, [configState]);
 
   const pushToast = (message: string, kind: Toast['kind'] = 'error') => {
     const id = ++toastId.current;
@@ -504,6 +504,13 @@ export function App() {
     void saveConfig({ ...cfg, protected: list });
   }
 
+  function toggleProtectProject(g: GroupSummary) {
+    const dir = projectDirOf(g);
+    if (dir === null) return;
+    const cfg = configState!.config;
+    void saveConfig({ ...cfg, protectedProjects: toggleProjectDir(cfg.protectedProjects ?? [], dir) });
+  }
+
   const sparks: SystemSparks =
     sysHist && sysHist.ts.length >= 2
       ? { mem: sysHist.memUsedKB, swap: sysHist.swapUsedKB, psi: sysHist.psi, load: sysHist.load }
@@ -573,6 +580,12 @@ export function App() {
                 onKillProc={killProc}
                 onForce={forceKill}
                 onToggleProtect={toggleProtect}
+                projectProtected={(() => {
+                  const g = findGroup(snapshot.groups, route.groupId);
+                  const dir = g ? projectDirOf(g) : null;
+                  return dir !== null && (configState.config.protectedProjects ?? []).includes(dir);
+                })()}
+                onToggleProtectProject={toggleProtectProject}
                 onReclassify={reclassify}
                 onKillInstance={killInstance}
                 onKillInstances={killInstances}
